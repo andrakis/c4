@@ -8,12 +8,13 @@ machine has them and their video menu says so, and run their own C everywhere el
 the same either way, to the byte.
 
 **In short** (2026-11-15, section 4):
-- In the page (400 MHz, the MMU on), Quake's demos average 24 to 27 fps where they averaged 12 to 14,
-  their slowest 1% of frames 11 to 12 where it was about 6; Duke's Atomic demos average 52 to 53 in
+- In the page (400 MHz, the MMU on), Quake's demos average 26 to 28 fps where they averaged 12 to 14,
+  their slowest 1% of frames 12 to 14 where it was about 6; Duke's Atomic demos average 52 to 53 in
   play where they averaged 27 to 29, their slowest 1% 20 to 23 where it was 13 to 16, and the
-  shareware script 60 where it was 28. Without the MMU, Quake 29 to 34, Duke 62 to 75.
+  shareware script 60 where it was 28. Without the MMU, Quake 33 to 35, Duke 62 to 75.
+- Quake's Video Options has Resolution, 320x200 to 1024x768 (section 3).
 - On node's bare machine a median frame is a third of the instructions it was or less (Duke 4.1-5.2 M
-  to 1.4-1.9 M; Quake 7.1-8.4 M to 3.1-3.6 M), and Quake's heaviest 1% under half (16-18 M to 7 M).
+  to 1.4-1.9 M; Quake 7.1-8.4 M to 2.9-3.2 M), and Quake's heaviest 1% about a third (16-18 M to 6 M).
 - The same frames: every checksum is the one it was, with the accelerators and without, in node and
   in the page under the MMU; test-duke3d and test-quake match gcc's build frame for frame.
 - Each game's video menu has the switch, on unless turned off, saved in its configuration.
@@ -90,9 +91,17 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
 | 3 | `qa_lblock` | `R_DrawSurfaceBlock8_mip0..3` | a surface-cache block, lit |
 | 4 | `qa_sspan` | `D_SpriteDrawSpans` | a sprite's run against the z buffer |
 | 5 | `qa_polyspans` | `D_PolysetDrawSpans8` | a model triangle's spans against the z buffer |
+| 6 | `qa_particles` | `R_DrawParticles`, `D_DrawParticle` | every particle drawn and moved, once the C has freed the dead |
+| 7, 8, 9 | `qa_lmfill`, `qa_dlight`, `qa_lmfin` | `R_BuildLightMap`, `R_AddDynamicLights` | a surface's light: ambient and lightmaps; one dynamic light's texels; bound and shift |
+| 10 | `qa_aliasverts` | `R_AliasTransformAndProjectFinalVerts` | a model's vertices transformed, projected and lit |
+| 11 | `qa_polytri` | `D_PolysetRecursiveTriangle` | a small triangle split to its pixels against the z buffer |
 
 The span lists' operations read the game's `espan_t` and `spanpackage_t` as c4's 32-bit layout has
-them, and the nine gradients from a copy the C makes (`d_scan.c`'s `c4_grad`).
+them, and the nine gradients from a copy the C makes (`d_scan.c`'s `c4_grad`); the particles, the
+models and the small triangles read what they need from a struct the C fills (`c4_pp`, `c4_av`,
+`c4_tri`). The particles' moves, a dynamic light's sums and the light maps' last pass cannot be run
+twice, so they first make sure, with the kit's `probe`, that nothing they write can fault: under the
+MMU a page that is not there faults then, before anything is written.
 
 ## 3. In the games
 
@@ -105,6 +114,16 @@ fixedPoint_math.c's helpers ask it (`DUKE_ACCEL()`).
 `vid_accel`, saved in `config.cfg`, on unless that says 0; `vid_null.c` reads it once a frame into
 `d_accel`, the first of Quake's numbers or 0, which `d_scan.c`, `d_sprite.c`, `d_polyse.c` and
 `r_surf.c` ask.
+
+Quake's Video Options also has **Resolution**: 320x200 (the original's, and what a timedemo's
+checksums and the tests are made at), 320x240, 400x300, 512x384, 640x400, 640x480, 800x600 and
+1024x768, the cvar `vid_mode` in `config.cfg`, taking at the next frame (`vid_null.c`'s
+`VID_C4SetMode`: the surface cache made again, the view and the console worked out again). The
+buffers for a frame bigger than 320x200 are made the first time one is chosen, so a machine that keeps
+320x200 (C4DOS's, which has little memory to spare) pays nothing for them; where there is no room the
+game stays at 320x200 and says so. Each frame goes to the display at its own size, and the display
+becomes the frame's size above 640x480 (`qg-gui.c`, writing `GUI_W` and `GUI_H`). The menus and the
+console keep Quake's 8-pixel font, so they are small at 1024x768, as they were in the original.
 
 Doom, Wolf3D, ROTT and Tyrian keep their loops: they run at a good speed in the page now, with idle to
 spare.
@@ -125,9 +144,9 @@ Duke's demo1 without its death (frames 1949 to 2782).
 | Duke Atomic demo1, in play | 5.23 / 9.57 / 11.06 | 1.70 / 3.20 / 3.64 |
 | Duke Atomic demo2 | 4.41 / 7.66 / 9.74 | 1.69 / 4.19 / 5.96 |
 | Duke Atomic demo3 | 4.09 / 6.20 / 7.19 | 1.93 / 3.68 / 4.62 |
-| Quake demo1 | 7.40 / 17.71 / 19.46 | 3.12 / 6.90 / 7.73 |
-| Quake demo2 | 7.14 / 16.20 / 20.07 | 3.13 / 6.58 / 7.52 |
-| Quake demo3 | 8.43 / 16.23 / 19.32 | 3.64 / 7.11 / 8.39 |
+| Quake demo1 | 7.40 / 17.71 / 19.46 | 2.91 / 5.55 / 6.12 |
+| Quake demo2 | 7.14 / 16.20 / 20.07 | 2.94 / 6.16 / 6.50 |
+| Quake demo3 | 8.43 / 16.23 / 19.32 | 3.24 / 5.88 / 6.56 |
 
 ### 4.2 The page: frame rates
 
@@ -140,9 +159,11 @@ Duke's demo1 without its death (frames 1949 to 2782).
 | Duke Atomic demo2 | 26.9 / 13.4 / 100 ms | 53.4 / 19.6 / 67 ms | 33.9 / 16.5 / 67 ms | 64.7 / 23.9 / 50 ms |
 | Duke Atomic demo3 | 28.9 / 15.6 / 67 ms | 51.7 / 23.3 / 66 ms | 36.7 / 3.2 / 1005 ms, one stall | 62.0 / 28.9 / 51 ms |
 | Duke Atomic demo1, with its death | 17.4 / 9.9 / 117 ms | 47.4 / 25.7 / 66 ms | 22.5 / 12.0 / 84 ms | 56.8 / 28.6 / 67 ms |
-| Quake demo1 | 13.1 / 5.7 / 233 ms | 26.0 / 12.0 / 84 ms | 16.5 / 7.2 / 150 ms | 32.8 / 14.3 / 100 ms |
-| Quake demo2 | 13.9 / 6.1 / 183 ms | 27.2 / 11.5 / 117 ms | 17.4 / 7.6 / 150 ms | 33.9 / 15.0 / 67 ms |
-| Quake demo3 | 12.2 / 6.2 / 184 ms | 23.9 / 11.2 / 117 ms | 15.3 / 7.4 / 150 ms | 29.1 / 14.3 / 83 ms |
+| Quake demo1 | 13.1 / 5.7 / 233 ms | 27.8 / 13.6 / 83 ms | 16.5 / 7.2 / 150 ms | 34.8 / 14.6 / 83 ms |
+| Quake demo2 | 13.9 / 6.1 / 183 ms | 28.4 / 12.8 / 100 ms | 17.4 / 7.6 / 150 ms | 35.4 / 14.0 / 84 ms |
+| Quake demo3 | 12.2 / 6.2 / 184 ms | 26.3 / 12.2 / 84 ms | 15.3 / 7.4 / 150 ms | 32.7 / 14.0 / 100 ms |
+| Quake demo1 at 640x480 | | 15.9 / 8.2 / 150 ms | | |
+| Quake demo1 at 1024x768 | | 10.2 / 4.4 / 300 ms | | |
 
 The checksums, in the page with the MMU and the accelerators (`-- -sum 1`): Duke's shareware script
 96ab05bb, Quake's demo1 ea3fefe7 and demo3 1f87d635, as gcc's build and the C make them. The two
@@ -157,24 +178,26 @@ machines on CDP here are not fast ones; a faster machine shows more of it, as th
   `dorotatesprite`, `drawalls`; the heavy frames grow in `inside` (the point-in-sector test, 14% of
   their growth), sprites (`drawsprite`), translucent walls (`tvlineasm2`, `thlineskipmodify`) and
   `florscan`. Game logic and the engine's arithmetic, more than drawing.
-- **Quake**: a median frame 3.12 M, its heaviest 1% 7.13 M. A median frame is now the edges and
-  surfaces (`R_RecursiveWorldNode`, `R_LeadingEdge`, `R_ClipEdge`, `R_RenderFace`, `R_TrailingEdge`,
-  `R_EmitEdge`: 43%) and the models' edge setup (`D_PolysetScanLeftEdge`); its heaviest frames are
-  explosions: `R_AddDynamicLights`' arithmetic (14% of their growth), particles (`D_DrawParticle`,
-  `R_DrawParticles`, `R_ParticleExplosion`: 27%), `R_BuildLightMap`.
+- **Quake**: a median frame 3.0 M, its heaviest 1% 6.2 M. With the particles, the light maps and the
+  models' vertices and triangles the machine's, explosions are no longer what the heaviest frames are:
+  they are views with many edges and models close to: the edges and surfaces (`R_EmitEdge`,
+  `R_LeadingEdge`, `R_TrailingEdge`, `R_RenderFace`, `R_ClipEdge`, `R_GenerateSpans`: a third of their
+  growth, and 43% of a median frame), `TransformVector`, `RecursiveLightPoint`, and libc's `ceil` and
+  `trunc`, which the edges call.
 - `R_AddDynamicLights` added a float to an unsigned, which went through the library both ways
   (`__c4f_from_ull_s`, `__c4f_to_ull`, long long shifts), some 380 instructions a texel, a fifth of the
   explosions' growth; it now converts through int, which c4's FPU does in one instruction, wherever
   the sum is below 2^31, which a light always is. The same lights, the same frames (games/quake f3ac7ad).
-- Next, if wanted, in the same way: Quake's particles (`D_DrawParticle`, each a few pixels against the
-  z buffer) and dynamic lights (`R_AddDynamicLights`, `R_BuildLightMap`), Duke's `inside` and
-  translucent walls. The edges are float geometry over the BSP, more of the game than a loop.
+- Next, if wanted: Quake's edges (`R_ScanEdges` and what it calls) are the game's rasterizer, float
+  geometry and linked lists over the BSP, a much larger thing to carry over than a loop; `ceil` and
+  `trunc` as FPU operations would help every float program. Duke's `inside` and translucent walls are
+  loops of the kind done here.
 
 ## 5. Tests
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
   palettes, steps and shifts, comparing every byte written and what is left behind: Duke's 2,200
-  cases, Quake's surface blocks and sprite runs 400. test-duke3d and test-quake build them (in
+  cases, Quake's surface blocks, sprite runs and light maps 1,000. test-duke3d and test-quake build them (in
   `.duke3d/test/`, `.quake/test/`) and run them first.
 - test-duke3d and test-quake hold the games' c4 frames to gcc's host build, frame by frame, on the
   bare machine, under C4DOS and inside C4IX; libjs runs them with the accelerators, so every one of

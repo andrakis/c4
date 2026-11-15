@@ -27,7 +27,8 @@
 // store would: the instruction then runs again from the start once the
 // kernel has seen to it, so an operation must give the same result run
 // again after a partial run (what it writes it may read back only where
-// writing the same again is what the loop would do). It costs one cycle.
+// writing the same again is what the loop would do), or first make sure
+// with kit.probe that nothing it writes can fault. It costs one cycle.
 import { STOP, ACC_BASE, ACC_END } from './c4m.js';
 import { FAULT, FK } from './mmu.js';
 
@@ -101,6 +102,18 @@ function writer32(m) {
   }
   return (x, v) => m.st32(x, v);
 }
+// That the task may use [addr, addr + len): before an operation writes
+// what it cannot write twice (a sum, a move), so that a page that is not
+// there faults before anything is written and the instruction runs again
+// as if it had not begun. Nothing to look at without the MMU.
+function probe(m, addr, len, write) {
+  if (!m.vm || len <= 0) return;
+  const mmu = m.mmu, kind = write ? FK.WRITE : FK.READ, last = (addr + len - 1) | 0;
+  for (let x = addr & ~4095; ; x = (x + 4096) | 0) {
+    if ((x >>> 12) !== 0 && mmu.page(x, kind) < 0) throw FAULT;
+    if (((x ^ last) & ~4095) === 0) break;
+  }
+}
 // the n arguments, in the order the program wrote them
 function args(m, n) {
   const sp = m.sp, a = new Array(n);
@@ -115,7 +128,7 @@ const fval = u => { FI[0] = u; return F[0]; };
 const fbits = x => { F[0] = x; return FI[0]; };
 const toInt = v => (v >= -2147483648 && v < 2147483648) ? Math.trunc(v) | 0 : (0x80000000 | 0);
 
-export const kit = Object.freeze({ reader, writer, reader32, writer32, args, fval, fbits, toInt, fround: Math.fround });
+export const kit = Object.freeze({ reader, writer, reader32, writer32, probe, args, fval, fbits, toInt, fround: Math.fround });
 
 // Load the named modules, each once, in order: before a machine starts
 export async function loadAccel(names) {

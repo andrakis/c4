@@ -4054,6 +4054,7 @@
 	(begin
 		(set! g:code (list))
 		(set! g:nlabel 0)
+		(set! g:jumped (list))
 		(set! g:ilabs (list))
 		(set! g:data (string:alloc g:DMAX))
 		(set! g:dlen 0)

@@ -199,8 +199,11 @@ LEVEL" over a view tilted on its side and down at the floor, by the game's `-sho
   (`forceplayerangle`) or looking left or right -- Duke draws the view into a tile and draws that back
   rotated (`game.c:3315`, `dorotatesprite`), the whole view through `rhlineasm4`. It is the one inner
   loop still as Chocolate Duke3D wrote it: its unsigned carries are compares that c4lc makes by
-  flipping sign bits, about 70 instructions a pixel. Written for c4 as `hlineasm4` was (32 a pixel),
-  it would take some 2.3 M off each such frame.
+  flipping sign bits, about 70 instructions a pixel. Now written for c4 as `hlineasm4` was (games/duke3d
+  622cfa9, 2026-11-15): the same 770 checksums from the host build, and on Atomic demo1 the mean frame
+  went from 7.63 to 6.53 M instructions, the 99th percentile from 12.82 to 10.59 M and the worst from
+  15.23 to 13.00 M; the 1% low at 250 M instructions a second from 19.1 to 23.0 fps. Demos 2 and 3,
+  which never tilt, did not change.
 - **`slopevlin`**: a dead player's view is mostly floor, sloped and close.
 - The median frame: `vlineasm4` 14.3%, `slopevlin` 12.0%, `hlineasm4` 9.7%, `mvlineasm4` 6.5%,
   `c4_mulscale` 5.3%, `c4_udiv64` 4.7%, `wallscan` 4.1%: the four drawing loops are 43% of it.
@@ -428,10 +431,10 @@ takes 67.
    (`D_DrawSpans8`'s runs), z spans and surface blocks -- are where both games' heavy frames go
    (section 3). Give such accelerators a number range of their own, outside the instruction set, so
    no other machine or compiler has to learn them.
-2. **`rhlineasm4` written for c4 now**, as the other loops were: the one inner loop left as
-   Chocolate Duke3D had it, about 70 instructions a pixel, the whole tilted screen when the player dies,
-   is knocked about or looks aside. At `hlineasm4`'s 32 a pixel, about 2.3 M off each such frame:
-   Atomic demo1's 1% low up by about a fifth, on every machine.
+2. **`rhlineasm4` written for c4: done** (games/duke3d 622cfa9). The one inner loop left as
+   Chocolate Duke3D had it, the whole tilted screen when the player dies, is knocked about or looks
+   aside. Atomic demo1's 1% low went up by a fifth (19.1 to 23.0 fps at 250 M instructions a second),
+   on every machine (section 3).
 3. **Quake's dynamic lights.** `blocklights[...] += (rad - dist)*256` makes an unsigned a float and back
    through the library for every lit texel, 7% of the heavy frames' growth; float to and from
    `unsigned` as `-mfpu` operations (or an `int` there, if its frames stay gcc's) would take it.

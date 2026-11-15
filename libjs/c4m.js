@@ -90,10 +90,10 @@ export const C4I_SMP = 0x100;
 export const C4I_PAR = 0x20000;
 // The MMU is fitted (mmu.js, docs/c4ix-mmu.md); 0x40000 is C4I_DRV
 export const C4I_MMU = 0x80000;
-// The drawing accelerators (accel.js, docs/accel.md): opcodes ACC_BASE to
-// ACC_END, outside the instruction set, that a machine with accel runs
-// itself, and the bit that says it does
-export const C4I_ACCEL = 0x100000, ACC_BASE = 0x1000, ACC_END = 0x1100;
+// The accelerators (accel.js, docs/accel.md): opcodes ACC_BASE to ACC_END,
+// outside the instruction set, that a machine with accel runs itself in the
+// games' own JavaScript, and the bit that says it does
+export const C4I_ACCEL = 0x100000, ACC_BASE = 0x1000, ACC_END = 0x2000;
 // Its registers, a window every CPU sees its own of, as the local one
 export const MMU_BASE = 0x500, MMU_END = 0x540;
 
@@ -134,7 +134,7 @@ export class Machine {
     // loop runs, and makes ld32 and the rest translate
     this.mmu = null;
     this.vm = false;
-    // accel.js's accel when the drawing accelerators are fitted (boot.js)
+    // accel.js's accel when the accelerators are fitted (boot.js)
     this.accel = null;
     // The user window (kpa, below): where user addresses start, 0 for
     // none, and the space kernel-mode accesses into it look in first.
@@ -883,8 +883,8 @@ export class Machine {
         return STOP.BUDGET;
     }
     if (op >= ACC_BASE && op < ACC_END && this.accel !== null) {
-      // a drawing accelerator (accel.js); a number it does not know is a
-      // custom opcode like any other
+      // an accelerator (accel.js); a number nobody has is a custom opcode
+      // like any other
       const s = this.accel(this, op);
       if (s >= 0) return s;
     }

@@ -33,8 +33,8 @@
 //                message is written to FILE as it is stamped, a line each:
 //                microseconds, then the bytes in hex
 //   --sf2 FILE   ... and --wav plays them with this SoundFont (snd-gm.js)
-//   --no-accel   no drawing accelerators (accel.js): a game draws with its
-//                own loops, as on any other machine
+//   --no-accel   no accelerators (accel.js): a game draws with its own
+//                loops, as on any other machine
 //
 // The flags are c4bb's (src/c4bb/sim/cli.js), so a test can swap one
 // runner for the other. Piped stdin without -i is fed to the keyboard up
@@ -46,6 +46,7 @@ import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import { createMachine, boot } from './boot.js';
+import { loadAccel, accelManifest } from './accel.js';
 import { Worker } from 'node:worker_threads';
 import { STOP } from './c4m.js';
 import { SoundDevice, EVT } from './snd-device.js';
@@ -127,6 +128,8 @@ async function main(argv) {
 
   const snd = o.wav || o.midi || o.sf2 ? new SoundDevice({ midi: !!(o.midi || o.sf2) }) : null;
   const played = [];
+  // the games' accelerators, the build's list (accel.js), before it starts
+  if (o.accel !== false) await loadAccel(await accelManifest());
   const machine = createMachine({
     arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, accel: o.accel, snd, cpus: o.cpus, quantum: o.quantum,
     parallel: o.parallel, spawn: url => new Worker(url), mmu: o.mmu,

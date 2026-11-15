@@ -480,9 +480,9 @@ The `C4I_*` bits `INFO` reports are the enum just above the traps in
 `c4m.c`. Two more come from c4bb rather than c4m, and a program asks
 for them the same way: `0x800` (the interval timer, `BB_I_PIT` in
 `include/c4bb_info.h`) and `0x2000` (the mailbox, `C4I_MBOX` in
-`include/c4bb_mbox.h`); §4.7 uses both. libjs adds `0x100000`, its drawing
-accelerators (`C4I_ACCEL`, `libjs/guest/accel.h`): opcodes `0x1000` to `0x10ff`,
-reached through `OPCD`, outside this table and every kernel's numbers
+`include/c4bb_mbox.h`); §4.7 uses both. libjs adds `0x100000`, its loader of
+the games' accelerators (`C4I_ACCEL`, `libjs/guest/accel.h`): opcodes `0x1000` to
+`0x1fff`, reached through `OPCD`, outside this table and every kernel's numbers
 (docs/accel.md).
 
 The fused opcodes split deliberately. `LDL n` (`a = *(bp+n)`), `STL n`

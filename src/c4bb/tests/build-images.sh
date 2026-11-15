@@ -315,8 +315,10 @@ done
 ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/smpwin.c $OUT/libjs-smpwin.c4r > /dev/null
 # the same work on every CPU, for the parallel engine (cli.js --parallel)
 ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/spinmp.c $OUT/libjs-spinmp.c4r > /dev/null
-# the drawing accelerators (libjs/accel.js) against the loops they stand
-# for, built as the games are, on the bare libc; test-libjs runs it
+# the games that ship accelerators (games/NAME/c4/accel.mjs, libjs/accel.js),
+# the list the machine loads; and the loader's test, on the bare libc, which
+# test-libjs runs
+for f in games/*/c4/accel.mjs; do [ -f "$f" ] && basename "$(dirname "$(dirname "$f")")"; done | sed 's/.*/"&"/' | paste -sd, - | sed 's/^/[/; s/$/]/' > $OUT/accel.json
 ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming -I src/c4ix/libc/include \
     -I libjs/guest libjs/tests/src/accel.c $OUT/.libjs-accel.c4o > /dev/null
 ./c4rlink32 $OUT/.libjs-accel.c4o .libc-bare/libc-*.c4o -o $OUT/libjs-accel.c4r > /dev/null

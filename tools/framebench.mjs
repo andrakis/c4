@@ -194,6 +194,10 @@ async function nodeRun(profile) {
     },
   });
   const { createMachine, boot } = await import('../libjs/boot.js');
+  if (o.accel !== false) {
+    const { loadAccel, accelManifest } = await import('../libjs/accel.js');
+    await loadAccel(await accelManifest());
+  }
   const { STOP } = await import('../libjs/c4m.js');
   const { readC4r } = await import('../libjs/c4r.js');
   const runOnce = async (wantProfile, groups) => {
@@ -300,7 +304,12 @@ async function nodeRun(profile) {
   const mid = all.length >> 1, half = Math.max(1, Math.ceil(all.length * 0.05));
   const median = new Set(all.slice(mid - half, mid + half).map(x => x[1]));
   const p = await runOnce(true, [heavy, median]);
-  const same = p.cyc.length === cyc.length && p.cyc.every((v, i) => v === cyc[i]);
+  // the same frames, as far as both went: a run stops at the end of the slice in which
+  // the demo after the last began, and that is 97 instructions here but 2 M in the plain
+  // run, which may finish the frame it began in (whose count has the next demo's start
+  // in it) and another
+  const upto = Math.min(Math.max(...segs.map(s => s.to)) + 1, cyc.length, p.cyc.length);
+  const same = upto >= Math.max(...segs.map(s => s.to)) && cyc.slice(0, upto).every((v, i) => v === p.cyc[i]);
   const insOf = set => [...set].reduce((t, k) => t + ins[k], 0) / set.size;
   const H = p.G[0], M = p.G[1], F = p.funcs;
   const sH = H.samp.reduce((a, b) => a + b, 0), sM = M.samp.reduce((a, b) => a + b, 0);
@@ -310,6 +319,10 @@ async function nodeRun(profile) {
                                   ch: H.calls[i] / heavy.size, cm: M.calls[i] / median.size }));
   console.log(`\n-- where the heaviest 1% of frames go (${heavy.size} frames, mean ${fmt(iH / 1e6, 3)} M), against the median 10% (${median.size} frames, mean ${fmt(iM / 1e6, 3)} M)`);
   console.log(`   pc sampled every ${o.every} instructions; the second run ${same ? 'made the same frames' : 'DIFFERED from the first'}`);
+  if (!same) {
+    const k = cyc.findIndex((v, i) => i < upto && v !== p.cyc[i]);
+    if (k >= 0) console.log(`   first at frame ${k}: ${cyc[k] - (cyc[k - 1] || 0)} instructions, then ${p.cyc[k] - (p.cyc[k - 1] || 0)}`);
+  }
   console.log(`${'function'.padEnd(28)}${'median M'.padStart(9)}${'heavy M'.padStart(9)}${'growth'.padStart(9)}${'of it'.padStart(7)}${'calls med'.padStart(11)}${'calls hvy'.padStart(11)}`);
   const grow = iH - iM;
   for (const r of rows.sort((a, b) => (b.h - b.m) - (a.h - a.m)).slice(0, 30))

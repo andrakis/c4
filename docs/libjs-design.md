@@ -62,7 +62,7 @@ Out of scope for now: c4mp multiprocessing.
 | `libjs/bus.js` | Addresses below 0x1000: 0x100-0x1FF go to c4bb's `Devices`, 0x400-0x47F to `GuiDevice`, 0x480-0x4FF to `SoundDevice`. |
 | `libjs/heap.js` | The host-side allocator behind MALC/FREE/RALC, with a size side table. |
 | `libjs/printf.js` | A pure PRTF formatter. |
-| `libjs/accel.js` | The drawing accelerators, opcodes 0x1000-0x10ff behind INFO's `C4I_ACCEL` (docs/accel.md). |
+| `libjs/accel.js` | The accelerators' loader and kit: the games' own modules (`games/NAME/c4/accel.mjs`), opcodes 0x1000-0x1fff behind INFO's `C4I_ACCEL` (docs/accel.md). |
 | `libjs/boot.js` | `parseC4r`/`loadImage` (reused), argv, and a c4mp-style trampoline. |
 | `libjs/gui-device.js` | The display registers and the two rings, host side. |
 | `libjs/snd-device.js` | The sound card's registers: what the guest writes, as timed events. |

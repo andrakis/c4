@@ -424,7 +424,7 @@ takes 67.
 
 ## 6. What to do
 
-1. **Drawing opcodes, behind a probe, in libjs.** The one change that moves the frame rate a person
+1. **Drawing opcodes, behind a probe, in libjs.** Done for Duke and Quake, as the games' own modules: `docs/accel.md`. The one change that moves the frame rate a person
    sees: `TCOL` alone took the shareware level from 28 to 43 fps with the MMU and the Atomic demos'
    averages up 17 to 29%, with the same frames. The rest of the drawing loops in the same shape --
    Duke's floors (`hlineasm4`), slopes (`slopevlin`) and tilted screen (`rhlineasm4`), Quake's spans

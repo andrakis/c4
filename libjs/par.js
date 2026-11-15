@@ -33,6 +33,7 @@
 
 import { OP, STOP, Machine } from './c4m.js';
 import { DmaSpace, FAULT } from './mmu.js';
+import { accelNames } from './accel.js';
 
 // the control block, in words
 export const C = {
@@ -214,12 +215,14 @@ export class ParHost extends ParCore {
       // the asking CPU's registers, on CPU 0's devices and heap
       const s = new Machine(m0.arena, m0.dev, m0.bus, m0.heap);
       s.noFpu = m0.noFpu;
+      s.accel = m0.accel;
       s.cpuId = k;
       this.shadows[k] = s;
       const w = spawn(new URL('./ap.js', import.meta.url));
       w.postMessage({
         type: 'init', arena: m0.arena.buf, ctl: ctl.buffer, pq: this.pq.buffer, heap: m0.heap.books, id: k, n,
         info: m0.info(), cyclesPerMs: m0.dev.cyclesPerMs, noFpu: !!m0.noFpu,
+        accelNames: m0.accel ? accelNames() : [],
       });
       this.workers.push(w);
     }

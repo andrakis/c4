@@ -271,6 +271,7 @@ What it was, and why:
 | `bus.js` | Addresses below 0x1000: 0x100–0x1FF go to c4bb's `Devices`, 0x400–0x47F to the display, 0x480–0x4FF to the sound card. |
 | `heap.js` | The host-side allocator behind MALC/FREE/RALC, with a size side table as native c4m keeps. |
 | `printf.js` | PRTF: glibc's format rules over 32-bit words. |
+| `accel.js` | The accelerators' loader and kit: each game that ships `games/NAME/c4/accel.mjs` (the build lists them in `src/c4bb/images/accel.json`) has its loops run by the host, opcodes 0x1000-0x1fff a program finds by name through OPCD once INFO says `C4I_ACCEL` (0x100000) (docs/accel.md). `--no-accel` turns them off. |
 | `boot.js` | Builds the machine, loads an image with c4bb's loader, and starts `main` through a c4mp-style trampoline. |
 | `gui-device.js` | The display registers and its two rings (c4bb's mailbox format), host side. |
 | `shared.js` | The display's SharedArrayBuffer path, used when the page is cross-origin isolated. |

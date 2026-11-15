@@ -10,7 +10,8 @@
 // itself: its books are shared (sheap.js).
 
 import { Arena } from '../src/c4bb/sim/arena.js';
-import { OP, STOP, Machine, C4I_MMU } from './c4m.js';
+import { OP, STOP, Machine, C4I_MMU, C4I_ACCEL } from './c4m.js';
+import { accel, loadAccel } from './accel.js';
 import { Mmu, FAULT } from './mmu.js';
 import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE, DMA_FAULT } from './par.js';
 import { SharedHeap } from './sheap.js';
@@ -192,6 +193,10 @@ function main(msg) {
   m.noFpu = msg.noFpu;
   // CPU 0 has an MMU: so has this CPU, its own, off until the kernel turns it on here
   if (msg.info & C4I_MMU) m.mmu = new Mmu(m);
+  // ... and the accelerators, as CPU 0's INFO says, its modules loaded in
+  // its order (start, below): every CPU tells a task the same and runs the
+  // same numbers, wherever it runs
+  if (msg.info & C4I_ACCEL) m.accel = accel;
   m.heap = new SharedHeap(arena, msg.heap);
   m.smp = core;
   m.cpuId = id;
@@ -257,7 +262,7 @@ const isNode = typeof process !== 'undefined' && process.versions && process.ver
   typeof self === 'undefined';
 if (isNode) {
   const { parentPort } = await import('node:worker_threads');
-  parentPort.once('message', msg => { main(msg); process.exit(0); });
+  parentPort.once('message', async msg => { await loadAccel(msg.accelNames); main(msg); process.exit(0); });
 } else {
-  self.onmessage = e => { if (e.data.type === 'init') { main(e.data); self.close(); } };
+  self.onmessage = async e => { if (e.data.type === 'init') { await loadAccel(e.data.accelNames); main(e.data); self.close(); } };
 }

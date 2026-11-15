@@ -50,6 +50,7 @@ import { SoundDevice, EVT } from './snd-device.js';
 import { RingWriter, FbProducer } from './shared.js';
 import { layUploads } from './uploads.js';
 import { LazyFiles } from './lazy.js';
+import { loadAccel, accelManifest } from './accel.js';
 
 // A disk read on demand (lazy.js). The page sends an index and a base
 // URL; the first get() of a name fetches that one file with a
@@ -175,7 +176,7 @@ function start(msg) {
     drives.push(persistDrive);
   }
   vm = createMachine({
-    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu,
+    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu, accel: msg.accel,
     cpus: msg.cpus | 0, quantum: msg.quantum | 0, mmu: !!msg.mmu,
     parallel: !!msg.parallel, spawn: url => new Worker(url, { type: 'module' }),
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },
@@ -362,7 +363,7 @@ function lazyStats() {
 
 function echo(bytes) { for (const b of bytes) out.push(b); flush(); }
 
-self.onmessage = e => {
+const onMessage = e => {
   const m = e.data;
   try {
     switch (m.type) {
@@ -406,3 +407,11 @@ self.onmessage = e => {
     postMessage({ type: 'error', message: `libjs: ${err.message}` });
   }
 };
+
+// The games' accelerators (accel.js) are loaded before the machine starts,
+// the build's list: what the page says meanwhile waits for them, in order
+const accelReady = accelManifest().then(loadAccel).catch(e => console.error('libjs: accelerators:', e));
+const waiting = [];
+let accelLoaded = false;
+accelReady.then(() => { accelLoaded = true; for (const e of waiting.splice(0)) onMessage(e); });
+self.onmessage = e => { if (accelLoaded) onMessage(e); else waiting.push(e); };

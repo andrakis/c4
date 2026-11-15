@@ -1,0 +1,179 @@
+// accel.js -- accelerators: a game's heaviest loops run by the host, in the
+// game's own JavaScript, one instruction however much they do (docs/accel.md).
+//
+// A game that wants them ships games/NAME/c4/accel.mjs, whose default export
+// is given this file's kit and returns its operations, an array of functions
+// of the machine. libjs knows no game: build-images.sh lists the modules it
+// finds in src/c4bb/images/accel.json, and the machine loads those before it
+// starts (loadAccel), from the site's own games/ folder and nowhere else, in
+// the list's order, the same on every CPU (ap.js is handed the names). A
+// program can name a module, never supply one.
+//
+// The numbers 0x1000 to 0x1fff (ACC_BASE, ACC_END in c4m.js) are these,
+// outside the instruction set, C4KE's services (128 up) and C4IX's syscalls
+// (200 up), so no compiler and no other machine has to know them. INFO bit
+// 0x100000 (C4I_ACCEL) says the machine has the loader. A program asks once
+// for its game's (libjs/guest/accel.h):
+//   base = __c4_opcode("quake", ACC_FIND);    // 0x1000: 0 if there is none
+// and the k-th module's op i is then base + i, base being ACC_BASE + 0x100 *
+// (k + 1); a number nobody has is a custom opcode as before. Everywhere else
+// -- native c4m, c4bb, C4DOS, libjs with accel off -- the bit is clear and
+// the program keeps its own loops.
+//
+// An operation reads its arguments with kit.args (sp+4 upward, the last one
+// nearest), guest memory only through kit's readers and writers, and returns
+// what the program gets back (a). Under the MMU those go through the task's
+// pages, and an address it may not use faults as the program's own load or
+// store would: the instruction then runs again from the start once the
+// kernel has seen to it, so an operation must give the same result run
+// again after a partial run (what it writes it may read back only where
+// writing the same again is what the loop would do), or first make sure
+// with kit.probe that nothing it writes can fault. It costs one cycle.
+import { STOP, ACC_BASE, ACC_END } from './c4m.js';
+import { FAULT, FK } from './mmu.js';
+
+export const ACC_FIND = ACC_BASE, ACC_SLOT = 0x100;
+const MAX_MODS = (ACC_END - ACC_BASE) / ACC_SLOT - 1;
+const NAME = /^[a-z0-9_-]{1,32}$/;
+const mods = [], index = new Map();
+
+// A byte reader, a byte writer, a word reader and a word writer for one
+// instruction: plain memory as runPlain's own loads take it, a task's pages
+// under the MMU, or the machine's ld and st for anything else (the user
+// window, the boot stack's guard, the low page, off the arena's end). Each
+// keeps its own page, so two streams read in turn do not evict each other.
+function reader(m) {
+  const u8 = m.u8;
+  if (m.vm) {
+    const mmu = m.mmu;
+    let vp = -1, base = 0;
+    return x => {
+      const v = x >>> 12;
+      if (v !== vp) {
+        if (v === 0) return m.ld8(x) & 255;
+        const p = mmu.page(x, FK.READ);
+        if (p < 0) throw FAULT;
+        vp = v; base = p;
+      }
+      return u8[base | (x & 4095)];
+    };
+  }
+  if (!m.uwin) {
+    const hi = Math.min(m.guardLo(), u8.length);
+    return x => (x >= 0x1000 && x < hi ? u8[x] : m.ld8(x) & 255);
+  }
+  return x => m.ld8(x) & 255;
+}
+function writer(m) {
+  const u8 = m.u8;
+  if (m.vm) {
+    const mmu = m.mmu;
+    let vp = -1, base = 0;
+    return (x, b) => {
+      const v = x >>> 12;
+      if (v !== vp) {
+        if (v === 0) { m.st8(x, b); return; }
+        const p = mmu.page(x, FK.WRITE);
+        if (p < 0) throw FAULT;
+        vp = v; base = p;
+      }
+      u8[base | (x & 4095)] = b;
+    };
+  }
+  if (!m.uwin) {
+    const hi = Math.min(m.guardLo(), u8.length);
+    return (x, b) => { if (x >= 0x1000 && x < hi) u8[x] = b; else m.st8(x, b); };
+  }
+  return (x, b) => m.st8(x, b);
+}
+function reader32(m) {
+  const i32 = m.i32;
+  if (!m.vm && !m.uwin) {
+    const hi = Math.min(m.guardLo(), m.u8.length) - 3;
+    return x => ((x & 3) === 0 && x >= 0x1000 && x < hi ? i32[x >> 2] | 0 : m.ld32(x) | 0);
+  }
+  return x => m.ld32(x) | 0;
+}
+function writer32(m) {
+  const i32 = m.i32;
+  if (!m.vm && !m.uwin) {
+    const hi = Math.min(m.guardLo(), m.u8.length) - 3;
+    return (x, v) => { if ((x & 3) === 0 && x >= 0x1000 && x < hi) i32[x >> 2] = v; else m.st32(x, v); };
+  }
+  return (x, v) => m.st32(x, v);
+}
+// That the task may use [addr, addr + len): before an operation writes
+// what it cannot write twice (a sum, a move), so that a page that is not
+// there faults before anything is written and the instruction runs again
+// as if it had not begun. Nothing to look at without the MMU.
+function probe(m, addr, len, write) {
+  if (!m.vm || len <= 0) return;
+  const mmu = m.mmu, kind = write ? FK.WRITE : FK.READ, last = (addr + len - 1) | 0;
+  for (let x = addr & ~4095; ; x = (x + 4096) | 0) {
+    if ((x >>> 12) !== 0 && mmu.page(x, kind) < 0) throw FAULT;
+    if (((x ^ last) & ~4095) === 0) break;
+  }
+}
+// the n arguments, in the order the program wrote them
+function args(m, n) {
+  const sp = m.sp, a = new Array(n);
+  for (let i = 0; i < n; i++) a[i] = m.ld32(sp + 4 * (n - i)) | 0;
+  return a;
+}
+// a float's bits as the float, and back; a single's arithmetic is
+// Math.fround of the double's, as c4's FPU makes it; a conversion to int
+// that does not fit gives the most negative int, as c4's FPU and SSE do
+const F = new Float32Array(1), FI = new Int32Array(F.buffer);
+const fval = u => { FI[0] = u; return F[0]; };
+const fbits = x => { F[0] = x; return FI[0]; };
+const toInt = v => (v >= -2147483648 && v < 2147483648) ? Math.trunc(v) | 0 : (0x80000000 | 0);
+
+export const kit = Object.freeze({ reader, writer, reader32, writer32, probe, args, fval, fbits, toInt, fround: Math.fround });
+
+// Load the named modules, each once, in order: before a machine starts
+export async function loadAccel(names) {
+  for (const name of names || []) {
+    if (typeof name !== 'string' || !NAME.test(name) || index.has(name) || mods.length >= MAX_MODS) continue;
+    try {
+      const mod = await import(new URL(`../games/${name}/c4/accel.mjs`, import.meta.url));
+      const ops = mod.default(kit);
+      if (!Array.isArray(ops)) throw new Error('its default export gave no array of operations');
+      index.set(name, mods.length);
+      mods.push({ name, ops });
+    } catch (e) {
+      console.error(`libjs: the accelerators of ${name}: ${e.message}`);
+    }
+  }
+}
+export const accelNames = () => mods.map(x => x.name);
+
+// The build's list (build-images.sh): the page fetches it, node reads it.
+// None there, none loaded: the games draw with their own loops.
+export async function accelManifest() {
+  const url = new URL('../src/c4bb/images/accel.json', import.meta.url);
+  try {
+    if (url.protocol === 'file:') {
+      const { readFileSync } = await import('node:fs');
+      return JSON.parse(readFileSync(url, 'utf8'));
+    }
+    const r = await fetch(url);
+    return r.ok ? await r.json() : [];
+  } catch { return []; }
+}
+
+// The machine's accel (c4m.js sys): ACC_FIND, or a module's operation; -1
+// for a number nobody has, which is then a custom opcode like any other
+export function accel(m, op) {
+  if (op === ACC_FIND) {
+    const name = new TextDecoder().decode(m.cstring(m.ld32(m.sp + 4) | 0, 33));
+    const k = index.get(name);
+    m.a = k === undefined ? 0 : ACC_BASE + ACC_SLOT * (k + 1);
+    return STOP.BUDGET;
+  }
+  const r = op - ACC_BASE - ACC_SLOT;
+  const mod = r >= 0 ? mods[r >> 8] : undefined;
+  const f = mod && mod.ops[r & 255];
+  if (typeof f !== 'function') return -1;
+  m.a = f(m) | 0;
+  return STOP.BUDGET;
+}

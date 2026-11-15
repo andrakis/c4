@@ -593,6 +593,17 @@ if echo "$out" | grep -qx "smpwin: cpu 1 saw 111, cpu 0 sees 1 and 9" && $LIBJS 
     ok "each CPU sees its own words in the CPU-local window"
 else bad "each CPU sees its own words in the CPU-local window"; echo "$out" | tail -3; fi
 
+# The accelerators' loader (accel.js, docs/accel.md): each game the build
+# lists found as a number of its own, a name nobody ships as 0; without them
+# (--no-accel) the program is told so by INFO. Each game tests its own
+# accelerators against its loops (test-duke3d, test-quake).
+out=$($LIBJS $IMAGES/libjs-accel.c4r 2>&1)
+if echo "$out" | grep -qx "accel: the loader finds each game's"; then ok "the accelerators' loader finds each game's"
+else bad "the accelerators' loader finds each game's"; echo "$out" | tail -5; fi
+out=$($LIBJS --no-accel $IMAGES/libjs-accel.c4r 2>&1)
+if [ "$out" = "accel: not fitted" ]; then ok "--no-accel: INFO says the accelerators are not there"
+else bad "--no-accel: INFO says the accelerators are not there"; echo "$out" | tail -3; fi
+
 # The parallel engine (par.js, ap.js, docs/c4ix-smp.md S2): each CPU on a
 # thread of its own, over a SharedArrayBuffer. The interleaving is the
 # host's, so the cycle counts are not c4mp's; the answers are.

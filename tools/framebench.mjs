@@ -36,6 +36,7 @@
 //   --leave A-B,...  frames the profile leaves out (Duke's demo1 dies at
 //                    1949-2782, a desync of the game's versions, not play)
 //   --image FILE     another build of the game's image
+//   --lines RE       node: the game's output lines that match RE, printed
 //   --no-accel       no drawing accelerators (libjs/accel.js): the game draws
 //                    with its own loops; the page: &accel=0
 //   --out DIR        node: the files the game writes go to DIR (duke3d's
@@ -109,6 +110,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--every') o.every = +v();
   else if (a === '--image') o.image = v();
   else if (a === '--no-accel') o.accel = false;
+  else if (a === '--lines') o.lines = new RegExp(v());
   else if (a === '--out') o.out = v();
   else if (a === '--page') o.page = v();
   else if (a === '--base') o.base = v().replace(/\/$/, '');
@@ -269,6 +271,7 @@ async function nodeRun(profile) {
   const ins = [], ms = [];
   for (let k = 2; k <= cyc.length; k++) { ins[k] = cyc[k - 1] - cyc[k - 2]; ms[k] = wall[k - 1] - wall[k - 2]; }
   const end = (text.match(/^timedemo: .*$/m) || [''])[0];
+  if (o.lines) for (const l of text.split('\n')) if (o.lines.test(l)) console.log(l);
   const segs = [];
   if (R.mark) {
     // a demo starts at its open: its first frame loads the level, and is

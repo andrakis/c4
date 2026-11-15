@@ -86,7 +86,7 @@ As Quake's (`games/quake`), whose layout this follows:
     `GUI_EV_REL`) to turn and aim, its buttons to fire and the rest.
   - `duke-c4ix.c`, `duke-bare.c`: whether the display has to be asked for.
   - `duke-host.c`: no display, no sound, for gcc: the reference.
-  - `duke-snd.c`: `FX_` on the card's eight sample channels (the GRP's VOCs and
+  - `duke-snd.c`: `FX_` on the card's sixteen sample channels (the GRP's VOCs and
     WAVs, 8-bit), `MUSIC_` through audiolib's MIDI player on the OPL, as
     `rott-snd.c` does.
   - `duke-sum.c`: the clock (virtual in a test), and every frame checksummed.
@@ -250,6 +250,29 @@ person's own GRP on C4IX):
 - `duke3d-full`, the bare machine, could not open a 44 MB GRP in its 128 MB:
   the bare libc reads a file whole, into a buffer that doubles as it fills, so
   32 MB and 64 MB at once. It has 192 MB now (160 MB was enough at 320x200).
+
+**Sounds cut off in a fight** (2026-11-15), "as if there were too few voices".
+There were enough: every sample the card played logged (a copy of `cli.js`),
+the Atomic Edition's demos 1 and 2 in the page for four minutes used at most 16
+voices and never had all 16 busy when a sound started, so nothing was stolen
+or refused for want of one, and the page's mixer dropped none (each arrived
+within 11 ms of its stamp; it drops at 200). Every cut was the game's own stop.
+Most are as the game means them, a sprite's sound restarting: the chaingun cuts
+its last shot 63 times in 70, the pistol 31 in 36. But explosions (`BOMBEXPL`,
+4 s) were cut a median 59 ms after they began, always the newest of up to ten
+playing. `sounds.c` lost count of what played: a voice's end took out its
+sound's last entry, whichever had ended, and the game's stops took out a second
+(DOS's linker did not tell `testcallback` from `TestCallBack`). So with two of
+a sound playing, a third stopped the newest and the count fell to nothing; the
+other played on untracked. Now the entry of the voice that ended goes, a stop
+takes out one, and up to four of a sound play together, a fifth stopping the
+oldest (the game's own rule, two, cut a fight's explosions a tenth of a second
+in once the counts were true). With all sixteen voices busy, `duke-snd.c` now
+takes the oldest of the lowest priority, one panned silent first, as audiolib
+did, where it took the lowest-numbered channel. Ambient loops now stop when
+the player leaves them: before, one stopping could restart another's, which
+played on beside its first copy (bubbles 25.4 s, four at once, against 20.5 s
+and three, in demo 1 on the bare machine).
 
 **A profile of a demo.** The Atomic Edition's `demo1.dmo` on the bare machine,
 frames 400 to 1000, every call counted by its target and by its call site (a

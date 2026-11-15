@@ -80,6 +80,15 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
 | 6 | `duke_udiv64` | `c4_udiv64` | a 64-bit quotient's low word, for `divscale` and `scale` |
 | 7 | `duke_qinterp16` | `qinterpolatedown16short` | a row of shorts stepping in 16.16 |
 | 8, 9 | `duke_clearb`, `duke_copyb` | `clearbufbyte`, `copybufbyte` | a byte fill of a word's pattern; a copy where the two do not overlap |
+| 10, 11 | `duke_tvline1`, `duke_tvline2` | `tvlineasm1`, `tvlineasm2` | translucent walls (glass): one column, or two side by side, blended through `transluc` |
+| 12 | `duke_tsprite` | `DrawSpriteVerticalLine` | a translucent sprite's column |
+| 13 | `duke_thline` | `thlineskipmodify` | a translucent floor sprite's row |
+| 14 | `duke_scale` | `scale` (fixedPoint_math.h) | `(int32_t)((int64_t)a * b / c)`, any a, b and c but 0 |
+| 15 | `duke_dmulscale` | `dmulscale` | `(int32_t)(((int64_t)a * b + (int64_t)c * d) >> s)` |
+
+The translucent loops read the screen and blend into it, and a blend run twice blends twice: each
+works out every pixel first, reading all it reads and making sure with the kit's `probe` that every
+page it will write is there, and only then writes.
 
 **Quake** (`games/quake/c4/accel.mjs`, `source/c4accel.h`; `QA_*`):
 
@@ -196,7 +205,7 @@ machines on CDP here are not fast ones; a faster machine shows more of it, as th
 ## 5. Tests
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
-  palettes, steps and shifts, comparing every byte written and what is left behind: Duke's 2,200
+  palettes, steps and shifts, comparing every byte written and what is left behind: Duke's 4,200
   cases, Quake's surface blocks, sprite runs and light maps 1,000. test-duke3d and test-quake build them (in
   `.duke3d/test/`, `.quake/test/`) and run them first.
 - test-duke3d and test-quake hold the games' c4 frames to gcc's host build, frame by frame, on the
@@ -206,7 +215,8 @@ machines on CDP here are not fast ones; a faster machine shows more of it, as th
   and the music's time is the machine's.
 - `libjs/tests/src/accel.c` (`libjs-accel.c4r`) tests the loader: INFO, a name nobody ships found as 0,
   each listed game as a number of its own; test-libjs runs it, and again with `--no-accel`.
-- framebench's `--no-accel` gives the same checksums with the games' C. Its `--profile` compares the
+- framebench's `--no-accel` gives the same checksums with the games' C (`--lines '^sum:'` prints the
+  game's own sums: the Atomic demos' 31, every 250 frames, are the same either way). Its `--profile` compares the
   frames both of its runs made: a run stops at the end of the slice in which the next demo began,
   97 instructions while profiling and 2 M otherwise.
 

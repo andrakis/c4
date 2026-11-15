@@ -207,6 +207,7 @@ int sc_compile (int argc, char **argv) {
 	L_gen_58fpu = fpu ? cell_true : cell_false;
 	L_gen_58nobuiltin = nobuiltin ? cell_true : cell_false;
 	L_gen_58pic = pic ? cell_true : cell_false;
+	L_gen_58opt = opt ? cell_true : cell_false;
 	L_lex_58locs = lines ? cell_true : cell_false;
 	L_p_58lines = lines ? cell_true : cell_false;
 

@@ -112,9 +112,14 @@ mkdir -p $DISK
 # kernel that rejects freshly-built images.
 # (the kernel #includes its extensions and the mailbox helpers: a change to any of
 #  them is a change to the kernel, or an edit there ships in an image built before it)
+# The compiler is a prerequisite too: c4lc itself and the c4sp that runs
+# it. C4IX rebuilds itself with c4sc, which make remakes after any change
+# to c4lc, so a disk compiled by the c4lc before it differs from what
+# C4IX builds (test-c4ix-rebuild, 2026-11-15).
+LC_SRCS="src/c4sp/lisp/c4lc*.lisp src/c4sp/lisp/c4r.lisp src/c4sp/lisp/c4opt.lisp c4sp32"
 kernel_stale=0
 [ -f $OUT/c4ke32.c4r ] || kernel_stale=1
-for dep in src/c4ke/c4ke.c load-c4r.c include/c4bb_mbox.h src/c4ke/extensions/*.c; do
+for dep in src/c4ke/c4ke.c load-c4r.c include/c4bb_mbox.h src/c4ke/extensions/*.c $LC_SRCS; do
     [ "$dep" -nt $OUT/c4ke32.c4r ] && kernel_stale=1
 done
 if [ $kernel_stale = 1 ]; then
@@ -320,10 +325,10 @@ keep() { cp "$1" "$PB/$2"; }
 # Rebuilt when ANY of C4IX changed -- kernel, libc4ix, headers, user
 # programs -- or the display header its programs include, or IMG_G, or
 # the linker (it drops unreached functions, so what it writes changes
-# with it). This used to list four kernel files, so an edit to sys.c,
+# with it), or the compiler ($LC_SRCS). This used to list four kernel files, so an edit to sys.c,
 # vfs.c or a user program was silently not built.
 if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
-   [ -n "$(find src/c4ix src/winkit libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) c4rlink32 -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
+   [ -n "$(find src/c4ix src/winkit libjs/guest/gui.h libjs/guest/gui.c libjs/guest/snd.h libjs/guest/snd.c $(ls .img_g 2>/dev/null) c4rlink32 $LC_SRCS -newer $OUT/c4ix32.c4r -type f -print -quit)" ]; then
     say "C4IX, compiled $G (c4lc)"
     rm -rf $PB
     mkdir -p $PB/kernel $PB/lib $PB/libc $PB/user $PB/desktop $PB/bin

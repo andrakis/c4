@@ -856,14 +856,22 @@ CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
    THEN
    TCUR ! ;M
 
+\ -O: a loop's condition that is a plain int constant is not tested, as
+\ c4lc's gen does (g:kint?): do ... while (K) runs its body whatever K
+\ is, and while (K) or for (;K;) with K not 0 test nothing.
+: KINT? ( n -- f )
+   OPTIMIZE @ IF DUP NUM? IF >nty @ t_int = EXIT THEN THEN DROP 0 ;
+: KTRUE? ( n -- f )  DUP KINT? IF >val @ 0<> ELSE DROP 0 THEN ;
+
 :M STMT n_while {: n | top m bb cb -- :}
    TCUR @
    BRKN @ TO bb   CNTN @ TO cb
    CHERE TO top
-   n >cond @ GEN   oBZ BR, TO m
+   -1 TO m
+   n >cond @ DUP KTRUE? IF DROP ELSE GEN  oBZ BR, TO m THEN
    n >body @ STMT
    oJMP top BACK,
-   m >RES
+   m 0< 0= IF m >RES THEN
    bb cb CHERE top RESOLVE-LOOP
    TCUR ! ;M
 
@@ -873,8 +881,9 @@ CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
    CHERE TO top
    n >body @ STMT
    CHERE TO cont
-   n >cond @ GEN
-   oBNZ top BACK,
+   n >cond @ DUP KINT? IF
+      >val @ IF oJMP top BACK, THEN
+   ELSE GEN  oBNZ top BACK, THEN
    bb cb CHERE cont RESOLVE-LOOP
    TCUR ! ;M
 
@@ -886,7 +895,7 @@ CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
    n >init @ ?DUP IF EFFECT THEN
    CHERE TO top
    -1 TO m                              \ patch 0 is a real patch index
-   n >cond @ ?DUP IF GEN  oBZ BR, TO m THEN
+   n >cond @ ?DUP IF DUP KTRUE? IF DROP ELSE GEN  oBZ BR, TO m THEN THEN
    n >body @ STMT
    CHERE TO cont
    n >step @ ?DUP IF EFFECT THEN

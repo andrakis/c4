@@ -2494,10 +2494,14 @@
 				(g:emit '(LEV)))
 		(if (= h 'break)
 			(if (= g:brk nil) (g:die "break outside of loop or switch")
-				(g:emit (list 'JMP (list 'code g:brk))))
+				(begin
+					(set! g:jumped (cons g:brk g:jumped))
+					(g:emit (list 'JMP (list 'code g:brk)))))
 		(if (= h 'continue)
 			(if (= g:cont nil) (g:die "continue outside of loop")
-				(g:emit (list 'JMP (list 'code g:cont))))
+				(begin
+					(set! g:jumped (cons g:cont g:jumped))
+					(g:emit (list 'JMP (list 'code g:cont)))))
 		(if (= h 'empty) nil
 		;; T4b: only the inliner makes these; the parser never does.
 		(if (= h 'ijmp)
@@ -2518,6 +2522,23 @@
 	(begin
 		(g:stmt (head l))
 		(next g:stmts (tail l))))))
+
+;; e is an int constant, (num V) with no type of its own, and -O is on
+(define g:kint? (lambda (e)
+	(if gen:opt
+		(if (= 'list (typeof e)) (if (= (head e) 'num) (= (length e) 2) false) false)
+	false)))
+(define g:ktrue? (lambda (e) (if (g:kint? e) (not (= (g:second e) 0)) false)))
+;; the labels a break or a continue jumped to. A loop whose condition is
+;; not tested places its end (and a do's continue) only if one did: c4fc
+;; marks a place a label only when something branches there, and a label
+;; nothing reaches would keep dead code after the loop alive, the LEV
+;; after a while (1) that only returns.
+(define g:jumped (list))
+(define g:jumped? (lambda (l ls)
+	(if (empty? ls) false (if (= (head ls) l) true (next g:jumped? l (tail ls))))))
+(define g:label-jumped! (lambda (l)
+	(if (g:jumped? l g:jumped) (g:label! l) nil)))
 
 (define g:ifstmt (lambda (s)
 	(begin
@@ -2543,13 +2564,17 @@
 		(set! g:brk lend)
 		(set! g:cont lc)
 		(g:label! lc)
-		(g:texpr (g:second s))
-		(g:emit (list 'BZ (list 'code lend)))
+		(define tested (not (g:ktrue? (g:second s))))
+		(if tested
+		(begin
+			(g:texpr (g:second s))
+			(g:emit (list 'BZ (list 'code lend))))
+		nil)
 		(define here g:lineloc)
 		(g:stmt (g:third s))
 		(g:loopline here)
 		(g:emit (list 'JMP (list 'code lc)))
-		(g:label! lend)
+		(if tested (g:label! lend) (g:label-jumped! lend))
 		(set! g:brk ob)
 		(set! g:cont oc))))
 
@@ -2566,17 +2591,19 @@
 		(set! g:cont lstep)
 		(if (= (g:second s) nil) nil (g:effect (g:second s)))
 		(g:label! lc)
-		(if (= (g:third s) nil) nil
+		(define tested (if (= (g:third s) nil) false (not (g:ktrue? (g:third s)))))
+		(if tested
 		(begin
 			(g:texpr (g:third s))
-			(g:emit (list 'BZ (list 'code lend)))))
+			(g:emit (list 'BZ (list 'code lend))))
+		nil)
 		(define here g:lineloc)
 		(g:stmt (index s 4))
 		(g:loopline here)
 		(g:label! lstep)
 		(if (= (index s 3) nil) nil (g:effect (index s 3)))
 		(g:emit (list 'JMP (list 'code lc)))
-		(g:label! lend)
+		(if tested (g:label! lend) (g:label-jumped! lend))
 		(set! g:brk ob)
 		(set! g:cont oc))))
 
@@ -2808,6 +2835,13 @@
 ;; with it must run under c4mp, not c4m (c4m traps the new opcodes).
 (define gen:cisc false)
 (define gen:fuse false)
+;; -O: a loop's condition that is a plain int constant is not tested
+;; (g:kint?). c4lc-tree's T1 already drops if (0), while (0) and
+;; for (;0;) when the function has no labels; what is left for here is
+;; do ... while (K), which runs its body whatever K is, and while (K)
+;; or for (;K;) with K not 0, which test nothing. c4fc's gen.f does the
+;; same under OPTIMIZE (KINT?).
+(define gen:opt false)
 ;; -mfpu: a float's operations are the FPU opcode where they stand (g:fpuargs)
 (define gen:fpu false)
 (define g:stubs nil)     ;; (LABEL ...) pending stub labels
@@ -3768,10 +3802,19 @@
 		(set! g:cont lc)
 		(g:label! lb)
 		(g:stmt (g:second s))
-		(g:label! lc)
-		(g:texpr (g:third s))
-		(g:emit (list 'BNZ (list 'code lb)))
-		(g:label! lend)
+		;; do ... while (0), the macro's idiom, is its body once; while (1)
+		;; is a jump back
+		(if (g:kint? (g:third s))
+			(begin
+				(g:label-jumped! lc)
+				(if (= (g:second (g:third s)) 0) nil
+					(g:emit (list 'JMP (list 'code lb))))
+				(g:label-jumped! lend))
+		(begin
+			(g:label! lc)
+			(g:texpr (g:third s))
+			(g:emit (list 'BNZ (list 'code lb)))
+			(g:label! lend)))
 		(set! g:brk ob)
 		(set! g:cont oc))))
 
@@ -4011,6 +4054,7 @@
 	(begin
 		(set! g:code (list))
 		(set! g:nlabel 0)
+		(set! g:jumped (list))
 		(set! g:ilabs (list))
 		(set! g:data (string:alloc g:DMAX))
 		(set! g:dlen 0)

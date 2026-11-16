@@ -55,8 +55,10 @@ ten instructions an item.
 
 Two halves, both in the tree.
 
-The **emitting** half is `NOPC` in `src/c4th/forth/native.f` and five
-opcodes in `c4m.c` at 79 up — `LDL`, `STL`, `POPA`, `ADDI`, `MULI`.
+The **emitting** half is `NOPC` in `src/c4th/forth/native.f` and the
+fused opcodes c4m runs, `LDL`, `STL` and `POPA`. The figures below were
+measured with five, `ADDI` and `MULI` besides, before bbb9ec3 cut the
+fused set to ten and left c4m three of them.
 `NOPC` is off by default, so the committed compiler emits nothing above
 `MOD` and its output still runs on plain `c4`. To measure with them on,
 put `1 NOPC !` in a file loaded before the benchmark:

@@ -60,7 +60,7 @@ None of these is part of `make test`.
 | target | checks |
 |---|---|
 | `make test-c4sc` | every generated unit compiles with `c4lc -O -c`; prints the expansion per file |
-| `make test-c4sc-run` | compiled c4opt produces byte-identical images to the interpreted one (needs `factorial.c4r` in the root: run `make` first) |
+| `make test-c4sc-run` | compiled c4opt produces byte-identical images to the interpreted one |
 | `make test-c4sc-lex` | compiled lexer's token dump matches the interpreted one over the c4fc lexer corpus |
 | `make test-c4sc-front` | preprocessor agrees with gcc -E on the twelve C4IX modules; parser matches the committed AST dump |
 | `make test-c4sc-back` | every image and object is byte-identical to the interpreted c4lc's; the twelve C4IX objects link to the same `c4ix.c4r` that `make c4ix.c4r` builds, and it boots |
@@ -102,9 +102,10 @@ None of these is part of `make test`.
 - It compiles the subset c4lc uses and refuses anything else. A change to
   c4lc that adds a closure or a higher-order call breaks this build.
 - `compile` mode has no `-minline`; the Lisp driver does.
-- `c4sc-main.c` goes through `gcc -E` first, because c4lc's own preprocessor
-  rejects a function-like macro named without an argument list (in
-  `include/c4.h`).
+- `c4sc-main.c` still goes through `gcc -E` first. The reason was
+  `include/c4.h`'s function-like macro named without an argument list,
+  which c4lc's preprocessor has let stand for itself since 0628331; the
+  rule was not changed.
 
 ## Docs
 

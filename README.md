@@ -181,7 +181,7 @@ Quick start
 	                      # (on Windows, under MSYS2: docs/windows.md)
 
 	make run-c4ix         # C4IX's shell
-	make run-c4dos        # C4DOS's A> prompt
+	make run-c4dos        # C4DOS's A:\> prompt
 	make run-c4dos-build  # a rung of the ladder: C4DOS builds C4KE from source on its floppy
 
 	make serve-c4bb       # the breadboard: http://localhost:8471/src/c4bb/web/index.html

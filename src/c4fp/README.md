@@ -13,6 +13,10 @@ It is what c4lc's `float` and `double` compile to (docs/c4-float.md):
 - conversions to and from `int`, `unsigned`, `long long` and `unsigned long long`;
 - conversions between the two widths.
 
+Each helper runs the machine's `FPU` opcode (89) instead when the machine
+has one (`__c4fp_hw`). With `-mfpu`, c4lc emits the opcode itself for most
+operations and calls a helper only for the rest.
+
 **How it behaves:**
 - Every result is correctly rounded: to nearest, ties to even.
 - Subnormals, signed zeros, infinities and NaNs all behave as IEEE says.

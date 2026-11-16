@@ -19,9 +19,11 @@ One line is one microstep is one bus transfer. The file holds:
   the opcode-name ROM at 0x200).
 - `routine fetch:` (required) and `routine trap:`, the trap machinery that
   builds c4m's trap frame.
-- One `op NAME:` routine per implemented opcode: 75 in all. That covers c4m's
-  0–65 except `_BLT` (a hole in c4m's own table) and all ten fused opcodes,
-  79–88 (`LDL`..`POPA`). c4mp's 66–78 are absent.
+- One `op NAME:` routine per implemented opcode: 80 in all. That covers c4m's
+  0–65 except `_BLT` (a hole in c4m's own table), all ten fused opcodes,
+  79–88 (`LDL`..`POPA`), and 90–94 (`LH LHU SH LSR LCU`,
+  [docs/c4-16bit.md](../../../docs/c4-16bit.md)). c4mp's 66–78 and `FPU`
+  (89) are named, not executed.
 - Eight of those are `jsop`: `ITH C4CF SIGH SIGI _TRP DBG C4IV FLT` run as a
   single black-box microstep implemented in `execJsop()` in
   [../sim/machine.js](../sim/machine.js), with semantics taken from c4m.c.

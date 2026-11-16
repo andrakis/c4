@@ -1,7 +1,9 @@
 # Source maps, Code Explorer, and windowed programs on the C4IX desktop
 
-A plan, written 2026-10-22, before any of it is built. Nothing here is
-done yet. It covers three pieces that depend on each other, and a fourth:
+A plan, written 2026-10-22, before any of it was built. Since then
+source maps have been built through S3: c4lc `-g` (S1), c4rlink merging
+the maps (S2, 28fbda2) and c4sc and `cc -g` (S3, 39bab69).
+The plan covers three pieces that depend on each other, and a fourth:
 
 1. **Source maps in C4R** (track S): an optional section that maps each
    code word to a file, a line and a function. Every compiler emits it,

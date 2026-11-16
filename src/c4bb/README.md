@@ -91,7 +91,7 @@ None of these are in `make test`.
 | `make test-c4bb-web` | The page in a real browser over CDP. Skips and passes when no browser answers. | |
 | `make test-c4dos-build32` | C4DOS on the board builds C4KE from source and boots it. | Under fifteen seconds, per the Makefile. |
 | `make test-c4dos-ladder32` | LADDER.BAT: the self-built compiler is a fixed point and builds the same kernel. | |
-| `make test-c4dos-c4ix32` | C4DOS on the board compiles and links C4IX, then boots it. | About four minutes of simulated hardware; not in any default chain. |
+| `make test-c4dos-c4ix32` | C4DOS on the board compiles and links C4IX, then boots it. | About four minutes of simulated hardware; in `make suite`, not `make test`. |
 | `make test-c4th-bb` | c4th (32-bit) runs on the board. | The cheap half: c4fc on c4th compiling a C4IX module on the board takes five and a half minutes and is not a routine test. |
 | `make test-c4sc-board` | The compiled c4lc (`c4sc32-fused.c4r`) compiles one C4IX module on the board, byte-identical to c4lc. | One module (`boot.c`), the smallest. |
 | `make test-ladder` | The DOS → C4KE handover and in-memory compile/link. Its script lives in `tests/`, but it runs on native 64-bit c4m, not on c4bb. | Minutes. |
@@ -128,25 +128,20 @@ repeatable, and none of the `/proc/uptime` issue that plain c4 has applies.
 
 - 32-bit images only.
 - c4mp's opcodes 66–78 (`CPUI`..`TRAW`) are named in the opcode ROM but not
-  implemented. All ten fused opcodes (79–88) are implemented.
+  implemented. All ten fused opcodes (79–88) are implemented, and so are
+  `LH LHU SH LSR LCU` (90–94); `FPU` (89) is named but not executed.
 - `STRC` prints nothing (the firmware has no symbols). `%p` prints arena
   offsets. `RALC` works, unlike native c4m's. printf runs in guest firmware,
   so absolute cycle counts after the first printf differ from native c4m.
-- `test-c4ke-mbox`, run inside `test-c4bb`, fails about one run in four with
-  "Custom opcode not found" in the mbpair message; it fails as often with the
-  older C4KE source ([docs/c4ix-desktop.md](../../docs/c4ix-desktop.md),
-  "Found on the way").
-- C4IX's vfsload sometimes loses one manifest entry at boot, which looks like
-  a preemption race; the tests require most entries, not all
+- C4IX's vfsload once lost one manifest entry at boot (2026-08), which
+  looked like a preemption race and has not been seen since; the tests
+  still require most entries, not all
   ([docs/c4bb-design.md](../../docs/c4bb-design.md), "The C4IX filesystem").
 
 ## Docs
 
 - [docs/c4bb-design.md](../../docs/c4bb-design.md): the machine, memory map,
-  devices, microcode, trap machinery, firmware and filesystems. It has
-  drifted: it does not mention the fused opcodes, says the firmware's printf
-  emits through PUTC (it now uses the UART block write), and calls the
-  machine 1 MHz (it is 20 MHz by default).
+  devices, microcode, trap machinery, firmware and filesystems.
 - [docs/c4bb-storage.md](../../docs/c4bb-storage.md): drives, media, firmware
   stages, the climb, and the opcode rungs.
 - [docs/c4bb-uart-block.md](../../docs/c4bb-uart-block.md): the UART block write.

@@ -141,15 +141,15 @@ The shell lives in [src/c4sh](../c4sh/README.md) and the benchmarks in
 
 ## Limits and known issues
 
-- Console input is a blocking line read; there is no cursor editing
-  (pressing up then Enter repeats the last command in c4sh).
+- Console input is a line read: c4sh polls `/dev/stdin` (`O_NONBLOCK`),
+  so other tasks run while it waits, but eshell's read blocks the kernel
+  until Enter. There is no cursor editing (pressing up then Enter
+  repeats the last command in c4sh).
 - Without protected mode the kernel cannot give back memory a task
   allocated and never freed -- except on libjs under C4DOS with
   `DEVICE=HEAP.SYS`, where each program task gets a heap generation of
   its own and the kernel releases it when the task is reaped
   ([docs/task-memory.md](../../docs/task-memory.md), M6).
-- `src/c4bb/tests/test-c4ke-mbox.mjs` (run by `make test-c4bb`) fails intermittently in the mbpair
-  step, as recorded in [docs/c4ix-desktop.md](../../docs/c4ix-desktop.md).
 
 ## Docs
 

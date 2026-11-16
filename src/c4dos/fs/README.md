@@ -13,9 +13,11 @@ FLUSH`, `DEVICE=DRIVES.SYS`) or a larger `SIZE=`.
 
 - **`CONFIG.SYS`**: one directive per line; `REM` lines are comments.
   C4DOS acts on `DEVICE=CLOCK.SYS`, `DEVICE=RAMDISK.SYS SIZE=n`,
-  `DEVICE=CONSOLE.SYS FLUSH` and `DEVICE=DRIVES.SYS`, and ignores `FILES=`,
-  `SHELL=` and any other `DEVICE=` line.
-- **`.BAT`**: one command per line, exactly as typed at `A>`; `@ECHO OFF`,
+  `DEVICE=CONSOLE.SYS FLUSH`, `DEVICE=DRIVES.SYS [HOME=B:]`,
+  `DEVICE=HEAP.SYS` and `DEVICE=REDIR.SYS [TAP]`, ignores `FILES=` and
+  `SHELL=`, and answers any other `DEVICE=` line as DOS 6 did ("Bad or
+  missing").
+- **`.BAT`**: one command per line, exactly as typed at `A:\>`; `@ECHO OFF`,
   `ECHO`, `REM`. A command line holds at most 16 tokens.
 - **Manifests** (`install.lst`, and `src/c4ke/fs/c4ix.lst` one rung up):
   one file name per line; `boot NAME` names the image the firmware loads,

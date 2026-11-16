@@ -27,7 +27,7 @@ boots C4KE as a C4IX task (docs/c4-float.md).
 | `make libarc.c4l` | gzip (inflate, CRC-32) and tar, for `c4ix-tar.c4r` and `c4ix-gunzip.c4r`, which link it as well |
 | `make c4ix-NAME.c4r` | `user/NAME.c` compiled with c4lc and linked with `libc4ix.c4l` (e.g. `c4ix-sh.c4r`, `c4ix-ls.c4r`) |
 | `make c4ix-hello.c4r` | `user/hello.c` alone, no library: it calls `printf` directly |
-| `make c4ix-desktop.c4r` | the desktop's seven modules linked with `libc4ix.c4l` |
+| `make c4ix-desktop.c4r` | the desktop's eleven modules linked with `libc4ix.c4l` |
 | `make c4ix-src.tar` | the kernel sources as a C4TAR1 archive, for building C4IX inside C4KE |
 
 The 32-bit images the breadboard and libjs boot (`c4ix32.c4r` and the
@@ -93,7 +93,7 @@ its own heap addresses in their symbol records, so they differ there and
 nowhere that runs. The whole tree is about 29G instructions (nine minutes
 under node). `make test-c4ix-rebuild` checks all of it.
 
-The shell's builtins are `exit jobs wait kill cd pwd help`; it has `<`,
+The shell's builtins are `exit jobs wait kill cd pwd rm mv help`; it has `<`,
 `>`, pipelines and `&`. `exit` or Ctrl-D shuts the kernel down.
 
 The desktop needs the libjs display, so it runs in the browser or headless
@@ -169,11 +169,16 @@ target.
 
 ## Limits and known issues
 
-- libc4ix's `printf` takes no width specifiers (`user/ps.c` pads by hand).
+- libc4ix's `printf` and the kernel's are one parser: the `-` and `0`
+  flags, widths and precisions (`*` too), `l ll h z`, and `d i u x X c s
+  p`; `+`, space and `#` are accepted and ignored, and there is no
+  floating point (libc's `printf` has it). `kprintf` takes a width and
+  `0` or `-` on `%d %x %s` only.
 - fd tables have 64 slots (`FD_MAX`, c4ix.h; 16 until 2026-10-29).
-- A race not yet root-caused intermittently corrupts one entry when
-  `c4ix-vfsload` fills the tree on c4bb, so `test-c4bb` only requires most
-  entries to load (see `user/vfsload.c` and `src/c4bb/tests/test-c4bb.sh`).
+- A race never root-caused once corrupted one entry when `c4ix-vfsload`
+  filled the tree on c4bb (2026-08). It has not been seen since, but
+  `test-c4bb` still only requires most entries to load (see
+  `user/vfsload.c` and `src/c4bb/tests/test-c4bb.sh`).
 
 ## Docs
 

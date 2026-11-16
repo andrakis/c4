@@ -2,8 +2,9 @@
 
 c4fc compiles C to `.c4r` images, with most of c4lc's coverage (structs,
 unions, a preprocessor, objects, `-O`), and its output is byte-identical to
-c4lc's, plain and `-O`. It has no `typedef` (c4lc does), and its `-minline` is
-a different inliner whose images differ from c4lc's. It is written in c4th ([../c4th/README.md](../c4th/README.md)) as a
+c4lc's, plain and `-O`. It has no `typedef`, `float` or `double` (c4lc has
+all three) and no `long long` on a 32-bit target, and its `-minline` is a
+different inliner whose images differ from c4lc's. It is written in c4th ([../c4th/README.md](../c4th/README.md)) as a
 small table-driven vocabulary ([`dsl.f`](dsl.f)): each C construct is one
 `NODE:` row plus one method per compiler phase.
 

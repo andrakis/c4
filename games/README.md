@@ -64,8 +64,8 @@ Its repository's branch `c4` carries, beside the game:
   that program, named alone or by its path under `/usr/games`
   (docs/c4ix-desktop.md, part twenty-four).
 
-  The menu has Cards and Puzzles in windows of their own; Doom, Quake,
-  Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, which take
+  The menu has Cards and Puzzles in windows of their own; Doom, Duke Nukem 3D,
+  Quake, Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, which take
   the whole display from a Terminal; and Text Adventures and BSD Games in a
   Terminal. Phantasia and hack are left out, since they need a current
   directory they can write.
@@ -168,6 +168,7 @@ not the one the game's `c4.mk` gives:
 | Rise of the Triad | `1rott13.zip`, Apogee's shareware package | `ROTT_ZIP` |
 | Super Blit Kart | its PNGs, maps and font, from a fixed commit of upstream's; the licence on them is not settled (`games/sbk/data/README.md`) | none |
 | OpenTyrian | `tyrian21.zip`, Tyrian 2.1, the user's own copy: it may not be passed on | `TYRIAN_ZIP` |
+| Duke Nukem 3D | `3dduke13.zip`, 3D Realms' shareware package (1.3D) | `DUKE3D_ZIP` |
 | Quake | `quake106.zip`, id's shareware package (`pak0.pak` is taken out of it) | `QUAKE_ZIP` |
 | Frotz | `zork1.z3`, `zork2.z3`, `zork3.z3`, Microsoft's MIT release of Zork, fetched from a fixed commit | `ZORK1_Z3`, `ZORK2_Z3`, `ZORK3_Z3` |
 

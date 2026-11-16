@@ -151,7 +151,4 @@ The hosted images are 64-bit, so they do not run on c4bb or libjs.
 ## Docs
 
 [docs/c4or1k-design.md](../../docs/c4or1k-design.md) has a section per
-milestone with transcripts, measurements and the bugs found on the way. Its
-opening paragraph has drifted: it says raw mode is external (`run-c4or1k.sh`)
-and not provided by the VM, which M18 changed, and it names `make
-c4or1k-m0`, which no longer exists.
+milestone with transcripts, measurements and the bugs found on the way.

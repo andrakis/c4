@@ -2,7 +2,7 @@
 
 OISC4 runs `.c4r` images, from c4cc or c4lc, on a virtual machine that has
 exactly one instruction. It loads an image, translates every C4 opcode into a
-short sequence of that instruction (1 to 11 of them), and runs the result.
+short sequence of that instruction (1 to 23 of them), and runs the result.
 Output is checked bit for bit against c4m. The self-hosted `c4` compiler and
 the `c4sp` Lisp interpreter both run inside it, and OISC4 compiled by c4lc
 runs under c4m, under plain c4, and under itself.
@@ -62,7 +62,7 @@ place OISC4 steps outside a single instruction.
 
 | Target | Output |
 |---|---|
-| `make oisc4` | `src/oisc4/oisc4`, the native build. The binary is tracked in git, so rebuilding it shows up as a change. |
+| `make oisc4` | `src/oisc4/oisc4`, the native build. |
 | `make oisc4-lc.c4r` | OISC4 compiled by c4lc `-O`: runs as a guest. |
 
 The source keeps to the dialect c4cc and c4lc accept (one `int` type, no
@@ -103,7 +103,7 @@ fused image on it.
 | File | What it is |
 |---|---|
 | `oisc4.c` | The loader, the translator and the VM, in one file. |
-| `oisc4` | The native build (tracked). |
+| `oisc4` | The native build (untracked; `make oisc4`). |
 | `test-oisc4.sh` | The comparison ladder behind `make test-oisc4`. |
 
 ## Hosts
@@ -143,5 +143,4 @@ an image that uses one fails at translation with "unknown opcode".
 
 [docs/oisc4-design.md](../../docs/oisc4-design.md): the machine, the devices,
 the translation of each opcode, verification, and a SIMD/GPU feasibility
-study. It predates the fused opcodes and does not mention them, and its
-list of files does not include the tracked `oisc4` binary.
+study.

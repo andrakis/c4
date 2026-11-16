@@ -39,7 +39,7 @@ lists as prerequisites.
 | `test-drives.mjs` | `test-c4bb.sh` | `web/drives.js` and `web/store.js`: a soft reset must not put back an ejected medium, writes persist. |
 | `test-tlev-wedge.mjs` | `test-c4bb.sh` | A `TLEV` that restores its own address cannot wedge the machine. |
 | `test-mbox.mjs` | `test-c4bb.sh` | The mailbox, host side, against `src/bb_mbox.c`. |
-| `test-c4ke-mbox.mjs` | `test-c4bb.sh` | The mailbox under C4KE: `mbecho`, then `mbpair`. Fails about one run in four; see [../README.md](../README.md#limits-and-known-issues). |
+| `test-c4ke-mbox.mjs` | `test-c4bb.sh` | The mailbox under C4KE: `mbecho`, then `mbpair`. |
 | `test-uart-block.mjs` | by hand | The UART block write is indistinguishable downstream from byte-at-a-time writes. |
 | `drive.mjs` | by hand | Types commands into `cli.js` at set times and logs the session: `node src/c4bb/tests/drive.mjs <log> <seconds> -- <cli.js args> :: cmd@sec ...`. |
 

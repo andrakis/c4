@@ -91,9 +91,7 @@ parked target.
 **Pass 2 is not implemented.** The plan in `smp.c` is to replace the round
 robin with one host thread per CPU and real `__atomic_*` builtins in the
 atomic opcodes, leaving the opcodes' interface unchanged. Today `-cpus N`
-always runs the simulated scheduler in one host thread; the header comment in
-`c4mp.h` that says "N host threads (pass 2)" describes the plan, not the
-code.
+always runs the simulated scheduler in one host thread.
 
 ## The added opcodes
 
@@ -206,8 +204,7 @@ Images are loaded only if their word size matches the machine, so the native
 ## Limits and known issues
 
 - Pass 2 (real host threads, real atomics) does not exist; see above.
-- `RALC` traps as an illegal opcode, as in c4m, where realloc has never been
-  implemented.
+- `RALC` traps as an illegal opcode; c4m has run it since 63e274a.
 - `STRC` prints a frame walk without names; the loader discards the image's
   symbol section.
 - No compiler: build images with c4lc (or c4cc, for images without the

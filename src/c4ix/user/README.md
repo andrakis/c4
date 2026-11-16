@@ -49,20 +49,23 @@ Run by `c4ix-sh` with the script as its argument.
 
 ## desktop/
 
-A Windows NT 4-style desktop, one C4IX task built from seven modules and
-linked with libc4ix (`make c4ix-desktop.c4r`; the 32-bit build comes from
+A Windows NT 4-style desktop, one C4IX task built from eleven modules over
+the window kit (`src/winkit`, which has the windows, widgets, dialogs,
+screen savers, the Calculator and the Text Editor) and linked with libc4ix (`make c4ix-desktop.c4r`; the 32-bit build comes from
 `build-images.sh`). It needs the libjs display: start C4IX in the libjs
 page and type `desktop`.
 
 | file | what |
 |---|---|
-| `desktop.h` | what the modules share: screen size (800x600), window kinds, colours, the `d_*` drawing layer |
-| `wm.c` | the window manager: the only module that touches the display (`libjs/guest/gui.h`); windows, taskbar with clock, Go menu (including Run…), menu bars, dialogs |
-| `ui.c` | stateless widgets drawn through `wm.c` |
+| `desktop.h` | what the modules share: window kinds, colours, the screen sizes Settings offers (`display_name`), the `d_*` drawing layer |
+| `shell.c` | the desktop's shell: it owns the display (`libjs/guest/gui.h`) and runs the loop, and draws the picture, icons, taskbar (with the volume in its tray) and Go menu (including Run…); Settings' choices are kept in `/etc/desktop.cfg` |
+| `tools.c` | the desktop's own window kinds as window kit classes, and the calls the tools were written against |
+| `host.c` | what the window kit asks of its host: memory and files |
+| `wall.c` | the desktop's picture: the boot logo stretched over the screen, as tiles the display keeps |
 | `term.c` | Terminal: a real `c4ix-sh -p` task on pipes, drawn through a VT100 subset, line-edited locally (Left/Right, Home/End, a 16-line history on Up/Down) with 300 rows of scrollback; Ctrl-C interrupts its foreground job |
 | `files.c` | Explorer: folder tree and file list over the VFS; double-click runs a program in a new Terminal |
 | `taskmgr.c` | System Monitor: Applications, Processes (CPU share over the last second, with System and idle rows, and an Interval column), Performance |
-| `apps.c` | Text Editor, Calculator, About |
+| `apps.c` | About and Settings |
 | `edit.c` | Editor, the IDE: a VIM-mode editor (`:set novim` for a plain one; arrow keys in every mode) that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file that names it, or has `cc -O -l c4ix` build a `.c` none names into `/tmp/NAME.c4r`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Explorer opens source files here |
 | `hl.c` | the IDE's syntax colouring: C, JavaScript, Lisp, Forth, shell and B4KE, a line at a time |
 | `explore.c` | the IDE's Code tab (View > Code, F7): the functions, and the C4 code of one with its source lines between the instructions, for a `.c` file (by `cc -g`, following the cursor) or any compiled file opened as it is, with the shared libraries it loads |

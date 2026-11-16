@@ -2,8 +2,9 @@
 
 C4DOS is the bottom rung of the ladder (C4DOS → C4KE → C4IX): a
 single-tasking, trap-free disk operating system in the classic DOS shape.
-It reads `CONFIG.SYS`, runs `AUTOEXEC.BAT`, shows an `A>` prompt, and runs
-transient programs that load, run and return. It needs no scheduler, no
+It reads `CONFIG.SYS`, runs `AUTOEXEC.BAT`, shows an `A:\>` prompt (with
+the current directory in it), and runs transient programs that load, run
+and return. It needs no scheduler, no
 traps and no opcode above c4's original `EXIT`, except the clock (`TIME`),
 which is compiled in only for the clock builds and switched on only by
 `DEVICE=CLOCK.SYS`. The clockless build runs under unmodified `c4`.
@@ -64,14 +65,19 @@ C4DOS takes no command-line options; it is configured by `CONFIG.SYS`:
 |---|---|
 | `DEVICE=CLOCK.SYS` | enables `TIME` and the API's clock slot (clock builds only) |
 | `DEVICE=RAMDISK.SYS SIZE=n` | a RAM disk of `n` bytes (default 1 MB); without it nothing can be written |
-| `DEVICE=CONSOLE.SYS FLUSH` | print `A>` without a newline (for consoles that show a partial line, like c4bb's UART) |
-| `DEVICE=DRIVES.SYS` | use c4bb's drives; enables `B:`, `C:` … |
+| `DEVICE=CONSOLE.SYS FLUSH` | print the prompt (`A:\>`) without a newline (for consoles that show a partial line, like c4bb's UART) |
+| `DEVICE=DRIVES.SYS [HOME=B:]` | use c4bb's drives; enables `B:`, `C:` …; `HOME=` is where files are written |
+| `DEVICE=HEAP.SYS` | each program gets a heap generation of its own, released when it is unloaded (libjs's heap) |
+| `DEVICE=REDIR.SYS [TAP]` | `>`, `>>`, `<` and `|` at the prompt; `TAP` also catches what a program prints for itself, where the machine has a console tap |
 
-Commands at the prompt: `DIR [/P]`, `TYPE`, `COPY`, `RUN prog[.c4r]
-[args]`, `ECHO [ON|OFF|text]`, `REM`, `VER`, `TIME`, `MEM`, `EXIT`, a drive
-letter such as `B:`, a bare program name, or a `.BAT` file name. Names
-resolve on the RAM disk before the disk; `ram:name` opens only the RAM
-copy.
+An unknown `DEVICE=` line gets DOS 6's "Bad or missing".
+
+Commands at the prompt: `DIR [/P]`, `TYPE`, `COPY`, `DEL`/`ERASE`,
+`CD`/`CHDIR`, `MD`/`MKDIR`, `RD`/`RMDIR`, `PATH`, `APPEND`, `RUN
+prog[.c4r] [args]`, `ECHO [ON|OFF|text]`, `REM`, `VER`, `TIME`, `MEM`,
+`EXIT`, a drive letter such as `B:`, a bare program name, or a `.BAT`
+file name. Names resolve on the RAM disk before the disk; `ram:name` opens
+only the RAM copy.
 
 ## Test
 
@@ -125,19 +131,18 @@ against `include/u0lite.h` instead of `u0.h`.
 - A command line holds at most 16 tokens (`ARGVMAX`). Linking C4IX needs
   more, which is why `c4rlink` accepts `@file` response files and why
   `fs/c4ix.objs` exists.
-- No `>` redirection, by design: tools write files through the API.
+- `>`, `>>`, `<` and `|` only with `DEVICE=REDIR.SYS`; without it, tools
+  write files through the API.
 - The RAM disk has 64 slots and 8 open handles, and dies with the session
   unless saved with `bbsave` or `install`.
-- DOS never gets back memory a transient allocated; many compiler runs in
-  one session accumulate. Building C4IX is left to C4KE for that reason.
+- Without `DEVICE=HEAP.SYS` (libjs's heap only), DOS never gets back
+  memory a transient allocated, and many compiler runs in one session
+  accumulate. `IX` builds C4IX in one session all the same
+  (`make test-c4dos-c4ix32`).
 
 ## Docs
 
 - [docs/c4dos-design.md](../../docs/c4dos-design.md): the design contract.
-  It has drifted: its status line is dated 2026-08-21, and it names files
-  that do not exist (such as `c4dos_load.c`). The build moved from c4cc to
-  c4lc after it was written; the header of `c4dos.c` still shows the c4cc
-  command.
 - [docs/compiler-on-the-board.md](../../docs/compiler-on-the-board.md):
   building C4KE and C4IX on c4bb, with cycle counts.
 - [docs/climbing-the-ladder.md](../../docs/climbing-the-ladder.md): the

@@ -101,6 +101,3 @@ only when the nested c4m reads its clock from `/proc/uptime`, which is
 when plain c4 runs it (`-c`, or a C4DOS floppy's `c4m.c4r`). C4IX and
 C4KE have that file, and so do c4bb and libjs, so `innerbench -c` runs
 inside both kernels on every host but Windows (C4IX's on Windows too).
-
-## Limits and known issues
-

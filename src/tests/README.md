@@ -13,7 +13,8 @@ repo root, so C4KE can run them by name (`./c4m load-c4r.c -- c4ke.c4r
 test_basic`). The `.c4r` files are build outputs and are not tracked.
 
 `make test-c4lc` parses every `.c` here with c4lc (except `genfloat.c`,
-`test_illins.c` and `c4lc_pp.c`), so a file in this folder must at least
+`test_illins.c`, `c4lc_pp.c`, and test-srcmap's `srcmap_probe.c` and
+`srcmap_link.c`), so a file in this folder must at least
 be valid c4cc-dialect C.
 
 ## The corpus (`TESTS_C4R`)

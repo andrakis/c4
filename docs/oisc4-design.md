@@ -347,7 +347,7 @@ stepper is replaced — which was the point of banning host pointers.
 
 ```
 src/oisc4/oisc4.c        VM + translator + loader, single file, c4 dialect
-src/oisc4/oisc4          the native build (tracked in git)
+src/oisc4/oisc4          the native build (untracked; make oisc4)
 src/oisc4/test-oisc4.sh  the comparison ladder
 make oisc4               native build
 make test-oisc4          output-compare ladder vs c4m

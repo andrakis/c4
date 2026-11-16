@@ -68,10 +68,8 @@ if that open fails it falls back to a blocking `read` of fd 0.
 
 ## Limits and known issues
 
-- The header comment in `c4sh.c` is out of date: it shows an old build
-  command (`./c4r … u0.c`), says `kill` is not implemented (it is), and
-  lists "functions" and "running scripts". There is no script-file mode:
-  `main` always reads from stdin.
+- There are no shell functions and no script-file mode: `main` always
+  reads from stdin.
 - `set` has no usage text (`help set` prints nothing further).
 
 ## Docs

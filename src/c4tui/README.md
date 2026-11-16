@@ -80,6 +80,4 @@ which fails if the flush stops being incremental.
 ## Docs
 
 [docs/c4tui-design.md](../../docs/c4tui-design.md) has the API and the
-design. It has drifted in one place: its limit "in a browser, keys do not
-arrive yet" was fixed by commit d9f919e, which made c4bb's web terminal
-send raw key sequences when a program has `/dev/tty` open.
+design.

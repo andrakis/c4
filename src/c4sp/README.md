@@ -127,23 +127,18 @@ the default `make` copies there.
 
 ## Limits and known issues
 
-- c4lc's preprocessor rejects a function-like macro named without an argument
-  list, and `include/c4.h` has one. Builds that include it (`c4sp.c4r`,
-  `c4sc.c4r`, `c4th32.c4r`) still preprocess with `gcc -E` first. C4IX builds
-  with `-P` and no gcc.
+- `c4sp.c4r`, `c4sc.c4r` and `c4th32.c4r` still preprocess with `gcc -E`
+  first, from when c4lc's preprocessor rejected `include/c4.h`'s
+  function-like macro named without an argument list; it lets the name
+  stand for itself now (0628331). C4IX builds with `-P` and no gcc.
 - Integer division stays integer even with float arguments in scope; write
   `(/ 10.0 4)` for a float result (`lisp/floats.lisp`).
 - c4sp treats `()` and `nil` as the same value, so `arguments.lisp` prints
   `nil` where alisp prints `()` ([tests/README.md](tests/README.md)).
-- The header comment of `c4sp.c` says the image is compiled by c4cc; the
-  Makefile builds it with c4lc.
 
 ## Docs
 
-- [c4sp-design.md](../../docs/c4sp-design.md): the interpreter. Drifted: it
-  describes a single fixed arena, but the arena now grows, and it predates the
-  register spill that makes the `-O2` native build safe (both in
-  `include/gc.h`).
+- [c4sp-design.md](../../docs/c4sp-design.md): the interpreter.
 - [c4lc-design.md](../../docs/c4lc-design.md): the compiler, milestones L0–L11,
   measured results. c4lc images of c4ke, c4sp and c4m are 18–27% smaller than
   c4cc's.

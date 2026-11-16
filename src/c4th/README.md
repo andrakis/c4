@@ -94,15 +94,13 @@ Details of the test files are in [tests/README.md](tests/README.md).
 
 ## Limits and known issues
 
-- c4lc's own preprocessor cannot read `c4th.c` (a function-like macro named
-  without an argument list), so both image builds go through `gcc -E`.
+- Both image builds go through `gcc -E`: c4cc has no preprocessor, and
+  `c4th32.c4r`'s rule is from before c4lc's preprocessor took a
+  function-like macro named without an argument list (0628331).
 - There is no saved image: the dictionary holds real addresses, so the
   sources are loaded at every start (about 19 s for c4fc's on c4bb).
 
 ## Docs
 
 - [c4th-design.md](../../docs/c4th-design.md): design and milestones B1–B6.
-  §2 Layout has drifted: it lists `coreext.f` and `meta.f`, which do not
-  exist, and misses `ext.f`, `locals.f`, `peep.f`, `self.f`, `trt.f` and
-  `dos.f`.
 - [c4th-selfhost.md](../../docs/c4th-selfhost.md): B5d.5, the fixed point.

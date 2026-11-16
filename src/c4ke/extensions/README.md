@@ -36,8 +36,8 @@ c4bb and in libjs.
 | `c4ke_boot.c` | `boot` | `OP_KBOOT`, which `bin/kboot.c` raises: the kernel shuts down as when init exits, and then loads and runs another kernel image (C4IX, built by b4ke) through `kernel_handoff`, last thing in `main`. When that returns, so does C4KE. [docs/c4dos-ladder.md](../../../docs/c4dos-ladder.md) | always |
 | `c4ke_mbox.c` | `mbox` | message frames: `OP_MBOX_INFO/SEND/RECV/AWAIT` for the c4bb host mailbox and `OP_MSG_SEND/RECV` for per-task inboxes. User side: `include/c4ke_mbox.h` | the task-to-task half always; the host half only when the host announces a mailbox |
 
-`c4ke_pm.c`'s header still says "Shelved"; protected mode is optional
-rather than shelved now, and `make test-task-mem` depends on it
+Protected mode (`c4ke_pm.c`) is optional and off by default, and
+`make test-task-mem` builds its own kernels with it
 (`include/config.h`, [docs/task-memory.md](../../../docs/task-memory.md)).
 
 The mailbox is documented in [docs/c4bb-design.md](../../../docs/c4bb-design.md)

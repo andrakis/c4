@@ -225,19 +225,10 @@ c4rdump [-aicdps] [--] file1.c4r [...fileN.c4r]
   `&fn`. Found by c4lc's differential tests ([c4lc-design.md](../../docs/c4lc-design.md) L3).
 - `-pie` is parsed but broken: the parser matches the `p` and then rejects the
   following `i` as an unknown option.
-- `make test-c4rstrip` and `make test-c4sc-run` depend on `hello.c4r` and
-  `factorial.c4r` in the repo root, which have no rule of their own; they are
-  copied there by the default `make` (`pre`). Run `make` first.
 
 ## Docs
 
-- [internals.md](../../docs/internals.md) Part 5 describes c4cc's design. It
-  has drifted: it lists `switch`/`break` and arrays as missing, but both are
-  implemented.
-- The header comment of [`asm-c4r.c`](asm-c4r.c) still calls version 3 an
-  unimplemented proposal. Version 3 as written today is the MEMSZ field
-  described above; the source-map and opcode-check ideas in that comment were
-  never built.
+- [internals.md](../../docs/internals.md) Part 5 describes c4cc's design.
 - [compiler-on-the-board.md](../../docs/compiler-on-the-board.md): c4cc on
   c4bb, response files, measured costs.
 - [c4lc-design.md](../../docs/c4lc-design.md) §5.1 lists c4cc bugs that c4lc

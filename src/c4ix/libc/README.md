@@ -36,7 +36,7 @@ same commands with `./c4sp32 ... src/c4sp/lisp/c4lc.lisp` and `-I src/c4ix/libc/
 | `sys.h` | private: the libc4ix functions the library is built on |
 | `string.c` | string.h and ctype.h |
 | `stdlib.c` | `malloc` (a size word ahead of each block), `realloc`, `exit` and `atexit`, `strtol`, `qsort`, the environment (read in from the kernel's copy, which `execve` set), `rand` |
-| `stdio.c` | `FILE`s, `fopen` and the rest, `fseek`/`ftell`/`rewind`, `fread` straight into the caller's memory for large reads, `printf` with flags, widths, precisions and every conversion, and `scanf`/`sscanf`/`fscanf`: `d i u o x X p n c s [set] f e g a`, widths, `*`, `h hh l ll` |
+| `stdio.c` | `FILE`s, `fopen` and the rest, `fseek`/`ftell`/`rewind`, `fread` straight into the caller's memory for large reads, `printf` with flags, widths, precisions and every conversion but `%a`, and `scanf`/`sscanf`/`fscanf`: `d i u o x X p n c s [set] f e g a`, widths, `*`, `h hh l ll` |
 | `fp.c` | `printf`'s `%f %e %g` digits and `strtod`/`strtof`/`atof`, exact both ways (glibc's answers) |
 | `math.c` | `<math.h>`, after fdlibm: within an ulp or two of glibc, the bit-exact ones exact |
 | `unix.c` | `open` … `rename`, `lseek`, `stat` and `fstat`, `link`, `truncate`, `execve` and `waitpid`, `opendir`, `getopt`, `errno` and `strerror`, `time`. `vfork` is libc4ix's, since it must execute the syscall itself (`src/c4ix/sched.c`) |
@@ -61,13 +61,16 @@ c4rlink prog.c4o string.c4o stdlib.c4o stdio.c4o unix.c4o fp.c4o math.c4o \
 ```
 
 (`make wolf3d-bare-objs` builds them, in `.wolf3d-bare/libc-*.c4o`.)
-Files are the machine's: `open` and `read` on the host's directory, and
-writing only to the console. A file opened for reading is read whole into
+Files are the machine's drives: read from drive 1, then drive 0, and
+written to drive 1 when the machine has a write head (otherwise only the
+console takes output). A file opened for reading is read whole into
 memory when it opens, so `lseek` works on it, which the machine itself
 cannot do (Doom reads its WAD a lump at a time). Under C4DOS -- the loader fills in
 `__c4dos_api` -- `bare.c` asks DOS first: `open` of a DOS file, `create`
 and `write` on its RAM disk, and `exit` through `dos_exit`, back to the
-prompt. Directories, `lseek`, pipes and `execve` are not there, and fail.
+prompt. Directories, pipes and `execve` are not there, and fail; on a
+file being written, `lseek` only says where it has got to (enough for
+`ftell`).
 
 ## Limits
 

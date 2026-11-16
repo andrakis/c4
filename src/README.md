@@ -214,7 +214,7 @@ compiled), and it rebuilds itself from the repo its disk unpacks at `/usr`
 
 **Folder:** [c4dos/](c4dos/).
 
-A single-tasking, trap-free DOS: `CONFIG.SYS`, `AUTOEXEC.BAT`, an `A>` prompt,
+A single-tasking, trap-free DOS: `CONFIG.SYS`, `AUTOEXEC.BAT`, an `A:\>` prompt,
 a RAM disk and transient programs. It uses nothing beyond c4's own opcodes,
 so its clockless build runs under plain c4 through `c4l.c`. It is the
 ladder's first rung.
@@ -282,8 +282,9 @@ evaluator with `call/cc`, and binary32 floats.
 **c4lc** is an optimizing C compiler written in that Lisp. It supports
 structs, typedef, its own preprocessor, separate compilation, tree passes and
 a peephole optimizer, and it has flags for the fused and CISC opcodes and for
-inlining. It has the integer types, `long long` and, in software, `float` and
-`double` ([docs/c4-float.md](../docs/c4-float.md)). Its images are 18–27%
+inlining. It has the integer types, `long long`, and `float` and `double`, in
+software or, with `-mfpu`, as the FPU opcode
+([docs/c4-float.md](../docs/c4-float.md)). Its images are 18–27%
 smaller than c4cc's.
 
 c4lc compiles C4IX, C4DOS, c4mp, c4or1k, c4tui and the 32-bit c4th. The

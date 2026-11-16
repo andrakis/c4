@@ -32,7 +32,3 @@ Two things from here live on elsewhere:
 
 - The build steps in `c4lm.c`'s header (`make run`, `make boot.c`) do not
   exist for CALM; `make run` in this repo boots C4KE.
-- The top-level [`c4lm/`](../../c4lm/) directory is a duplicate of this one:
-  `c4lm/include`, `c4lm/src/include` and `src/c4lm/include` are
-  byte-identical, `c4lm/src/*.c` match the files here, and it carries a stray
-  object file, `c4lm/load-c4r.o`.

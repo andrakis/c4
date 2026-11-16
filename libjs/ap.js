@@ -11,7 +11,7 @@
 
 import { Arena } from '../src/c4bb/sim/arena.js';
 import { OP, STOP, Machine, C4I_MMU, C4I_ACCEL } from './c4m.js';
-import { accel, loadAccel } from './accel.js';
+import { accel, loadAccel, adoptAccelSwitch } from './accel.js';
 import { Mmu, FAULT } from './mmu.js';
 import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE, DMA_FAULT } from './par.js';
 import { SharedHeap } from './sheap.js';
@@ -262,7 +262,7 @@ const isNode = typeof process !== 'undefined' && process.versions && process.ver
   typeof self === 'undefined';
 if (isNode) {
   const { parentPort } = await import('node:worker_threads');
-  parentPort.once('message', async msg => { await loadAccel(msg.accelNames); main(msg); process.exit(0); });
+  parentPort.once('message', async msg => { adoptAccelSwitch(msg.accelSwitch); await loadAccel(msg.accelNames); main(msg); process.exit(0); });
 } else {
-  self.onmessage = async e => { if (e.data.type === 'init') { await loadAccel(e.data.accelNames); main(e.data); self.close(); } };
+  self.onmessage = async e => { if (e.data.type === 'init') { adoptAccelSwitch(e.data.accelSwitch); await loadAccel(e.data.accelNames); main(e.data); self.close(); } };
 }

@@ -3075,7 +3075,7 @@ libc4ix.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4IX_SRC)/
 # unpack archives. The board disk's copy is built -mfuse by
 # build-images.sh; this one is plain, because native c4m lacks most of
 # the fused opcodes.
-libarc.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/include/archive.h $(C4IX_SRC)/include/c4ix_user.h
+libarc.c4l: c4sp $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/include/archive.h $(C4IX_SRC)/include/c4ix_user.h $(C4IX_SRC)/include/c4ix_accel.h
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/archive.c .c4ix_arc.c4o > /dev/null
 	$(C4RLINK) -r .c4ix_arc.c4o -o libarc.c4l
 	rm -f .c4ix_arc.pp.c .c4ix_arc.c4o
@@ -3140,7 +3140,7 @@ $(C4IX_ARC_PROGS): c4ix-%.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c
 C4IX_DESKTOP := shell tools host term files taskmgr apps edit hl explore wall
 WINKIT := draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
 C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/*.h libjs/guest/gui.h \
-                    $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/libc/fp.c
+                    $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/include/c4ix_accel.h $(C4IX_SRC)/libc/fp.c
 C4IX_DESKTOP_LC = $(C4SPLC) src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC)/include -I $(C4IX_SRC)/user/desktop -I src/winkit
 c4ix-desktop.c4r: c4sp $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_DESKTOP_SRC)
 	for m in $(C4IX_DESKTOP); do \

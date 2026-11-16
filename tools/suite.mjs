@@ -7,6 +7,7 @@
 //   -o DIR        logs and the result go here (default .suite/)
 //   -j N          at most N tests at once (default: processors - 1)
 //   --cpus N      processors the tests may use between them (default: processors - 1)
+//                 (processors: those this process may run on, if pinned to fewer)
 //   --reserve MB  memory left free for everything else (default 300)
 //   --mem MB      memory the machine can grow to (default: $SUITE_MEM, else
 //                 what it has now). A Hyper-V guest with Dynamic Memory
@@ -58,7 +59,19 @@ for (let i = 0; i < argv.length; i++) {
   else if (a.startsWith('-')) { console.error(`suite: unknown option ${a}`); process.exit(2); }
   else tests.push(a);
 }
-const NCPU = cpus().length;
+// The processors this process may run on: all of them, unless it was
+// pinned to fewer (taskset; Helios's c4-lock pins each job to half the
+// machine, so a suite there packs its tests onto those and no more)
+function allowedCpus() {
+  try {
+    const m = /Cpus_allowed_list:\s*(\S+)/.exec(readFileSync('/proc/self/status', 'utf8'));
+    let n = 0;
+    if (m) for (const r of m[1].split(',')) { const [a, b] = r.split('-').map(Number); n += (b ?? a) - a + 1; }
+    if (n > 0) return Math.min(n, cpus().length);
+  } catch {}
+  return cpus().length;
+}
+const NCPU = allowedCpus();
 if (!opt.cpus) opt.cpus = Math.max(1, NCPU - 1);
 if (!opt.jobs) opt.jobs = opt.cpus;
 const WIN = process.platform === 'win32';

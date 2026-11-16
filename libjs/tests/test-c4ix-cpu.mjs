@@ -42,7 +42,8 @@ const top = n => {
   until(() => (text(n0).match(/top: \d+ tasks/g) || []).length >= n && /c4ix:\/\$ *$/.test(text(n0)), 3000);
   if (process.env.SHOW) console.log(text(n0));
   return text(n0).split(/top: (?=\d+ tasks)/).slice(1).map(s => {
-    const lines = s.split('\n');
+    // top erases each line's rest (ESC [ K) after writing it
+    const lines = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n');
     const rows = lines.map(l => row.exec(l)).filter(Boolean).map(m => ({ id: +m[1], pct: +m[5], name: m[6] }));
     const sys = lines.map(l => sysrow.exec(l)).filter(Boolean).map(m => +m[1]);
     return { s, rows, sys: sys.length === 1 ? sys[0] : null, usage: +(/CPU usage (\d+)%/.exec(s) || [])[1] };

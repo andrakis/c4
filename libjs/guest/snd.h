@@ -38,10 +38,16 @@ enum {
 	SND_PCM_ADDR = 0x494, SND_PCM_LEN = 0x498, SND_PCM_RATE = 0x49c, SND_PCM_VOL = 0x4a0,
 	SND_PCM_PLAY = 0x4a4, SND_PCM_STOP = 0x4a8, SND_PCM_SETVOL = 0x4ac, SND_PCM_BUSY = 0x4b0,
 	SND_SPK = 0x4b4, SND_RESET = 0x4b8, SND_MASTER = 0x4bc, SND_MIDI = 0x4c0, SND_MIDI_DATA = 0x4c4,
+	SND_PCM_START = 0x4c8, SND_PCM_CHVOL = 0x4cc,
 	C4I_SND = 0x8000
 };
 // CAPS
-enum { SND_HAS_OPL = 1, SND_HAS_PCM = 2, SND_HAS_SPK = 4, SND_HAS_OPL3 = 8, SND_HAS_PCM16 = 16, SND_HAS_MIDI = 32 };
+enum { SND_HAS_OPL = 1, SND_HAS_PCM = 2, SND_HAS_SPK = 4, SND_HAS_OPL3 = 8, SND_HAS_PCM16 = 16, SND_HAS_MIDI = 32,
+	SND_HAS_START = 64 };
+// snd_play and snd_volume are each one write of the card's (PCM_START,
+// PCM_CHVOL) where it has SND_HAS_START: two programs playing samples at
+// once never mix up one's sample with the other's, as the five writes of
+// PCM_ADDR ... PCM_PLAY can (snd-device.js)
 // sample channels: sixteen since SND_HAS_PCM16, eight on a card without it.
 // Eight were too few for Quake, whose own mixer has eight for what starts
 // besides its ambience and its looped sounds.

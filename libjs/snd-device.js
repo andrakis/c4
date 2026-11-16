@@ -32,6 +32,19 @@
 //   0x4C4 MIDI_DATA w    one byte, as an MPU-401's data port takes them in
 //                        UART mode: running status, and system exclusives
 //                        (F0 ... F7) whole when their F7 comes
+//   0x4C8 PCM_START w    the address of five words, ch, data, len, rate, vol:
+//                        PCM_PLAY's sample, said in one write
+//   0x4CC PCM_CHVOL w    ch | (vol << 8): PCM_SETVOL's, in one write
+//
+// One write, not five. ADDR, LEN, RATE and VOL are the card's, not a
+// program's: two programs that play samples at once -- two Quakes on two
+// CPUs, or one preempted between its ADDR and its PLAY -- can each set
+// them before the other's PLAY, which then plays the other's sample, or
+// under C4IX's MMU is refused it (it is not in the player's space) and
+// the player is killed for "a device's read of" the other's memory. A
+// write of PCM_START is one register's: whatever else runs, the sample
+// is the one its block says, and the latches are left as they were.
+// CAPS bit 6 says the card has the two (snd.c uses them when it does).
 //
 // The MIDI port. CAPS bit 5 is there when the person chose General MIDI
 // for the music (the page's Configuration, cli.js --midi): a synth hears
@@ -62,8 +75,9 @@ export const SND = {
   PCM_ADDR: 0x494, PCM_LEN: 0x498, PCM_RATE: 0x49c, PCM_VOL: 0x4a0,
   PCM_PLAY: 0x4a4, PCM_STOP: 0x4a8, PCM_SETVOL: 0x4ac, PCM_BUSY: 0x4b0,
   SPK: 0x4b4, RESET: 0x4b8, MASTER: 0x4bc, MIDI: 0x4c0, MIDI_DATA: 0x4c4,
+  PCM_START: 0x4c8, PCM_CHVOL: 0x4cc,
 };
-export const HAS_MIDI = 32;
+export const HAS_MIDI = 32, HAS_START = 64;
 // what the listener gets: [kind, t (us), ...], in the order they happened
 //   [OPL, t, reg, val]   [PCM, t, ch, rate, vol, bytes]   [STOP, t, ch | -1]
 //   [VOL, t, ch, vol]    [SPK, t, divisor]                [RESET, t]
@@ -128,9 +142,23 @@ export class SoundDevice {
     return this.cursor;
   }
 
+  // A sample on channel ch, now: PCM_PLAY's, or PCM_START's
+  play(ch, addr, len, rate, vol) {
+    const c = ch & (CHANNELS - 1);
+    // inside the arena, or nothing: never a copy through a wild pointer
+    if (len <= 0 || len > PCM_MAX) return;
+    // the task's own samples, wherever they are in memory, or its page fault
+    const bytes = this.arena.dmaRead(addr, len);
+    if (bytes.length !== len) return;
+    const t = this.now();
+    this.emit([EVT.PCM, t, c, rate, vol, bytes]);
+    this.ends[c] = t + len * 1e6 / rate;
+    this.plays++;
+  }
+
   read32(addr) {
     switch (addr) {
-      case SND.CAPS: return 1 | 2 | 4 | 8 | 16 | (this.midi ? HAS_MIDI : 0);
+      case SND.CAPS: return 1 | 2 | 4 | 8 | 16 | HAS_START | (this.midi ? HAS_MIDI : 0);
       case SND.AHEAD: return Math.max(0, Math.min(0x7fffffff, Math.round(this.cursor - this.now())));
       case SND.CLOCK: return this.clock;
       case SND.PCM_ADDR: return this.pcm.addr;
@@ -172,18 +200,21 @@ export class SoundDevice {
       case SND.PCM_RATE: this.pcm.rate = Math.max(100, Math.min(200000, v | 0)); return;
       case SND.PCM_VOL: this.pcm.vol = v & 0xffff; return;
       case SND.PCM_PLAY: {
-        const c = v & (CHANNELS - 1), { addr, len, rate, vol } = this.pcm;
-        // inside the arena, or nothing: never a copy through a wild pointer
-        if (len <= 0 || len > PCM_MAX) return;
-        // the task's own samples, wherever they are in memory, or its page fault
-        const bytes = this.arena.dmaRead(addr, len);
-        if (bytes.length !== len) return;
-        const t = this.now();
-        this.emit([EVT.PCM, t, c, rate, vol, bytes]);
-        this.ends[c] = t + len * 1e6 / rate;
-        this.plays++;
+        const { addr, len, rate, vol } = this.pcm;
+        this.play(v, addr, len, rate, vol);
         return;
       }
+      case SND.PCM_START: {
+        // the block, then its sample: both the writer's, or its page fault
+        const d = this.arena.dmaRead(v >>> 0, 20);
+        if (d.length !== 20) return;
+        const w = k => d[k * 4] | (d[k * 4 + 1] << 8) | (d[k * 4 + 2] << 16) | (d[k * 4 + 3] << 24);
+        this.play(w(0), w(1) >>> 0, w(2), Math.max(100, Math.min(200000, w(3))), w(4) & 0xffff);
+        return;
+      }
+      case SND.PCM_CHVOL:
+        this.emit([EVT.VOL, this.now(), v & (CHANNELS - 1), (v >>> 8) & 0xffff]);
+        return;
       case SND.PCM_STOP: {
         const t = this.now();
         if ((v | 0) < 0) this.ends.fill(0); else this.ends[v & (CHANNELS - 1)] = 0;

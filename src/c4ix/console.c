@@ -49,6 +49,7 @@ static int  con_gate;           // cycle count of the last host read
 // output is still logged -- declared up here, ahead of con_init
 enum { CON_PRE = 2048, CON_LOG_MAX = 262144 };
 static struct vnode *con_log;
+static int  con_lost;           // bytes /var/log/kernel had no memory for, since it last had
 static char con_pre[CON_PRE];
 static int  con_npre;
 static int  con_booting;
@@ -129,10 +130,35 @@ int con_read(char *buf, int len) {
 // redraws would fill it within minutes. Lines from before the VFS exists
 // wait in con_pre. It stops at CON_LOG_MAX: a log, not a ring.
 
+//
+// The file grows as it is written, and under memory pressure a grow can
+// fail: a byte with no room is counted, and the next line that has room
+// starts by saying how many went missing, so a gap is never silent. (Its
+// lines are all in dmesg's ring too, which never needs memory.)
+static char *con_lostmsg = "[/var/log/kernel: no memory to grow, bytes lost here (dmesg has them): ";
+
 static void con_logc(int c) {
-    if (con_log) vfs_logc(con_log, c, CON_LOG_MAX);
-    else if (con_npre < CON_PRE) { con_pre[con_npre] = c; ++con_npre; }
+    char d[12];
+    int k, n;
+    if (!con_log) {
+        if (con_npre < CON_PRE) { con_pre[con_npre] = c; ++con_npre; }
+        return;
+    }
+    if (con_lost && con_log->size < CON_LOG_MAX && (!con_log->size || con_log->data[con_log->size - 1] == '\n')) {
+        n = con_lost;
+        con_lost = 0;
+        k = 0;
+        while (con_lostmsg[k]) { if (!vfs_logc(con_log, con_lostmsg[k], CON_LOG_MAX)) ++con_lost; ++k; }
+        k = 0;
+        if (!n) { d[0] = '0'; k = 1; }
+        while (n) { d[k] = '0' + n % 10; n = n / 10; ++k; }
+        while (k) { --k; if (!vfs_logc(con_log, d[k], CON_LOG_MAX)) ++con_lost; }
+        if (!vfs_logc(con_log, ']', CON_LOG_MAX)) ++con_lost;
+        if (!vfs_logc(con_log, '\n', CON_LOG_MAX)) ++con_lost;
+    }
+    if (!vfs_logc(con_log, c, CON_LOG_MAX) && con_log->size < CON_LOG_MAX) ++con_lost;
 }
+
 // ---- the kernel log (dmesg, /proc/kmsg) ----
 //
 // Every line the kernel says -- kprintf's, kputs', klog's -- goes into a

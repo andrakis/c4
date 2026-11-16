@@ -76,7 +76,7 @@ const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
 // in Node), with 119k of its 135k requests these writes. PCM_PLAY copies
 // the samples, and the display's BELL and FBFLIP read the frame, so they
 // still ask.
-export const POSTED = new Set([0x484, 0x488, 0x490, 0x494, 0x498, 0x49c, 0x4a0, 0x4a8, 0x4ac, 0x4b4, 0x4b8]);
+export const POSTED = new Set([0x484, 0x488, 0x490, 0x494, 0x498, 0x49c, 0x4a0, 0x4a8, 0x4ac, 0x4b4, 0x4b8, 0x4cc]);
 // Each CPU's queue, in a SharedArrayBuffer of its own: its head (CPU 0's,
 // the next to apply), its tail (the CPU's, the next free), then PQLEN
 // entries of two words, (8-bit << 16) | addr and the value.

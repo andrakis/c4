@@ -265,11 +265,11 @@ for want in "C4IX booting" "protected mode on for user tasks, preemption on" \
 done
 
 # the C4IX VFS: vfsload populates a real hierarchical tree from
-# c4ix.vfs.txt at boot (src/c4ix/user/vfsload.c). KNOWN ISSUE: a
-# timing-sensitive race (documented at length in vfsload.c, not yet
-# root-caused - see docs/c4bb-design.md) intermittently corrupts one
-# entry's value, so this only requires the run to complete and load
-# MOST entries, not all of them.
+# c4ix.vfs.txt at boot (src/c4ix/user/vfsload.c). A timing-sensitive
+# race (documented at length in vfsload.c, never root-caused - see
+# docs/c4bb-design.md) once corrupted one entry's value (2026-08). It
+# has not been seen since, but this still only requires the run to
+# complete and load MOST entries, not all of them.
 if echo "$c4ix_out" | grep -qE '([4-9][0-9]|[1-9][0-9][0-9])/([4-9][0-9]|[1-9][0-9][0-9]) entries loaded from c4ix\.vfs\.txt'; then
     echo "test-c4bb: c4ix-vfs manifest mostly loaded OK"
 else

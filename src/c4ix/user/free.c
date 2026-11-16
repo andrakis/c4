@@ -43,8 +43,8 @@ static int get(char *name) {
     return 0 - 1;
 }
 
-// K kilobytes, right-aligned in ten columns, "  12345 K" or "   12.3 M"
-// (libc4ix's printf takes no widths); "-" for none
+// K kilobytes, right-aligned in ten columns, "  12345 K" or "   12.3 M";
+// "-" for none
 static void amt(int k) {
     char s[16];
     int n, v;

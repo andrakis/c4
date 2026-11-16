@@ -783,8 +783,8 @@ int c4_run(struct c4_cpu * RESTRICT c, int quantum) {
         default:
             // Everything unknown becomes a trap, which is the whole
             // custom-opcode mechanism: a kernel claims a number and
-            // implements it here. RALC lands here too, matching c4m,
-            // where realloc has never been implemented.
+            // implements it here. RALC lands here too: c4mp has no
+            // realloc, though c4m has run it since 63e274a.
             c4_trap(TRAP_ILLOP, i, traph, &sp, &bp, &pc, a, mode, ival);
             // A handler is kernel code and must run privileged, or its
             // own first syscall raises a second trap on top of this one.

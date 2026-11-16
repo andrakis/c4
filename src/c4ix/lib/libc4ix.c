@@ -157,9 +157,10 @@ void __c4ix_uva_adj(int n) {
 
 // ---- column output ----
 //
-// libc4ix's printf takes no width specifiers -- a deliberate limit --
-// so anything that wants columns pads explicitly. ps and top both do,
-// and both want it to look the same.
+// These helpers come from when libc4ix's printf took no width
+// specifiers; it has since 8c53fff (uformat, below). ps and top still
+// pad through them, so both look the same, and upadcycles scales a
+// cycle count, which no printf width does.
 // These build into the shared format buffer and flush once per
 // call. Writing a character at a time would be one kernel round trip
 // per character -- fine on a host, ruinous through a trap gateway.

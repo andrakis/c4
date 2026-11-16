@@ -209,7 +209,8 @@ void drv_select (int n) { if (g_drives) *(int *)BB_DRIVE = n; }
 
 // 'A' + n, and back. The machine is happy with either spelling -- its
 // resolveDrive takes 0: and A: alike -- but a person should only ever
-// meet one, and the prompt has said A> since the first boot.
+// meet one, and the prompt has named its drive by letter since the
+// first boot (A>, and A:\> with its directory since API v7).
 int drv_letter (int n) { return 'A' + n; }
 int drv_num (char *s) {
   int c;

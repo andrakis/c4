@@ -289,6 +289,13 @@ will touch first (the state, the input, the window behind and the output ahead, 
 under the MMU a page that is not there faults before anything is done, and a run again from the start
 is the same run. The gzip trailer's CRC checks every byte of a boot's unpacking.
 
+**What it gained.** A boot to the desktop's prompt, node, 400 MHz: 1,608 M instructions before,
+202 M after (what is left is mostly the desktop's own start: `wall_tiles` 38 M, the inflater's
+`construct` 23 M, `gui_imgdef` 21 M). `bench-desktop` with the modules loaded: 9.98 s to 1.68 s,
+and with the MMU 13.01 s to 2.31 s. The page in Chrome, `?persist=0`, from loading to the taskbar's
+clock: 24.1 s to 10.0 s (1,612 M to 200 M cycles), and with the MMU 23.4 s to 9.4 s (1,643 M to
+235 M).
+
 **The switch.** The machine's option `osAccel` (`createMachine`, `cli.js --no-osaccel`, the page's
 `&osaccel=0` and its Configuration dialog's "C4IX accelerators"; "Accelerators", `&accel=0`, turns off
 every one, the games' too). A program reads and turns it with `ACC_OS` (`0x1001`, the loader's, beside

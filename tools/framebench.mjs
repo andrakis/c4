@@ -84,6 +84,9 @@ const RUNS = {
               page: 'wolf3d --timedemo 1 --show', about: "Wolfenstein 3D's --timedemo 1 (shareware)" },
   'rott': { image: 'rott.c4r', frame: 'rott_frame', mem: 64, skip: 2, args: ['--timedemo', '4', 'NOSOUND'],
             page: 'rott --timedemo 4 NOSOUND --show', about: "Rise of the Triad's --timedemo 4 (shareware)" },
+  ...Object.fromEntries([1, 2, 3].map(n => [`rott-demo${n}`, {
+    image: 'rott.c4r', frame: 'rott_frame', mem: 64, skip: 2, args: ['--timedemo', `${n}`, 'NOSOUND'],
+    page: `rott --timedemo ${n} NOSOUND --show`, about: `Rise of the Triad's --timedemo ${n} (shareware)` }])),
 };
 // the games played for --lag: started at the shell, then a turn key held
 const LAG = {

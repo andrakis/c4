@@ -219,15 +219,17 @@ function main(msg) {
     m.i32[m.sp >> 2] = 0x18;            // CPU_HALT_ADDR: the entry function's LEV lands on CPUH
     m.bp = m.sp; m.pc = entry | 0; m.a = 0;
     m.ipiPending = 0;
-    m.cpuState = 'run';
-    Atomics.store(ctl, word(id, K.IPI), 0);
+    m.cpuState = 'run';                 // (its IPI word: cleared by par.js start)
 
     for (;;) {
       // a slice, then an IPI or the machine's end looked for: not inside
       // the instruction loop, which would run it at half speed
       const r = m.run(65536);
       m.flushPosted();
-      core.poll(m);
+      // Halted, its IPI word is left alone: CPU 0 may already have started
+      // it again and sent it one, which taken here the restart dropped.
+      // One sent before the start, start clears (par.js).
+      if (r !== STOP.CPUHALT) core.poll(m);
       Atomics.store(ctl, word(id, K.CYCLES), m.cycle | 0);
       if (dev.halted || Atomics.load(ctl, C.HALT)) return;
       if (r === STOP.CPUHALT) break;

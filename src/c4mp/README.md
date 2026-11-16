@@ -106,14 +106,14 @@ arrive as `TRAP_ILLOP`, so a kernel can emulate them.
 |---|---|---|---|
 | 66 | `CPUI` | `__c4_cpu_id()` | This CPU's index. |
 | 67 | `CPUN` | `__c4_cpu_count()` | How many CPUs the machine has. |
-| 68 | `CPUS` | `__c4_cpu_start(id, entry, stacktop)` | Start a CPU on `entry` with the given stack. 1 on success, 0 if `id` is out of range or already running. |
+| 68 | `CPUS` | `__c4_cpu_start(id, entry, stacktop)` | Start a CPU on `entry` with the given stack. 1 on success, 0 if `id` is out of range or already running. A CPU whose function has just told you it is finished may not have reached its `CPUH` yet: ask again until it returns 1 (`guest/smp1.c` `start_on`). |
 | 69 | `CPUH` | `__c4_cpu_halt()` | Halt this CPU, not the machine. |
 | 70 | `CAS` | `__c4_cas(addr, expect, new)` | Compare and swap; returns the value found. |
 | 71 | `XCHG` | `__c4_xchg(addr, val)` | Swap; returns the old value. |
 | 72 | `FADD` | `__c4_fadd(addr, delta)` | Fetch and add; returns the old value. |
 | 73 | `CWAI` | `__c4_wait(addr, val)` | Park while `*addr == val`. Returns 1 if it did not park, 0 when woken. A wake is a hint: re-test in a loop. |
 | 74 | `CWAK` | `__c4_wake(addr, n)` | Wake up to `n` CPUs parked on `addr` (`n <= 0`: all). Returns how many. |
-| 75 | `IPI` | `__c4_ipi(cpu)` | Raise `HIRQ_IPI` on another CPU. |
+| 75 | `IPI` | `__c4_ipi(cpu)` | Raise `HIRQ_IPI` on another CPU. 1 if raised, 0 if the id is out of range or that CPU is off or halted. |
 | 76 | `LXI` | emitted by c4lc `-mcisc` | `a = *(int *)(base + a * 8)`, base popped from the stack. |
 | 77 | `SXI` | emitted by c4lc `-mcisc` | `*(int *)(base + index * 8) = a`, base and index popped. |
 | 78 | `TRAW` | `__c4_termraw(on)` | Put fd 0 in or out of raw mode (`tcsetattr`/`cfmakeraw`). Returns 1 if raw mode is on. A no-op returning 0 when stdin is not a tty. Restored at exit and on SIGTERM/SIGHUP. |

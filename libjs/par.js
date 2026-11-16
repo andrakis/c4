@@ -160,6 +160,10 @@ export class ParCore {
     if (was !== S.OFF && was !== S.HALT) return 0;
     Atomics.store(ctl, word(id, K.ENTRY), entry);
     Atomics.store(ctl, word(id, K.STACK), stacktop);
+    // a stale IPI dropped here, before the CPU counts as running: its
+    // thread, clearing it as it picked the start up, also dropped one sent
+    // after this returned, which ipi() had said was raised
+    Atomics.store(ctl, word(id, K.IPI), 0);
     if (Atomics.compareExchange(ctl, st, was, S.RUN) !== was) return 0;
     Atomics.notify(ctl, st);
     return 1;

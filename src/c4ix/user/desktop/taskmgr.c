@@ -441,11 +441,18 @@ static void figure(int x, int y, int w, char *label, int v) {
 }
 
 // Swap: a bar of what is on it, and how fast pages are going: a machine with more
-// programs than memory says so here. A host with no swap (no MMU) says that.
+// programs than memory says so here. A host with no swap (no MMU) says how to get
+// it, in lines that fit the box's 25 or so characters.
 static void swapbox(struct tasks *t, int x, int y, int w, int h) {
     int used, fill;
     ui_group(x, y, w, h, "Swap");
-    if (t->swap <= 0) { d_text(x + 12, y + 20, C_DARK, F_SANS, "none on this host"); return; }
+    if (t->swap <= 0) {
+        d_text(x + 12, y + 20, C_DARK, F_SANS, "Enable MMU in");
+        d_text(x + 12, y + 36, C_DARK, F_SANS, "Configuration for swap.");
+        d_text(x + 12, y + 56, C_DARK, F_SANS, "Slight performance");
+        d_text(x + 12, y + 72, C_DARK, F_SANS, "penalty in games.");
+        return;
+    }
     used = t->swap - t->swapfree;
     d_rect(x + 12, y + 20, w - 24, 12, C_DARK);
     fill = (int)(((long long)(w - 26) * used) / t->swap);

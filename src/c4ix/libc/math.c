@@ -23,13 +23,21 @@ static double m_from(unsigned long long b) { return *(double *)&b; }
 static int m_exp(double x) { return (int)(m_bits(x) >> 52) & 2047; }
 static int m_neg(double x) { return (int)(m_bits(x) >> 63); }
 
-double fabs(double x) { return m_from(m_bits(x) & 0x7FFFFFFFFFFFFFFFull); }
+// Most values are signed one way or the other, and two compares cost less
+// than the bits' 64-bit operations and their calls. Zeros and NaNs, whose
+// sign is only in the bits, go by the bits.
+double fabs(double x) {
+    if (x > 0.0) return x;
+    if (x < 0.0) return -x;
+    return m_from(m_bits(x) & 0x7FFFFFFFFFFFFFFFull);
+}
 double copysign(double x, double y) {
     return m_from((m_bits(x) & 0x7FFFFFFFFFFFFFFFull) | (m_bits(y) & 0x8000000000000000ull));
 }
 int __c4ix_isnan(double x) { return (m_bits(x) & 0x7FFFFFFFFFFFFFFFull) > 0x7FF0000000000000ull; }
 int __c4ix_isinf(double x) { return (m_bits(x) & 0x7FFFFFFFFFFFFFFFull) == 0x7FF0000000000000ull; }
-int __c4ix_isfinite(double x) { return m_exp(x) != 2047; }
+// x - x is 0 for every finite x, and NaN for an infinity or a NaN
+int __c4ix_isfinite(double x) { return x - x == 0.0; }
 
 double sqrt(double x) { return m_from(__c4d_sqrt(m_bits(x))); }
 
@@ -52,8 +60,19 @@ double trunc(double x) {
     m = 0x000FFFFFFFFFFFFFull >> e;
     return m_from(b & ~m);
 }
+// floor and ceil take trunc's short way themselves, rather than calling it
+// (Quake calls ceil 700 times a frame): e is x towards zero, so x < e is a
+// negative x that is not whole, and x > e a positive one. A result of 0 is
+// x * 0.0, as trunc's.
 double floor(double x) {
     double t;
+    int e;
+    if (x > -2147483648.0 && x < 2147483648.0) {
+        e = (int)x;
+        if (x < (double)e) return (double)e - 1;
+        if (e) return (double)e;
+        return x * 0.0;
+    }
     t = trunc(x);
     // t != x: x is neither 0 nor whole, so its sign is x < 0's
     if (t != x && x < 0.0) return t - 1;
@@ -61,6 +80,13 @@ double floor(double x) {
 }
 double ceil(double x) {
     double t;
+    int e;
+    if (x > -2147483648.0 && x < 2147483648.0) {
+        e = (int)x;
+        if (x > (double)e) return (double)e + 1;
+        if (e) return (double)e;
+        return x * 0.0;
+    }
     t = trunc(x);
     if (t != x && x > 0.0) return t + 1;
     return t;

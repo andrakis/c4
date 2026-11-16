@@ -239,6 +239,14 @@ export class ParHost extends ParCore {
   // the machine's time: CPU 0's cycles, and what passed while it waited
   get cycle() { return this.m0.cycle + this.idleCycles; }
 
+  // CPU k's instructions so far, in their low 32 bits, for the page's
+  // inst/s (worker.js cpuIps): CPU 0's own, and each other's as ap.js last
+  // published it, after a slice -- a count it keeps anyway, so the
+  // instructions pay nothing for it
+  cpuCycles(k) {
+    return k === 0 ? (this.m0.cycle - this.m0.skipped) | 0 : Atomics.load(this.ctl, word(k, K.CYCLES));
+  }
+
   // CPU 0 runs in slices of 16K cycles, and between them answers the
   // others and takes its IPIs: checking for them inside the instruction
   // loop made every CPU run at half speed. A request waits at most a

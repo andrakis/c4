@@ -75,6 +75,10 @@ export class Smp {
     return 1;
   }
 
+  // CPU k's instructions so far, in their low 32 bits, for the page's
+  // inst/s (worker.js cpuIps), as par.js's ParHost gives them
+  cpuCycles(k) { const m = this.machines[k]; return (m.cycle - m.skipped) | 0; }
+
   // __c4_wake(addr, n): release up to n CPUs parked on addr (n <= 0: all)
   wake(addr, n) {
     if (!addr) return 0;

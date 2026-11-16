@@ -194,6 +194,19 @@ const info = $('display-info');
 function fmtRate(ips) {
   return ips >= 1e6 ? (ips / 1e6).toFixed(1) + 'M' : ips >= 1e3 ? (ips / 1e3).toFixed(0) + 'k' : String(ips);
 }
+// shorter, for a figure per CPU: 390M, 98M, 9.8M, 1.2G, 640k
+function fmtShort(ips) {
+  const u = ips >= 1e9 ? [1e9, 'G'] : ips >= 1e6 ? [1e6, 'M'] : ips >= 1e3 ? [1e3, 'k'] : [1, ''];
+  const x = ips / u[0];
+  return (x >= 10 || u[0] === 1 ? Math.round(x) : x.toFixed(1)) + u[1];
+}
+// the status line's speed: with one CPU its figure; with more, each CPU's
+// and their sum, as "inst/s 98M 97M 99M 96M = 390M" (worker.js cpuIps)
+function fmtSpeed(s) {
+  const c = s.cpuIps;
+  if (!c || c.length < 2) return `${fmtRate(c ? c[0] : s.ips)} inst/s`;
+  return `inst/s ${c.map(fmtShort).join(' ')} = ${fmtShort(c.reduce((a, b) => a + b, 0))}`;
+}
 
 const extraArgs = (params.get('args') || '').split(/\s+/).filter(Boolean);
 const opts = {
@@ -410,7 +423,7 @@ window.c4m = vm;
 vm.on('loading', ({ n, of }) => { status.textContent = `loading disk ${n}/${of}`; });
 vm.on('status', s => {
   if (s.state === 'loading') return;
-  const parts = [s.state, `${fmtRate(s.ips)} inst/s`, `cpu ${Math.round((s.busy || 0) * 100)}%`,
+  const parts = [s.state, fmtSpeed(s), `cpu ${Math.round((s.busy || 0) * 100)}%`,
                  `t ${((s.simMs || 0) / 1000).toFixed(1)}s`];
   status.textContent = parts.join(' · ');
   if (s.gui && s.gui.attached)

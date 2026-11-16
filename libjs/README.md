@@ -263,6 +263,30 @@ What it was, and why:
   desktop and `test-c4ix-c4m` (cc compiling C4KE's kernel inside C4IX,
   31 s) were looked at too: their time is the work they check.
 
+### Harnesses for looking
+
+`tests/try-*.mjs` boot C4IX headless, as the tests do, and print what a
+question needs rather than pass or fail. They are for chasing a hang, a
+kill or the memory a run leaves behind, and are in no suite. Each says at
+its top what it runs and which environment variables change it (`MB`,
+`CPUS`, `N`, `IMAGE`, …). Some read the kernel's `struct task` and MMU
+regions by word offset, as `c4ix.h` has them; those say so.
+
+| harness | what |
+|---|---|
+| `try-inner.mjs` | the shell runs `CMDS` (split at `\|`), each with its machine time; `PIN`, `HEAP=1`, `LIVE=1` |
+| `try-bench.mjs` | `/bin/bench` on `CPUS` CPUs, the MMU on or off |
+| `try-free.mjs` | `free` and `/proc/meminfo` beside the JS heap's own numbers |
+| `try-tiny.mjs` | the desktop's boot in machines of a few MB (`SIZES`) |
+| `try-hog.mjs` | one program bigger than memory, walked: machine time and swap |
+| `try-build.mjs`, `try-stall.mjs` | the in-C4IX build, with `free` before and after, or `ps` and `free` as it goes |
+| `try-hang.mjs`, `try50.mjs` | the build or `innerbench -Tln N` until its output stops; then each CPU's place, the tasks and the kernel's log |
+| `try-fault.mjs` | the build until a task is killed; then the kernel's books on that address |
+| `try-heapwho.mjs` | which kernel call chain allocated each heap block left after `innerbench` |
+| `try-par.mjs`, `try-parw.mjs` | `innerbench -Tln N` on real threads (`NS` for several N), or with the swap and scheduler counters as it goes |
+| `repro-save.mjs` | `persist save` while other tasks read big files, `ROUNDS` times |
+| `heapdump.mjs` | `heapDump(vm)`, the heap's map, for the others |
+
 ## Layout
 
 | File | What it is |
@@ -292,7 +316,7 @@ What it was, and why:
 | `pages.sh` | `make pages`: builds the site and commits it to the GitHub Pages repository. |
 | `web/` | The page: terminal on the left, display on the right. `explore.html`, the Code Explorer. |
 | [guest/](guest/README.md) | `gui.h` and `snd.h`, the display and sound card APIs for guest C, and their demos. |
-| `tests/` | `test-libjs.sh`, the unit tests, the CDP gate (`cdp.mjs`, `test-web.mjs`, `test-web-gui.mjs`), and `src/strc.c`. |
+| `tests/` | `test-libjs.sh`, the unit tests, the CDP gate (`cdp.mjs`, `test-web.mjs`, `test-web-gui.mjs`), `src/strc.c`, and the `try-*.mjs` harnesses (Test, above). |
 | `package.json` | Marks the directory as ES modules. |
 
 Reused from c4bb: `src/c4bb/sim/arena.js`, `devices.js`, `loader.js`,

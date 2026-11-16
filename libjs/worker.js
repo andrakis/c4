@@ -37,7 +37,8 @@
 //   download { name, bytes }  a file the machine hands the person (C4IX's download:
 //                             devices.js "download:NAME"), for the page to save
 //   cache   { name, hash, bytes }  a lazy disk's file with a hash, read from the server: for the page to keep
-//   status  { ... }           about four times a second
+//   status  { ... }           about four times a second; cpuIps: each CPU's
+//                             inst/s over the last second or so (cpuIps, below)
 //   exit    { status, cycles }
 //   reply   { id, ... }       for peek and poke
 //   error   { message }
@@ -188,6 +189,7 @@ function start(msg) {
   paused = false; halted = false; parked = false;
   tRun = performance.now(); lostMs = 0; busyMs = 0;
   lastStatus = { t: tRun, cycle: 0, busy: 0 };
+  ipsLast = null;
   lastRaw = 0;
   state = 'running';
   schedule(0);
@@ -342,6 +344,7 @@ function postStatus(force) {
     state: paused ? 'paused' : state,
     cycle: vm.cycle,
     ips: dt > 0 ? Math.round((ran - lastStatus.cycle) / dt * 1000) : 0,
+    cpuIps: cpuIps(now),
     busy: dt > 0 ? Math.min(1, (busyMs - lastStatus.busy) / dt) : 0,
     heapUsed: vm.heap.used,
     missedTraps: vm.missedTraps,
@@ -355,6 +358,30 @@ function postStatus(force) {
   lastStatus = { t: now, cycle: ran, busy: busyMs };
 }
 setInterval(() => postStatus(false), 250);
+
+// Each CPU's instructions per second, over the last second or so, for the
+// page's status line: one figure per CPU, CPU 0 first. The counts are the
+// ones each engine keeps anyway (smp.js's and par.js's cpuCycles; ap.js
+// publishes its own after every slice), read here as a status goes out,
+// so the instructions themselves pay nothing. They come in their low 32
+// bits, and are added up here as they move.
+let ipsLast = null, ipsTotal = null, ipsWin = [];
+function cpuIps(now) {
+  const smp = vm.smp && vm.smp.cpuCycles ? vm.smp : null, n = smp ? smp.n : 1;
+  if (!ipsLast || ipsLast.length !== n) { ipsLast = new Array(n).fill(0); ipsTotal = new Array(n).fill(0); ipsWin = []; }
+  for (let k = 0; k < n; k++) {
+    const c = smp ? smp.cpuCycles(k) : (vm.cycle - vm.skipped) | 0;
+    let d = (c - ipsLast[k]) | 0;
+    if (d < 0) d = c >>> 0;             // that CPU started again, from 0 (CPUS)
+    ipsLast[k] = c;
+    ipsTotal[k] += d;
+  }
+  // the oldest sample kept is the newest one at least a second old
+  ipsWin.push({ t: now, c: ipsTotal.slice() });
+  while (ipsWin.length > 2 && now - ipsWin[1].t >= 1000) ipsWin.shift();
+  const a = ipsWin[0], dt = now - a.t;
+  return ipsTotal.map((c, k) => dt > 0 ? Math.round((c - a.c[k]) / dt * 1000) : 0);
+}
 
 function lazyStats() {
   const f = vm && vm.dev.drives[0] && vm.dev.drives[0].files;

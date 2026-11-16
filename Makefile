@@ -1198,9 +1198,10 @@ test-c4sc-chain: c4sc-host c4sp $(C4M)
 # the .c4r writer -- becomes one .c4r that runs anywhere c4m does. This
 # is what M8 puts on the board.
 #
-# The driver goes through gcc -E first for the reason c4sp.c4r does:
-# c4lc's own preprocessor refuses a function-like macro named without an
-# argument list, and c4.h has one.
+# The driver goes through gcc -E first, as c4sp.c4r does: c4lc's own
+# preprocessor refused c4.h's function-like macro named without an
+# argument list until 0628331, which lets it stand for itself, and the
+# rule was not changed.
 C4SC_UNITS := opt lex pp parse c4r tree gen
 c4sc.c4r: c4sp $(C4LC_LISP) $(C4RLINK) $(C4SC_GEN) src/c4sc/c4sc-main.c \
           src/c4sc/body.h src/c4sc/host.h src/c4sc/scrt.h
@@ -1862,9 +1863,9 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	# things in the tree c4fc can compile as one unit, and the second is
 	# a kernel: an image that is byte-identical AND boots is a stronger
 	# statement than either alone. C4KE also goes through gcc -E on the
-	# c4lc side because c4lc's own preprocessor cannot read it -- a
-	# function-like macro named without an argument list is an error
-	# there and stands for itself here, which is what C says.
+	# c4lc side, from when c4lc's own preprocessor could not read it -- a
+	# function-like macro named without an argument list was an error
+	# there until 0628331, and stands for itself, which is what C says.
 	$(PREPROC_LC) -I src/c4ke src/c4ke/c4ke.c > .c4fc_pp.c
 	./c4sp src/c4sp/lisp/c4lc.lisp -O .c4fc_pp.c .c4fc_lc.c4r > /dev/null
 	./c4th $(C4FC_ALL) -e ': GO 1 OPTIMIZE ! C4FC-INIT -P S" include" -I S" ." -I S" src/c4ke" -I S" C4CC=1" -D S" __c4__=1" -D S" __C4CC__=1" -D S" __c4cc__=1" -D S" src/c4ke/c4ke.c" C4FC ; GO' > .c4fc_fc.c4r
@@ -2081,9 +2082,10 @@ run-c4dos-c4fc: c4dos32.c4r $(C4DOS_FC_DISK)
 
 # c4th for the breadboard. c4bb is a 32-bit machine, so the image has to
 # be built by a 32-bit compiler -- c4lc under c4sp32, the same route
-# c4ke32.c4r takes. c4lc's own preprocessor cannot read c4th.c (a
-# function-like macro named without an argument list is an error there),
-# so this one goes through gcc -E like the c4cc-built c4th.c4r does.
+# c4ke32.c4r takes. It goes through gcc -E like the c4cc-built c4th.c4r
+# does, from when c4lc's own preprocessor could not read c4th.c (a
+# function-like macro named without an argument list was an error there
+# until 0628331).
 #
 # What it is FOR: c4fc runs on c4th, so a 32-bit c4th is a C compiler on
 # the breadboard. It compiles a real C4IX module there, byte-identical to
@@ -3741,9 +3743,10 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# M4 through the standard headers. stddef.h #defines unsigned away
 	# and long to int for c4cc; c4lc predefines __c4_inttypes__, which
 	# turns that off, and $(PREPROC_LC) says the same to gcc -E. stdio.h
-	# needs the gcc -E route (c4lc's preprocessor refuses stdarg.h's
-	# function-like macro named without arguments); -D STDDEF_ONLY swaps
-	# it for stddef.h alone, so c4lc's own -P is held to it as well.
+	# takes the gcc -E route (c4lc's preprocessor refused stdarg.h's
+	# function-like macro named without arguments until 0628331);
+	# -D STDDEF_ONLY swaps it for stddef.h alone, so c4lc's own -P is
+	# held to it as well.
 	$(PREPROC_LC) $(TESTS)/c4lc_m4std.c > .c4lc_pp.c
 	@for fl in "" "-O"; do \
 	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl .c4lc_pp.c .c4lc_b.c4r > /dev/null || exit 1; \

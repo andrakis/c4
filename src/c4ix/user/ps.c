@@ -1,8 +1,9 @@
 // C4IX userland: ps. The task table is kernel memory, so this asks
 // for one fixed-shape record at a time rather than walking anything.
 //
-// Columns are padded explicitly: libc4ix's printf takes no width
-// specifiers, which is a deliberate limit rather than an oversight.
+// Columns are padded by libc4ix's upad* helpers, which top uses too,
+// so the two look the same. They date from before libc4ix's printf
+// took widths (8c53fff).
 
 #include "c4ix_user.h"
 

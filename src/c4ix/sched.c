@@ -755,6 +755,15 @@ int sched_sleep_due(int *pms) {
 int sched_nlive;
 int sched_nzombies;
 
+// A signal by name, for the log
+static char *sched_signame(int sig) {
+    if (sig == CK_SIGINT) return "SIGINT, Ctrl-C";
+    if (sig == CK_SIGKILL) return "SIGKILL";
+    if (sig == C4IX_SIGSEGV) return "SIGSEGV, a fault";
+    if (sig == CK_SIGTERM) return "SIGTERM";
+    return "a signal";
+}
+
 // Every death comes through here: a task's exit, a Ctrl-C, a signal's
 // default action. Whoever waits on the task is woken now, with its code,
 // and reaps it -- the event sched_pick used to look for, on every pick,
@@ -771,7 +780,14 @@ void task_zombify(struct task *t, int code) {
     int was;
     if (t->state == TS_ZOMBIE) return;
     was = t->state;
+    // Said in the kernel log (dmesg): every task the boot made, and after
+    // it every death that was not a plain exit(0) -- a signal's, or a
+    // code that says something went wrong -- so that a program that
+    // vanishes from the screen has its reason in dmesg -w. (What killed
+    // one for a fault, mmu.c and the stack guard say on the console too.)
     if (con_is_booting() || t->id <= boot_lastid) klog("task %d (%s) exited %d\n", t->id, t->name, code);
+    else if (t->killsig) klog("task %d (%s) killed by signal %d (%s)\n", t->id, t->name, t->killsig, sched_signame(t->killsig));
+    else if (code) klog("task %d (%s) exited %d\n", t->id, t->name, code);
     t->exitcode = code;
     task_state(t, TS_ZOMBIE);
     TF_SET(t, TF_NOPAGE);

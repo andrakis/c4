@@ -76,7 +76,7 @@ const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
 // in Node), with 119k of its 135k requests these writes. PCM_PLAY copies
 // the samples, and the display's BELL and FBFLIP read the frame, so they
 // still ask.
-export const POSTED = new Set([0x484, 0x488, 0x490, 0x494, 0x498, 0x49c, 0x4a0, 0x4a8, 0x4ac, 0x4b4, 0x4b8]);
+export const POSTED = new Set([0x484, 0x488, 0x490, 0x494, 0x498, 0x49c, 0x4a0, 0x4a8, 0x4ac, 0x4b4, 0x4b8, 0x4cc]);
 // Each CPU's queue, in a SharedArrayBuffer of its own: its head (CPU 0's,
 // the next to apply), its tail (the CPU's, the next free), then PQLEN
 // entries of two words, (8-bit << 16) | addr and the value.
@@ -160,6 +160,10 @@ export class ParCore {
     if (was !== S.OFF && was !== S.HALT) return 0;
     Atomics.store(ctl, word(id, K.ENTRY), entry);
     Atomics.store(ctl, word(id, K.STACK), stacktop);
+    // a stale IPI dropped here, before the CPU counts as running: its
+    // thread, clearing it as it picked the start up, also dropped one sent
+    // after this returned, which ipi() had said was raised
+    Atomics.store(ctl, word(id, K.IPI), 0);
     if (Atomics.compareExchange(ctl, st, was, S.RUN) !== was) return 0;
     Atomics.notify(ctl, st);
     return 1;
@@ -238,6 +242,14 @@ export class ParHost extends ParCore {
 
   // the machine's time: CPU 0's cycles, and what passed while it waited
   get cycle() { return this.m0.cycle + this.idleCycles; }
+
+  // CPU k's instructions so far, in their low 32 bits, for the page's
+  // inst/s (worker.js cpuIps): CPU 0's own, and each other's as ap.js last
+  // published it, after a slice -- a count it keeps anyway, so the
+  // instructions pay nothing for it
+  cpuCycles(k) {
+    return k === 0 ? (this.m0.cycle - this.m0.skipped) | 0 : Atomics.load(this.ctl, word(k, K.CYCLES));
+  }
 
   // CPU 0 runs in slices of 16K cycles, and between them answers the
   // others and takes its IPIs: checking for them inside the instruction

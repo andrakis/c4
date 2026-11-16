@@ -22,6 +22,7 @@ int shared;          // guarded by lock, or updated with FADD
 int done[MAXCPU];    // one slot per CPU: written by it, read by CPU 0
 int gate;            // phase 4 parks on this
 int ipis;            // phase 5 counts arrivals here
+int got[MAXCPU];     // ... and each CPU marks its own
 int failures;
 
 void check(char *what, int got, int want) {
@@ -64,31 +65,47 @@ void worker_wait() {
 // c4mp keeps unchanged; returning from it executes LEV, which lands on
 // the TLEV the machine planted and restores the interrupted context.
 void irq(int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {
-    if (ins == HIRQ_IPI) ipis = ipis + 1;
+    if (ins == HIRQ_IPI) {
+        got[__c4_cpu_id()] = 1;
+        __c4_fadd((int)&ipis, 1);   // the handlers run at once on several CPUs
+    }
 }
 
+// Each waits for its own IPI. Waiting for the count to move, one CPU's
+// IPI let every other leave, and halt before CPU 0 had sent it theirs:
+// an IPI to a halted CPU is refused (0), and on threads, where CPU 0 can
+// be put off between two IPIs, that happened.
 void worker_ipi() {
     __c4_configure(CONF_HANDLER, (int)&irq);
     done[__c4_cpu_id()] = 1;        // "handler installed, send it"
-    while (!ipis) ;                 // the handler runs underneath this loop
+    while (!got[__c4_cpu_id()]) ;   // the handler runs underneath this loop
     done[__c4_cpu_id()] = 2;
+}
+
+// Start CPU i on fn. A CPU reports in done[] before its function
+// returns, so when CPU 0 sees that it may still be on its way out -- the
+// LEV, and the CPUH it lands on -- and __c4_cpu_start refuses a CPU
+// that is running (0): ask until it has halted. On threads a CPU can be
+// put off for a while in those few instructions, and the next phase's
+// start, made once, was lost: CPU 0 waited for it for ever.
+void start_on(int i, int fn) {
+    int stack;
+    stack = (int)malloc(65536);
+    while (!__c4_cpu_start(i, fn, stack + 65536)) ;
 }
 
 // Start every secondary on fn and wait for all of them to report.
 // done[] is written by one processor and read by one other, so it
 // needs no atomic of its own.
 void run_all(int n, int fn, int want) {
-    int i, stack;
+    int i;
     for (i = 0; i < n; i = i + 1) done[i] = 0;
-    for (i = 1; i < n; i = i + 1) {
-        stack = (int)malloc(65536);
-        __c4_cpu_start(i, fn, stack + 65536);
-    }
+    for (i = 1; i < n; i = i + 1) start_on(i, fn);
     for (i = 1; i < n; i = i + 1) while (done[i] != want) ;
 }
 
 int main() {
-    int n, i, old;
+    int n, i;
 
     if (!(__c4_info() & 0x100)) { printf("smp1: no SMP here\n"); return 1; }
     n = __c4_cpu_count();
@@ -127,10 +144,7 @@ int main() {
     // ---- 4. park and wake
     gate = 0;
     for (i = 0; i < n; i = i + 1) done[i] = 0;
-    for (i = 1; i < n; i = i + 1) {
-        old = (int)malloc(65536);
-        __c4_cpu_start(i, (int)&worker_wait, old + 65536);
-    }
+    for (i = 1; i < n; i = i + 1) start_on(i, (int)&worker_wait);
     // Let them reach the park. Setting the gate first and waking
     // second is the safe order, and CWAI's value test makes it safe in
     // either order anyway.
@@ -142,11 +156,8 @@ int main() {
     // ---- 5. inter-processor interrupts
     if (n > 1) {
         ipis = 0;
-        for (i = 0; i < n; i = i + 1) done[i] = 0;
-        for (i = 1; i < n; i = i + 1) {
-            old = (int)malloc(65536);
-            __c4_cpu_start(i, (int)&worker_ipi, old + 65536);
-        }
+        for (i = 0; i < n; i = i + 1) { done[i] = 0; got[i] = 0; }
+        for (i = 1; i < n; i = i + 1) start_on(i, (int)&worker_ipi);
         for (i = 1; i < n; i = i + 1) while (done[i] != 1) ;
         for (i = 1; i < n; i = i + 1) check("ipi raised", __c4_ipi(i), 1);
         for (i = 1; i < n; i = i + 1) while (done[i] != 2) ;

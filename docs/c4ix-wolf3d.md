@@ -24,6 +24,7 @@ The keys are the original's:
 | Space | open a door, push a wall |
 | 1-4 | knife, pistol, machine gun, chain gun |
 | Esc | the menu |
+| Tab | the map of what has been seen; `-` and `+` zoom it (games/wolf3d/README.md) |
 
 The game is played from the keyboard. The original's mouse control is
 not wired up yet (`plat.h` passes key events only).

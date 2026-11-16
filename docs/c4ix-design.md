@@ -941,7 +941,15 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
   and how long the boot took. On libjs they show on the console too while
   the boot runs, until the console is the shell's (`klog_boot`), unless
   the kernel was booted with `-q`; after, the new lines go only to the
-  log, unless it was booted with `-v`.
+  log, unless it was booted with `-v`. `dmesg -w` prints the log and
+  then each new line as it comes, until Ctrl-C, as Linux's `--follow`
+  does (2026-11-16). After the boot a task's death is said there when it
+  was not a plain `exit(0)`: "task 15 (quake) killed by signal 11
+  (SIGSEGV, a fault)", or the code it exited with. `/var/log/kernel`
+  grows as the console writes to it, and a grow can fail under memory
+  pressure. The bytes it had no room for used to go without a word. Now
+  they are counted, and the next line that fits says how many went (they
+  are all in dmesg's ring, which never needs memory).
 
 - **An MMU** (branch ix-mmu, 2026-10-29): docs/c4ix-mmu.md. When the host
   fits one (cli.js and the tests do unless `--no-mmu` or `mmu: false`;

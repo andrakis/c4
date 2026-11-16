@@ -301,7 +301,7 @@ int          vfs_trim_slow();
 extern int   vfs_ncached, vfs_cachedbytes, vfs_dropped;   // the cache, and files dropped from it
 int          vfs_put(char *path, char *buf, int len);   // C4KE OP_VFS_PUT
 struct vnode *vfs_klog();                                // /var/log/kernel, held by the kernel
-void         vfs_logc(struct vnode *vn, int c, int max); // one byte on its end, up to MAX
+int          vfs_logc(struct vnode *vn, int c, int max); // one byte on its end, up to MAX: 0 if it had no room
 // C4KE OP_VFS_GET: the file's own bytes. HOLD, if not 0, gets the vnode,
 // which keeps them until vfs_unhold; without, they are kept for good.
 char        *vfs_getdata(char *path, int *plen, struct vnode **hold);

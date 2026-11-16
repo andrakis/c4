@@ -22,7 +22,16 @@ void snd_wait (int n) { *(int *)SND_WAIT = n; }
 
 int snd_ahead () { return *(int *)SND_AHEAD; }
 
+// One write where the card can take one (SND_HAS_START): the latches
+// below are the card's, and another program's snd_play can set them
+// between these writes (snd.h)
 void snd_play (int ch, char *data, int len, int rate, int vol) {
+	int b[5];
+	if (*(int *)SND_CAPS & SND_HAS_START) {
+		b[0] = ch; b[1] = (int)data; b[2] = len; b[3] = rate; b[4] = vol;
+		*(int *)SND_PCM_START = (int)b;
+		return;
+	}
 	*(int *)SND_PCM_ADDR = (int)data;
 	*(int *)SND_PCM_LEN = len;
 	*(int *)SND_PCM_RATE = rate;
@@ -33,6 +42,10 @@ void snd_play (int ch, char *data, int len, int rate, int vol) {
 void snd_stop (int ch) { *(int *)SND_PCM_STOP = ch; }
 
 void snd_volume (int ch, int vol) {
+	if (*(int *)SND_CAPS & SND_HAS_START) {
+		*(int *)SND_PCM_CHVOL = (ch & 255) | ((vol & 0xffff) << 8);
+		return;
+	}
 	*(int *)SND_PCM_VOL = vol;
 	*(int *)SND_PCM_SETVOL = ch;
 }

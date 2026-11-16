@@ -312,7 +312,7 @@ MIDI port, for a General MIDI synth (below).
 
 | Address | Register | Access | Meaning |
 |---|---|---|---|
-| 0x480 | CAPS | r | bit0 OPL, bit1 samples, bit2 speaker, bit3 OPL3, bit4 sixteen sample channels (eight without it) |
+| 0x480 | CAPS | r | bit0 OPL, bit1 samples, bit2 speaker, bit3 OPL3, bit4 sixteen sample channels (eight without it), bit5 a MIDI synth, bit6 PCM_START and PCM_CHVOL |
 | 0x484 | OPL | w | (reg << 8) \| val; reg 0x100 and up is the OPL3's second bank |
 | 0x488 | WAIT | w | the stream moves n CLOCK units on |
 | 0x48C | AHEAD | r | microseconds the stream is ahead of now |
@@ -327,6 +327,23 @@ MIDI port, for a General MIDI synth (below).
 | 0x4BC | MASTER | r/w | every sound's volume, 0-255 (255 at power on); bit 8 mutes; RESET leaves it |
 | 0x4C0 | MIDI | w | a short MIDI message, status \| (data1 << 8) \| (data2 << 16), stamped on the stream |
 | 0x4C4 | MIDI_DATA | w | one byte, as an MPU-401's data port takes them in UART mode: running status, and system exclusives whole at their F7 |
+| 0x4C8 | PCM_START | w | the address of five words, ch, data, len, rate, vol: PCM_PLAY's sample in one write |
+| 0x4CC | PCM_CHVOL | w | ch \| (vol << 8): PCM_SETVOL's in one write |
+
+- **One write for a sample** (2026-11-16). PCM_ADDR, LEN, RATE and VOL
+  are the card's, not a program's. Two programs playing samples at once
+  could each set them before the other's PCM_PLAY, which then played the
+  other's sample. Under C4IX's MMU the card was refused it, since it was
+  not in the player's space, and the player was killed for "a device's
+  read of" the other program's memory: three windowed Quakes at 32 MB
+  lost one most times before the first demo ended. On an AP the four
+  latches are posted writes and PCM_PLAY is a request. Normally CPU 0
+  applies them together, but a page-in between them gave another CPU's
+  latches the time to land, which is why it took memory pressure.
+  PCM_START is one register's write, so its block and its sample are
+  both the writer's. CAPS bit 6 says the card has PCM_START and
+  PCM_CHVOL, and `snd.c` uses them when it does. The latches still
+  work, for a program that is alone on the card.
 
 - **The machine makes no samples.** Each write becomes an event with a
   time on it, and whoever listens mixes them (`snd-mix.js`). An

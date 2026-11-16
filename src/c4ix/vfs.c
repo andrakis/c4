@@ -252,10 +252,11 @@ struct vnode *vfs_klog() {
     return vn;
 }
 
-void vfs_logc(struct vnode *vn, int c, int max) {
-    if (vn->size >= max || !vn_grow(vn, vn->size + 1)) return;
+int vfs_logc(struct vnode *vn, int c, int max) {
+    if (vn->size >= max || !vn_grow(vn, vn->size + 1)) return 0;
     vn->data[vn->size] = c;
     ++vn->size;
+    return 1;
 }
 
 struct vnode *vfs_root() { return rootdir; }

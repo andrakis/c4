@@ -114,6 +114,25 @@ function probe(m, addr, len, write) {
     if (((x ^ last) & ~4095) === 0) break;
   }
 }
+// [addr, addr + len) as a view of the machine's own bytes, when they are
+// one run of them: plain memory as runPlain's loads take it, or under the
+// MMU a stretch within one page the task may read (write: and write). Else
+// null, and the operation goes byte by byte with reader and writer. A page
+// that is not there faults, as reader's and writer's do.
+function span(m, addr, len, write) {
+  const u8 = m.u8;
+  if (len <= 0) return null;
+  if (m.vm) {
+    if ((addr >>> 12) === 0 || ((addr ^ (addr + len - 1)) & ~4095) !== 0) return null;
+    const p = m.mmu.page(addr, write ? FK.WRITE : FK.READ);
+    if (p < 0) throw FAULT;
+    const at = p | (addr & 4095);
+    return u8.subarray(at, at + len);
+  }
+  if (m.uwin) return null;
+  if (addr >= 0x1000 && addr + len <= Math.min(m.guardLo(), u8.length)) return u8.subarray(addr, addr + len);
+  return null;
+}
 // the n arguments, in the order the program wrote them
 function args(m, n) {
   const sp = m.sp, a = new Array(n);
@@ -128,7 +147,7 @@ const fval = u => { FI[0] = u; return F[0]; };
 const fbits = x => { F[0] = x; return FI[0]; };
 const toInt = v => (v >= -2147483648 && v < 2147483648) ? Math.trunc(v) | 0 : (0x80000000 | 0);
 
-export const kit = Object.freeze({ reader, writer, reader32, writer32, probe, args, fval, fbits, toInt, fround: Math.fround });
+export const kit = Object.freeze({ reader, writer, reader32, writer32, probe, span, args, fval, fbits, toInt, fround: Math.fround });
 
 // Load the named modules, each once, in order: before a machine starts
 export async function loadAccel(names) {

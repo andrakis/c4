@@ -104,6 +104,7 @@ page it will write is there, and only then writes.
 | 7, 8, 9 | `qa_lmfill`, `qa_dlight`, `qa_lmfin` | `R_BuildLightMap`, `R_AddDynamicLights` | a surface's light: ambient and lightmaps; one dynamic light's texels; bound and shift |
 | 10 | `qa_aliasverts` | `R_AliasTransformAndProjectFinalVerts` | a model's vertices transformed, projected and lit |
 | 11 | `qa_polytri` | `D_PolysetRecursiveTriangle` | a small triangle split to its pixels against the z buffer |
+| 12 | `qa_sincos` | `AngleVectors`' `sin` and `cos` | an angle's sine and cosine as floats, by the browser's `Math.sin` and `Math.cos`: within a double's last bit of libc's, which a float hardly ever keeps (test-quake's frames are gcc's still) |
 
 The span lists' operations read the game's `espan_t` and `spanpackage_t` as c4's 32-bit layout has
 them, and the nine gradients from a copy the C makes (`d_scan.c`'s `c4_grad`); the particles, the

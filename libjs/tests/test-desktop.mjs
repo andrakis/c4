@@ -1470,6 +1470,21 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
     check(until(() => rgbFrames > f0 && has('Net'), 3000) && terms() < t0, 'net in a Terminal plays in that Terminal', screen().slice(-300));
     type('q');
     check(until(() => terms() === t0, 1500) && !has('Net'), 'and q gives it back', screen().slice(-300));
+    // What the Terminal sent Net that Net did not read (a key let go, a frame
+    // drawn) goes when the prompt is back, and the shell skips an event line
+    // anyway: once it ran one, "sh: cannot find" (term.c, sh.c)
+    until(() => false, 100);
+    check(!has(/cannot find/), 'and the shell reads nothing Net left unread', screen().slice(-300));
+    // In the background, net & gets a window of its own: a Terminal's canvas
+    // and its input are its foreground job's, and two games there read each
+    // other's frame acks and keys (term.c, term_adopt; window.c, win_open)
+    f0 = rgbFrames;
+    type('net &\n');
+    check(until(() => rgbFrames > f0 && has('Net'), 3000) && terms() === t0,
+      'net & in a Terminal plays in a window of its own, and the Terminal stays a Terminal', screen().slice(-300));
+    key('ESC');
+    check(until(() => !has('Net'), 1500) && terms() === t0 && !has(/cannot find/),
+      'Esc in that window ends it, and the window goes', screen().slice(-300));
   } else console.log('test-desktop: the Puzzles are not on the disk (games/README.md): their window checks skipped');
   if (/^\s*thornq: ilink/m.test(vfs)) {
     // Files: a double-click on the program, by its path under /usr/games

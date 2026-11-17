@@ -10,10 +10,19 @@
 // (snd-device.js PCM_START). NOSTART=1 hides CAPS bit 6, so the games play
 // through the latches as they did, and the race comes back.
 //
+// Each window's frames are counted by where its canvas is (a host RGB
+// frame's x,y): a window that has drawn and then draws nothing for STALL
+// status lines in a row while its Quake lives is FROZEN. Until 2026-11-17
+// the three shared the Terminal's pipes: each read the others' frame acks
+// (WIN_FRAME), and one left waiting for an ack drew no more; now each has
+// a window of its own (term.c, term_adopt). A Terminal line saying
+// "cannot find" is the shell reading an event line, and is reported. The
+// exit status is 1 for either, or for a Quake lost.
+//
 //   node libjs/tests/try-quake3.mjs
 //   MB=32 CPUS=4 PARALLEL=0|1 SECS=400 (machine seconds) NQ=3 SND=0
 //   CMD='pin %d quake --window &' ARGS=-v (kernel arguments) QUIET=1 ECHO=1
-//   LIBJS=dir IMAGES=dir OUT=file (the console at the end)
+//   LIBJS=dir IMAGES=dir OUT=file (the console at the end) STALL=8
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -53,6 +62,9 @@ const argv = ['c4ix32.c4r', ...(process.env.ARGS ? process.env.ARGS.split(' ') :
 boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), argv);
 const consoleText = () => Buffer.from(out).toString('latin1');
 let frame = [], cur = [], rgb = 0;
+const perWin = new Map();          // a canvas's x,y -> its frames
+const said = new Set();            // every line of text drawn that says "cannot find"
+const STALL = Number(process.env.STALL || 8);
 const pump = () => {
   if (snd) snd.drain();
   const words = gui.drain();
@@ -64,10 +76,11 @@ const pump = () => {
       const n = words[i + 8]; let s = '';
       for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
       cur.push(s);
+      if (/cannot find/.test(s)) said.add(s);
     }
     if (t === CMD.PRESENT) { frame = cur.slice(); cur = []; }
     if (t === CMD.SIZE) sized = { w: words[i + 2], h: words[i + 3] };
-    if (t === CMD.RGB) rgb++;
+    if (t === CMD.RGB) { rgb++; const k = words[i + 2] + ',' + words[i + 3]; perWin.set(k, (perWin.get(k) || 0) + 1); }
   }
   if (sized && (sized.w !== gui.w || sized.h !== gui.h)) gui.event({ kind: 'resize', ...sized });
 };
@@ -94,6 +107,8 @@ log('terminal prompt');
 const cmd = process.env.CMD || 'pin %d quake --window &';
 for (let k = 1; k <= N; k++) { type(cmd.replace('%d', k) + '\n'); until(() => false, 50); log('started ' + k); }
 let lastRgb = 0, lastCon = consoleText().length, lastQ = '', maxq = 0, minq = 99;
+const lastWin = new Map(), stalls = new Map(), frozen = new Set();
+let reported = 0;
 const wins = () => frame.filter(s => /quake/i.test(s)).join(',');
 while (!halted && vm.dev.simMs() / 1000 < SECS) {
   for (let i = 0; i < 100; i++) run();
@@ -105,9 +120,20 @@ while (!halted && vm.dev.simMs() / 1000 < SECS) {
   const scr = tops.length > 2 ? tops[tops.length - 2] : '';
   const nq = (scr.match(/ quake\s*$/gm) || []).length;
   if (tops.length > 2) { if (nq > maxq) maxq = nq; if (nq < maxq) minq = Math.min(minq, nq); }
-  log(`rgb +${rgb - lastRgb} live quakes ${nq} (most ${maxq}, fewest since ${minq === 99 ? '-' : minq})`);
+  // each window's frames since the last line; one that has drawn and stops while its Quake lives froze
+  const per = [];
+  for (const [k, v] of [...perWin].sort()) {
+    const d = v - (lastWin.get(k) || 0);
+    lastWin.set(k, v);
+    stalls.set(k, d ? 0 : (stalls.get(k) || 0) + 1);
+    if (v >= 20 && stalls.get(k) >= STALL && nq >= maxq && !frozen.has(k)) { frozen.add(k); log(`FROZEN: the window at ${k} drew ${v} frames, then none for ${STALL} lines`); }
+    if (v >= 20) per.push(`${k}:+${d}`);
+  }
+  for (const s of [...said].slice(reported)) { log('TERMINAL: ' + s); reported++; }
+  log(`rgb +${rgb - lastRgb} live quakes ${nq} (most ${maxq}, fewest since ${minq === 99 ? '-' : minq}) windows ${per.length} [${per.join(' ')}]`);
   lastRgb = rgb; lastQ = q;
 }
 if (process.env.OUT) writeFileSync(process.env.OUT, consoleText());
-log(`done: most ${maxq} quakes at once, ${minq === 99 ? 'none lost' : 'down to ' + minq}`);
-process.exit(0);
+const drawing = [...perWin].filter(([k, v]) => v >= 20).length;
+log(`done: most ${maxq} quakes at once, ${minq === 99 ? 'none lost' : 'down to ' + minq}; ${drawing} windows drew, ${frozen.size} froze; ${said.size} "cannot find" lines`);
+process.exit(minq !== 99 || frozen.size || said.size ? 1 : 0);

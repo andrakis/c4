@@ -574,7 +574,7 @@ reads the same variable. Any other value is an error.
 
 **It is the same compiler.**
 
-- I touched c4lc's Lisp and built `make c4bb-images` and all 52 64-bit
+- I touched c4lc's Lisp and built `make c4bb-images` and all 51 64-bit
   targets both ways. The whole `src/c4bb/images` tree (4,635 files) came
   out byte-identical, and so did a hash of 2,372 build products: every
   `.c4o`, `.c4r`, `.c4l`, `.c4s`, `.vfs`, `.tgz`, `.img`, `.sizes` and
@@ -604,7 +604,7 @@ compile reran:
 | | interpreted | compiled | |
 |---|---:|---:|---:|
 | `make c4bb-images` (946 compiles) | 3,788 s (63 min) | 315 s (5.3 min) | 12x |
-| the 52 64-bit targets (48 compiles) | 88 s | 53 s | 1.7x |
+| the 51 64-bit targets (48 compiles) | 88 s | 53 s | 1.7x |
 
 Both compiled times include regenerating the C units and building the
 host with gcc. The 64-bit targets are small, so that rebuild is most of

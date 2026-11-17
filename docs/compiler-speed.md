@@ -504,7 +504,7 @@ I measured on Helios, in one c4-lock slot of four processors, with
 | | `C4LC=interp` | compiled (the default) | |
 |---|---:|---:|---:|
 | `make c4bb-images` (946 compiles) | 3,788 s (63 min) | 315 s (5.3 min) | 12x |
-| the 52 64-bit targets (48 compiles) | 88 s | 53 s | 1.7x |
+| the 51 64-bit targets (48 compiles) | 88 s | 53 s | 1.7x |
 | one C4IX object at 32 bits (sched, mmu, vfs) | 5.9-12.6 s | 0.23-0.39 s | 26-32x |
 
 The compiled times include regenerating the C units and building the

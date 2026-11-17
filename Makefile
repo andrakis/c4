@@ -31,11 +31,13 @@
 
 # On a host that asks for it (~/.c4-require-lock: Helios), make runs only
 # holding a build slot -- under ~/bin/c4-lock, or `flock /tmp/c4-build.lock
-# make ...` -- one job at a time, so that the tests' timings are their own.
+# make ...` -- so that the tests' timings are their own. A make started by
+# a node program holding the slot (tools/suite.mjs) has no lock file of its
+# own: the program names itself in C4_SLOT_HELD (libjs/hostlock.mjs).
 # C4_NO_LOCK_CHECK=1 skips it, for a make that times nothing (make -n).
 ifeq ($(C4_NO_LOCK_CHECK),)
 ifneq ($(wildcard $(HOME)/.c4-require-lock),)
-ifeq ($(shell ls -l /proc/self/fd 2>/dev/null | grep -c 'c4-build\.lock'),0)
+ifeq ($(shell ls -l /proc/self/fd $(if $(C4_SLOT_HELD),/proc/$(C4_SLOT_HELD)/fd) 2>/dev/null | grep -c 'c4-build\.lock'),0)
 $(error this host runs builds and tests one at a time: run make under ~/bin/c4-lock (the host asks: ~/.c4-require-lock; C4_NO_LOCK_CHECK=1 for a make that times nothing))
 endif
 endif

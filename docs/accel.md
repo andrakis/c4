@@ -65,6 +65,9 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
   same result run again after a partial run: what it writes it reads back only where writing the same
   again is what the loop would do (a z buffer it has already set reads equal, and is set again).
   Without the MMU they read the arena directly, above the low page and short of the boot stack's guard.
+  The kit's `span(m, addr, len, write)` gives a stretch as a view of the arena's own bytes when it is
+  one run of them (plain memory, or within one page under the MMU), and null otherwise: a copy goes a
+  page at a time as one typed-array move where it can, byte by byte where it cannot.
 - **One instruction.** It counts one cycle however much it does, as `MCPY` does: the point is that the
   machine's clock (400 MHz in the page) is not spent on it. A test that times the game in the
   machine's clock sees it finish sooner: test-duke3d's General MIDI check counts the notes in the
@@ -89,6 +92,8 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
 | 13 | `duke_thline` | `thlineskipmodify` | a translucent floor sprite's row |
 | 14 | `duke_scale` | `scale` (fixedPoint_math.h) | `(int32_t)((int64_t)a * b / c)`, any a, b and c but 0 |
 | 15 | `duke_dmulscale` | `dmulscale` | `(int32_t)(((int64_t)a * b + (int64_t)c * d) >> s)` |
+| 16 | `duke_copyr` | `copybufreverse` | a copy read backwards, where the two do not overlap: a mirror's rows turned round (`completemirror`), every row of every frame a mirror is on the screen |
+| 17 | `duke_mhline` | `mhlineskipmodify` | a masked floor's or ceiling's row, left to right, texel 255 left out: a floor-aligned sprite, and the masked floors and ceilings `ceilspritehline` draws |
 
 The translucent loops read the screen and blend into it, and a blend run twice blends twice: each
 works out every pixel first, reading all it reads and making sure with the kit's `probe` that every

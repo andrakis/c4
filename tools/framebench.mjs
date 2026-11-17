@@ -279,7 +279,8 @@ async function nodeRun(profile) {
   const end = (text.match(/^timedemo: .*$/m) || [''])[0];
   if (o.lines) for (const l of text.split('\n')) if (o.lines.test(l)) console.log(l);
   const segs = [];
-  if (R.mark) {
+  // a run that opens no demo (duke3d -map FILE) is measured whole
+  if (R.mark && marks.length) {
     // a demo starts at its open: its first frame loads the level, and is
     // left out; it ends where the next one opens
     for (let i = 0; i < marks.length - 1; i++) segs.push({ name: `demo${i + 1}`, from: marks[i] + 3, to: marks[i + 1], load: [marks[i] + 1, marks[i] + 2] });

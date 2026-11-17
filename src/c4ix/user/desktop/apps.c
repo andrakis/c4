@@ -2,6 +2,7 @@
 // Text Editor are the window kit's: calc.c and notepad.c in src/winkit.)
 
 #include "desktop.h"
+#include "c4ix_accel.h"
 
 // ---- About ---------------------------------------------------------------------------------
 
@@ -38,11 +39,15 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 // screen's size too, which the display takes at once (display_set). And
 // in a third column the interface's font, its face and size, with a
 // sample: every window's titles, menus and dialogs are drawn in it.
+// Under it, C4IX's accelerators (c4ix_accel.h): the machine's switch for
+// them, turned at once; the page keeps what it was turned to for its
+// next boot (libjs/web/app.js), and a machine without them says so.
 
 static char *dflt_label;
 static char sbuf[16];
 // the second column's width, and where the third starts and how wide it is
-enum { SET_COL = 222, SET_X3 = 432, SET_COL3 = 146 };
+// and where the accelerators' group is, under the font's sample
+enum { SET_COL = 222, SET_X3 = 432, SET_COL3 = 146, SET_ACC = 250 };
 
 int settings_open() {
     int k;
@@ -132,6 +137,15 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_bevel(x, y, SET_COL3, 56, B_SUNKEN);
     d_text(x + 8, y + 8, C_DARK, F_BOLD, "Window Title");
     d_text(x + 8, y + 30, C_DARK, F_SANS, "The quick brown fox");
+    // the accelerators
+    y = oy + SET_ACC;
+    n = cx_os(0 - 1);
+    ui_group(x, y, SET_COL3, 64, "Accelerators");
+    if (n & 2) {
+        ui_radio(x + 10, y + 18, "On", n & 1);
+        ui_radio(x + 70, y + 18, "Off", !(n & 1));
+        d_text(x + 10, y + 40, C_SHADOW, F_SANS, "unpacking and CRC");
+    } else d_text(x + 10, y + 24, C_SHADOW, F_SANS, "Not on this machine");
     ui_button(ox + 8, oy + ch - 34, 86, 24, dflt_label, 0, 0);
 }
 
@@ -178,6 +192,11 @@ void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     sy = 8 + 28 + WK_FACES * 20;
     i = 0;
     while (i < WK_SIZES) { if (ui_hit(x, y, SET_X3 + 4, sy + 16 + i * 20, SET_COL3 - 8, 18)) { theme_set_font(theme_font(), i); return; } ++i; }
+    // the accelerators (settings_draw), where the machine has them
+    if (cx_os(0 - 1) & 2) {
+        if (ui_hit(x, y, SET_X3 + 6, SET_ACC + 16, 56, 18)) { cx_os(1); mark_win_dirty(w); return; }
+        if (ui_hit(x, y, SET_X3 + 66, SET_ACC + 16, 60, 18)) { cx_os(0); mark_win_dirty(w); return; }
+    }
     if (ui_hit(x, y, 8, ch - 34, 86, 24)) { theme_set(theme_count() - 1, 0 - 1); theme_set_wall(1); theme_set_style(S_FLAT); theme_set_font(0, 1); }
 }
 

@@ -35,6 +35,8 @@
 //   --sf2 FILE   ... and --wav plays them with this SoundFont (snd-gm.js)
 //   --no-accel   no accelerators (accel.js): a game draws with its own
 //                loops, as on any other machine
+//   --no-osaccel ... nor C4IX's own (src/c4ix/accel.mjs): its gunzip, tar and
+//                boot unpack the root archive in its own C
 //
 // The flags are c4bb's (src/c4bb/sim/cli.js), so a test can swap one
 // runner for the other. Piped stdin without -i is fed to the keyboard up
@@ -74,6 +76,7 @@ function parseArgs(argv) {
     else if (f === '--fast') o.unpaced = true;
     else if (f === '--no-fpu') o.fpu = false;
     else if (f === '--no-accel') o.accel = false;
+    else if (f === '--no-osaccel') o.osAccel = false;
     else if (f === '--mbox') o.mbox = parseInt(argv[++i], 10);
     else if (f === '--wav') o.wav = argv[++i];
     else if (f === '--midi') o.midi = argv[++i];
@@ -132,7 +135,7 @@ async function main(argv) {
   // the games' accelerators, the build's list (accel.js), before it starts
   if (o.accel !== false) await loadAccel(await accelManifest());
   const machine = createMachine({
-    arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, accel: o.accel, snd, cpus: o.cpus, quantum: o.quantum,
+    arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, accel: o.accel, osAccel: o.osAccel, snd, cpus: o.cpus, quantum: o.quantum,
     parallel: o.parallel, spawn: url => new Worker(url), mmu: o.mmu,
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });

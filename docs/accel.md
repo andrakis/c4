@@ -24,6 +24,10 @@ their own C everywhere else. The frames are the same either way, to the byte.
   instructions on average where they were 3.6 to 4.2 M, and the worst 2.6 to 2.9 M where it was
   11.5 M. 0.89 M of each is the timedemo's own checksum, which play does not do: a frame a player
   sees is a fifth or less of what it was. Its switch is Extended User Options' ACCELERATED.
+- C4IX has its own (section 7, 2026-11-17): libarc's CRC-32 and inflater, which unpack the root
+  archive at boot. A boot to the desktop was 1,592 M instructions, 85% of them those two loops; it is
+  now 202 M, and the page's boot 24 s to 10 s. A machine option of its own (`&osaccel=0`,
+  `--no-osaccel`), which the desktop's Settings turns too.
 
 ## 1. How it works
 
@@ -35,7 +39,8 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
   whose default export is given libjs's kit and returns an array of operations, functions of the
   machine. Its C side names them by their place in that array (`c4/c4accel.h`, `source/c4accel.h`).
   libjs knows no game and no loop.
-- **Which modules.** build-images.sh lists the games that ship one in `src/c4bb/images/accel.json`.
+- **Which modules.** build-images.sh lists the games that ship one in `src/c4bb/images/accel.json`,
+  then an operating system's (`src/NAME/accel.mjs`, listed as `os/NAME`: C4IX's, section 7).
   A machine loads those before it starts (`loadAccel`, `accelManifest`: cli.js, framebench, the
   page's worker, which holds the page's messages until they are in), from the site's own `games/`
   folder and nowhere else, in the list's order. A program can name a module, never supply one: a
@@ -317,3 +322,76 @@ same, to the bit, on the host. The rules the ones here keep:
 Another machine need do nothing: INFO says nothing of the loader there. A machine that wanted the
 games' accelerators (c4bb's simulator, which is JavaScript too) would load the same modules with the
 same kit.
+
+## 7. C4IX's own
+
+An operating system ships accelerators as a game does: `src/c4ix/accel.mjs`, listed in `accel.json`
+as `os/c4ix` and asked for as `c4ix`; `src/c4ix/include/c4ix_accel.h` is its C side (`CX_*`,
+`cx_find()`, `cx_os()`). libjs still knows no system and no loop.
+
+**Where the time went.** `libjs/tests/try-osprof.mjs` charges each 97 instructions to the function
+they ran in, kernel or user (the images found in memory, so its breakdown is without the MMU), in a
+set of situations. On node, 400 MHz, 800x600, before:
+
+| situation | instructions | where |
+|---|---:|---|
+| boot to the desktop's prompt | 1,592 M (1,624 M with the MMU) | libarc's `arc_crc32` 36.5%, its inflater (`codes`, `bits`, `decode`, `construct`) 49%: the root archive, 4.46 MB of gzip, 18.26 MB of tar; 32 instructions a byte for the CRC, 43 to inflate |
+| a window dragged, 120 moves | 0.40 M a move | the kernel 43% (syscalls; `top` writing the console), `gui_text2` 8%, `gui_frame` 8% |
+| System Monitor in front | 0.56 M a second | `gui_text2` 12%, syscalls 11%, `cpu_load` 7.5% |
+| the Terminal's `cat` of 20 KB | 23.4 M, 1,100 a byte | `gui_text2` 27%, the text grid (`tg_feed`, `putc_`, `clear`, `row_text`) 36% |
+| Files, a turn of the wheel | 0.55 M | `gui_text2` 25%, `gui_frame` 9% |
+| the Text Editor, Page Down | 1.03 M | `gui_text2` 20%, `gui_frame` 16%, `gui_commit` 7% |
+| the Start menu, opened and closed | 2.66 M | `gui_text2` 33%, `gui_frame` 13% |
+
+The desktop draws through the display's command ring, so its rectangles, images and glyphs are the
+host's already: what it spends is in making the commands, `gui_text2`'s characters packed into words
+a byte at a time and each command's frame and commit, and each of those situations is 1 to 7 ms of a
+400 MHz machine. `memcpy`, `memset` and `memcmp` are opcodes already (`MCPY`, `MSET`, `MCMP`), and
+`strlen` and `strcmp` never reached 0.3%; the kernel's MMU and scheduler paths are not loops. So the
+accelerators are the boot's two loops, and nothing of the desktop's: what would help it there is C
+(`gui_text2`'s packing as one `memcpy`), not an accelerator.
+
+**The operations** (`CX_*`):
+
+| op | macro | the C | what it is |
+|---|---|---|---|
+| 0 | `cx_crc32` | `arc_crc32` | the CRC-32 of a buffer, from a CRC so far |
+| 1 | `cx_inflate` | `codes()`'s loop | literals and matches, turn after turn, from the state in `cx_st` and back into it |
+
+`codes()` asks for `CX_INFLATE` at the top of a turn while a whole turn can reach neither the
+window's end (a match is at most 258 bytes) nor the input's (a turn reads fewer than 16 bytes); the
+operation runs turns while that stays so, at most 64 KB of output and of input at a call, and stops
+before a turn that would meet an edge, a bad code among them. Then a turn of the C, which flushes the
+window, reads on or says what was wrong as it always did, and the operation again. It probes what it
+will touch first (the state, the input, the window behind and the output ahead, the code tables), so
+under the MMU a page that is not there faults before anything is done, and a run again from the start
+is the same run. The gzip trailer's CRC checks every byte of a boot's unpacking.
+
+**What it gained.** A boot to the desktop's prompt, node, 400 MHz: 1,608 M instructions before,
+202 M after (what is left is mostly the desktop's own start: `wall_tiles` 38 M, the inflater's
+`construct` 23 M, `gui_imgdef` 21 M). `bench-desktop` with the modules loaded: 9.98 s to 1.68 s,
+and with the MMU 13.01 s to 2.31 s. The page in Chrome, `?persist=0`, from loading to the taskbar's
+clock: 24.1 s to 10.0 s (1,612 M to 200 M cycles), and with the MMU 23.4 s to 9.4 s (1,643 M to
+235 M).
+
+**The switch.** The machine's option `osAccel` (`createMachine`, `cli.js --no-osaccel`, the page's
+`&osaccel=0` and its Configuration dialog's "C4IX accelerators"; "Accelerators", `&accel=0`, turns off
+every one, the games' too). A program reads and turns it with `ACC_OS` (`0x1001`, the loader's, beside
+`ACC_FIND`): `__c4_opcode(v, ACC_OS)` gives it as it was, 3 on and 2 off where the machine has an OS
+module (bit 1), and turns it on for v > 0, off for v == 0. While it is off `ACC_FIND` gives 0 for an
+OS module, so libarc, which asks before each piece of work (`cx_find()`), runs its own C. It is one
+word, shared with the CPUs on threads (`ap.js` adopts it with the module names), so a turn on one CPU
+is every CPU's at once.
+
+The desktop's **Settings** has it under the font: "Accelerators", On or Off ("Not on this machine"
+where there are none), turned at once. The page sends it in its status, and when it differs from the
+page's own the page writes it into its URL (`&osaccel=0`, or none for on): the next boot, and the
+Configuration dialog, keep what Settings chose. Under node it lasts as long as the machine.
+
+**Tests.** `libjs/tests/test-osaccel.mjs` holds both operations to zlib and to libarc's own C, carried
+over line for line with its hand-over to `CX_INFLATE` (1,300 cases: zlib's levels and strategies,
+windows and input buffers small enough to meet every edge, damaged streams that must fail with the
+same message, CRCs whole and in two); `libjs-accel.c4r` turns the switch and finds `c4ix` on and off.
+test-libjs runs both. Every C4IX boot under cli.js and the page unpacks its root archive with them,
+and the archive's CRC must match.
+

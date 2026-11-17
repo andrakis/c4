@@ -604,6 +604,18 @@ else bad "the accelerators' loader finds each game's"; echo "$out" | tail -5; fi
 out=$($LIBJS --no-accel $IMAGES/libjs-accel.c4r 2>&1)
 if [ "$out" = "accel: not fitted" ]; then ok "--no-accel: INFO says the accelerators are not there"
 else bad "--no-accel: INFO says the accelerators are not there"; echo "$out" | tail -3; fi
+# C4IX's own (src/c4ix/accel.mjs, docs/accel.md 7): its switch, on unless
+# --no-osaccel, which a program turns (ACC_OS); off, ACC_FIND gives it 0.
+# test-osaccel.mjs holds its CRC-32 and inflater to zlib, through a copy of
+# libarc's C loop, on made-up data and damaged streams.
+out=$($LIBJS $IMAGES/libjs-accel.c4r 2>&1)
+out2=$($LIBJS --no-osaccel $IMAGES/libjs-accel.c4r 2>&1)
+if echo "$out" | grep -qx "accel: the OS switch was on and turns" && echo "$out2" | grep -qx "accel: the OS switch was off and turns"; then
+    ok "C4IX's accelerators: on unless --no-osaccel, and a program turns them"
+else bad "C4IX's accelerators: on unless --no-osaccel, and a program turns them"; echo "$out" "$out2" | tail -5; fi
+out=$(node libjs/tests/test-osaccel.mjs 2>&1)
+if echo "$out" | tail -1 | grep -q " cases, 0 failed$"; then ok "C4IX's accelerators: CRC-32 and inflate as libarc's C ($(echo "$out" | tail -1))"
+else bad "C4IX's accelerators: CRC-32 and inflate as libarc's C"; echo "$out" | grep FAIL | head -5; echo "$out" | tail -2; fi
 
 # The parallel engine (par.js, ap.js, docs/c4ix-smp.md S2): each CPU on a
 # thread of its own, over a SharedArrayBuffer. The interleaving is the

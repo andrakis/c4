@@ -17,7 +17,7 @@ DEPS $(OUT)/lib/libc4ix.c4o : src/c4ix/lib/libc4ix.c src/c4ix/include/c4ix_user.
 RUN $(LC) -c -I src/c4ix/include src/c4ix/lib/libc4ix.c $(OUT)/lib/libc4ix.c4o
 DEPS $(OUT)/lib/libc4ix.c4l : $(OUT)/lib/libc4ix.c4o
 RUN c4rlink -r $(OUT)/lib/libc4ix.c4o -o $(OUT)/lib/libc4ix.c4l
-DEPS $(OUT)/lib/libarc.c4o : src/c4ix/lib/archive.c src/c4ix/include/archive.h src/c4ix/include/c4ix_user.h
+DEPS $(OUT)/lib/libarc.c4o : src/c4ix/lib/archive.c src/c4ix/include/archive.h src/c4ix/include/c4ix_user.h src/c4ix/include/c4ix_accel.h
 RUN $(LC) -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c $(OUT)/lib/libarc.c4o
 DEPS $(OUT)/lib/libarc.c4l : $(OUT)/lib/libarc.c4o
 RUN c4rlink -r $(OUT)/lib/libarc.c4o -o $(OUT)/lib/libarc.c4l
@@ -35,7 +35,7 @@ DEPS $(OUT)/lib/shared-cpustat.c4o : src/c4ix/include/cpustat.c src/c4ix/include
 RUN $(LCPIC) src/c4ix/include/cpustat.c $(OUT)/lib/shared-cpustat.c4o
 DEPS $(OUT)/lib/libc4ix.c4s : $(OUT)/lib/shared-libc4ix.c4o $(OUT)/lib/shared-window.c4o $(OUT)/lib/shared-cpustat.c4o
 RUN c4rlink -r $(OUT)/lib/shared-libc4ix.c4o $(OUT)/lib/shared-window.c4o $(OUT)/lib/shared-cpustat.c4o -o $(OUT)/lib/libc4ix.c4s
-DEPS $(OUT)/lib/shared-arc.c4o : src/c4ix/lib/archive.c src/c4ix/include/archive.h src/c4ix/include/c4ix_user.h
+DEPS $(OUT)/lib/shared-arc.c4o : src/c4ix/lib/archive.c src/c4ix/include/archive.h src/c4ix/include/c4ix_user.h src/c4ix/include/c4ix_accel.h
 RUN $(LCPIC) -mfuse src/c4ix/lib/archive.c $(OUT)/lib/shared-arc.c4o
 DEPS $(OUT)/lib/libarc.c4s : $(OUT)/lib/shared-arc.c4o
 RUN c4rlink -r $(OUT)/lib/shared-arc.c4o -o $(OUT)/lib/libarc.c4s

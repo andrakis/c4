@@ -8,6 +8,13 @@
 // That matters here: the root archive is megabytes and every
 // instruction is interpreted.
 //
+// Where the machine has C4IX's accelerators (c4ix_accel.h, src/c4ix/
+// accel.mjs) and they are on, the CRC and the inflater's literal/match
+// loop are the host's, one instruction each: the same bytes, the same
+// state left behind, the C seeing to every edge (a window to flush, the
+// input running low, a bad code) as before. At boot that is most of the
+// time the machine spends: 85% of its instructions were these two loops.
+//
 // Word size. Nothing below may depend on whether int is 32 or 64 bits,
 // and this VM has no unsigned type. The bit buffer never holds more
 // than 23 bits, so its shifts are safe either way. The CRC keeps its
@@ -18,6 +25,7 @@
 
 #include "c4ix_user.h"
 #include "archive.h"
+#include "c4ix_accel.h"
 
 char *arc_error;
 
@@ -58,8 +66,9 @@ static void crc_init() {
 }
 
 int arc_crc32(int crc, char *buf, int len) {
-    int *t;
+    int *t, b;
     char *e;
+    if (len > 0 && (b = cx_find())) return cx_crc32(b, crc, buf, len);
     if (!crc_table) crc_init();
     t = crc_table;
     e = buf + len;
@@ -277,15 +286,34 @@ static int decode(struct huff *h) {
 // back only around the slow path and on the way out. A literal costs
 // a table read and a store. A match that does not overlap itself is
 // one memcpy, which the host does.
+//
+// With C4IX's accelerators, the host runs this loop (CX_INFLATE) for as
+// long as a whole turn of it cannot reach the window's end (a match is at
+// most 258 bytes) or the input's (a turn reads fewer than 16 bytes), from
+// the state in CX_ST and back into it; then a turn of the C here, which
+// sees to the edge, and the host again. A bad code stops it before the
+// turn that has it, so the C finds it and says so as it always did.
+static int cx_st[14];
+
 static int codes(struct huff *lc, struct huff *dc) {
-    int sym, len, dist, e, l, bb, bc, ip, il, op, oc;
-    int *lfast, *dfast;
+    int sym, len, dist, e, l, bb, bc, ip, il, op, oc, cxb;
+    int *lfast, *dfast, *st;
     char *ib, *ob, *from;
 
     lfast = lc->fast; dfast = dc->fast;
     ib = in_buf; il = in_len; ob = out_buf; oc = out_cap;
     bb = bitbuf; bc = bitcnt; ip = in_pos; op = out_pos;
+    cxb = cx_find();
+    st = cx_st;
     while (1) {
+        if (cxb && op + 258 <= oc && il - ip >= 16) {
+            st[0] = bb; st[1] = bc; st[2] = ip; st[3] = il; st[4] = op; st[5] = oc;
+            st[6] = (int)ib; st[7] = (int)ob; st[8] = (int)lfast; st[9] = (int)dfast;
+            st[10] = (int)lc->count; st[11] = (int)lc->symbol; st[12] = (int)dc->count; st[13] = (int)dc->symbol;
+            e = cx_inflate(cxb, st);
+            bb = st[0]; bc = st[1]; ip = st[2]; op = st[4];
+            if (e == 1) break;              // the end of the block
+        }
         // a literal/length symbol
         if (bc < 16 && ip + 2 <= il) {
             bb = bb | ((ib[ip] & 255) << bc) | ((ib[ip + 1] & 255) << (bc + 8));

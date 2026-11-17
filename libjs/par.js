@@ -33,7 +33,7 @@
 
 import { OP, STOP, Machine } from './c4m.js';
 import { DmaSpace, FAULT } from './mmu.js';
-import { accelNames } from './accel.js';
+import { accelNames, accelSwitch } from './accel.js';
 
 // the control block, in words
 export const C = {
@@ -226,7 +226,7 @@ export class ParHost extends ParCore {
       w.postMessage({
         type: 'init', arena: m0.arena.buf, ctl: ctl.buffer, pq: this.pq.buffer, heap: m0.heap.books, id: k, n,
         info: m0.info(), cyclesPerMs: m0.dev.cyclesPerMs, noFpu: !!m0.noFpu,
-        accelNames: m0.accel ? accelNames() : [],
+        accelNames: m0.accel ? accelNames() : [], accelSwitch: accelSwitch(),
       });
       this.workers.push(w);
     }

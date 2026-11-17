@@ -316,9 +316,11 @@ done
 # the same work on every CPU, for the parallel engine (cli.js --parallel)
 ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/spinmp.c $OUT/libjs-spinmp.c4r > /dev/null
 # the games that ship accelerators (games/NAME/c4/accel.mjs, libjs/accel.js),
-# the list the machine loads; and the loader's test, on the bare libc, which
-# test-libjs runs
-for f in games/*/c4/accel.mjs; do [ -f "$f" ] && basename "$(dirname "$(dirname "$f")")"; done | sed 's/.*/"&"/' | paste -sd, - | sed 's/^/[/; s/$/]/' > $OUT/accel.json
+# then C4IX's own (src/c4ix/accel.mjs, as os/c4ix): the list the machine
+# loads; and the loader's test, on the bare libc, which test-libjs runs
+{ for f in games/*/c4/accel.mjs; do [ -f "$f" ] && basename "$(dirname "$(dirname "$f")")"; done
+  for f in src/*/accel.mjs; do [ -f "$f" ] && echo "os/$(basename "$(dirname "$f")")"; done
+} | sed 's/.*/"&"/' | paste -sd, - | sed 's/^/[/; s/$/]/' > $OUT/accel.json
 ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming -I src/c4ix/libc/include \
     -I libjs/guest libjs/tests/src/accel.c $OUT/.libjs-accel.c4o > /dev/null
 ./c4rlink32 $OUT/.libjs-accel.c4o .libc-bare/libc-*.c4o -o $OUT/libjs-accel.c4r > /dev/null
@@ -592,6 +594,7 @@ cat src/winkit/winkit.h src/winkit/wkwin.h src/winkit/textgrid.h src/c4ix/user/d
     src/c4ix/user/desktop/*.c src/winkit/*.c > $DISK/c4ix-desktop.c
 cp src/c4ix/c4ix.h $DISK/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
+cp src/c4ix/include/c4ix_accel.h $DISK/c4ix_accel.h
 # c4m as a C4IX program: c4m.c built the way cc builds it inside the
 # machine (a C4KE program, run through C4IX's compatibility layer). It
 # runs an image as c4m always has -- c4m load-c4r.c -- /usr/lib/c4ke.c4r --
@@ -662,6 +665,7 @@ cp src/c4ix/user/vfsload.c      $DISK/src/c4ix/user/vfsload.c
 for m in $C4IX_MODS; do cp src/c4ix/$m.c $DISK/src/c4ix/$m.c; done
 cp src/c4ix/c4ix.h              $DISK/src/c4ix/c4ix.h
 cp src/c4ix/include/c4ix_user.h $DISK/src/c4ix/include/c4ix_user.h
+cp src/c4ix/include/c4ix_accel.h $DISK/src/c4ix/include/c4ix_accel.h
 cp src/c4ix/lib/libc4ix.c       $DISK/src/c4ix/lib/libc4ix.c
 
 # The build kit: one archive of every source a kernel build reaches
@@ -997,7 +1001,7 @@ rm -f $ROOTDISK/c4ke-src.tar $ROOTDISK/dostar.c4r $ROOTDISK/dosload.c4r
 # C4IX's binaries go; C4IX's SOURCES stay, because building them is
 # what this disk is for.
 rm -f $ROOTDISK/c4ix.c4r $ROOTDISK/c4ix-*.c4r $ROOTDISK/c4ix.vfs.txt
-rm -f $ROOTDISK/c4ix-*.c $ROOTDISK/c4ix.h $ROOTDISK/c4ix_user.h
+rm -f $ROOTDISK/c4ix-*.c $ROOTDISK/c4ix.h $ROOTDISK/c4ix_user.h $ROOTDISK/c4ix_accel.h
 rm -rf $ROOTDISK/games
 # The build tools, so C4KE can build C4IX the way it is meant to:
 # b4ke drives it, c4sc is the compiled c4lc, c4rlink joins the objects.

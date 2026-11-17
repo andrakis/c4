@@ -28,7 +28,8 @@ make framebench FB_RUN=RUN FB_ARGS="options"
 
 `--list` prints the runs: `duke3d` (the Atomic Edition's three demos, from the person's own files
 with `--data DIR`), `duke3d-sw` (test-duke3d's E1L1 script on the shareware), `quake-demo1` to
-`quake-demo3`, `doom-demo1` to `doom-demo3`, `wolf3d` and `rott` (their timedemos, shareware).
+`quake-demo3`, `doom-demo1` to `doom-demo3`, `wolf3d` and `rott` (their timedemos, shareware;
+`rott` is ROTT's demo 4, and `rott-demo1` to `rott-demo3` its other three).
 
 **On node's bare machine** (the default). The game runs on its virtual clock (`-sum 0` for Duke and
 Quake; a timedemo for the others), so every run of an image makes the same frames and counts the
@@ -424,7 +425,7 @@ takes 67.
 
 ## 6. What to do
 
-1. **Drawing opcodes, behind a probe, in libjs.** Done for Duke and Quake, as the games' own modules: `docs/accel.md`. The one change that moves the frame rate a person
+1. **Drawing opcodes, behind a probe, in libjs.** Done for Duke, Quake and ROTT, as the games' own modules: `docs/accel.md`. The one change that moves the frame rate a person
    sees: `TCOL` alone took the shareware level from 28 to 43 fps with the MMU and the Atomic demos'
    averages up 17 to 29%, with the same frames. The rest of the drawing loops in the same shape --
    Duke's floors (`hlineasm4`), slopes (`slopevlin`) and tilted screen (`rhlineasm4`), Quake's spans

@@ -29,6 +29,20 @@
 # u0 is the C4KE user runtime, and is provides an interface to C4KE as well as
 # a standard library.
 
+# On a host that asks for it (~/.c4-require-lock: Helios), make runs only
+# holding a build slot -- under ~/bin/c4-lock, or `flock /tmp/c4-build.lock
+# make ...` -- so that the tests' timings are their own. A make started by
+# a node program holding the slot (tools/suite.mjs) has no lock file of its
+# own: the program names itself in C4_SLOT_HELD (libjs/hostlock.mjs).
+# C4_NO_LOCK_CHECK=1 skips it, for a make that times nothing (make -n).
+ifeq ($(C4_NO_LOCK_CHECK),)
+ifneq ($(wildcard $(HOME)/.c4-require-lock),)
+ifeq ($(shell ls -l /proc/self/fd $(if $(C4_SLOT_HELD),/proc/$(C4_SLOT_HELD)/fd) 2>/dev/null | grep -c 'c4-build\.lock'),0)
+$(error this host runs builds and tests one at a time: run make under ~/bin/c4-lock (the host asks: ~/.c4-require-lock; C4_NO_LOCK_CHECK=1 for a make that times nothing))
+endif
+endif
+endif
+
 PKG       := package.tgz
 NATIVE_CC := gcc
 EXTRA_CC  :=
@@ -3196,7 +3210,7 @@ libc4ix.c4l: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/libc4ix.c $(C4I
 # unpack archives. The board disk's copy is built -mfuse by
 # build-images.sh; this one is plain, because native c4m lacks most of
 # the fused opcodes.
-libarc.c4l: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/include/archive.h $(C4IX_SRC)/include/c4ix_user.h
+libarc.c4l: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/lib/archive.c $(C4IX_SRC)/include/archive.h $(C4IX_SRC)/include/c4ix_user.h $(C4IX_SRC)/include/c4ix_accel.h
 	$(call lc64,) -O -c -I $(C4IX_SRC)/include $(C4IX_SRC)/lib/archive.c .c4ix_arc.c4o > /dev/null
 	$(C4RLINK) -r .c4ix_arc.c4o -o libarc.c4l
 	rm -f .c4ix_arc.pp.c .c4ix_arc.c4o
@@ -3261,7 +3275,7 @@ $(C4IX_ARC_PROGS): c4ix-%.c4r: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) libarc.c4l li
 C4IX_DESKTOP := shell tools host term files taskmgr apps edit hl explore wall
 WINKIT := draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
 C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/*.h libjs/guest/gui.h \
-                    $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/libc/fp.c
+                    $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/include/c4ix_accel.h $(C4IX_SRC)/libc/fp.c
 C4IX_DESKTOP_LC = $(call lc64,) -O -c -I $(C4IX_SRC)/include -I $(C4IX_SRC)/user/desktop -I src/winkit
 c4ix-desktop.c4r: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) libarc.c4l libc4ix.c4l $(C4IX_DESKTOP_SRC)
 	for m in $(C4IX_DESKTOP); do \

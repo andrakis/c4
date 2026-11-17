@@ -29,13 +29,29 @@
 // again after a partial run (what it writes it may read back only where
 // writing the same again is what the loop would do), or first make sure
 // with kit.probe that nothing it writes can fault. It costs one cycle.
+//
+// An operating system ships its own the same way, src/NAME/accel.mjs, listed
+// as "os/NAME" (C4IX's: src/c4ix/accel.mjs, its libarc's CRC-32 and
+// inflater). Those have a switch of their own, the machine's option osAccel
+// (cli.js --no-osaccel, the page's &osaccel=0), which the guest may read and
+// turn (ACC_OS, 0x1001: the desktop's Settings): while it is off, ACC_FIND
+// gives 0 for an OS module and its programs run their own loops. One word,
+// shared with the CPUs on threads (ap.js adopts it), so every CPU sees a turn.
 import { STOP, ACC_BASE, ACC_END } from './c4m.js';
 import { FAULT, FK } from './mmu.js';
 
-export const ACC_FIND = ACC_BASE, ACC_SLOT = 0x100;
+export const ACC_FIND = ACC_BASE, ACC_OS = ACC_BASE + 1, ACC_SLOT = 0x100;
 const MAX_MODS = (ACC_END - ACC_BASE) / ACC_SLOT - 1;
 const NAME = /^[a-z0-9_-]{1,32}$/;
 const mods = [], index = new Map();
+
+// The OS modules' switch: 1 on, 0 off
+let osSwitch = new Int32Array(typeof SharedArrayBuffer !== 'undefined' ? new SharedArrayBuffer(4) : new ArrayBuffer(4));
+osSwitch[0] = 1;
+export const accelSwitch = () => osSwitch.buffer;
+export const adoptAccelSwitch = buf => { if (buf) osSwitch = new Int32Array(buf); };
+export const osAccelOn = () => Atomics.load(osSwitch, 0) !== 0;
+export const setOsAccel = on => { Atomics.store(osSwitch, 0, on ? 1 : 0); };
 
 // A byte reader, a byte writer, a word reader and a word writer for one
 // instruction: plain memory as runPlain's own loads take it, a task's pages
@@ -114,6 +130,25 @@ function probe(m, addr, len, write) {
     if (((x ^ last) & ~4095) === 0) break;
   }
 }
+// [addr, addr + len) as a view of the machine's own bytes, when they are
+// one run of them: plain memory as runPlain's loads take it, or under the
+// MMU a stretch within one page the task may read (write: and write). Else
+// null, and the operation goes byte by byte with reader and writer. A page
+// that is not there faults, as reader's and writer's do.
+function span(m, addr, len, write) {
+  const u8 = m.u8;
+  if (len <= 0) return null;
+  if (m.vm) {
+    if ((addr >>> 12) === 0 || ((addr ^ (addr + len - 1)) & ~4095) !== 0) return null;
+    const p = m.mmu.page(addr, write ? FK.WRITE : FK.READ);
+    if (p < 0) throw FAULT;
+    const at = p | (addr & 4095);
+    return u8.subarray(at, at + len);
+  }
+  if (m.uwin) return null;
+  if (addr >= 0x1000 && addr + len <= Math.min(m.guardLo(), u8.length)) return u8.subarray(addr, addr + len);
+  return null;
+}
 // the n arguments, in the order the program wrote them
 function args(m, n) {
   const sp = m.sp, a = new Array(n);
@@ -128,24 +163,28 @@ const fval = u => { FI[0] = u; return F[0]; };
 const fbits = x => { F[0] = x; return FI[0]; };
 const toInt = v => (v >= -2147483648 && v < 2147483648) ? Math.trunc(v) | 0 : (0x80000000 | 0);
 
-export const kit = Object.freeze({ reader, writer, reader32, writer32, probe, args, fval, fbits, toInt, fround: Math.fround });
+export const kit = Object.freeze({ reader, writer, reader32, writer32, probe, span, args, fval, fbits, toInt, fround: Math.fround });
 
-// Load the named modules, each once, in order: before a machine starts
+// Load the named modules, each once, in order: before a machine starts. A
+// game's is "NAME" (games/NAME/c4/accel.mjs), an operating system's
+// "os/NAME" (src/NAME/accel.mjs); either is asked for as NAME.
 export async function loadAccel(names) {
-  for (const name of names || []) {
-    if (typeof name !== 'string' || !NAME.test(name) || index.has(name) || mods.length >= MAX_MODS) continue;
+  for (const entry of names || []) {
+    if (typeof entry !== 'string') continue;
+    const os = entry.startsWith('os/'), name = os ? entry.slice(3) : entry;
+    if (!NAME.test(name) || index.has(name) || mods.length >= MAX_MODS) continue;
     try {
-      const mod = await import(new URL(`../games/${name}/c4/accel.mjs`, import.meta.url));
+      const mod = await import(new URL(os ? `../src/${name}/accel.mjs` : `../games/${name}/c4/accel.mjs`, import.meta.url));
       const ops = mod.default(kit);
       if (!Array.isArray(ops)) throw new Error('its default export gave no array of operations');
       index.set(name, mods.length);
-      mods.push({ name, ops });
+      mods.push({ entry, name, os, ops });
     } catch (e) {
       console.error(`libjs: the accelerators of ${name}: ${e.message}`);
     }
   }
 }
-export const accelNames = () => mods.map(x => x.name);
+export const accelNames = () => mods.map(x => x.entry);
 
 // The build's list (build-images.sh): the page fetches it, node reads it.
 // None there, none loaded: the games draw with their own loops.
@@ -161,13 +200,23 @@ export async function accelManifest() {
   } catch { return []; }
 }
 
-// The machine's accel (c4m.js sys): ACC_FIND, or a module's operation; -1
-// for a number nobody has, which is then a custom opcode like any other
+// The machine's accel (c4m.js sys): ACC_FIND, ACC_OS, or a module's
+// operation; -1 for a number nobody has, which is then a custom opcode like
+// any other
 export function accel(m, op) {
   if (op === ACC_FIND) {
     const name = new TextDecoder().decode(m.cstring(m.ld32(m.sp + 4) | 0, 33));
     const k = index.get(name);
-    m.a = k === undefined ? 0 : ACC_BASE + ACC_SLOT * (k + 1);
+    m.a = k === undefined || (mods[k].os && !osAccelOn()) ? 0 : ACC_BASE + ACC_SLOT * (k + 1);
+    return STOP.BUDGET;
+  }
+  if (op === ACC_OS) {
+    // __c4_opcode(v, ACC_OS): the OS modules' switch as it was, 1 or 0, and
+    // turned on (v > 0) or off (v == 0); v < 0 only asks. 2 more where the
+    // machine has an OS module (so a program can tell "off" from "none").
+    const v = m.ld32(m.sp + 4) | 0, was = osAccelOn() ? 1 : 0;
+    if (v >= 0) setOsAccel(v > 0);
+    m.a = was | (mods.some(x => x.os) ? 2 : 0);
     return STOP.BUDGET;
   }
   const r = op - ACC_BASE - ACC_SLOT;

@@ -601,6 +601,10 @@ int sched_cpustat(struct cpustat *h, struct cpustat_task *r, int max) {
     h->idles[0] = h->idle;
     i = 1;
     while (i < h->ncpu) { if (smp_idle_t[i]) h->idles[i] = smp_idle_t[i]->id; ++i; }
+    h->cpms = klog_cpms;
+    // and how many tasks there are, should max have been too few
+    h->total = n;
+    while (t) { ++h->total; t = t->next; }
     return n;
 }
 
@@ -797,6 +801,7 @@ void task_zombify(struct task *t, int code) {
     if (t != kernel_task && !t->cpuidle) --sched_nlive;
     task_unborrow(t);
     sys_display_drop(t->id);      // the desktop has the display back
+    con_task_gone(t->id);         // ... and the console its line, should it have asked for raw keys
     if (was == TS_VFORK && (w = task_get(t->wait_for)) && w->vfparent == t) task_zombify(w, code);
     w = task_head;
     while (w) {

@@ -15,6 +15,13 @@
 // window becomes a terminal again when the program says so, when Ctrl-C
 // stops it, or when the shell's prompt comes back.
 //
+// Or a program may take the keys and leave the text, as from a tty in
+// raw mode: after ESC _ T r ESC \ each key goes down its stdin as it is
+// typed, unechoed -- the arrows, PgUp, PgDn, Home, End and the function
+// keys as a VT100 sends them, Enter as CR -- until ESC _ T c ESC \, Ctrl-C
+// (which stays an interrupt) or the prompt coming back. top does this;
+// on the console the kernel does the same (console.c).
+//
 // Or the window is a program's own (term_run): no shell and no menu, the
 // program itself on the pipes, and the window only its canvas. It closes
 // when the program ends -- unless it is showing text the program wrote,
@@ -23,6 +30,17 @@
 // its /etc/desktop.apps line says `window` (tools.c, run_command). The
 // program may give its window a menu bar (window.h: the M and I ops): the
 // window grows by the bar's height, and a pick goes down the pipe as 'c'.
+//
+// A program run in the background from a Terminal (`quake --window &`)
+// gets such a window too (term_adopt). The Terminal's canvas is its
+// foreground job's, and its pipes are shared by every job it runs: two
+// games drawing there would each read the other's frame acks and keys,
+// and the shell at its prompt would read them too. So the shell gives a
+// background job an input that has ended, as POSIX's does, and a program
+// that asks for a canvas with no input asks for a window of its own
+// instead (window.c, win_open: the O op, with its task id). The desktop
+// makes the window and its pipes and gives them to that task as its stdin
+// and stdout (SYS_FDGIVE). Its stderr stays the Terminal's.
 //
 // A canvas is GW by GH, whatever the window's size, unless the program
 // asks for it to follow the window (the z op, window.h's win_resizable):
@@ -57,9 +75,11 @@ struct term {
     int win;                      // its window's number
     int pid, in_w, out_r, ended;
     int bare;                     // the program's own window: no shell (term_run)
+    int adopted;                  // ... and the program a Terminal's job (term_adopt): not ours to wait for
     struct tgrid *g;              // the text
     char pending[128];            // a command to type at the first prompt
     int gfx, buttons;             // a canvas now; mouse buttons held on it
+    int raw;                      // keys go to the program as typed (ESC _ T r)
     int fpend;                    // a frame with a framebuffer presented, not yet drawn
     int fit, gw, gh;              // the canvas follows the window (z); its size
     int nw, nh, nat;              // the size the window last had, and since when
@@ -171,6 +191,8 @@ static void follow(struct term *t, struct win *w) {
     }
 }
 
+static void term_adopt(int pid, char *title);
+
 // One command, ESC _ and ESC \ already stripped: G, the op, numbers
 // separated by commas, and for text a ';' and the string.
 static void apc(char *ctx, char *abuf, int alen) {
@@ -178,6 +200,8 @@ static void apc(char *ctx, char *abuf, int alen) {
     int i, n, v, neg, op, len, *g, k, nums[8];
     char *s;
     t = (struct term *)ctx;
+    // T: raw keys (r) or lines (c)
+    if (alen == 2 && abuf[0] == 'T') { if (abuf[1] == 'r' || abuf[1] == 'c') t->raw = abuf[1] == 'r'; return; }
     if (alen < 2 || abuf[0] != 'G') return;
     op = abuf[1];
     i = 2; n = 0;
@@ -198,6 +222,8 @@ static void apc(char *ctx, char *abuf, int alen) {
         return;
     }
     if (op == 'q') { gfx_mode(t, 0); return; }
+    // a program in the background wants a window of its own (window.c)
+    if (op == 'O') { if (n && nums[0] > 0) term_adopt(nums[0], s); return; }
     if (!t->gfx) return;
     // a menu bar: a program's own window's only (a Terminal has its own)
     if (op == 'M' || op == 'I') { if (t->bare) prog_menu(t, op, n ? nums[0] : 0, s); return; }
@@ -374,6 +400,49 @@ int term_run(char *cmd) {
     return i;
 }
 
+// A program a Terminal ran in the background asks for a window of its
+// own (the O op: its task id, and its title): one as term_run's, whose
+// pipes are given to that task as its stdin and stdout (SYS_FDGIVE, which
+// gives only to a task the desktop's own tasks started). Its stdout goes
+// first: once its stdin is live (win_open waits for that) it is drawing
+// here. It is the shell's job, not the desktop's child, so the window
+// knows it has ended by the pipe, and closing the window ends it.
+static void term_adopt(int pid, char *title) {
+    int i, ok, pin[2], pout[2];
+    struct win *w;
+    struct term *t;
+    char name[48];
+    ui_ncpy(name, title && *title ? title : "Program", 45);
+    i = win_open(K_TERM, name, TG_W + 2 * BORDER, TG_H + 2 * BORDER + TITLE_H + 1, sizeof(struct term));
+    if (i < 0) return;
+    w = win_get(i);
+    w->resizable = 0;
+    t = T(w);
+    t->win = i;
+    t->bare = 1;
+    t->adopted = 1;
+    t->pid = pid;
+    t->ended = 1;                 // until it has its pipes
+    if (!(t->g = tg_new(i))) { win_close(i); return; }
+    t->g->apc = apc; t->g->ctx = (char *)t;
+    ok = 0;
+    if (upipe(pin) == 0) {
+        if (upipe(pout) == 0) {
+            ucloexec(pin[1], 1); ucloexec(pout[0], 1);
+            ok = ufdgive(pid, pout[1], STDOUT) >= 0 && ufdgive(pid, pin[0], STDIN) >= 0;
+            uclose(pout[1]);
+            if (ok) t->out_r = pout[0];
+            else uclose(pout[0]);
+        }
+        uclose(pin[0]);
+        if (ok) t->in_w = pin[1];
+        else uclose(pin[1]);
+    }
+    // no pipes, or not a task of ours: its win_open gives up waiting
+    if (!ok) { win_close(i); return; }
+    t->ended = 0;
+}
+
 // The window is going: stop the job running in it, then the shell.
 void term_close(struct win *w) {
     struct term *t;
@@ -384,7 +453,7 @@ void term_close(struct win *w) {
     ukill(t->pid, SIGTERM);
     uclose(t->in_w);
     uclose(t->out_r);
-    uwait(t->pid);
+    if (!t->adopted) uwait(t->pid);
     t->ended = 1;
 }
 
@@ -407,8 +476,12 @@ void term_tick(struct win *w) {
         tg_feed(t->g, iobuf, n);
         // the shell's prompt ends "$ " (c4ix-sh -p) and is the last thing it writes
         prompt = !t->bare && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == ' ';
-        // the shell's prompt is back: whatever made this a canvas has ended
-        if (t->gfx && prompt) gfx_mode(t, 0);
+        // The shell's prompt is back: whatever made this a canvas, or took
+        // the keys, has ended. What was sent to it and not read -- a frame
+        // ack, a key let go -- goes with it, as on a Ctrl-C: the shell
+        // would read it next.
+        if (t->gfx && prompt) { gfx_mode(t, 0); udiscard(t->in_w); }
+        if (prompt) t->raw = 0;
         // ... and time to type a waiting command
         if (t->pending[0] && prompt) {
             k = ui_len(t->pending);
@@ -424,7 +497,7 @@ void term_tick(struct win *w) {
         // every writer is gone: the shell exited
         uclose(t->in_w);
         uclose(t->out_r);
-        uwait(t->pid);
+        if (!t->adopted) uwait(t->pid);
         t->ended = 1;
         // a program's own window goes with it, unless it shows what the program wrote
         if (t->bare && (t->gfx || (!t->g->cx && !t->g->cy && !t->g->sbn))) { win_close(t->win); return; }
@@ -461,6 +534,7 @@ static void paste(struct win *w, struct term *t) {
         c = s[k] & 255;
         if (c == 9) c = ' ';
         if (t->gfx) { if (c == 10) event(t, 'k', KEY_ENTER, 13, 0); else if (c >= 32 && c < 127) event(t, 'k', 0, c, 0); }
+        else if (t->raw) { tmp[0] = c == 10 ? 13 : c; if (c == 10 || (c >= 32 && c < 127)) write(t->in_w, tmp, 1); }
         else if (c == 10) { if ((c = tg_key(t->g, KEY_ENTER, 0, 0)) > 0) write(t->in_w, t->g->line, c); }
         else if (c >= 32 && c < 127) tg_key(t->g, 0, c, 0);
         ++k;
@@ -478,6 +552,59 @@ void term_command(struct win *w, int menu, int item) {
     else if (item == T_COPYALL) tg_copy(t->g, 1);
     else if (item == T_ALL) tg_select_all(t->g);
     else if (item == T_PASTE && !t->ended) { tg_unselect(t->g); paste(w, t); }
+}
+
+// Raw keys (t->raw): what a VT100 sends for a key that is not a character,
+// after its ESC, or 0
+static char *raw_tail(int code) {
+    if (code == KEY_UP) return "[A";
+    if (code == KEY_DOWN) return "[B";
+    if (code == KEY_RIGHT) return "[C";
+    if (code == KEY_LEFT) return "[D";
+    if (code == KEY_HOME) return "[H";
+    if (code == KEY_END) return "[F";
+    if (code == KEY_PGUP) return "[5~";
+    if (code == KEY_PGDN) return "[6~";
+    if (code == KEY_INS) return "[2~";
+    if (code == KEY_DEL) return "[3~";
+    if (code == KEY_F2 - 1) return "OP";
+    if (code == KEY_F2) return "OQ";
+    if (code == KEY_F2 + 1) return "OR";
+    if (code == KEY_F4) return "OS";
+    if (code == KEY_F5) return "[15~";
+    if (code == KEY_F5 + 1) return "[17~";
+    if (code == KEY_F5 + 2) return "[18~";
+    if (code == KEY_F5 + 3) return "[19~";
+    if (code == KEY_F5 + 4) return "[20~";
+    if (code == KEY_F5 + 5) return "[21~";
+    if (code == KEY_F5 + 6) return "[23~";
+    if (code == KEY_F5 + 7) return "[24~";
+    return 0;
+}
+
+// ... and the key itself down the program's stdin: a character as it is,
+// Enter as CR and Backspace as DEL, Ctrl with a letter as its control
+// code, Alt with ESC in front
+static void raw_key(struct term *t, int code, int ch, int mods) {
+    char b[8];
+    char *s;
+    int n, c;
+    n = 0;
+    if (!ch && (s = raw_tail(code))) {
+        b[0] = 27; n = 1;
+        while (*s && n < 7) { b[n] = *s; ++n; ++s; }
+        write(t->in_w, b, n);
+        return;
+    }
+    c = ch;
+    if (!ch && (code == KEY_ENTER || code == KEY_BACK || code == KEY_TAB || code == KEY_ESC)) c = code;
+    if (c == 10) c = 13;
+    if (c == 8) c = 127;
+    if ((mods & M_CTRL) && code >= 'A' && code <= 'Z') c = code - 64;
+    if (c <= 0 || c > 255) return;
+    if (mods & M_ALT) { b[n] = 27; ++n; }
+    b[n] = c; ++n;
+    write(t->in_w, b, n);
 }
 
 // the letter key, with Ctrl and Shift held
@@ -506,6 +633,7 @@ void term_key(struct win *w, int code, int ch, int mods) {
         term_tick(w);
         if (t->ended) return;
         if (t->gfx) gfx_mode(t, 0);
+        t->raw = 0;
         tg_interrupt(t->g);
         // Lines typed at the job and not read by it go with it, as a tty
         // flushes its input on an interrupt: left in the pipe, the shell
@@ -515,6 +643,8 @@ void term_key(struct win *w, int code, int ch, int mods) {
         if (uintr(t->pid) <= 0) write(t->in_w, "\n", 1);
         return;
     }
+    // raw keys: all of them the program's, Ctrl-L too; the screen, not the scrollback
+    if (t->raw && !t->gfx) { if (t->g->view) { t->g->view = 0; wk_redraw_all(); } raw_key(t, code, ch, mods); return; }
     if ((mods & M_CTRL) && (ch == 'l' || ch == 'L' || code == 'L')) { tg_clear_screen(t->g); return; }
     if (t->gfx) { event(t, 'k', code, ch, mods); return; }
     if ((n = tg_key(t->g, code, ch, mods)) > 0) write(t->in_w, t->g->line, n);

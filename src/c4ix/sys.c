@@ -139,6 +139,26 @@ int sys_dup2(int oldfd, int newfd) {
     return fd_dup2(sched_current(), oldfd, newfd);
 }
 
+// SYS_FDGIVE: give task PID -- one T started, or one its tasks did, as
+// for SYS_MAPFROM -- T's descriptor FD as its descriptor TO, as dup2 would
+// there: what TO was is closed. The desktop's Terminal gives a program
+// that ran in the background from it the pipes of a window of its own
+// (term.c, term_adopt; window.c, win_open). Every syscall holds the
+// kernel lock, so the table is not in use; a task parked reading what TO
+// was is woken, and its read, which starts again, takes what TO is now.
+// TO, or -1.
+static int sys_fdgive(struct task *t, int pid, int fd, int to) {
+    struct task *c, *p;
+    int n;
+    if (!t || !(c = task_get(pid)) || c == t || c->state == TS_ZOMBIE || c->privs != PRIV_USER) return -1;
+    p = c; n = 0;
+    while (p && p != t && n < 64) { p = p->parent ? task_get(p->parent) : 0; ++n; }
+    if (p != t) return -1;
+    if (fd_give(t, fd, c, to) < 0) return -1;
+    if (c->state == TS_BLOCKED) { task_state(c, TS_READY); sched_wake = 1; }
+    return to;
+}
+
 int sys_pipe(int *fds) {
     struct vnode *vn;
     struct task *t;
@@ -626,6 +646,7 @@ int sys_dispatch(int num, int *args) {
     // asks (docs/c4ix-mmu.md 7). Nothing to do without the MMU.
     case SYS_IOPERM:   return mmu_ioperm(t, args[0]);
     case SYS_MAPFROM:  return mmu_mapfrom(t, args[0], args[1]);
+    case SYS_FDGIVE:   return sys_fdgive(t, args[0], args[1], args[2]);
     case SYS_GETPID:   return t ? t->id : -1;
     // Freed with the task if it does not free it itself (task.c)
     case SYS_SBRK:     return task_ualloc(t, args[0]);

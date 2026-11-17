@@ -31,7 +31,7 @@ import { Bus } from './bus.js';
 import { Heap } from './heap.js';
 import { SharedHeap } from './sheap.js';
 import { Mmu } from './mmu.js';
-import { accel } from './accel.js';
+import { accel, setOsAccel } from './accel.js';
 
 // The whole machine, empty. Both hosts (cli.js, worker.js) build it
 // here so they cannot drift apart.
@@ -54,6 +54,9 @@ import { accel } from './accel.js';
 //   mmu       fit an MMU (mmu.js, docs/c4ix-mmu.md) to every CPU, unless
 //             false: one is fitted by default. It does nothing until the
 //             guest turns it on, which only C4IX does
+//   accel     the accelerators (accel.js): on unless false
+//   osAccel   ... an operating system's among them (C4IX's src/c4ix/accel.mjs):
+//             on unless false; the guest may turn them (ACC_OS)
 export function createMachine(opts = {}) {
   const bytes = (opts.arenaMb || 32) * 1024 * 1024;
   const par = opts.cpus > 1 && opts.parallel && opts.spawn && typeof SharedArrayBuffer !== 'undefined';
@@ -72,6 +75,7 @@ export function createMachine(opts = {}) {
   machine.noFpu = opts.fpu === false;
   // the drawing accelerators (accel.js): on unless asked otherwise (accel: false)
   machine.accel = opts.accel === false ? null : accel;
+  setOsAccel(opts.osAccel !== false);
   dev.noFpu = machine.noFpu;
   if (opts.mmu !== false) machine.mmu = new Mmu(machine);
   if (par) new ParHost(machine, opts.cpus | 0, opts.spawn);

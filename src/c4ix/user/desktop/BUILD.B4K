@@ -13,7 +13,7 @@ SET OUT /build
 # g:resolvecode recursing once per instruction (fixed in 29cbac9).
 SET LC c4sc -c 65536 compile -O -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop -I src/winkit
 SET KH src/winkit/winkit.h src/winkit/wkwin.h src/winkit/wkgui.h src/winkit/textgrid.h libjs/guest/gui.h
-SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h $(KH)
+SET H src/c4ix/user/desktop/desktop.h src/c4ix/include/c4ix_user.h src/c4ix/include/c4ix_accel.h $(KH)
 CD $(ROOT)
 MKDIR $(OUT)/desktop
 MKDIR $(OUT)/bin

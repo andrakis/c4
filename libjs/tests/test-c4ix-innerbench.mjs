@@ -62,7 +62,7 @@ const t = sh('cd /usr\ninnerbench -n 1');
 check(/^innerbench: invoking '\/bin\/c4m load-c4r\.c src\/c4ke\/c4ke\.c -- /m.test(t), 'innerbench starts /bin/c4m, C4IX\'s', t);
 check(/Benchmark complete: +\d/.test(t) && /^innerbench complete$/m.test(t) && !/page fault|cannot start/.test(t),
   'its C4KE, booted from source, runs bench to the end', t);
-check(/(^|\x1b\[H)top: \d+ tasks, CPU usage \d+% -- Ctrl-C to stop(\x1b\[K)?$/m.test(t) && !/c4top|-\d+%/.test(t),
+check(/(^|\x1b\[H)top - up \d+:\d\d:\d\d, \d+ CPUs?, usage \d+%/m.test(t) && !/c4top|-\d+%/.test(t),
   'top beside it is C4IX\'s, its shares none of them negative', t);
 const ps = sh('ps');
 check(!/ top$/m.test(ps), 'and is stopped when the benchmarks are done', ps);

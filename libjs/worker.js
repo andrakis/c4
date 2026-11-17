@@ -38,7 +38,8 @@
 //                             devices.js "download:NAME"), for the page to save
 //   cache   { name, hash, bytes }  a lazy disk's file with a hash, read from the server: for the page to keep
 //   status  { ... }           about four times a second; cpuIps: each CPU's
-//                             inst/s over the last second or so (cpuIps, below)
+//                             inst/s over the last second or so (cpuIps, below);
+//                             osAccel: the OS accelerators' switch (accel.js ACC_OS)
 //   exit    { status, cycles }
 //   reply   { id, ... }       for peek and poke
 //   error   { message }
@@ -51,7 +52,7 @@ import { SoundDevice, EVT } from './snd-device.js';
 import { RingWriter, FbProducer } from './shared.js';
 import { layUploads } from './uploads.js';
 import { LazyFiles } from './lazy.js';
-import { loadAccel, accelManifest } from './accel.js';
+import { loadAccel, accelManifest, osAccelOn } from './accel.js';
 
 // A disk read on demand (lazy.js). The page sends an index and a base
 // URL; the first get() of a name fetches that one file with a
@@ -177,7 +178,7 @@ function start(msg) {
     drives.push(persistDrive);
   }
   vm = createMachine({
-    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu, accel: msg.accel,
+    arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu, accel: msg.accel, osAccel: msg.osAccel,
     cpus: msg.cpus | 0, quantum: msg.quantum | 0, mmu: !!msg.mmu,
     parallel: !!msg.parallel, spawn: url => new Worker(url, { type: 'module' }),
     onByte: b => { out.push(b); if (out.length >= 4096) flush(); },
@@ -354,6 +355,7 @@ function postStatus(force) {
     disk: lazyStats(),
     gui: gui ? { ...gui.stats(), shared: !!ring, ringStalls, handoffMs: Math.round(handoffMs) } : null,
     snd: snd ? snd.stats() : null,
+    osAccel: osAccelOn(),           // the OS accelerators' switch, which the guest may turn (accel.js)
   });
   lastStatus = { t: now, cycle: ran, busy: busyMs };
 }

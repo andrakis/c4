@@ -221,7 +221,8 @@ const opts = {
   unpaced: params.has('fast') || !!sys.unpaced,
   realtime: params.get('realtime') !== '0',
   fpu: params.get('fpu') !== '0',
-  accel: params.get('accel') !== '0',  // the drawing accelerators (accel.js)
+  accel: params.get('accel') !== '0',  // the accelerators (accel.js, docs/accel.md)
+  osAccel: params.get('osaccel') !== '0',  // ... C4IX's own among them, which its Settings may turn
   arenaMb: Number(params.get('mem')) || sys.mem || 64,
   shared: params.get('shared') !== '0',
   snd: params.get('snd') !== '0',
@@ -252,6 +253,10 @@ const CONFIG = [
   { key: 'mmu', label: 'MMU', kind: 'select', tab: 'machine', def: mmuDefault ? '1' : '0',
     options: [['0', 'off'], ['1', 'on: C4IX gives each program its own memory']],
     help: 'paged memory with protection: a program that writes where it should not is stopped, and nothing else is hurt (C4IX only)' },
+  { key: 'accel', label: 'Accelerators', kind: 'onoff', def: true, tab: 'machine',
+    help: "loops a program hands to the browser, one instruction however much they do: Duke Nukem 3D's and Quake's drawing, C4IX's unpacking (docs/accel.md)" },
+  { key: 'osaccel', label: 'C4IX accelerators', kind: 'onoff', def: true, tab: 'machine',
+    help: "C4IX's own: its gzip and CRC-32, so the root archive unpacks at boot in a fraction of the time; the desktop's Settings turns them too, and this follows" },
   { key: 'mem', label: 'Memory (MB)', kind: 'text', tab: 'machine', options: ['32', '64', '128', '256'],
     help: `the arena; empty is the system's own (${sys.mem || 64})` },
   { key: 'snd', label: 'Sound card', kind: 'onoff', def: true },
@@ -423,6 +428,15 @@ window.c4m = vm;
 vm.on('loading', ({ n, of }) => { status.textContent = `loading disk ${n}/${of}`; });
 vm.on('status', s => {
   if (s.state === 'loading') return;
+  // C4IX's Settings turned its accelerators: the URL follows, so the next
+  // boot (and the Configuration dialog) keeps what it chose
+  if (opts.accel && typeof s.osAccel === 'boolean' && s.osAccel !== opts.osAccel) {
+    opts.osAccel = s.osAccel;
+    const p = new URLSearchParams(location.search);
+    if (s.osAccel) p.delete('osaccel'); else p.set('osaccel', '0');
+    const q = p.toString();
+    history.replaceState(history.state, '', location.pathname + (q ? '?' + q : '') + location.hash);
+  }
   const parts = [s.state, fmtSpeed(s), `cpu ${Math.round((s.busy || 0) * 100)}%`,
                  `t ${((s.simMs || 0) / 1000).toFixed(1)}s`];
   status.textContent = parts.join(' · ');

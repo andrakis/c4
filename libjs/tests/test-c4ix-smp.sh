@@ -101,15 +101,15 @@ else bad "three tasks share libc's code and keep their own data"; echo "$out" | 
 
 # S4: ps and top say which CPU runs each task, and top each CPU's load;
 # on one CPU, the columns there always were
-out=$(printf 'ps\ntop 1\nexit\n' | c4ix 1000000000)
+out=$(printf 'ps\ntop -b 1\nexit\n' | c4ix 1000000000)
 if [ "$N" -ge 2 ]; then
-    if echo "$out" | grep -qE '^  ID  PPID STATE    CPU PRIV' && echo "$out" | grep -qE "^CPUs:  0:[0-9]+% 1:[0-9]+%"; then
+    if echo "$out" | grep -qE '^  ID  PPID STATE    CPU PRIV' && echo "$out" | grep -qE '^%Cpu\(s\):.* 0: *[0-9]+% +1: *[0-9]+%' && echo "$out" | grep -qE 'PID +PPID USER +NI S +P +RES'; then
         ok "ps and top show the CPUs"
-    else bad "ps and top show the CPUs"; echo "$out" | grep -E 'ID|CPUs' | head -4; fi
+    else bad "ps and top show the CPUs"; echo "$out" | grep -E 'ID|CPU' | head -4; fi
 else
-    if echo "$out" | grep -qE '^  ID  PPID STATE   PRIV' && ! echo "$out" | grep -qE 'CPUs:'; then
+    if echo "$out" | grep -qE '^  ID  PPID STATE   PRIV' && echo "$out" | grep -qE 'PID +PPID USER +NI S +RES' && ! echo "$out" | grep -qE '^%Cpu\(s\):.* 0: *[0-9]+%'; then
         ok "ps and top: one CPU, no CPU column"
-    else bad "ps and top: one CPU, no CPU column"; echo "$out" | grep -E 'ID|CPUs' | head -4; fi
+    else bad "ps and top: one CPU, no CPU column"; echo "$out" | grep -E 'ID|CPU' | head -4; fi
 fi
 
 # nice: on one CPU a favoured program (nice -3: a turn of four slices)

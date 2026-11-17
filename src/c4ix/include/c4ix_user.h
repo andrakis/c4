@@ -24,7 +24,8 @@ enum {
     SYS_STACK = 228, SYS_CPUSTAT = 229, SYS_EVWAIT = 230, SYS_DISCARD = 231,
     SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
     SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
-    SYS_DISPLAY = 240, SYS_AFFINITY = 242, SYS_NICE = 243, SYS_IOPERM = 244, SYS_MAPFROM = 245, SYS_RELAZY = 246
+    SYS_DISPLAY = 240, SYS_AFFINITY = 242, SYS_NICE = 243, SYS_IOPERM = 244, SYS_MAPFROM = 245, SYS_RELAZY = 246,
+    SYS_FDGIVE = 247
 };
 // libjs's display, taken from the desktop and given back (include/display.h)
 #ifndef __C4IX_DISPLAY_H
@@ -105,6 +106,11 @@ int  uioperm(int bits);
 // program's (umapfrom, docs/c4ix-mmu.md 9). 0, or -1 if it is not one's.
 // Without the MMU there is nothing to do, and it says 0.
 int  umapfrom(int addr, int n);
+// Give task pid -- one this task started, or one they started -- this
+// task's descriptor fd as its descriptor to, as udup2 would there: what to
+// was is closed. The desktop gives a program run in the background from a
+// Terminal the pipes of a window of its own so (window.h). to, or -1.
+int  ufdgive(int pid, int fd, int to);
 // Sleep ms milliseconds, or less: until an event lands in the GUI ring at
 // ring (0: none), or, with pipes set, data or end of file on a pipe this
 // task reads. 1 if one already had.

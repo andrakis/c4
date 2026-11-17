@@ -1746,3 +1746,62 @@ htop too if it can be had, by a Busybox port if that was the way.
   the console's keys while it runs. Ctrl-C stops it.
 - **htop**, as above, and termios in libc for it (M7d of the Busybox
   port).
+
+## Part twenty-seven: a game run in the background gets a window of its own (2026-11-17)
+
+Found while fixing three windowed Quakes at once (the sound card's
+PCM_START): `pin 1 quake --window &`, `pin 2 ...`, `pin 3 ...` typed in
+one Terminal all drew on that Terminal's canvas, through its two pipes.
+Every job a Terminal runs shares them, so:
+
+- each game read the others' events. A frame ack (`f`, WIN_FRAME) read
+  by the wrong Quake left the right one waiting for it, and a Quake
+  waiting sends no more frames (qg-c4ix.c): its picture froze;
+- the shell at its prompt read them too: `sh: cannot find f0,0,0`, an
+  ack run as a command (with two Duke3Ds);
+- what was left in the pipe when a game ended went to the shell.
+
+What was done:
+
+- [x] **A background job has no input** (sh.c). As POSIX's shell does
+      for an asynchronous list (`/dev/null`), `cmd &` gets a pipe with no
+      writer for its stdin, at its end at once, unless it has a `<` of
+      its own. The Terminal's input is the shell's and its foreground
+      job's.
+- [x] **A program wanting a canvas with no input asks for a window**
+      (window.c, `win_open`). With stdin ended it writes `O pid;title`
+      instead (window.h's wire format), and waits up to 10 s for its
+      stdin to be live; then it opens the canvas as always, on its new
+      stdout. Without an answer, win_open says 0.
+- [x] **The Terminal makes the window** (term.c, `term_adopt`): one as
+      `term_run`'s, only its canvas, with two new pipes, given to that
+      task as its fds 1 and 0, in that order. The program is the shell's
+      job, not the desktop's child: the window knows it has ended when
+      its pipe has no writer, and is not the one to wait for it; closing
+      the window, or Ctrl-C in it, ends the program, as for term_run's.
+      Its stderr stays the Terminal's, so an error shows where it was
+      typed.
+- [x] **SYS_FDGIVE** (247; libc4ix `ufdgive(pid, fd, to)`): the
+      caller's descriptor `fd` becomes task `pid`'s descriptor `to`, as
+      dup2 would there, for a task the caller started or one its tasks
+      did (the rule SYS_MAPFROM has). Every syscall holds the kernel
+      lock, so the other task's table is not in use; a task parked
+      reading what `to` was is woken, and its read, which starts again,
+      takes the new one. SYS_TOP is 248.
+- [x] **Events left over are not commands.** When the prompt comes
+      back and the Terminal stops being a canvas, it drops what it sent
+      the program and was not read (`udiscard`, as on a Ctrl-C). The
+      shell skips a line that starts ESC E anyway: it can read the
+      pipe before the Terminal sees the prompt.
+- [x] test-desktop.mjs: after `net` and `q` in a Terminal the screen
+      says no `cannot find`; `net &` there plays in a window of its own,
+      the Terminal keeps its title, and Esc in the game's window ends it
+      and the window. `libjs/tests/try-quake3.mjs` counts each window's
+      frames by where its canvas is, says FROZEN for one that drew and
+      then stopped while its Quake lives, reports a Terminal line saying
+      `cannot find`, and exits 1 for either or for a Quake lost.
+
+Three `pin N quake --window &` from one Terminal, for 300 s of simulated
+time: three windows drew, none froze, and no line said `cannot find`.
+The gate (c4bb-images, test-c4ix, test-c4ix-rebuild, test-libjs, test,
+test-c4fc, test-quake) passed.

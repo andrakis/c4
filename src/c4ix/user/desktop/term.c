@@ -31,6 +31,17 @@
 // program may give its window a menu bar (window.h: the M and I ops): the
 // window grows by the bar's height, and a pick goes down the pipe as 'c'.
 //
+// A program run in the background from a Terminal (`quake --window &`)
+// gets such a window too (term_adopt). The Terminal's canvas is its
+// foreground job's, and its pipes are shared by every job it runs: two
+// games drawing there would each read the other's frame acks and keys,
+// and the shell at its prompt would read them too. So the shell gives a
+// background job an input that has ended, as POSIX's does, and a program
+// that asks for a canvas with no input asks for a window of its own
+// instead (window.c, win_open: the O op, with its task id). The desktop
+// makes the window and its pipes and gives them to that task as its stdin
+// and stdout (SYS_FDGIVE). Its stderr stays the Terminal's.
+//
 // A canvas is GW by GH, whatever the window's size, unless the program
 // asks for it to follow the window (the z op, window.h's win_resizable):
 // then it is the window's whole inside, a window of the program's own may
@@ -64,6 +75,7 @@ struct term {
     int win;                      // its window's number
     int pid, in_w, out_r, ended;
     int bare;                     // the program's own window: no shell (term_run)
+    int adopted;                  // ... and the program a Terminal's job (term_adopt): not ours to wait for
     struct tgrid *g;              // the text
     char pending[128];            // a command to type at the first prompt
     int gfx, buttons;             // a canvas now; mouse buttons held on it
@@ -179,6 +191,8 @@ static void follow(struct term *t, struct win *w) {
     }
 }
 
+static void term_adopt(int pid, char *title);
+
 // One command, ESC _ and ESC \ already stripped: G, the op, numbers
 // separated by commas, and for text a ';' and the string.
 static void apc(char *ctx, char *abuf, int alen) {
@@ -208,6 +222,8 @@ static void apc(char *ctx, char *abuf, int alen) {
         return;
     }
     if (op == 'q') { gfx_mode(t, 0); return; }
+    // a program in the background wants a window of its own (window.c)
+    if (op == 'O') { if (n && nums[0] > 0) term_adopt(nums[0], s); return; }
     if (!t->gfx) return;
     // a menu bar: a program's own window's only (a Terminal has its own)
     if (op == 'M' || op == 'I') { if (t->bare) prog_menu(t, op, n ? nums[0] : 0, s); return; }
@@ -384,6 +400,49 @@ int term_run(char *cmd) {
     return i;
 }
 
+// A program a Terminal ran in the background asks for a window of its
+// own (the O op: its task id, and its title): one as term_run's, whose
+// pipes are given to that task as its stdin and stdout (SYS_FDGIVE, which
+// gives only to a task the desktop's own tasks started). Its stdout goes
+// first: once its stdin is live (win_open waits for that) it is drawing
+// here. It is the shell's job, not the desktop's child, so the window
+// knows it has ended by the pipe, and closing the window ends it.
+static void term_adopt(int pid, char *title) {
+    int i, ok, pin[2], pout[2];
+    struct win *w;
+    struct term *t;
+    char name[48];
+    ui_ncpy(name, title && *title ? title : "Program", 45);
+    i = win_open(K_TERM, name, TG_W + 2 * BORDER, TG_H + 2 * BORDER + TITLE_H + 1, sizeof(struct term));
+    if (i < 0) return;
+    w = win_get(i);
+    w->resizable = 0;
+    t = T(w);
+    t->win = i;
+    t->bare = 1;
+    t->adopted = 1;
+    t->pid = pid;
+    t->ended = 1;                 // until it has its pipes
+    if (!(t->g = tg_new(i))) { win_close(i); return; }
+    t->g->apc = apc; t->g->ctx = (char *)t;
+    ok = 0;
+    if (upipe(pin) == 0) {
+        if (upipe(pout) == 0) {
+            ucloexec(pin[1], 1); ucloexec(pout[0], 1);
+            ok = ufdgive(pid, pout[1], STDOUT) >= 0 && ufdgive(pid, pin[0], STDIN) >= 0;
+            uclose(pout[1]);
+            if (ok) t->out_r = pout[0];
+            else uclose(pout[0]);
+        }
+        uclose(pin[0]);
+        if (ok) t->in_w = pin[1];
+        else uclose(pin[1]);
+    }
+    // no pipes, or not a task of ours: its win_open gives up waiting
+    if (!ok) { win_close(i); return; }
+    t->ended = 0;
+}
+
 // The window is going: stop the job running in it, then the shell.
 void term_close(struct win *w) {
     struct term *t;
@@ -394,7 +453,7 @@ void term_close(struct win *w) {
     ukill(t->pid, SIGTERM);
     uclose(t->in_w);
     uclose(t->out_r);
-    uwait(t->pid);
+    if (!t->adopted) uwait(t->pid);
     t->ended = 1;
 }
 
@@ -417,9 +476,11 @@ void term_tick(struct win *w) {
         tg_feed(t->g, iobuf, n);
         // the shell's prompt ends "$ " (c4ix-sh -p) and is the last thing it writes
         prompt = !t->bare && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == ' ';
-        // the shell's prompt is back: whatever made this a canvas, or took
-        // the keys, has ended
-        if (t->gfx && prompt) gfx_mode(t, 0);
+        // The shell's prompt is back: whatever made this a canvas, or took
+        // the keys, has ended. What was sent to it and not read -- a frame
+        // ack, a key let go -- goes with it, as on a Ctrl-C: the shell
+        // would read it next.
+        if (t->gfx && prompt) { gfx_mode(t, 0); udiscard(t->in_w); }
         if (prompt) t->raw = 0;
         // ... and time to type a waiting command
         if (t->pending[0] && prompt) {
@@ -436,7 +497,7 @@ void term_tick(struct win *w) {
         // every writer is gone: the shell exited
         uclose(t->in_w);
         uclose(t->out_r);
-        uwait(t->pid);
+        if (!t->adopted) uwait(t->pid);
         t->ended = 1;
         // a program's own window goes with it, unless it shows what the program wrote
         if (t->bare && (t->gfx || (!t->g->cx && !t->g->cy && !t->g->sbn))) { win_close(t->win); return; }

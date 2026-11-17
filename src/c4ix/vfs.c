@@ -1426,6 +1426,21 @@ int fd_dup2(struct task *t, int oldfd, int newfd) {
     return newfd;
 }
 
+// The same across two tasks: TO's newfd is FROM's oldfd's description
+// (SYS_FDGIVE). Counted before what newfd was is closed, which may be it.
+int fd_give(struct task *from, int oldfd, struct task *to, int newfd) {
+    struct file *f;
+    sched_lock();
+    if (!(f = fd_get(from, oldfd)) || newfd < 0 || newfd >= FD_MAX) { sched_unlock(); return -1; }
+    ++f->refs;
+    if (to->fds[newfd]) fd_close(to, newfd);
+    to->fds[newfd] = (int)f;
+    if (newfd >= to->fdtop) to->fdtop = newfd + 1;
+    to->fdcloexec[newfd] = 0;
+    sched_unlock();
+    return newfd;
+}
+
 void fd_init_console(struct task *t) {
     fd_open_vnode(t, console, C4IX_O_RDONLY);   // 0
     fd_open_vnode(t, console, C4IX_O_WRONLY);   // 1

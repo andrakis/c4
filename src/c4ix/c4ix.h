@@ -123,7 +123,9 @@ enum {
     SYS_MAPFROM = 245,
     // a file saved is the host's again (vfs.c, vfs_relazy; persist.c)
     SYS_RELAZY = 246,
-    SYS_TOP = 247          // one past the last: sched_trap's range check
+    // a descriptor given to a task this one started (sys.c, sys_fdgive)
+    SYS_FDGIVE = 247,
+    SYS_TOP = 248          // one past the last: sched_trap's range check
 };
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
 enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_YIELDS = 1 };
@@ -328,6 +330,7 @@ int          fd_install(struct task *t, struct file *f);
 int          fd_open_vnode(struct task *t, struct vnode *vn, int flags);
 int          fd_close(struct task *t, int fd);
 int          fd_dup2(struct task *t, int oldfd, int newfd);
+int          fd_give(struct task *from, int oldfd, struct task *to, int newfd);
 void         fd_init_console(struct task *t);
 void         fd_clone(struct task *dst, struct task *src);
 void         fd_clone_all(struct task *dst, struct task *src);   // vfork: close-on-exec fds too
@@ -352,6 +355,7 @@ int kputc(int c);
 void con_logopen();        // /var/log/kernel exists now: the console is logged to it
 void con_booted();         // boot is over: tasks' console output is no longer logged
 void con_write_task(char *buf, int len);  // a task's bytes to the console
+void con_task_gone(int id);   // task id has died: the raw keys it asked for go back
 int kputs(char *s);
 int kprintf(char *fmt, ...);
 // The kernel log (console.c): every line the kernel says, stamped with
@@ -636,6 +640,8 @@ struct cpustat {
     int cnap[CPU_MAX];
     long long cbusy[CPU_MAX];
     long long cidle[CPU_MAX];
+    int cpms;                  // cycles in a machine ms (klog_cpms), 0 if not measured
+    int total;                 // tasks there are: more than ntasks if max was too few
 };
 struct cpustat_task {
     int id, parent, state, privs, nsyscalls;

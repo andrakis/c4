@@ -54,6 +54,9 @@ import { registerHooks } from 'node:module';
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { requireSlot } from '../libjs/hostlock.mjs';
+
+requireSlot('framebench');
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const GAMES = join(ROOT, 'src/c4bb/images/games');
@@ -84,6 +87,9 @@ const RUNS = {
               page: 'wolf3d --timedemo 1 --show', about: "Wolfenstein 3D's --timedemo 1 (shareware)" },
   'rott': { image: 'rott.c4r', frame: 'rott_frame', mem: 64, skip: 2, args: ['--timedemo', '4', 'NOSOUND'],
             page: 'rott --timedemo 4 NOSOUND --show', about: "Rise of the Triad's --timedemo 4 (shareware)" },
+  ...Object.fromEntries([1, 2, 3].map(n => [`rott-demo${n}`, {
+    image: 'rott.c4r', frame: 'rott_frame', mem: 64, skip: 2, args: ['--timedemo', `${n}`, 'NOSOUND'],
+    page: `rott --timedemo ${n} NOSOUND --show`, about: `Rise of the Triad's --timedemo ${n} (shareware)` }])),
 };
 // the games played for --lag: started at the shell, then a turn key held
 const LAG = {
@@ -273,7 +279,8 @@ async function nodeRun(profile) {
   const end = (text.match(/^timedemo: .*$/m) || [''])[0];
   if (o.lines) for (const l of text.split('\n')) if (o.lines.test(l)) console.log(l);
   const segs = [];
-  if (R.mark) {
+  // a run that opens no demo (duke3d -map FILE) is measured whole
+  if (R.mark && marks.length) {
     // a demo starts at its open: its first frame loads the level, and is
     // left out; it ends where the next one opens
     for (let i = 0; i < marks.length - 1; i++) segs.push({ name: `demo${i + 1}`, from: marks[i] + 3, to: marks[i + 1], load: [marks[i] + 1, marks[i] + 2] });

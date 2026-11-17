@@ -16,7 +16,7 @@
 #ifndef __C4IX_CPUSTAT_H
 #define __C4IX_CPUSTAT_H 1
 
-enum { CPUSTAT_NAME = 16, CPU_MAXT = 32, CPUSTAT_CPUS = 16 };
+enum { CPUSTAT_NAME = 16, CPU_MAXT = 128, CPUSTAT_CPUS = 16 };
 
 // the kernel's struct cpustat and struct cpustat_task (c4ix.h)
 struct cpustat {
@@ -36,6 +36,8 @@ struct cpustat {
     int cnap[CPUSTAT_CPUS];
     long long cbusy[CPUSTAT_CPUS];
     long long cidle[CPUSTAT_CPUS];
+    int cpms;                  // cycles in a machine ms, 0 if not measured
+    int total;                 // tasks there are: more than ntasks past CPU_MAXT
 };
 struct cpustat_task {
     int id, parent, state, privs, nsyscalls;

@@ -99,6 +99,7 @@ int uaffinity(int id, int mask)       { return __c4ix_syscall(SYS_AFFINITY, id, 
 int unice(int id, int nice)           { return __c4ix_syscall(SYS_NICE, id, nice, 0); }
 int uioperm(int bits)                 { return __c4ix_syscall(SYS_IOPERM, bits, 0, 0); }
 int umapfrom(int addr, int n)         { return __c4ix_syscall(SYS_MAPFROM, addr, n, 0); }
+int ufdgive(int pid, int fd, int to)  { return __c4ix_syscall(SYS_FDGIVE, pid, fd, to); }
 
 int spawn(char *path, int argc, char **argv) {
     return __c4ix_syscall(SYS_SPAWN, (int)path, argc, (int)argv);

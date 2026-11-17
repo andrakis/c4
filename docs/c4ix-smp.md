@@ -258,7 +258,12 @@ seconds:
 
 test-libjs runs `smp0`, `smp1`, the deadlock, the window and `spinmp`
 with `--parallel`, and checks their answers. Their cycle counts are not
-pinned, since the host interleaves the threads. C4IX boots to its shell
+pinned, since the host interleaves the threads, and each run has a
+timeout. A guest has to allow for any interleaving there: smp1 started
+each CPU once, and lost the start when the CPU had reported back but not
+yet halted; and its IPI phase let every CPU go on the first IPI, so the
+rest could halt before theirs was sent (2026-11-16, both now in smp1.c).
+C4IX boots to its shell
 on `?cpus=2&parallel` as it does on one CPU. It starts no other CPU
 until S3.
 

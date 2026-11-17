@@ -10,7 +10,11 @@
 // is a terminal again. The desktop can also start a program in a window
 // that is only its canvas, with no shell (Go > Games, and Files, for the
 // games whose /etc/desktop.apps line says `window`): there the window
-// closes when the program ends.
+// closes when the program ends. A program run in the background from a
+// Terminal (`quake --window &`) gets a window of its own as well, since
+// the Terminal's canvas, and its input, are its foreground job's: the
+// shell gives a background job no input, and win_open() then asks the
+// desktop for a window, whose pipes become the program's stdin and stdout.
 //
 // win_here() says whether there is a window to open: stdin and stdout
 // are pipes, as the desktop gives a program in either kind. On the
@@ -55,6 +59,9 @@
 //     t x,y,rgb,size;text  text        p                 show the frame
 //     f addr,w,h,pitch,pal  an 8-bit framebuffer, scaled to the canvas
 //     q         be a terminal again
+//     O pid;title  a window of the program's own, for task pid: its
+//               pipes are given to it as fds 0 and 1 (SYS_FDGIVE); sent
+//               by a program whose stdin has ended, a background job's
 //     M n;title  menu n of the menu bar (0: the bar anew)
 //     z 1       the canvas follows the window's size (z 0: WIN_W by WIN_H)
 //     I n;label  an item of menu n ("-" a rule, "*label" checked)

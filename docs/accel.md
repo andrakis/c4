@@ -2,10 +2,10 @@
 
 A game can hand its heaviest loops to the host, in its own JavaScript: a wall's column, a floor's
 row, Quake's whole span lists, each one instruction however much it does. `libjs/accel.js` is the
-loader and the kit those modules use; the modules are the games' own, `games/duke3d/c4/accel.mjs`
-and `games/quake/c4/accel.mjs`, and libjs knows no game. Duke Nukem 3D and Quake use theirs when the
-machine has them and their video menu says so, and run their own C everywhere else. The frames are
-the same either way, to the byte.
+loader and the kit those modules use; the modules are the games' own, `games/duke3d/c4/accel.mjs`,
+`games/quake/c4/accel.mjs` and `games/rott/c4/accel.mjs`, and libjs knows no game. Duke Nukem 3D,
+Quake and Rise of the Triad use theirs when the machine has them and their menu says so, and run
+their own C everywhere else. The frames are the same either way, to the byte.
 
 **In short** (2026-11-15, section 4):
 - In the page (400 MHz, the MMU on), Quake's demos average 26 to 28 fps where they averaged 12 to 14,
@@ -20,10 +20,14 @@ the same either way, to the byte.
 - Each game's video menu has the switch, on unless turned off, saved in its configuration.
 - Duke's demo1 dies at frames 1949 to 2782, a desync between the game's versions rather than play,
   and is left out of these numbers.
+- Rise of the Triad (2026-11-17, section 4.4): on node its four timedemos' frames are 1.3 to 1.4 M
+  instructions on average where they were 3.6 to 4.2 M, and the worst 2.6 to 2.9 M where it was
+  11.5 M. 0.89 M of each is the timedemo's own checksum, which play does not do: a frame a player
+  sees is a fifth or less of what it was. Its switch is Extended User Options' ACCELERATED.
 - C4IX has its own (section 7, 2026-11-17): libarc's CRC-32 and inflater, which unpack the root
   archive at boot. A boot to the desktop was 1,592 M instructions, 85% of them those two loops; it is
-  now a fraction of that. A machine option of its own (`&osaccel=0`, `--no-osaccel`), which the
-  desktop's Settings turns too.
+  now 202 M, and the page's boot 24 s to 10 s. A machine option of its own (`&osaccel=0`,
+  `--no-osaccel`), which the desktop's Settings turns too.
 
 ## 1. How it works
 
@@ -66,6 +70,9 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
   same result run again after a partial run: what it writes it reads back only where writing the same
   again is what the loop would do (a z buffer it has already set reads equal, and is set again).
   Without the MMU they read the arena directly, above the low page and short of the boot stack's guard.
+  The kit's `span(m, addr, len, write)` gives a stretch as a view of the arena's own bytes when it is
+  one run of them (plain memory, or within one page under the MMU), and null otherwise: a copy goes a
+  page at a time as one typed-array move where it can, byte by byte where it cannot.
 - **One instruction.** It counts one cycle however much it does, as `MCPY` does: the point is that the
   machine's clock (400 MHz in the page) is not spent on it. A test that times the game in the
   machine's clock sees it finish sooner: test-duke3d's General MIDI check counts the notes in the
@@ -90,6 +97,8 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
 | 13 | `duke_thline` | `thlineskipmodify` | a translucent floor sprite's row |
 | 14 | `duke_scale` | `scale` (fixedPoint_math.h) | `(int32_t)((int64_t)a * b / c)`, any a, b and c but 0 |
 | 15 | `duke_dmulscale` | `dmulscale` | `(int32_t)(((int64_t)a * b + (int64_t)c * d) >> s)` |
+| 16 | `duke_copyr` | `copybufreverse` | a copy read backwards, where the two do not overlap: a mirror's rows turned round (`completemirror`), every row of every frame a mirror is on the screen |
+| 17 | `duke_mhline` | `mhlineskipmodify` | a masked floor's or ceiling's row, left to right, texel 255 left out: a floor-aligned sprite, and the masked floors and ceilings `ceilspritehline` draws |
 
 The translucent loops read the screen and blend into it, and a blend run twice blends twice: each
 works out every pixel first, reading all it reads and making sure with the kit's `probe` that every
@@ -118,6 +127,26 @@ models and the small triangles read what they need from a struct the C fills (`c
 twice, so they first make sure, with the kit's `probe`, that nothing they write can fault: under the
 MMU a page that is not there faults then, before anything is written.
 
+**Rise of the Triad** (`games/rott/c4/accel.mjs`, `c4/c4accel.h`; `RA_*`):
+
+| op | macro | ROTT's C | what it is |
+|---|---|---|---|
+| 0 | `rott_col` | `R_DrawColumn`, `R_DrawClippedColumn`, `R_DrawWallColumn` (rt_scale.c) | a column, `*dest = shade[src[frac >> sh]]`, the shift signed or not as each has it |
+| 1 | `rott_trans` | `R_TransColumn` | a translucent column, `*dest = shade[*dest]` |
+| 2 | `rott_row` | `DrawRow` (rt_floor.c) | a floor's or ceiling's row out of its 128x128 tile |
+| 3 | `rott_rotrow` | `DrawRotRow`, `DrawMaskedRotRow` (rt_draw.c) | the turned screen's row at 320 across (the player's death, a level's start), out of the 256x512 image; the masked one leaves 255 out |
+| 4 | `rott_sky` | `DrawSkyPost` | the sky's column at 320 across |
+| 5, 6 | `rott_fixmul`, `rott_fixmulshift` | `FixedMul`, `FixedMulShift` (watcom.c) | `(int32_t)(((int64_t)a * b + 0x8000) >> 16)`; `(int32_t)((uint64_t)((int64_t)a * b) >> s)` |
+| 7, 8 | `rott_fixdiv2`, `rott_fixscale` | `FixedDiv2`, `FixedScale` | `(int32_t)((int64_t)a * 65536 / b)`; `(int32_t)((int64_t)a * b / c)`, each through c4's `__int64` library in the C |
+| 9 | `rott_tile` | `DrawTiledRegion` (rt_vid.c) | a region tiled with a pic's four planes: the border behind a small view, a message's line |
+| 10 | `rott_post` | `ScaleMaskedPost`, `ScaleClippedPost`, `ScaleTransparentPost`, `ScaleTransparentClippedPost` | a sprite's post, every run of it, solid and translucent, leaving `dc_yl`, `dc_yh` and `dc_source` as the C does |
+
+`watcom.h` makes the four fixed-point helpers macros that choose the operation where they stand, as
+Duke's `mulscale` does (`FixedMul` was 1,100 calls a frame, and `FixedScale` and `FixedDiv2` went
+through the 64-bit library's division); the functions are there for every other machine and until
+the game has asked. The translucent column and posts work out every pixel and make sure of the pages
+they write before writing, as Duke's translucent loops do.
+
 ## 3. In the games
 
 **Duke Nukem 3D**: Options, Video Setup, **ACCELERATED** (on, off; "OFF" where the machine has none,
@@ -140,7 +169,13 @@ game stays at 320x200 and says so. Each frame goes to the display at its own siz
 becomes the frame's size above 640x480 (`qg-gui.c`, writing `GUI_W` and `GUI_H`). The menus and the
 console keep Quake's 8-pixel font, so they are small at 1024x768, as they were in the original.
 
-Doom, Wolf3D, ROTT and Tyrian keep their loops: they run at a good speed in the page now, with idle to
+**Rise of the Triad**: Options, Extended User Options, **ACCELERATED** (its button on or
+off; the item is greyed out where the machine has none). It is `BrowserAccelerated` in the game's
+config, on unless that says 0. `rott_accel` (rt_scale.c) is the first of ROTT's numbers, or 0: the
+columns, posts, rows, sky, turned screen, tiled regions and watcom.h's macros ask it
+(`ROTT_ACCEL()`).
+
+Doom, Wolf3D and Tyrian keep their loops: they run at a good speed in the page now, with idle to
 spare.
 
 ## 4. What they do
@@ -162,6 +197,14 @@ Duke's demo1 without its death (frames 1949 to 2782).
 | Quake demo1 | 7.40 / 17.71 / 19.46 | 2.91 / 5.55 / 6.12 |
 | Quake demo2 | 7.14 / 16.20 / 20.07 | 2.94 / 6.16 / 6.50 |
 | Quake demo3 | 8.43 / 16.23 / 19.32 | 3.24 / 5.88 / 6.56 |
+| ROTT demo 1 | 3.90 / 5.28 / 11.52 | 1.37 / 1.62 / 2.69 |
+| ROTT demo 2 | 3.53 / 5.08 / 11.52 | 1.29 / 1.57 / 2.58 |
+| ROTT demo 3 | 3.72 / 5.44 / 11.52 | 1.36 / 1.74 / 2.90 |
+| ROTT demo 4 | 4.17 / 5.44 / 11.52 | 1.55 / 1.77 / 2.79 |
+
+ROTT's before is `c4ix_and_toppings` 38e0fe1 (2026-11-17), its runs `rott-demo1` to `rott-demo3`
+and `rott`, and each of its figures has the timedemo's own checksum of the frame in it, 0.89 M,
+which play does not do (section 4.4).
 
 ### 4.2 The page: frame rates
 
@@ -208,12 +251,47 @@ machines on CDP here are not fast ones; a faster machine shows more of it, as th
   `trunc` as FPU operations would help every float program. Duke's `inside` and translucent walls are
   loops of the kind done here.
 
+### 4.4 Rise of the Triad
+
+The shareware's four timedemos on node's bare machine, M instructions a frame of the game's own
+frames (framebench counts some 130 calls of the frame function for the loading bar at each demo's
+start, which the game leaves out of its count and its checksum), mean / median / 99th percentile /
+worst:
+
+| demo | frames, checksum | before | after |
+|---|---|---|---|
+| 1 | 1,481, b0fe23ad | 4.04 / 3.90 / 5.28 / 11.52 | 1.37 / 1.37 / 1.62 / 2.69 |
+| 2 | 745, 9460844c | 3.57 / 3.53 / 5.08 / 11.52 | 1.26 / 1.29 / 1.57 / 2.58 |
+| 3 | 946, 3e81c403 | 3.74 / 3.72 / 5.44 / 11.52 | 1.35 / 1.36 / 1.74 / 2.90 |
+| 4 | 475, 4c959773 | 4.17 / 4.17 / 5.44 / 11.52 | 1.44 / 1.55 / 1.77 / 2.79 |
+
+- Each figure has the timedemo's checksum of the frame in it, 0.89 M (`rott_frame`), which play does
+  not do: without it a median frame is 0.4 to 0.7 M where it was 2.6 to 3.3 M, a fifth or less, and
+  the worst 1.7 to 2.0 M where it was 10.6 M.
+- Before, a median frame was the walls' columns (`R_DrawWallColumn`, a quarter of it), the floors'
+  and ceilings' rows (`DrawRow`, a fifth), sprites' columns, the sky, and `FixedMul` (1,100 calls)
+  with `FixedScale` and `FixedDiv2` in the 64-bit library's division. The heaviest frames were the
+  turned screen (`DrawRotRow`, the player's death and a level's start), a full-screen
+  `DrawTiledRegion`, and sprites close to.
+- After, the heaviest 1% grow over the median in the status bar's and border's redraws
+  (`SetBorderColor`, `DrawPPic`, `VL_MemToScreen`), which come once in a while, and in the
+  intensity font of the messages; a median frame is the ray caster (`Cast`, `HitWall`,
+  `Interpolate`), `DrawWallPost` and the sprites' set-up.
+- Without the accelerators (`--no-accel`) a frame is what it was before, within 0.02 M: the
+  macros' test of `rott_accel`.
+- The same frames: the four checksums with the accelerators and without, with a sound card and
+  without, and demo 4's inside C4IX under the MMU.
+
 ## 5. Tests
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
   palettes, steps and shifts, comparing every byte written and what is left behind: Duke's 4,200
-  cases, Quake's surface blocks, sprite runs and light maps 1,000. test-duke3d and test-quake build them (in
-  `.duke3d/test/`, `.quake/test/`) and run them first.
+  cases, Quake's surface blocks, sprite runs and light maps 1,000, ROTT's 6,900 (its posts with
+  solid and translucent runs, and the fixed-point helpers against `__int64`'s). test-duke3d,
+  test-quake and test-rott build them (in `.duke3d/test/`, `.quake/test/`, `.rott/test/`) and run
+  them first.
+- test-rott holds ROTT's demo 4 to gcc's build on the bare machine, under C4DOS and inside C4IX,
+  and with a sound card, with the accelerators where the machine has them (C4DOS's has none).
 - test-duke3d and test-quake hold the games' c4 frames to gcc's host build, frame by frame, on the
   bare machine, under C4DOS and inside C4IX; libjs runs them with the accelerators, so every one of
   those frames is drawn by them, Quake's span lists included. test-duke3d's menu run and its General

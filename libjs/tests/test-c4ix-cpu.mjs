@@ -32,20 +32,22 @@ const check = (ok, what, extra = '') => { console.log(`test-c4ix-cpu: ${what} ${
 const type = s => typeBytes(vm, new TextEncoder().encode(s));
 
 
-// top N's screens, from what it printed after output offset n0: each
-// task's row, and the System line
-const row = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(user|kernel)\s+(-?\d+)\s.*?(\S+)\s*$/;
-const sysrow = /^\s+(-?\d+)\s+\S+\s+System\s*$/;
+// top -b N's screens, from what it printed after output offset n0: each
+// task's row, and sy, the kernel's share for them all, from %Cpu(s).
+// PID PPID USER NI S [P, with several CPUs] RES %CPU %MEM TIME+ COMMAND
+const rowre = smp => new RegExp('^\\s*(\\d+)\\s+(\\d+)\\s+(user|kernel)\\s+(-|-?\\d+)\\s+[RSWDZ?]\\s+' +
+  (smp ? '(?:-|\\d+)\\s+' : '') + '(\\d+)\\s+(-?\\d+)\\s+(?:-|\\d+)\\s+\\S+\\s+(\\S.*?)\\s*$');
 const top = n => {
   const n0 = out.length;
-  type(`top ${n}\n`);
-  until(() => (text(n0).match(/top: \d+ tasks/g) || []).length >= n && /c4ix:\/\$ *$/.test(text(n0)), 3000);
+  type(`top -b ${n}\n`);
+  until(() => (text(n0).match(/^top - up /gm) || []).length >= n && /c4ix:\/\$ *$/.test(text(n0)), 3000);
   if (process.env.SHOW) console.log(text(n0));
-  return text(n0).split(/top: (?=\d+ tasks)/).slice(1).map(s => {
-    const lines = s.split('\n');
-    const rows = lines.map(l => row.exec(l)).filter(Boolean).map(m => ({ id: +m[1], pct: +m[5], name: m[6] }));
-    const sys = lines.map(l => sysrow.exec(l)).filter(Boolean).map(m => +m[1]);
-    return { s, rows, sys: sys.length === 1 ? sys[0] : null, usage: +(/CPU usage (\d+)%/.exec(s) || [])[1] };
+  return text(n0).split(/^top - (?=up )/m).slice(1).map(s => {
+    const lines = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n');
+    const row = rowre(!/, 1 CPU,/.test(lines[0]));
+    const rows = lines.map(l => row.exec(l)).filter(Boolean).map(m => ({ id: +m[1], pct: +m[6], name: m[7] }));
+    const cpu = /%Cpu\(s\):\s+(-?\d+) us,\s+(-?\d+) sy,\s+(-?\d+) id/.exec(s);
+    return { s, rows, sys: cpu ? +cpu[2] : null, usage: +(/usage (\d+)%/.exec(s) || [])[1] };
   });
 };
 const sum = sc => sc.rows.reduce((a, r) => a + r.pct, 0) + sc.sys;

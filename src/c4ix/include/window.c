@@ -52,7 +52,15 @@ int win_here() {
 }
 
 // Become a canvas, titled. 1 on success.
+//
+// With an input that has ended, the program is a job a Terminal's shell
+// ran in the background (sh.c gives one no input, as POSIX's shell does),
+// and that Terminal's canvas is its foreground job's: it asks for a
+// window of its own instead (op O, with its task id), and the desktop
+// gives it that window's pipes as its stdin and stdout (term.c,
+// term_adopt). It waits up to 10 seconds for them; with none, 0.
 int win_open(char *title) {
+    int k;
     // a program in a window draws too: CPU 0, unless it was pinned (sched_softpin).
     // SYS_DISPLAY, DISP_PIN, by the gate here: c4cc builds this file into a program
     // with no libc4ix.
@@ -63,6 +71,17 @@ int win_open(char *title) {
         if (!win_out || !win_in) return 0;
     }
     win_olen = 0; win_ilen = 0;
+    if (win_sys(221, 0, 0, 0) < 0) {                                  // SYS_AVAIL: stdin has ended
+        win_begin('O'); win_num(win_sys(209, 0, 0, 0)); win_ch(';');   // SYS_GETPID
+        win_str(title); win_end();
+        win_flush();
+        k = 0;
+        while (win_sys(221, 0, 0, 0) < 0) {
+            if (k >= 500) return 0;
+            win_sleep(20);
+            k = k + 1;
+        }
+    }
     win_begin('o'); win_ch(';'); win_str(title); win_end();
     win_flush();
     return 1;

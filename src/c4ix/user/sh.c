@@ -18,7 +18,8 @@
 //                      the shell's own state), ls is a program.
 //   cmd < in > out  -- redirection
 //   a | b | c       -- pipelines of any length
-//   cmd &           -- background, reported by `jobs`, reaped by `wait`
+//   cmd &           -- background, reported by `jobs`, reaped by `wait`;
+//                      its input has ended unless it says otherwise
 //   *.c, a?.txt     -- wildcards in a word's last component (sh_glob)
 //   builtins        -- exit, jobs, wait, cd, pwd, rm [-r] [-f], mv, help
 //   PATH=/bin:...   -- where a bare name is looked for (sh_candidate)
@@ -549,7 +550,7 @@ static int sh_runline(char **w, int nw) {
     char *cand;
     int i, k, argc, background, hasnext, pid, fd, st, form, err;
     int prev_read, saved0, saved1;
-    int p[2];
+    int p[2], q[2];
     int pids[ARG_MAX];
     int npids;
 
@@ -601,6 +602,17 @@ static int sh_runline(char **w, int nw) {
         else if (infile) {
             if ((fd = uopen(infile, O_RD)) < 0) uprintf("sh: cannot open %s\n", infile);
             else { udup2(fd, STDIN); uclose(fd); }
+        }
+        // A background job does not read this shell's input, as POSIX's
+        // shell has it (an asynchronous list's is /dev/null): that is the
+        // shell's, and its foreground jobs'. Its input is a pipe with no
+        // writer, at its end at once. In the desktop's Terminal that is
+        // also what tells a program wanting a canvas that the Terminal's
+        // is not its own (window.c, win_open).
+        else if (background && upipe(q) == 0) {
+            uclose(q[1]);
+            udup2(q[0], STDIN);
+            uclose(q[0]);
         }
         if (hasnext) udup2(p[1], STDOUT);
         else if (outfile) {
@@ -705,6 +717,9 @@ int main(int argc, char **argv) {
             break;
         }
         if (!len) continue;
+        // ESC E: an event the desktop's Terminal sent a program drawing in
+        // it (window.h) that ended before reading it. Not a command.
+        if (len >= 2 && line[0] == 27 && line[1] == 'E') continue;
         nw = sh_split(line, words, WORD_MAX);
         if (!nw) continue;
         sh_runline(words, nw);

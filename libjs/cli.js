@@ -51,6 +51,7 @@ import { createMachine, boot } from './boot.js';
 import { loadAccel, accelManifest } from './accel.js';
 import { Worker } from 'node:worker_threads';
 import { STOP } from './c4m.js';
+import { requireSlot } from './hostlock.mjs';
 import { SoundDevice, EVT } from './snd-device.js';
 import { renderWav } from './snd-mix.js';
 
@@ -300,6 +301,8 @@ if (process.send && process.env.LIBJS_CHILD) {
   const done = s => process.send({ status: s }, () => process.exit(s));
   main(process.argv.slice(2)).then(done, e => { console.error(e); done(70); });
 } else {
+  // here, not in the child: it has no lock fd to show (its stdio is three and ipc)
+  requireSlot("libjs/cli.js");
   const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)],
     { stdio: ['inherit', 'inherit', 'inherit', 'ipc'], env: { ...process.env, LIBJS_CHILD: '1' } });
   let status = null;

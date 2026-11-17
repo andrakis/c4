@@ -118,6 +118,27 @@ void gui_clip   (int x, int y, int w, int h)          { int *p; if ((p = gui_fra
 void gui_noclip ()                                    { gui_cmd0(GUI_NOCLIP); }
 void gui_size   (int w, int h)                        { int *p; if ((p = gui_frame(GUI_SIZE, 2))) { p[0] = w; p[1] = h; gui_commit(); } }
 
+// n characters of s into the words at p, four to a word, lowest byte
+// first, the last word's spare bytes 0. Where a word is four bytes that is
+// the bytes as they lie, one memcpy (an opcode); the loop, a character at
+// a time, was a quarter of what the desktop spent drawing.
+void gui_chars (int *p, char *s, int n) {
+	int i, w;
+	w = (n + 3) / 4;
+	if (sizeof(int) == 4) {
+		if (w) p[w - 1] = 0;
+		memcpy(p, s, n);
+		return;
+	}
+	i = 0;
+	while (i < w) { p[i] = 0; i = i + 1; }
+	i = 0;
+	while (i < n) {
+		p[i / 4] = p[i / 4] | ((s[i] & 255) << ((i % 4) * 8));
+		i = i + 1;
+	}
+}
+
 // Text at (x, y), top-left, size in pixels. Characters travel four to a
 // word, lowest byte first.
 void gui_text (int x, int y, int rgb, int size, char *s) {
@@ -126,13 +147,7 @@ void gui_text (int x, int y, int rgb, int size, char *s) {
 	while (s[n]) n = n + 1;
 	if (!(p = gui_frame(GUI_TEXT, 5 + (n + 3) / 4))) return;
 	p[0] = x; p[1] = y; p[2] = rgb; p[3] = size; p[4] = n;
-	i = 0;
-	while (i < (n + 3) / 4) { p[5 + i] = 0; i = i + 1; }
-	i = 0;
-	while (i < n) {
-		p[5 + i / 4] = p[5 + i / 4] | ((s[i] & 255) << ((i % 4) * 8));
-		i = i + 1;
-	}
+	gui_chars(p + 5, s, n);
 	gui_commit();
 }
 
@@ -144,13 +159,7 @@ void gui_text2 (int x, int y, int rgb, int size, int font, int advance, char *s,
 	if (n < 0) { n = 0; while (s[n]) n = n + 1; }
 	if (!(p = gui_frame(GUI_TEXT2, 7 + (n + 3) / 4))) return;
 	p[0] = x; p[1] = y; p[2] = rgb; p[3] = size; p[4] = font; p[5] = advance; p[6] = n;
-	i = 0;
-	while (i < (n + 3) / 4) { p[7 + i] = 0; i = i + 1; }
-	i = 0;
-	while (i < n) {
-		p[7 + i / 4] = p[7 + i / 4] | ((s[i] & 255) << ((i % 4) * 8));
-		i = i + 1;
-	}
+	gui_chars(p + 7, s, n);
 	gui_commit();
 }
 
@@ -160,8 +169,7 @@ void gui_imgdef (int id, int w, int h, int *pixels) {
 	int i, *p;
 	if (!(p = gui_frame(GUI_IMGDEF, 3 + w * h))) return;
 	p[0] = id; p[1] = w; p[2] = h;
-	i = 0;
-	while (i < w * h) { p[3 + i] = pixels[i]; i = i + 1; }
+	memcpy(p + 3, pixels, w * h * sizeof(int));
 	gui_commit();
 }
 void gui_image (int id, int x, int y) { gui_cmd3(GUI_IMG, id, x, y); }

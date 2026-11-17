@@ -15,6 +15,13 @@
 // window becomes a terminal again when the program says so, when Ctrl-C
 // stops it, or when the shell's prompt comes back.
 //
+// Or a program may take the keys and leave the text, as from a tty in
+// raw mode: after ESC _ T r ESC \ each key goes down its stdin as it is
+// typed, unechoed -- the arrows, PgUp, PgDn, Home, End and the function
+// keys as a VT100 sends them, Enter as CR -- until ESC _ T c ESC \, Ctrl-C
+// (which stays an interrupt) or the prompt coming back. top does this;
+// on the console the kernel does the same (console.c).
+//
 // Or the window is a program's own (term_run): no shell and no menu, the
 // program itself on the pipes, and the window only its canvas. It closes
 // when the program ends -- unless it is showing text the program wrote,
@@ -60,6 +67,7 @@ struct term {
     struct tgrid *g;              // the text
     char pending[128];            // a command to type at the first prompt
     int gfx, buttons;             // a canvas now; mouse buttons held on it
+    int raw;                      // keys go to the program as typed (ESC _ T r)
     int fpend;                    // a frame with a framebuffer presented, not yet drawn
     int fit, gw, gh;              // the canvas follows the window (z); its size
     int nw, nh, nat;              // the size the window last had, and since when
@@ -178,6 +186,8 @@ static void apc(char *ctx, char *abuf, int alen) {
     int i, n, v, neg, op, len, *g, k, nums[8];
     char *s;
     t = (struct term *)ctx;
+    // T: raw keys (r) or lines (c)
+    if (alen == 2 && abuf[0] == 'T') { if (abuf[1] == 'r' || abuf[1] == 'c') t->raw = abuf[1] == 'r'; return; }
     if (alen < 2 || abuf[0] != 'G') return;
     op = abuf[1];
     i = 2; n = 0;
@@ -407,8 +417,10 @@ void term_tick(struct win *w) {
         tg_feed(t->g, iobuf, n);
         // the shell's prompt ends "$ " (c4ix-sh -p) and is the last thing it writes
         prompt = !t->bare && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == ' ';
-        // the shell's prompt is back: whatever made this a canvas has ended
+        // the shell's prompt is back: whatever made this a canvas, or took
+        // the keys, has ended
         if (t->gfx && prompt) gfx_mode(t, 0);
+        if (prompt) t->raw = 0;
         // ... and time to type a waiting command
         if (t->pending[0] && prompt) {
             k = ui_len(t->pending);
@@ -461,6 +473,7 @@ static void paste(struct win *w, struct term *t) {
         c = s[k] & 255;
         if (c == 9) c = ' ';
         if (t->gfx) { if (c == 10) event(t, 'k', KEY_ENTER, 13, 0); else if (c >= 32 && c < 127) event(t, 'k', 0, c, 0); }
+        else if (t->raw) { tmp[0] = c == 10 ? 13 : c; if (c == 10 || (c >= 32 && c < 127)) write(t->in_w, tmp, 1); }
         else if (c == 10) { if ((c = tg_key(t->g, KEY_ENTER, 0, 0)) > 0) write(t->in_w, t->g->line, c); }
         else if (c >= 32 && c < 127) tg_key(t->g, 0, c, 0);
         ++k;
@@ -478,6 +491,59 @@ void term_command(struct win *w, int menu, int item) {
     else if (item == T_COPYALL) tg_copy(t->g, 1);
     else if (item == T_ALL) tg_select_all(t->g);
     else if (item == T_PASTE && !t->ended) { tg_unselect(t->g); paste(w, t); }
+}
+
+// Raw keys (t->raw): what a VT100 sends for a key that is not a character,
+// after its ESC, or 0
+static char *raw_tail(int code) {
+    if (code == KEY_UP) return "[A";
+    if (code == KEY_DOWN) return "[B";
+    if (code == KEY_RIGHT) return "[C";
+    if (code == KEY_LEFT) return "[D";
+    if (code == KEY_HOME) return "[H";
+    if (code == KEY_END) return "[F";
+    if (code == KEY_PGUP) return "[5~";
+    if (code == KEY_PGDN) return "[6~";
+    if (code == KEY_INS) return "[2~";
+    if (code == KEY_DEL) return "[3~";
+    if (code == KEY_F2 - 1) return "OP";
+    if (code == KEY_F2) return "OQ";
+    if (code == KEY_F2 + 1) return "OR";
+    if (code == KEY_F4) return "OS";
+    if (code == KEY_F5) return "[15~";
+    if (code == KEY_F5 + 1) return "[17~";
+    if (code == KEY_F5 + 2) return "[18~";
+    if (code == KEY_F5 + 3) return "[19~";
+    if (code == KEY_F5 + 4) return "[20~";
+    if (code == KEY_F5 + 5) return "[21~";
+    if (code == KEY_F5 + 6) return "[23~";
+    if (code == KEY_F5 + 7) return "[24~";
+    return 0;
+}
+
+// ... and the key itself down the program's stdin: a character as it is,
+// Enter as CR and Backspace as DEL, Ctrl with a letter as its control
+// code, Alt with ESC in front
+static void raw_key(struct term *t, int code, int ch, int mods) {
+    char b[8];
+    char *s;
+    int n, c;
+    n = 0;
+    if (!ch && (s = raw_tail(code))) {
+        b[0] = 27; n = 1;
+        while (*s && n < 7) { b[n] = *s; ++n; ++s; }
+        write(t->in_w, b, n);
+        return;
+    }
+    c = ch;
+    if (!ch && (code == KEY_ENTER || code == KEY_BACK || code == KEY_TAB || code == KEY_ESC)) c = code;
+    if (c == 10) c = 13;
+    if (c == 8) c = 127;
+    if ((mods & M_CTRL) && code >= 'A' && code <= 'Z') c = code - 64;
+    if (c <= 0 || c > 255) return;
+    if (mods & M_ALT) { b[n] = 27; ++n; }
+    b[n] = c; ++n;
+    write(t->in_w, b, n);
 }
 
 // the letter key, with Ctrl and Shift held
@@ -506,6 +572,7 @@ void term_key(struct win *w, int code, int ch, int mods) {
         term_tick(w);
         if (t->ended) return;
         if (t->gfx) gfx_mode(t, 0);
+        t->raw = 0;
         tg_interrupt(t->g);
         // Lines typed at the job and not read by it go with it, as a tty
         // flushes its input on an interrupt: left in the pipe, the shell
@@ -515,6 +582,8 @@ void term_key(struct win *w, int code, int ch, int mods) {
         if (uintr(t->pid) <= 0) write(t->in_w, "\n", 1);
         return;
     }
+    // raw keys: all of them the program's, Ctrl-L too; the screen, not the scrollback
+    if (t->raw && !t->gfx) { if (t->g->view) { t->g->view = 0; wk_redraw_all(); } raw_key(t, code, ch, mods); return; }
     if ((mods & M_CTRL) && (ch == 'l' || ch == 'L' || code == 'L')) { tg_clear_screen(t->g); return; }
     if (t->gfx) { event(t, 'k', code, ch, mods); return; }
     if ((n = tg_key(t->g, code, ch, mods)) > 0) write(t->in_w, t->g->line, n);

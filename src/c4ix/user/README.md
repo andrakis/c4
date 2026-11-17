@@ -21,7 +21,7 @@ names (`/bin`, `/usr/bin`, `/usr/games/bin`), and then as
 | `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd rm mv help` (`wait PID` waits for any task), and `PATH=DIR:DIR...`, where a bare name is looked for. No fork: it points its own fd 0/1 at a stage, spawns, and restores them. `-p` puts the prompt on the input line (the Terminal passes it); `-e CMD` runs a line first, as if typed |
 | `ls.c`, `cat.c`, `echo.c`, `wc.c`, `mkdir.c` | the usual; `cat` and `wc` read fd 0 when given no file |
 | `ps.c` | task table, one fixed-shape record per syscall |
-| `top.c` | samples the task table twice and reports what each task did in between |
+| `top.c` | Linux top's screen and keys over the task table: P M T N sort, V a tree, 1 each CPU, k kill, r renice, d delay, h help, q quit; `-b` prints plain screens, `-d SECS`, `-n N` |
 | `spin.c` | burns cycles with progress output, for Ctrl-C and preemption; takes a tick count (default 20) |
 | `bench.c` | the pi/factorial workload of `src/bench/bench.c` plus OS microbenchmarks (used by `make bench-c4ix`) |
 | `cycles.c` | prints the VM cycle counter first thing; the counterpart of `src/tests/cycles.c` under C4KE |

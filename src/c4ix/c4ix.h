@@ -352,6 +352,7 @@ int kputc(int c);
 void con_logopen();        // /var/log/kernel exists now: the console is logged to it
 void con_booted();         // boot is over: tasks' console output is no longer logged
 void con_write_task(char *buf, int len);  // a task's bytes to the console
+void con_task_gone(int id);   // task id has died: the raw keys it asked for go back
 int kputs(char *s);
 int kprintf(char *fmt, ...);
 // The kernel log (console.c): every line the kernel says, stamped with
@@ -636,6 +637,8 @@ struct cpustat {
     int cnap[CPU_MAX];
     long long cbusy[CPU_MAX];
     long long cidle[CPU_MAX];
+    int cpms;                  // cycles in a machine ms (klog_cpms), 0 if not measured
+    int total;                 // tasks there are: more than ntasks if max was too few
 };
 struct cpustat_task {
     int id, parent, state, privs, nsyscalls;

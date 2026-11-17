@@ -349,24 +349,36 @@ until(() => termText('blk').length > 0 && inputLine() === '');
   check(until(() => termText('blk').length > n && inputLine() === ''), 'Ctrl+Shift+C copies it, and Shift+Ins pastes it: the one line, run',
     inputLine() + ' / ' + screen().slice(-300));
 }
-type('cat /usr/src/c4ix/user/top.c\n');
+type('cat /usr/src/c4ix/user/free.c\n');
 until(() => has(/^\s*return 0;/) && inputLine() === '', 600);
-check(!has(/^\/\/ C4IX userland: top\./), 'a long file scrolls its first line off the Terminal', screen());
+check(!has(/^\/\/ C4IX userland: free /), 'a long file scrolls its first line off the Terminal', screen());
 // PgUp until it shows: how many pages that is depends on what came before
-for (let i = 0; i < 12 && !until(() => has(/^\/\/ C4IX userland: top\./), 50); i++) key('', 0, 33);
-check(until(() => has(/^\/\/ C4IX userland: top\./)), 'and PgUp scrolls back to it', screen());
+for (let i = 0; i < 12 && !until(() => has(/^\/\/ C4IX userland: free /), 50); i++) key('', 0, 33);
+check(until(() => has(/^\/\/ C4IX userland: free /)), 'and PgUp scrolls back to it', screen());
 key('', 0, 34);                                                // PgDn
 type('echo back\n');
-check(until(() => has('back') && !has(/^\/\/ C4IX userland: top\./)), 'typing comes back to the bottom', screen());
+check(until(() => has('back') && !has(/^\/\/ C4IX userland: free /)), 'typing comes back to the bottom', screen());
 // Copy All: the scrollback and the screen (pasted into Text Editor, below)
 check(menu('Edit', 'Copy All'), 'Edit > Copy All', screen());
 
-// ---- top runs until Ctrl-C ----------------------------------------------------------------
+// ---- top: its keys as they are typed, and Ctrl-C -----------------------------------------------
 type('top\n');
-check(until(() => has(/Ctrl-C to stop/), 800), 'top starts in the Terminal', screen());
+check(until(() => has(/^top - up /), 800), 'top starts in the Terminal', screen());
 const t0 = vm.dev.simMs();
 until(() => vm.dev.simMs() - t0 > 5000, 3000);
-check(has(/Ctrl-C to stop/) && !frame.some(t => /^c4ix:\/\$/.test(t.s) && t.y > 300), 'and is still running five machine-seconds later', screen());
+check(has(/^top - up /) && !frame.some(t => /^c4ix:\/\$/.test(t.s) && t.y > 300), 'and is still running five machine-seconds later', screen());
+// it has asked for the keys as they are typed (ESC _ T r): no Enter, no echo
+key('h');
+check(until(() => has(/^Keys, as in Linux's top/), 400), 'h shows its help at once, with no Enter', screen());
+key('x');
+check(until(() => !has(/^Keys, as in Linux's top/) && has(/PID +PPID/), 400), 'and any key takes it away', screen());
+key('q');
+const headY = () => Math.max(-1, ...frame.filter(t => /PID +PPID/.test(t.s)).map(t => t.y));
+check(until(() => frame.some(t => /(^|\s)c4ix:\/\$/.test(t.s) && t.y > headY()), 400), 'q quits it, the prompt under its screen', screen());
+type('echo lines-again\n');
+check(until(() => has('lines-again')), 'and the Terminal edits lines again', screen());
+type('top\n');
+check(until(() => has(/^top - up /), 800), 'top again', screen());
 key('c', 2, 67);
 // top may be stopped partway through a line, and the shell doesn't start
 // its prompt on a fresh one, so the prompt can follow what top had written
@@ -656,10 +668,10 @@ const notes = find('untitled.txt - Text Editor').length;
 dbl('untitled.txt', inList);
 check(until(() => find('untitled.txt - Text Editor').length > notes), 'double-clicking it opens it in Text Editor');
 check(until(() => find('hello from c4ix').length >= 2), 'with what was saved in it');
-// the Terminal's Copy All, pasted here: its scrollback too, top.c's first line long scrolled off
+// the Terminal's Copy All, pasted here: its scrollback too, free.c's first line long scrolled off
 key('v', 2, 86);
 // PgUp a page at a time, each drawn before the next
-const topLine = () => frame.some(t => t.adv === 7 && /^\/\/ C4IX userland: top\./.test(t.s));
+const topLine = () => frame.some(t => t.adv === 7 && /^\/\/ C4IX userland: free /.test(t.s));
 for (let i = 0; i < 30 && !topLine(); i++) { key('', 0, 33); until(topLine, 8); }
 check(until(topLine),
   "the Terminal's Copy All pastes into Text Editor, with what had scrolled off its screen", screen().slice(-600));

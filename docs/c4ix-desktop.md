@@ -1653,7 +1653,101 @@ for: a few seconds at most, and the rest loaded when it is wanted.
   were taken. Now app.js watches the canvas's width and height, and
   snaps only within 5%.
 
-## Part twenty-six: a game run in the background gets a window of its own (2026-11-17)
+## Part twenty-six: top as Linux's is, with its keys as they are typed (asked for 2026-11-17)
+
+Linux's top and htop fit much more on a screen than C4IX's top did, and
+they take keys while they run. Asked for: a top more like Linux's, and
+htop too if it can be had, by a Busybox port if that was the way.
+
+### The way chosen
+
+- **Busybox's top** reads Linux's `/proc`: `/proc/stat`,
+  `/proc/meminfo`, and `stat`, `statm` and `status` for each process.
+  C4IX has no `/proc`, and making one in Linux's text formats only for
+  top to parse would be the long way round. procps-ng's top is 8,571
+  lines over libproc2's 11,706, and it reads the same files.
+- **So top.c is C4IX's own**, rewritten in Linux top's layout and with
+  its keys, over `SYS_CPUSTAT` as before.
+- **htop** is 19,372 lines of core, with a platform layer for each OS:
+  Linux's is 7,696 lines, and the "unsupported" one, 448, is where a
+  C4IX one would start. It draws with curses (about 30 calls, which
+  PDCurses with a VT backend could give), and it needs c4lc to take 185
+  `for (int ...)` declarations, 9 compound literals and 8
+  `static_assert`s. That is a port of its own (andrakis/c4-htop), after
+  this.
+
+### What was done
+
+- [x] **Raw keys.** A program writes `ESC _ T r ESC \` to have its keys
+      as they are typed, and `ESC _ T c ESC \` for lines again.
+      - On the console, console.c takes the sequence out of the output
+        and opens the host's `/dev/tty`, which puts keys.js (and cli.js)
+        in RAW. It closes it for `c`, or when the task that asked dies
+        (`task_zombify` calls `con_task_gone`).
+      - In the desktop's Terminal, term.c's `apc()` sets `raw`, and keys
+        go to the program as typed: Enter as CR, Backspace as DEL,
+        Ctrl+letter as its control code, Alt as an ESC first, arrows as
+        `ESC [ A` to `D`, Home and End as `ESC [ H` and `F`, PgUp and
+        PgDn as `ESC [ 5 ~` and `6 ~`, Ins and Del, and F1 to F12 as
+        xterm sends them. Ctrl-C is still the signal. The Terminal goes
+        back to lines at Ctrl-C and when the shell's prompt comes back,
+        so a program that dies raw doesn't leave it so.
+- [x] **SYS_CPUSTAT** says the cycles in a millisecond (`cpms`), for
+      TIME+, and how many tasks there are in all (`total`), even past
+      the ones it has room for. `CPU_MAXT`, a user-side size only, is
+      now 128.
+- [x] **top.c**, in Linux top's shape:
+      - a heading with the uptime, the CPUs and the usage; `Tasks:` by
+        state; `%Cpu(s):` us, sy and id, and each CPU's load on SMP;
+        `KiB Mem:`; then a line for prompts and messages, which says
+        which tasks are shown when there are more than rows ("tasks
+        1-17 of 31, scroll with Up, Down, PgUp and PgDn").
+      - the columns PID PPID USER NI S, P on SMP, RES %CPU %MEM TIME+
+        COMMAND, the heading in reverse video and running tasks bold.
+      - the keys: P, M, T and N sort by CPU, memory, time and PID, R
+        reverses, V shows the tree, i hides tasks that did nothing, 1
+        gives each CPU a line and a bar, k kills (asking which task and
+        which signal), r renices, d or s changes the delay, Space
+        refreshes, the arrows, PgUp, PgDn, Home and End scroll, h or ?
+        is the help, and q quits.
+      - `top -b` prints screens one after another with no escapes, for
+        tests and pipes; `-d SECS` and `-n N`, or a bare N, as before.
+- [x] **The tests** read the new screens: test-c4ix-cpu runs `top -b`,
+      test-desktop types `h`, a key and `q` at top in the Terminal, and
+      then checks that the Terminal edits lines again. test-desktop's
+      long file is now free.c, as top.c is longer than the scrollback
+      it checks.
+
+### Found on the way
+
+- **The console's keys stayed a line at a time.** Opening the host's
+  `/dev/tty` puts the host in RAW, but the host still holds back what
+  `/dev/stdin` reads until Enter, however many raw fds are open
+  (devices.js `kbdRead`). The kernel read `/dev/stdin`, so on the page
+  top saw no key until Enter. While raw, `con_poll` now reads from the
+  `/dev/tty` fd it holds. The desktop's Terminal was never affected:
+  its keys come down a pipe.
+- **An arrow was three keys.** The console's `uavail` says only whether
+  anything is there (1), not how much, and top read that many bytes: the
+  ESC of `ESC [ B` came alone, as Esc, then `[` and `B`. top now reads as
+  much as its buffer has room for; a read with something there doesn't
+  wait.
+- **%Cpu(s) could add up to more than 100.** Each task's share is
+  rounded on its own, so 26 spins at 3.8% each showed `104 us`. top
+  now takes what is over 100 off `us`.
+
+### Left
+
+- **The size.** top takes `LINES` and `COLUMNS`, which nothing sets
+  yet, so it draws 24 rows of 80 even in a bigger Terminal. A size
+  query (`ESC [ 18 t`, answered by the Terminal and the page) would
+  let it fill the window.
+- **The console's own top**, which init starts beside the desktop, has
+  the console's keys while it runs. Ctrl-C stops it.
+- **htop**, as above, and termios in libc for it (M7d of the Busybox
+  port).
+
+## Part twenty-seven: a game run in the background gets a window of its own (2026-11-17)
 
 Found while fixing three windowed Quakes at once (the sound card's
 PCM_START): `pin 1 quake --window &`, `pin 2 ...`, `pin 3 ...` typed in

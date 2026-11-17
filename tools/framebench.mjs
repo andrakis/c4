@@ -54,6 +54,9 @@ import { registerHooks } from 'node:module';
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { requireSlot } from '../libjs/hostlock.mjs';
+
+requireSlot('framebench');
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const GAMES = join(ROOT, 'src/c4bb/images/games');

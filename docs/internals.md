@@ -1389,6 +1389,17 @@ with room to spare for guard bits, and division can scale the numerator by
 2^27 without overflow. binary64 would need 106-bit intermediates — 128-bit
 multiply emulation — which is a different project.
 
+**A 32-bit word** (c4sp32, which is c4lc's 32-bit host, and images that c4cc32
+or c4lc build for c4bb) holds neither the 48-bit product nor the 51-bit
+scaled numerator. There `f32_mul` builds the product as `hi * 2^24 + lo` from
+12-bit pieces of each significand, and `f32_div` divides a bit at a time,
+with the same bits as the 64-bit route. `sizeof(int)` chooses; at 64 bits
+the code is what it was. `f32_from_int` and `f32_to_int` take the word's
+limits from `sizeof(int)` as well. Until 2026-11-17 they had none of this:
+1,278 of the 3,365 cases failed at 32 bits, c4sp32 said `(* 1.5 1.5)` was 2,
+and no test noticed, because test-c4bb compares c4bb with c4m32 and both ran
+the same library.
+
 ## 9.2 How it works
 
 Each operation unpacks sign/exponent/significand, restores the hidden bit, and
@@ -1451,7 +1462,9 @@ Cases are carried as a compact data string rather than as generated calls —
 data as text is 112 KB in the data pool.
 
 Passes under `c4m`, under **plain `c4`**, and as a C4KE process; clean under
-valgrind.
+valgrind. At 32 bits (c4cc32's image, on c4m32 and c4bb) it passes 3,363:
+the other two convert an int wider than 32 bits, which a 32-bit word cannot
+hold, and are skipped and counted. `make test-c4bb` holds it to that.
 
 ## 9.5 Merging into c4m
 

@@ -18,7 +18,7 @@
 
 #include "float_cases.h"
 
-static int total, fails;
+static int total, fails, skipped;
 
 // Parse hex digits until a non-hex character; advance *pp past them.
 static int rdhex (char **pp) {
@@ -75,19 +75,36 @@ static int run_cases (char *data) {
 	return 0;
 }
 
+static int ishex (int c) {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
 // Conversion cases use two fields, not three.
 static int run_conv (char *data) {
-	char *p;
-	int op, a, want, got;
+	char *p, *q;
+	int op, a, want, got, n, wide;
 
 	p = data;
 	while (*p) {
 		op = *p++;
+		// A from_int input wider than the word -- a 64-bit int, in a
+		// 32-bit build -- cannot even be read: skipped, not failed. A
+		// negative one written in 64 bits fits when the digits that do not
+		// fit only extend its sign.
+		q = p; n = 0;
+		while (*q == ' ') ++q;
+		while (ishex(q[n])) ++n;
 		a = rdhex(&p);
 		want = rdhex(&p);
 		while (*p == '\n' || *p == ' ') ++p;
+		wide = 0;
+		while (n > sizeof(int) * 2) {
+			if (a < 0 ? (*q != 'f' && *q != 'F') : *q != '0') wide = 1;
+			++q; --n;
+		}
 
-		if (op == 'i') { got = f32_from_int(a); ck(got, want, "from_int", a, 0); }
+		if (op == 'i' && wide) ++skipped;
+		else if (op == 'i') { got = f32_from_int(a); ck(got, want, "from_int", a, 0); }
 		else if (op == 't') { got = f32_to_int(a); ck(got, want, "to_int", a, 0); }
 		else { printf("bad conv op '%c'\n", op); return 1; }
 	}
@@ -195,7 +212,7 @@ static void demo (char *buf) {
 int main () {
 	char *buf;
 
-	total = 0; fails = 0;
+	total = 0; fails = 0; skipped = 0;
 	buf = malloc(64);
 
 	if (run_cases(float_case_data())) return 1;
@@ -203,6 +220,8 @@ int main () {
 	run_specials();
 	run_text(buf);
 
+	if (skipped)
+		printf("\n%d conversions from an int wider than the word skipped\n", skipped);
 	if (fails)
 		printf("\n%d of %d float tests FAILED\n", fails, total);
 	else

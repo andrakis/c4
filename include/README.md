@@ -39,7 +39,7 @@ and returns to the prompt.
 | `c4m.h` | no-op definitions of c4m's builtins (`__c4_trap`, `__c4_opcode`, `__c4_info`, …) so gcc can syntax-check c4m code |
 | `c4m_util.h` | c4m's native clock: `clock_gettime`, with a `timespec_get` fallback on MSVC. Included by `c4m.c` in native builds |
 | `c4m_float.h` | the interface to c4m's floating-point support (`c4m_float.c`) |
-| `c4_float.h` | IEEE-754 binary32 arithmetic written in C4, carried in an `int`; subnormals flush to zero |
+| `c4_float.h` | IEEE-754 binary32 arithmetic written in C4, carried in an `int`, at 64-bit and 32-bit word sizes; subnormals flush to zero |
 | `stdio.h` | the printf family on one formatting core (`vsnprintf`), so output goes through one function a kernel can redirect; uses only stock c4 opcodes |
 | `stdlib.h`, `string.h`, `memory.h`, `ctype.h`, `stdarg.h`, `stddef.h`, `signal.h`, `unistd.h`, `fcntl.h`, `time.h`, `stdint.h` | C4 versions of the libc headers, or pass-throughs to the system ones |
 | `c4cc_helpers.h` | a stack-printing debug helper; used by `src/tests/vararg2.c` |

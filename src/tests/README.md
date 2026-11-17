@@ -28,7 +28,7 @@ computer and c4mp, and compare against native c4m.
 |---|---|
 | `hello.c` | prints a greeting. Built without u0, so it uses no opcode above `EXIT` and runs under plain c4 via `c4l.c` (`make test-c4l`) |
 | `factorial.c`, `multifun.c`, `fun_with_ptrs.c`, `tests.c`, `test_basic.c`, `test-order.c`, `test-ptrs.c`, `test_args.c`, `test_continue.c`, `test_static.c`, `test_malloc.c`, `test_printf.c`, `test_printloop.c`, `test_fread.c`, `test_exit.c`, `test_crash.c`, `test_signal.c`, `test_customop.c`, `test_timekeeping.c`, `test_infiniteloop.c`, `rps.c`, `test_for.c` | language, library and VM behaviour, one area per file |
-| `test_float.c` + `float_cases.h` | soft float (`include/c4_float.h`) against a table generated from hardware floats; built through `gcc -E` |
+| `test_float.c` + `float_cases.h` | soft float (`include/c4_float.h`) against a table generated from hardware floats, at 64 bits and (c4cc32's image, `make test-c4bb`) 32; built through `gcc -E` |
 | `test_vprintf.c` | the `include/stdio.h` printf family; built through `gcc -E` |
 | `mandel.c` | ASCII Mandelbrot, a port of github.com/Johnlon/mandelbrot |
 | `cycles.c` | prints the VM cycle counter first thing, to measure boot cost (`make bench-c4ix`) |

@@ -29,6 +29,12 @@
 // needed. binary64 would need 106-bit intermediates, i.e. 128-bit multiply
 // emulation -- doable, but not a prototype.
 //
+// A 32-bit word works too (c4sp32, c4lc's and c4cc32's 32-bit images): the
+// product and the quotient's scaled numerator are the two values that do not
+// fit in one, and f32_mul and f32_div build them in pieces there instead,
+// with the same bits as a result. src/tests/test_float.c holds both widths to
+// the same hardware answers (make test-c4bb runs the 32-bit one).
+//
 
 #ifndef __C4_FLOAT_H
 #define __C4_FLOAT_H 1
@@ -202,6 +208,7 @@ static int f32_sub (int a, int b) { return f32_add(a, f32_neg(b)); }
 static int f32_mul (int a, int b) {
 	int sa, ea, ma, sb, eb, mb;
 	int sr, er, mr;
+	int ah, al, bh, bl, mid, hi, lo;
 
 	if (f32_is_nan(a) || f32_is_nan(b)) return F32_NAN;
 
@@ -219,19 +226,41 @@ static int f32_mul (int a, int b) {
 	ma = ma | F32_HIDDEN;
 	mb = mb | F32_HIDDEN;
 
-	// 24 x 24 = 48 bits, comfortably inside a 64-bit word.
-	mr = ma * mb;
 	er = ea + eb - F32_BIAS;
 
 	// Two 24-bit significands give a product in [2^46, 2^48). Reduce it to the
-	// 27-bit working form, whose leading bit sits at 26. The 1 is cast
-	// because a native build widens the int TYPE to 64 bits but a bare
-	// literal stays C's 32-bit int, making 1 << 47 undefined.
-	if (mr >= ((int)1 << 47)) {
-		mr = f32_shr_sticky(mr, 21);
-		++er;
+	// 27-bit working form, whose leading bit sits at 26: down by 21 bits when
+	// the product reaches 2^47 (and the exponent goes up), by 20 when it does
+	// not, with what falls off kept as the sticky bit.
+	if (sizeof(int) >= 8) {
+		// 24 x 24 = 48 bits, comfortably inside a 64-bit word. mr >> 24 is
+		// compared rather than mr with 2^47, which a 32-bit build of this
+		// file cannot write.
+		mr = ma * mb;
+		if ((mr >> 24) >= F32_HIDDEN) {
+			mr = f32_shr_sticky(mr, 21);
+			++er;
+		} else {
+			mr = f32_shr_sticky(mr, 20);
+		}
 	} else {
-		mr = f32_shr_sticky(mr, 20);
+		// A 32-bit word: the product as hi * 2^24 + lo, from 12-bit pieces
+		// of each significand, every partial product below 2^25.
+		ah = ma >> 12; al = ma & 4095;
+		bh = mb >> 12; bl = mb & 4095;
+		mid = ah * bl + al * bh;
+		lo  = al * bl + ((mid & 4095) << 12);
+		hi  = ah * bh + (mid >> 12) + (lo >> 24);
+		lo  = lo & 16777215;
+		// the product reaches 2^47 exactly when hi reaches 2^23
+		if (hi >= F32_HIDDEN) {
+			mr = (hi << 3) | (lo >> 21);
+			if (lo & 2097151) mr = mr | 1;
+			++er;
+		} else {
+			mr = (hi << 4) | (lo >> 20);
+			if (lo & 1048575) mr = mr | 1;
+		}
 	}
 
 	if (er >= F32_EXPMAX) return f32_inf_signed(sr);
@@ -246,7 +275,7 @@ static int f32_mul (int a, int b) {
 
 static int f32_div (int a, int b) {
 	int sa, ea, ma, sb, eb, mb;
-	int sr, er, mr, rem;
+	int sr, er, mr, rem, i;
 
 	if (f32_is_nan(a) || f32_is_nan(b)) return F32_NAN;
 
@@ -267,9 +296,23 @@ static int f32_div (int a, int b) {
 	mb = mb | F32_HIDDEN;
 
 	// ma/mb lies in (0.5, 2), so scaling the numerator by 2^27 puts the
-	// quotient in (2^26, 2^28). ma < 2^24, so ma << 27 < 2^51 -- no overflow.
-	mr  = (ma << 27) / mb;
-	rem = (ma << 27) % mb;
+	// quotient in (2^26, 2^28). ma < 2^24, so ma << 27 < 2^51 -- no overflow
+	// in a 64-bit word. A 32-bit one divides a bit at a time instead, the
+	// remainder staying below mb < 2^24: the same quotient and remainder.
+	if (sizeof(int) >= 8) {
+		mr  = (ma << 27) / mb;
+		rem = (ma << 27) % mb;
+	} else {
+		mr  = ma / mb;
+		rem = ma % mb;
+		i = 0;
+		while (i < 27) {
+			rem = rem << 1;
+			mr  = mr << 1;
+			if (rem >= mb) { rem = rem - mb; mr = mr | 1; }
+			++i;
+		}
+	}
 
 	er = ea - eb + F32_BIAS;
 
@@ -324,6 +367,13 @@ static int f32_ge (int a, int b) { int c; c = f32_cmp(a, b); return c == 1 || c 
 /// Conversion
 ///
 
+// The largest int, at whatever width the word is: 2^63 - 1, or 2^31 - 1 in a
+// 32-bit build. Made without overflowing, and without a literal one width
+// cannot hold.
+static int f32_intmax () {
+	return ((((int)1 << (sizeof(int) * 8 - 2)) - 1) << 1) + 1;
+}
+
 static int f32_from_int (int v) {
 	int sign, exp, m, sticky, bits;
 
@@ -333,14 +383,15 @@ static int f32_from_int (int v) {
 	if (v < 0) {
 		sign = 1;
 		// Do not negate the most negative value; handle it directly.
-		if (v == (0 - 0x7FFFFFFFFFFFFFFF) - 1) return f32_pack(1, F32_BIAS + 63, 0);
+		if (v == 0 - f32_intmax() - 1) return f32_pack(1, F32_BIAS + sizeof(int) * 8 - 1, 0);
 		v = 0 - v;
 	}
 
-	// Find the position of the top set bit.
+	// Find the position of the top set bit. v is positive here, so the
+	// shift brings in zeros.
 	bits = 0;
 	m = v;
-	while (m != 0) { m = (m >> 1) & 0x7FFFFFFFFFFFFFFF; ++bits; }
+	while (m != 0) { m = m >> 1; ++bits; }
 	exp = F32_BIAS + bits - 1;
 
 	// Reduce to 27 bits (24 value + guard/round/sticky).
@@ -361,12 +412,13 @@ static int f32_to_int (int x) {
 
 	sign = f32_sign(x);
 	exp  = f32_exp_field(x);
-	if (f32_is_inf(x)) return sign ? (0 - 0x7FFFFFFFFFFFFFFF) - 1 : 0x7FFFFFFFFFFFFFFF;
+	if (f32_is_inf(x)) return sign ? 0 - f32_intmax() - 1 : f32_intmax();
 	if (exp == 0) return 0;                     // subnormal
 
 	exp = exp - F32_BIAS;
 	if (exp < 0) return 0;                      // |x| < 1
-	if (exp > 62) return sign ? (0 - 0x7FFFFFFFFFFFFFFF) - 1 : 0x7FFFFFFFFFFFFFFF;
+	// out of range saturates, as the hardware's conversion does
+	if (exp > sizeof(int) * 8 - 2) return sign ? 0 - f32_intmax() - 1 : f32_intmax();
 
 	m = f32_man_field(x) | F32_HIDDEN;          // 24 bits, binary point after bit 23
 	shift = exp - 23;

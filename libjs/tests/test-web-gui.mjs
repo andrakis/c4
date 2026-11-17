@@ -154,9 +154,9 @@ export async function run(ctx) {
   ok('ps typed on the display runs in that window', await shownHas('/c4ix-desktop/') && await shownHas('/tasks,/'));
   // top keeps going until Ctrl-C
   await tab.type('top\n');
-  ok('top starts in the Terminal', await shownHas('/Ctrl-C to stop/'));
+  ok('top starts in the Terminal', await shownHas('/top - up /'));
   await sleep(4000);
-  ok('and is still running four seconds later', await shownHas('/Ctrl-C to stop/', 2000));
+  ok('and is still running four seconds later', await shownHas('/top - up /', 2000));
   await tab.key('c', { ctrl: true });
   ok('Ctrl-C stops it', await shownHas('/\\^C/'));
   // raycast, drawn in colour in the Terminal

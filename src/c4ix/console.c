@@ -45,6 +45,10 @@ static int  con_len;
 static int  con_pos;
 static int  con_eof;
 static int  con_gate;           // cycle count of the last host read
+// While a task has the keys raw (below), the host's /dev/tty plus one, and
+// reads come from it: the host still holds /dev/stdin's bytes back until
+// Enter, whatever else is open. 0 while cooked.
+static int  con_rawfd;
 // /var/log/kernel (below): the file, what waits for it, and whether tasks'
 // output is still logged -- declared up here, ahead of con_init
 enum { CON_PRE = 2048, CON_LOG_MAX = 262144 };
@@ -102,7 +106,7 @@ int con_poll() {
 
     con_pos = 0;
     con_len = 0;
-    n = read(con_fd, con_buf, CON_BUF);
+    n = read(con_rawfd ? con_rawfd - 1 : con_fd, con_buf, CON_BUF);
     if (n > 0) { con_len = n; return 1; }
     if (n == 0) { con_eof = 1; return 1; }
     return 0;                      // nothing there yet
@@ -297,18 +301,74 @@ void con_booted() { con_booting = 0; klog_boot = 0; }
 // byte a request, and a game on CPU 0, which needs the lock for every
 // syscall, stalled once a second. A NUL, which would end the string,
 // goes by putchar.
+//
+// Raw keys. A full-screen program (top) wants each key as it is typed and
+// not echoed, as from a tty in raw mode. It asks with ESC _ T r ESC \, and
+// ESC _ T c ESC \ gives the line back -- what the desktop's Terminal reads
+// from its pipe too (term.c). Here they are taken out of what the task
+// wrote, and while raw the host's /dev/tty is held open: an open raw
+// keyboard is what has the host (libjs, c4bb) stop echoing and editing a
+// line, and send the arrows and function keys as their escape sequences.
+// Ctrl-C stays an interrupt. The task that asked gives it back when it
+// dies (task_zombify), so a program stopped by Ctrl-C leaves the console
+// as it found it.
 enum { CON_RUN = 256 };
+static char con_run[CON_RUN + 1];
+static int  con_nrun;
+static int  con_rawown;         // the task that asked for it
+static int  con_tst, con_tmode; // how much of ESC _ T mode ESC \ has come
+
+static void con_flush() {
+    if (con_nrun) { con_run[con_nrun] = 0; printf("%s", con_run); con_nrun = 0; }
+}
+
+static void con_emit(int c) {
+    if (!c) { con_flush(); putchar(0); return; }
+    con_run[con_nrun] = c;
+    ++con_nrun;
+    if (con_nrun == CON_RUN) con_flush();
+}
+
+static void con_raw(int on) {
+    struct task *t;
+    int h;
+    if (on && !con_rawfd && (h = open("/dev/tty", CON_O_RDONLY | CON_O_NONBLOCK)) >= 0) con_rawfd = h + 1;
+    if (!on && con_rawfd) { close(con_rawfd - 1); con_rawfd = 0; }
+    if (on && (t = sched_current())) con_rawown = t->id;
+}
+
+void con_task_gone(int id) { if (con_rawfd && id == con_rawown) con_raw(0); }
+
+// One byte of a task's, through the ESC _ T mode ESC \ reader: what turns
+// out not to be one goes out as it came.
+static void con_tbyte(int c) {
+    if (con_tst == 0 && c == 27) { con_tst = 1; return; }
+    if (con_tst == 1 && c == '_') { con_tst = 2; return; }
+    if (con_tst == 2 && c == 'T') { con_tst = 3; return; }
+    if (con_tst == 3) { con_tmode = c; con_tst = 4; return; }
+    if (con_tst == 4 && c == 27) { con_tst = 5; return; }
+    if (con_tst == 5 && c == '\\') {
+        con_tst = 0;
+        if (con_tmode == 'r') con_raw(1);
+        if (con_tmode == 'c') con_raw(0);
+        return;
+    }
+    if (con_tst >= 1) con_emit(27);
+    if (con_tst >= 2) con_emit('_');
+    if (con_tst >= 3) con_emit('T');
+    if (con_tst >= 4) con_emit(con_tmode);
+    if (con_tst == 5) con_emit(27);
+    if (con_tst && c == 27) { con_tst = 1; return; }
+    con_tst = 0;
+    con_emit(c);
+}
+
 void con_write_task(char *buf, int len) {
-    char run[CON_RUN + 1];
-    int i, n;
+    int i;
 
     i = 0;
-    while (i < len) {
-        n = 0;
-        while (i < len && n < CON_RUN && buf[i]) { run[n] = buf[i]; ++n; ++i; }
-        if (n) { run[n] = 0; printf("%s", run); }
-        if (i < len && !buf[i]) { putchar(0); ++i; }
-    }
+    while (i < len) { con_tbyte(buf[i] & 255); ++i; }
+    con_flush();
     if (con_booting) { i = 0; while (i < len) { con_logc(buf[i]); ++i; } }
 }
 

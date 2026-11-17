@@ -26,7 +26,8 @@ c4rlink prog.c4o -l /lib/libc.c4s -o prog.c4r
 library names ordinary functions instead of VM opcodes, so this library's
 functions are the ones called. `c4rlink -l` leaves the references for the
 loader to resolve instead of copying the library in. On the host it is the
-same commands with `./c4sp32 ... src/c4sp/lisp/c4lc.lisp` and `-I src/c4ix/libc/include`.
+same commands with `./c4sc-host32 compile ...` (or `./c4sp32 src/c4sp/lisp/c4lc.lisp ...`,
+the same compiler interpreted) and `-I src/c4ix/libc/include`.
 
 ## Layout
 

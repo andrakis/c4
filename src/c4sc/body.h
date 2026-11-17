@@ -148,8 +148,14 @@ int sc_ast (int argc, char **argv) {
 // and file:write, which is why this mode is the one the byte-identity
 // test uses.
 //
-//   c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-conforming] [-fno-builtin] [-fpic]
-//                     [-g] [-g0] [-I dir] [-D name] in.c out.c4r
+//   c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-mfpu] [-minline] [-minline-why]
+//                     [-conforming] [-fno-builtin] [-fpic] [-g] [-g0] [-I dir] [-D name]
+//                     in.c out.c4r
+//
+// The flags are c4lc.lisp's, one for one, and mean what they mean there;
+// the c4sc-host32 rule in the Makefile stops the build if the Lisp gains
+// one this does not take. Built -m32 (c4sc-host32), this is the host's
+// 32-bit c4lc: the Makefile's $(call lc32).
 //
 // -g gives the image a source map, as c4lc.lisp's -g does: the lexer
 // keeps each token's file, the parser puts the lines in, and the writer
@@ -157,10 +163,10 @@ int sc_ast (int argc, char **argv) {
 // either way. -g0, no map, is the default.
 int sc_compile (int argc, char **argv) {
 	int *paths, *predefs, *ptail, *dtail, *e, *ast, *m, *out, *r;
-	int  opt, obj, usepp, cisc, fuse, fpu, conf, nobuiltin, pic, lines;
+	int  opt, obj, usepp, cisc, fuse, fpu, inl, inlrep, conf, nobuiltin, pic, lines;
 	char *in, *outname;
 
-	opt = obj = usepp = cisc = fuse = fpu = conf = nobuiltin = pic = lines = 0;
+	opt = obj = usepp = cisc = fuse = fpu = inl = inlrep = conf = nobuiltin = pic = lines = 0;
 	paths = predefs = ptail = dtail = 0;
 	while (argc > 0 && **argv == '-') {
 		if      (!memcmp(*argv, "-O", 3)) opt = 1;
@@ -169,6 +175,10 @@ int sc_compile (int argc, char **argv) {
 		else if (!memcmp(*argv, "-mcisc", 7)) cisc = 1;
 		else if (!memcmp(*argv, "-mfuse", 7)) { fuse = 1; opt = 1; }
 		else if (!memcmp(*argv, "-mfpu", 6)) fpu = 1;
+		// -minline implies -O, as in c4lc.lisp; -minline-why also says
+		// what the inliner decided about each function, and why
+		else if (!memcmp(*argv, "-minline", 9)) { inl = 1; opt = 1; }
+		else if (!memcmp(*argv, "-minline-why", 13)) { inl = inlrep = 1; opt = 1; }
 		else if (!memcmp(*argv, "-conforming", 12)) conf = 1;
 		else if (!memcmp(*argv, "-fno-builtin", 13)) nobuiltin = 1;
 		else if (!memcmp(*argv, "-fpic", 6)) pic = 1;
@@ -225,6 +235,8 @@ int sc_compile (int argc, char **argv) {
 
 	if (opt) {
 		L_tree_58objmode = obj ? cell_true : cell_false;
+		L_tree_58inlining = inl ? cell_true : cell_false;
+		L_tree_58inlinereport = inlrep ? cell_true : cell_false;
 		ast = L_tree_58optimize(ast);
 		if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }
 	}
@@ -312,7 +324,9 @@ static int sc_run (int argc, char **argv) {
 	orig = sc_call_named("file:path", cons(mk_string(in), 0));
 	orig = sc_call_named("file:read", cons(orig, 0));
 	if (c4sp_err || !orig) { printf("c4sc-host: cannot read %s\n", in); return 1; }
-	m = L_c4r_58decode(orig);
+	// its source map, if it has one, rides through the passes as items,
+	// as in c4opt-run.lisp
+	m = L_c4r_58smap_45carry(L_c4r_58decode(orig));
 	if (c4sp_err) { printf("c4sc-host: %s\n", c4sp_err_msg); return 1; }
 
 	L_opt_58fuse_45on = fuse ? cell_true : cell_false;

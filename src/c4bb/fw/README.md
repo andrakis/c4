@@ -49,8 +49,10 @@ every stage passes `FW_STAGE`: `fw.c` never tests it, but it gives
 
 ## Building by hand
 
-    ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O -D FW_STAGE=3 -D FW_RAM=1 \
+    ./c4sc-host32 -c 64000000 compile -O -D FW_STAGE=3 -D FW_RAM=1 \
         -D FW_DRIVES=1 -D FW_BOOT=1 src/c4bb/fw/fw.c src/c4bb/fw/fw.c4r
 
-That is the command `build-images.sh` runs; `c4sp32` comes from
-`make c4bb-32bit`.
+That is the command `build-images.sh` runs; `c4sc-host32` is c4lc compiled
+(`make c4sc-host32`). With `C4LC32=interp` it runs the same Lisp interpreted,
+`./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp ...` (`make c4bb-32bit`), and
+writes the same bytes.

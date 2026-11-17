@@ -22,11 +22,48 @@ if [ ! -x ./cpp ]; then
     exit 1
 fi
 mkdir -p $OUT
+# The 32-bit c4lc, as the Makefile's $(call lc32) chooses it (C4LC32):
+# c4sc-host32, c4lc's Lisp compiled by c4sc, or with C4LC32=interp
+# c4lc.lisp under c4sp32 -- the same compiler, byte for byte, 25-30x
+# apart (docs/c4sc-design.md, "c4sc-host32").
+#   lc32 [-R] [-c CELLS] c4lc-flags... in out
+# -R and -c are c4sp32's: the evaluator, which the compiled one has no
+# use for, and where the arena starts, which it takes too.
+C4LC32=${C4LC32:-compiled}
+case $C4LC32 in
+    interp)   LC32_BIN=c4sp32 ;;
+    compiled) LC32_BIN=c4sc-host32 ;;
+    *) echo "c4bb: C4LC32 is compiled or interp, not $C4LC32" >&2; exit 1 ;;
+esac
+if [ ! -x ./$LC32_BIN ]; then
+    echo "c4bb: ./$LC32_BIN is required (make $LC32_BIN, or C4LC32=interp)" >&2
+    exit 1
+fi
+lc32 () {
+    local r= c=
+    [ "$1" = -R ] && { r=-R; shift; }
+    [ "$1" = -c ] && { c="-c $2"; shift 2; }
+    if [ $C4LC32 = interp ]; then
+        ./c4sp32 $r $c src/c4sp/lisp/c4lc.lisp "$@"
+    else
+        ./c4sc-host32 $c compile "$@"
+    fi
+}
+# ... and c4opt-run.lisp, or its twin, c4sc-host32's opt mode:
+#   c4opt32 [-mfuse] in.c4r out.c4r
+c4opt32 () {
+    if [ $C4LC32 = interp ]; then
+        ./c4sp32 src/c4sp/lisp/c4opt-run.lisp "$@"
+    else
+        ./c4sc-host32 opt "$@"
+    fi
+}
 # Progress: a line a stage, so a build says what it is doing. A long
 # loop's stage is one line, with each item named as it is done.
 say () { echo "c4bb: $*"; }
 step () { printf 'c4bb: %s' "$*"; }
 item () { printf ' %s' "$*"; }
+say "the 32-bit c4lc is ./$LC32_BIN (C4LC32=$C4LC32)"
 
 # firmware: built with c4lc (the nicer compiler; real preprocessor).
 # c4lc emits for its host's word size, so the 32-bit c4sp gives 32-bit
@@ -45,7 +82,7 @@ item () { printf ' %s' "$*"; }
 #   fw          + the loader and the retry loop -- the BIOS
 fwbuild () {                                  # fwbuild <out> <flags...>
     out=$1; shift
-    ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O "$@" \
+    lc32 -c 64000000 -O "$@" \
         src/c4bb/fw/fw.c src/c4bb/fw/$out.c4r > /dev/null
 }
 step "the firmware:"
@@ -79,7 +116,7 @@ cp c4th32.c4r $FUSEDISK/c4th32.c4r
 # A fused image, for the lockstep and same-answers checks: identical
 # program, fewer instructions, and it must still agree with its unfused
 # twin step for step between the two engines.
-./c4sp32 src/c4sp/lisp/c4opt-run.lisp -mfuse $OUT/factorial.c4r $OUT/factorial-fused.c4r > /dev/null
+c4opt32 -mfuse $OUT/factorial.c4r $OUT/factorial-fused.c4r > /dev/null
 
 say "c4bb's trap tests, and libjs's demos"
 # c4bb's own trap-machinery tests (src/tests/test_customop predates
@@ -112,11 +149,12 @@ mkdir -p $DISK
 # kernel that rejects freshly-built images.
 # (the kernel #includes its extensions and the mailbox helpers: a change to any of
 #  them is a change to the kernel, or an edit there ships in an image built before it)
-# The compiler is a prerequisite too: c4lc itself and the c4sp that runs
-# it. C4IX rebuilds itself with c4sc, which make remakes after any change
-# to c4lc, so a disk compiled by the c4lc before it differs from what
-# C4IX builds (test-c4ix-rebuild, 2026-11-15).
-LC_SRCS="src/c4sp/lisp/c4lc*.lisp src/c4sp/lisp/c4r.lisp src/c4sp/lisp/c4opt.lisp c4sp32"
+# The compiler is a prerequisite too: c4lc itself and what runs it
+# ($LC32_BIN: c4sp32, or c4sc-host32, which make remakes from c4lc's
+# Lisp). C4IX rebuilds itself with c4sc, which make remakes after any
+# change to c4lc, so a disk compiled by the c4lc before it differs from
+# what C4IX builds (test-c4ix-rebuild, 2026-11-15).
+LC_SRCS="src/c4sp/lisp/c4lc*.lisp src/c4sp/lisp/c4r.lisp src/c4sp/lisp/c4opt.lisp $LC32_BIN"
 kernel_stale=0
 [ -f $OUT/c4ke32.c4r ] || kernel_stale=1
 for dep in src/c4ke/c4ke.c load-c4r.c include/c4bb_mbox.h src/c4ke/extensions/*.c $LC_SRCS; do
@@ -125,7 +163,7 @@ done
 if [ $kernel_stale = 1 ]; then
     say "C4KE's kernel (c4lc)"
     $PREPROC_LC src/c4ke/c4ke.c > .c4bb_klc.c
-    ./c4sp32 -c 64000000 src/c4sp/lisp/c4lc.lisp -O .c4bb_klc.c $OUT/c4ke32.c4r > /dev/null
+    lc32 -c 64000000 -O .c4bb_klc.c $OUT/c4ke32.c4r > /dev/null
     rm -f .c4bb_klc.c
 else
     say "C4KE's kernel is up to date"
@@ -153,14 +191,14 @@ say "C4KE's vfsload and raycast (c4lc)"
 # u0.h (a pre-existing issue, unrelated to word size - reproduces at
 # 64-bit too), so preprocess with gcc -E first, same as the kernel.
 $PREPROC_LC $BIN/vfsload.c > .c4bb_vfsload_pp.c
-./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O .c4bb_vfsload_pp.c $DISK/vfsload.c4r > /dev/null
+lc32 -c 16000000 -O .c4bb_vfsload_pp.c $DISK/vfsload.c4r > /dev/null
 rm -f .c4bb_vfsload_pp.c
 
 # raycast: also c4lc, also no u0, and additionally -conforming so it
 # can write ANSI escapes as "\033[" instead of poking 27 in as an
 # integer. No gcc -E here -- it includes nothing, so c4lc's own
 # preprocessor handles the one -D and the #ifdef it guards.
-./c4sp32 -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
+lc32 -c 16000000 -O -conforming -D RC_KE=1 \
     src/tests/raycast.c $DISK/raycast.c4r > /dev/null
 
 say "c4, c4m, c4cc, c4rdump and c4rlink (c4cc32), and the benchmarks"
@@ -310,16 +348,16 @@ say "c4mp's SMP guests"
 # c4mp's SMP guests, and the CPU-local window's, as 32-bit images for
 # libjs's processors (cli.js --cpus, docs/c4ix-smp.md); test-libjs runs them
 for g in smp0 smp1 deadlock; do
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O src/c4mp/guest/$g.c $OUT/c4mp-$g.c4r > /dev/null
+    lc32 -c $C4IX_CELLS -O src/c4mp/guest/$g.c $OUT/c4mp-$g.c4r > /dev/null
 done
-./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/smpwin.c $OUT/libjs-smpwin.c4r > /dev/null
+lc32 -c $C4IX_CELLS -O libjs/tests/src/smpwin.c $OUT/libjs-smpwin.c4r > /dev/null
 # the same work on every CPU, for the parallel engine (cli.js --parallel)
-./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O libjs/tests/src/spinmp.c $OUT/libjs-spinmp.c4r > /dev/null
+lc32 -c $C4IX_CELLS -O libjs/tests/src/spinmp.c $OUT/libjs-spinmp.c4r > /dev/null
 # the games that ship accelerators (games/NAME/c4/accel.mjs, libjs/accel.js),
 # the list the machine loads; and the loader's test, on the bare libc, which
 # test-libjs runs
 for f in games/*/c4/accel.mjs; do [ -f "$f" ] && basename "$(dirname "$(dirname "$f")")"; done | sed 's/.*/"&"/' | paste -sd, - | sed 's/^/[/; s/$/]/' > $OUT/accel.json
-./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O -mfuse -fno-builtin -c -conforming -I src/c4ix/libc/include \
+lc32 -c $C4IX_CELLS -O -mfuse -fno-builtin -c -conforming -I src/c4ix/libc/include \
     -I libjs/guest libjs/tests/src/accel.c $OUT/.libjs-accel.c4o > /dev/null
 ./c4rlink32 $OUT/.libjs-accel.c4o .libc-bare/libc-*.c4o -o $OUT/libjs-accel.c4r > /dev/null
 rm -f $OUT/.libjs-accel.c4o
@@ -344,7 +382,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     step "C4IX's kernel:"
     for m in $C4IX_MODS; do
         item $m
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null
+        lc32 -c $C4IX_CELLS -O $G -c -I src/c4ix src/c4ix/$m.c .c4bb_ix_$m.c4o > /dev/null
         objs="$objs .c4bb_ix_$m.c4o"
         keep .c4bb_ix_$m.c4o kernel/$m.c4o
     done
@@ -352,7 +390,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     ./c4rlink32 $objs -o $OUT/c4ix32.c4r
     keep $OUT/c4ix32.c4r c4ix.c4r
     say "C4IX's libraries: libc4ix and libarc, static and shared, and libgui"
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_lib.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_lib.c4o -o .c4bb_libc4ix32.c4l
     keep .c4bb_ix_lib.c4o lib/libc4ix.c4o
     keep .c4bb_libc4ix32.c4l lib/libc4ix.c4l
@@ -363,7 +401,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # libarc: inflate, CRC-32 and tar, for vfsload's root archive. -mfuse
     # like c4sp.c4r below: unpacking the archive is the one long job a
     # boot starts, and both machines that read this disk run fused code.
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c .c4bb_ix_arc.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -mfuse -c -I src/c4ix/include src/c4ix/lib/archive.c .c4bb_ix_arc.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_arc.c4o -o .c4bb_libarc32.c4l
     keep .c4bb_ix_arc.c4o lib/libarc.c4o
     keep .c4bb_libarc32.c4l lib/libarc.c4l
@@ -373,7 +411,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # display's (gui.h) and the sound card's (snd.h), so a program built
     # -D C4IX_SHARED carries none of
     # them itself (docs/c4ix-design.md, "Code out of the headers").
-    LCPIC="./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fpic -c -D C4IX_SHARED -I src/c4ix/include"
+    LCPIC="lc32 -c $C4IX_CELLS -O $G -fpic -c -D C4IX_SHARED -I src/c4ix/include"
     $LCPIC src/c4ix/lib/libc4ix.c .c4bb_ix_s_libc4ix.c4o > /dev/null
     $LCPIC src/c4ix/include/window.c .c4bb_ix_s_window.c4o > /dev/null
     $LCPIC src/c4ix/include/cpustat.c .c4bb_ix_s_cpustat.c4o > /dev/null
@@ -397,11 +435,11 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     step "C4IX's libc:"
     for m in string stdlib stdio unix fp math; do
         item $m
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
+        lc32 -c $C4IX_CELLS -O $G -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c .c4bb_ix_libc_$m.c4o > /dev/null
         keep .c4bb_ix_libc_$m.c4o libc/$m.c4o
     done
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fpic -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_libc_u.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -fpic -c src/c4ix/libc/opcodes.c .c4bb_ix_libc_opcodes.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c .c4bb_ix_libc_u.c4o > /dev/null
     ./c4rlink32 -r .c4bb_ix_libc_string.c4o .c4bb_ix_libc_stdlib.c4o .c4bb_ix_libc_stdio.c4o .c4bb_ix_libc_unix.c4o \
         .c4bb_ix_libc_fp.c4o .c4bb_ix_libc_math.c4o .c4bb_ix_libc_opcodes.c4o .c4bb_ix_libc_u.c4o -o .c4bb_lib/libc.c4s > /dev/null
     echo
@@ -411,24 +449,24 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     cp .c4bb_lib/libc.c4s $DISK/c4ix-libc.c4s
     say "libc's tests: libctest, pictest, unixtest"
     # libctest exercises it (libjs/tests/test-libjs.sh compares its output)
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c .c4bb_ix_u.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-libctest.c4r > /dev/null
     keep .c4bb_ix_u.c4o libc/libctest.c4o
     keep $DISK/c4ix-libctest.c4r bin/c4ix-libctest.c4r
     # pictest: two at once must each keep their own libc data
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c .c4bb_ix_u.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-pictest.c4r > /dev/null
     keep .c4bb_ix_u.c4o libc/pictest.c4o
     keep $DISK/c4ix-pictest.c4r bin/c4ix-pictest.c4r
     # unixtest: lseek, fstat, links, waitpid, vfork and execve (M7c)
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/unixtest.c .c4bb_ix_u.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/unixtest.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libc.c4s -o $DISK/c4ix-unixtest.c4r > /dev/null
     keep .c4bb_ix_u.c4o libc/unixtest.c4o
     keep $DISK/c4ix-unixtest.c4r bin/c4ix-unixtest.c4r
     step "C4IX's programs:"
     for u in $C4IX_USER; do
         item $u
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+        lc32 -c $C4IX_CELLS -O $G -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
         # each loads libc4ix at run time; gui, the display's demo, libgui too
         if [ $u = gui ]; then
             ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libgui.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
@@ -443,10 +481,10 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
         # splash runs while the boot unpacks the root archive, before
         # anything else may have been: it carries its libraries itself
         if [ $u = splash ]; then
-            ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+            lc32 -c $C4IX_CELLS -O $G -c -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
             ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libarc32.c4l .c4bb_libc4ix32.c4l -o $DISK/c4ix-$u.c4r > /dev/null
         else
-            ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
+            lc32 -c $C4IX_CELLS -O $G -c -D C4IX_SHARED -I src/c4ix/include src/c4ix/user/$u.c .c4bb_ix_u.c4o > /dev/null
             ./c4rlink32 .c4bb_ix_u.c4o -l .c4bb_lib/libarc.c4s -l .c4bb_lib/libc4ix.c4s -o $DISK/c4ix-$u.c4r > /dev/null
         fi
         keep .c4bb_ix_u.c4o user/$u.c4o
@@ -461,13 +499,13 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
         item $m
         src=src/c4ix/user/desktop/$m.c
         [ -f $src ] || src=src/winkit/$m.c
-        ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
+        lc32 -c $C4IX_CELLS -O $G -c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop \
             -I src/winkit $src .c4bb_ix_d_$m.c4o > /dev/null
         dobjs="$dobjs .c4bb_ix_d_$m.c4o"
         keep .c4bb_ix_d_$m.c4o desktop/$m.c4o
     done
     # the Calculator's decimal conversions are libc's fp.c, linked in
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c src/c4ix/libc/fp.c .c4bb_ix_d_fp.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -c src/c4ix/libc/fp.c .c4bb_ix_d_fp.c4o > /dev/null
     dobjs="$dobjs .c4bb_ix_d_fp.c4o"
     echo
     keep .c4bb_ix_d_fp.c4o desktop/fp.c4o
@@ -482,7 +520,7 @@ if [ ! -f $OUT/c4ix32.c4r ] || [ ! -f $PB/c4ix.c4r ] || \
     # under itself - "c4ix-" keeps it consistent with every other
     # C4IX binary here, all of which face the same shared-disk risk).
     say "C4IX's vfsload"
-    ./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
+    lc32 -c $C4IX_CELLS -O $G -c -I src/c4ix/include src/c4ix/user/vfsload.c .c4bb_ix_u.c4o > /dev/null
     ./c4rlink32 .c4bb_ix_u.c4o .c4bb_libc4ix32.c4l -o $DISK/c4ix-vfsload.c4r > /dev/null
     keep .c4bb_ix_u.c4o user/vfsload.c4o
     keep $DISK/c4ix-vfsload.c4r bin/c4ix-vfsload.c4r
@@ -596,7 +634,7 @@ cp src/c4ix/include/c4ix_user.h $DISK/c4ix_user.h
 # machine (a C4KE program, run through C4IX's compatibility layer). It
 # runs an image as c4m always has -- c4m load-c4r.c -- /usr/lib/c4ke.c4r --
 # and lends its guest the FLT of the machine under it.
-./c4sp32 -c $C4IX_CELLS src/c4sp/lisp/c4lc.lisp -O $G -P -I src/c4ix/include -I include -I . -D C4CC=1 -D __c4cc__=1 c4m.c $DISK/c4ix-c4m.c4r > /dev/null
+lc32 -c $C4IX_CELLS -O $G -P -I src/c4ix/include -I include -I . -D C4CC=1 -D __c4cc__=1 c4m.c $DISK/c4ix-c4m.c4r > /dev/null
 # what C4IX's own compilers are for (docs/c4ix-desktop.md, part three)
 cp src/c4ix/include/window.h $DISK/c4ix-window.h
 for f in README.txt hello.c bounce.c; do cp src/c4ix/examples/$f $DISK/c4ix-examples-$f; done
@@ -637,7 +675,7 @@ cp $OUT/c4ix32.c4r $DISK/c4ix.c4r
 # against 51.84s. The image is smaller too, 124,361 -> 105,864 bytes.
 # docs/fused-opcodes.md F7.
 $PREPROC -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4bb_c4sp_pp.c
-./c4sp32 -R src/c4sp/lisp/c4lc.lisp -O -mfuse .c4bb_c4sp_pp.c $DISK/c4sp.c4r > /dev/null
+lc32 -R -O -mfuse .c4bb_c4sp_pp.c $DISK/c4sp.c4r > /dev/null
 rm -f .c4bb_c4sp_pp.c
 $CC -o $DISK/cpp.c4r include/c4dos.h src/c4dos/cpp.c > /dev/null
 

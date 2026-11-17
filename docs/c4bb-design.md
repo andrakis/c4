@@ -50,6 +50,7 @@ The machine is 32-bit: words, pointers and instructions are 4 bytes, and
 | `c4cc32` | `make c4bb-32bit` | c4cc emitting 32-bit images |
 | `c4m32` | `make c4bb-32bit` | native 32-bit c4m, the parity baseline |
 | `c4sp32` | `make c4bb-32bit` | 32-bit c4sp; running c4lc.lisp on it makes **c4lc a 32-bit compiler** |
+| `c4sc-host32` | `make c4sc-host32` | the same compiler with its Lisp compiled by c4sc, 25-30x faster: what the host's 32-bit builds run (`make C4LC32=interp` for the one above; [c4sc-design.md](c4sc-design.md)) |
 | `c4rlink32` | `make c4bb-32bit` | 32-bit linker for C4IX objects |
 
 c4lc's target word size follows the host running it: `g:WORD` in

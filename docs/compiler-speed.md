@@ -490,6 +490,34 @@ Expect ~6,000-7,000 lines of C for 4,823 of Lisp.
 
 ---
 
+## The host's c4lc, compiled (2026-11-17)
+
+A2 wanted c4lc at native speed on the host. That compiler now exists,
+built from the other side: `c4sc-host` and `c4sc-host32` are c4lc's own
+Lisp, compiled to C by c4sc (docs/c4sc-design.md) and built by gcc at 64
+and 32 bits. Since 2026-11-17 the host's builds use them instead of
+c4sp, and their output is byte-identical.
+
+I measured on Helios, in one c4-lock slot of four processors, with
+`make -j3`, after touching c4lc's Lisp:
+
+| | `C4LC=interp` | compiled (the default) | |
+|---|---:|---:|---:|
+| `make c4bb-images` (946 compiles) | 3,788 s (63 min) | 315 s (5.3 min) | 12x |
+| the 52 64-bit targets (48 compiles) | 88 s | 53 s | 1.7x |
+| one C4IX object at 32 bits (sched, mmu, vfs) | 5.9-12.6 s | 0.23-0.39 s | 26-32x |
+
+The compiled times include regenerating the C units and building the
+host with gcc.
+
+To get the interpreter back:
+
+- `make C4LC=interp` for both word sizes;
+- `C4LC32=interp` or `C4LC64=interp` for one.
+
+This changes only the host's builds. Compiles inside the machine (c4bb, C4DOS,
+C4IX) run what they ran before.
+
 ## Out of scope / later
 
 - Anything about hosting a compiler on Forth. Answered during planning: Forth's

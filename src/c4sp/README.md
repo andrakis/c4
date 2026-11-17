@@ -124,6 +124,9 @@ the default `make` copies there.
   board is c4sc's compiled c4lc ([../c4sc/README.md](../c4sc/README.md)).
 - **Word size**: c4lc emits images of the word size of the interpreter running
   it, so c4lc under `c4sp32` writes 32-bit images and under `c4sp` 64-bit ones.
+  The host's 32-bit builds run it compiled instead, `c4sc-host32`
+  ([../c4sc/README.md](../c4sc/README.md)); `make C4LC32=interp` brings this
+  route back, and writes the same bytes.
 
 ## Limits and known issues
 

@@ -12,11 +12,13 @@ takes ~4.6 minutes compiled against ~30 interpreted (M8). The C4DOS →
 C4KE → C4IX climb uses it (`c4sc32-fused.c4r`, as `c4sc.c4r`, on the
 `c4dos-c4ix32` floppy), and so do C4IX's own BUILD.B4K files and its `cc`.
 Since it is c4lc compiled, it has c4lc's `float` and `double` too
-(docs/c4-float.md). One
-known gap: c4sc's `compile` mode has no `-minline` (the Lisp driver does),
-and its bootstrap fixed point has not been re-run since inlining landed
-in the tree pass ([inline-small-functions.md](inline-small-functions.md)
-I6).
+(docs/c4-float.md). Since
+2026-11-17 its `compile` mode takes `-minline` and `-minline-why` as well,
+and it is the host's c4lc at both word sizes: see
+[The host's c4lc, compiled](#the-hosts-c4lc-compiled-2026-11-17). One
+known gap: its bootstrap fixed point has not been re-run since inlining
+landed in the tree pass
+([inline-small-functions.md](inline-small-functions.md) I6).
 
 **Rule for this document:** tick a box only when its verification command
 has been run green, with the evidence pasted beside it. Anything found
@@ -542,6 +544,87 @@ for all of them.
       `docs/compiler-on-the-board.md` already predicted from a different
       direction. So the compiled compiler is **~6.6x** on the real
       workload.
+
+## The host's c4lc, compiled (2026-11-17)
+
+The host's own builds run c4lc compiled rather than interpreted.
+
+- `c4sc-host32` (the same driver built with `gcc -m32`) does every 32-bit
+  compile: `make c4bb-images`, the games' `c4.mk`, `c4sc32.c4r`, and the
+  32-bit tests that build with c4lc.
+- `c4sc-host` does the 64-bit compiles that the Makefile used to give
+  `./c4sp -R ... c4lc.lisp`: C4DOS, `c4ix.c4r` and its programs and
+  libraries, c4mp, c4or1k, `c4sc.c4r` and the `*-lc.c4r` images.
+- c4opt-run.lisp's steps (`c4sc32-fused.c4r`, build-images.sh's
+  `factorial-fused`) go through `c4sc-host32 opt`, which now carries a
+  `-g` image's source map through the way c4opt-run.lisp does.
+
+**The switch.** The Makefile routes every such compile through
+`$(call lc32,...)` or `$(call lc64,...)`, and build-images.sh through its
+`lc32` and `c4opt32` functions:
+
+| | |
+|---|---|
+| default | compiled at both word sizes |
+| `make C4LC=interp ...` | both word sizes interpreted, the way it was |
+| `make C4LC32=interp` or `C4LC64=interp` | one word size interpreted |
+
+`C4LC32` is exported, so build-images.sh follows it; run by hand, it
+reads the same variable. Any other value is an error.
+
+**It is the same compiler.**
+
+- I touched c4lc's Lisp and built `make c4bb-images` and all 52 64-bit
+  targets both ways. The whole `src/c4bb/images` tree (4,635 files) came
+  out byte-identical, and so did a hash of 2,372 build products: every
+  `.c4o`, `.c4r`, `.c4l`, `.c4s`, `.vfs`, `.tgz`, `.img`, `.sizes` and
+  `.json`, and the generated `*_gen.c`.
+- `make test-c4sc32` (in the suite) holds c4sc-host32 to c4sp32 running
+  the Lisp, on:
+  - the c4sc-back corpus with no flags, `-O`, `-minline` and
+    `-O -mfuse -mfpu -g`;
+  - five C4IX objects with the flags build-images.sh gives them;
+  - `-minline-why`'s image and its report;
+  - `opt` mode, plain and `-mfuse`, with and without a source map.
+- The recipes for `c4sc-host` and `c4sc-host32` refuse to build if
+  `c4lc.lisp` takes a flag that `body.h`'s `compile` mode does not.
+  `-minline` was the one missing.
+- The 64-bit tests that hold c4lc to its expected outputs (`test-c4lc`
+  and its kin) still run the Lisp, so the interpreted route stays the
+  oracle.
+
+**What rebuilds.** A change to any of c4lc's Lisp files (`$(C4LC_LISP)`)
+regenerates the seven C units (`C4SC_GEN`) and rebuilds both hosts before
+any compile runs.
+
+**What it is worth.** I measured on Helios, in one c4-lock slot of four
+processors, with `make -j3`, after touching c4lc's Lisp so that every
+compile reran:
+
+| | interpreted | compiled | |
+|---|---:|---:|---:|
+| `make c4bb-images` (946 compiles) | 3,788 s (63 min) | 315 s (5.3 min) | 12x |
+| the 52 64-bit targets (48 compiles) | 88 s | 53 s | 1.7x |
+
+Both compiled times include regenerating the C units and building the
+host with gcc. The 64-bit targets are small, so that rebuild is most of
+their 53 s.
+
+One file at a time, at 32 bits:
+
+| file | interpreted | compiled | |
+|---|---:|---:|---:|
+| C4IX `sched` | 5.88 s | 0.23 s | 26x |
+| C4IX `mmu` | 12.57 s | 0.39 s | 32x |
+| C4IX `vfs` | 6.48 s | 0.25 s | 26x |
+| `c4lc_m9.c -minline` | 0.54 s | 0.03 s | 18x |
+
+Each object is byte-identical, and the compiled compiler peaks at
+66 MB.
+
+Building the images also exposed a bug in c4sp32, below c4lc.
+`include/c4_float.h` assumed a 64-bit word, so c4sp32 computed
+`(* 1.5 1.5)` as 2. docs/internals.md §9.1 has the details and the fix.
 
 ## What this is not
 

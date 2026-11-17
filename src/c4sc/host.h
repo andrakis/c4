@@ -74,7 +74,10 @@ extern int *L_c4r_58bss_45size;
 extern int *L_c4r_58srcfiles;           // -g: the map's files
 int *L_c4r_58decode (int *a0);
 int *L_c4r_58encode (int *a0);
+int *L_c4r_58smap_45carry (int *a0);    // opt: a -g image keeps its map
 extern int *L_tree_58objmode;
+extern int *L_tree_58inlining;          // -minline
+extern int *L_tree_58inlinereport;      // -minline-why
 int *L_tree_58optimize (int *a0);
 extern int *L_gen_58objmode;
 extern int *L_gen_58cisc;

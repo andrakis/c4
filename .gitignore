@@ -117,6 +117,10 @@ c4or1k-native
 /c4m-fuse
 /src/c4sc/c4opt_gen.c
 /c4sc-host
+/c4sc-host32
+# test-c4sc32's -minline-why reports
+/.c4sc32_i.txt
+/.c4sc32_c.txt
 /src/c4sc/c4lex_gen.c
 /src/c4sc/c4pp_gen.c
 /src/c4sc/c4parse_gen.c

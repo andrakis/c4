@@ -21,8 +21,9 @@ minutes of cycles (5.8 minutes wall), measured in
 |---|---|
 | `src/c4sc/c4<unit>_gen.c` | generated C for one c4lc file (`opt lex pp parse c4r tree gen`); made on demand by the targets below, and gitignored |
 | `make c4sc-host` | native binary with all seven units compiled in; the differential harness |
+| `make c4sc-host32` | the same built `-m32`: the host's 32-bit c4lc, which compiles every 32-bit image the host builds (`$(call lc32)` in the Makefile; `make C4LC32=interp` for c4lc.lisp under `c4sp32`) |
 | `make c4sc.c4r` | 64-bit image: the driver and seven units, each `c4lc -O -c`, linked by `c4rlink` |
-| `make c4sc32.c4r` | the same at 32 bits, via `c4sp32` and `c4rlink32` |
+| `make c4sc32.c4r` | the same at 32 bits, via `$(call lc32)` and `c4rlink32` |
 | `make c4sc32-fused.c4r` | `c4sc32.c4r` put through c4opt's fuse pass; for c4bb, c4mp and oisc4, not c4m |
 | `make c4sc-self` | c4sc compiled by itself, as a native binary |
 
@@ -40,8 +41,9 @@ c4sc-host tokens [-count|-conforming] file.c               # c4lc-tokens.lisp
 c4sc-host pp [-I dir] [-D name] file.c                     # c4lc-ppdump.lisp
 c4sc-host pptok file.i
 c4sc-host ast [-check] file.c                              # c4lc-ast.lisp
-c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-conforming]
-                  [-fno-builtin] [-fpic] [-I dir] [-D name] in.c out.c4r          # c4lc.lisp
+c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-mfpu] [-minline] [-minline-why]
+                  [-conforming] [-fno-builtin] [-fpic] [-g] [-g0]
+                  [-I dir] [-D name] in.c out.c4r                         # c4lc.lisp
 ```
 
 `compile` is c4lc. For example, one C4IX module on the simulated board:
@@ -55,7 +57,7 @@ node src/c4bb/sim/cli.js -s -m 512 -d <disk> c4sc32-fused.c4r -c 8000000 \
 
 ## Test
 
-None of these is part of `make test`.
+None of these is part of `make test`; `test-c4sc`, `test-c4sc32`, `test-c4sc-lex` and `test-c4sc-image` are in `make suite`.
 
 | target | checks |
 |---|---|
@@ -63,6 +65,7 @@ None of these is part of `make test`.
 | `make test-c4sc-run` | compiled c4opt produces byte-identical images to the interpreted one |
 | `make test-c4sc-lex` | compiled lexer's token dump matches the interpreted one over the c4fc lexer corpus |
 | `make test-c4sc-front` | preprocessor agrees with gcc -E on the twelve C4IX modules; parser matches the committed AST dump |
+| `make test-c4sc32` | at 32 bits, where the build uses it: `c4sc-host32` against c4lc.lisp under `c4sp32` -- the corpus plain, `-O`, `-minline` and `-O -mfuse -mfpu -g`, five C4IX objects with the image flags, and `-minline-why`'s report (in the suite) |
 | `make test-c4sc-back` | every image and object is byte-identical to the interpreted c4lc's; the twelve C4IX objects link to the same `c4ix.c4r` that `make c4ix.c4r` builds, and it boots |
 | `make test-c4sc-chain` | a 2000-term `a + a + ... + a`, 1000 products and 200 right-nested levels compile in seconds (they took time exponential in the length), byte-identical to the interpreted c4lc, and print the right sums |
 | `make test-c4sc-image` | `c4sc.c4r` under c4m produces the same object sizes as the native host |
@@ -84,7 +87,7 @@ None of these is part of `make test`.
 
 ## Hosts
 
-- **Native**: `c4sc-host`, `c4sc-self`.
+- **Native**: `c4sc-host`, `c4sc-host32`, `c4sc-self`.
 - **Under c4m**: `c4sc.c4r` runs, but bare c4m cannot write files; the tests
   compare the size line printed before the write.
 - **c4bb**: `c4sc32-fused.c4r` is the compiler the in-machine C4IX build uses;
@@ -101,7 +104,9 @@ None of these is part of `make test`.
 
 - It compiles the subset c4lc uses and refuses anything else. A change to
   c4lc that adds a closure or a higher-order call breaks this build.
-- `compile` mode has no `-minline`; the Lisp driver does.
+- `compile` mode's flags are a second copy of c4lc.lisp's driver (`body.h`).
+  Building `c4sc-host32` stops when the Lisp takes a flag that `body.h` does
+  not; `-minline` and `-minline-why` were the gap until 2026-11-17.
 - `c4sc-main.c` still goes through `gcc -E` first. The reason was
   `include/c4.h`'s function-like macro named without an argument list,
   which c4lc's preprocessor has let stand for itself since 0628331; the

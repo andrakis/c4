@@ -110,9 +110,12 @@ value and must not become one.
       inlined, 4 correctly refused).
 - [x] **I5** Measured; see below. `__fw_putc` is deliberately NOT gone
       from the image — see the linking rule.
-- [~] **I6** `make src/c4sc/c4tree_gen.c` regenerates cleanly and the
+- [x] **I6** `make src/c4sc/c4tree_gen.c` regenerates cleanly and the
       pass is in the C: `_t_58inline`, `_t_58ninline`, 38,628 -> 65,621
-      bytes. c4sc's bootstrap fixed point NOT yet re-run.
+      bytes. c4sc's bootstrap fixed point re-run 2026-11-17, from
+      regenerated units: `make test-c4sc-self` passes (gen1 == gen2 ==
+      gen3, 75,956 bytes, and the seven units match the interpreter's).
+      It is in `make suite` since.
 - [x] **T4** Multi-statement bodies with locals, statement position.
       Budget picked by measurement; C4KE, C4IX and C4DOS all build and
       run. `make test-c4lc` green.
@@ -520,8 +523,7 @@ budget 24, 13,469 at 32, 16,029 at 60. This grows code quickly.
 Status 2026-09-30. Shipped 2026-09-07 (`d445540`): T3, T4, T4b in c4lc and
 the I7 port to c4fc. `-minline` stays off by default in both compilers.
 
-- **I6** c4sc's bootstrap fixed point (the regeneration itself is done
-  and verified).
+- **I6** is done: c4sc's bootstrap fixed point holds (2026-11-17).
 - **I7** is done (see the ladder and the I7 section above): it went into
   `src/c4fc/inline.f`, not `tree.f` as first planned, and the spike
   corpus plus the T3/T4/T4b tests produce identical output with and

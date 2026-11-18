@@ -20,8 +20,10 @@
 #
 #   bash src/c4sp/tests/srcmap-link.sh
 cd "$(dirname "$0")/../../.."
-LC="./c4sp -c 400000 src/c4sp/lisp/c4lc.lisp"
-LC32="./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp"
+. tools/c4lc.sh   # the host's c4lc and c4opt-run, compiled unless C4LC=interp
+LC=$(lc 64)
+LC32=$(lc 32)
+OPT=$(c4opt 64)
 T=.srcmap_link
 rm -rf $T; mkdir -p $T
 fail=0
@@ -146,8 +148,8 @@ rows_ok () {   # optimized-image original-map-dump
 }
 opt_pair () {   # name image-g image-g0
   local name=$1 g=$2 g0=$3
-  ./c4sp src/c4sp/lisp/c4opt-run.lisp $g $T/og.c4r > /dev/null || { bad "$name: c4opt-run"; return; }
-  ./c4sp src/c4sp/lisp/c4opt-run.lisp $g0 $T/o0.c4r > /dev/null
+  $OPT $g $T/og.c4r > /dev/null || { bad "$name: c4opt-run"; return; }
+  $OPT $g0 $T/o0.c4r > /dev/null
   local so=$(stat -c %s $T/o0.c4r)
   if ! head -c $so $T/og.c4r | cmp -s - $T/o0.c4r || [ $(stat -c %s $T/og.c4r) -le $so ]; then
     bad "$name: c4opt-run optimised the mapped image differently, or dropped its map"; return

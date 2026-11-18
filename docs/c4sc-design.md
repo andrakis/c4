@@ -15,10 +15,12 @@ Since it is c4lc compiled, it has c4lc's `float` and `double` too
 (docs/c4-float.md). Since
 2026-11-17 its `compile` mode takes `-minline` and `-minline-why` as well,
 and it is the host's c4lc at both word sizes: see
-[The host's c4lc, compiled](#the-hosts-c4lc-compiled-2026-11-17). One
-known gap: its bootstrap fixed point has not been re-run since inlining
-landed in the tree pass
-([inline-small-functions.md](inline-small-functions.md) I6).
+[The host's c4lc, compiled](#the-hosts-c4lc-compiled-2026-11-17). On
+2026-11-17 its bootstrap fixed point was re-run with inlining in the tree
+pass ([inline-small-functions.md](inline-small-functions.md) I6), and it
+holds: gen1 == gen2 == gen3 (75,956 bytes), and the compiled c4sc writes
+the seven units the interpreted one does. `make test-c4sc-self` takes
+16 s, so it is in `make suite` now.
 
 **Rule for this document:** tick a box only when its verification command
 has been run green, with the evidence pasted beside it. Anything found
@@ -592,6 +594,31 @@ reads the same variable. Any other value is an error.
 - The 64-bit tests that hold c4lc to its expected outputs (`test-c4lc`
   and its kin) still run the Lisp, so the interpreted route stays the
   oracle.
+
+**An error ends the program (2026-11-18).** In c4sp an `error` unwinds
+the evaluator, so c4lc's `error` never returns. In compiled code it
+used to return: the runtime only set c4sp's error flag, and `body.h`
+looked at that flag between phases. A parse error at the end of the
+tokens therefore never stopped. The parser ran on, without advancing,
+and grew without bound. This hung every C error compiled on the host
+from 2026-11-17, when the host switched to the compiled c4lc, until
+the next day. Byte-identical builds of programs that compile could
+not show it; `srcmap-invariant.sh` did, on `c4lc_pp.c` without `-P`.
+
+`sc_error` (`scrt.h`) now prints `body.h`'s `c4sc-host: MESSAGE` and
+exits with 1. `make test-c4sc32` holds the message and the exit code to
+the interpreter's.
+
+**Test scripts.** `tools/c4lc.sh` gives the test scripts the same choice
+as the Makefile, compiled unless `C4LC`, `C4LC32` or `C4LC64` says
+`interp`. These scripts use it:
+
+- `fold-link.sh`, `srcmap-link.sh` and `srcmap-invariant.sh`;
+- `test-libjs.sh` and `test-desktop.mjs`;
+- `test-c4dos.sh` and `bbport/run.sh`.
+
+Two checks stay on the Lisp, as `test-c4lc` does, and say so:
+`common-link.sh` and `test-srcmap`'s two pinned maps.
 
 **What rebuilds.** A change to any of c4lc's Lisp files (`$(C4LC_LISP)`)
 regenerates the seven C units (`C4SC_GEN`) and rebuilds both hosts before

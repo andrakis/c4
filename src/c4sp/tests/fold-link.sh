@@ -16,8 +16,9 @@
 #
 #   bash src/c4sp/tests/fold-link.sh
 cd "$(dirname "$0")/../../.."
-LC="./c4sp -c 400000 src/c4sp/lisp/c4lc.lisp"
-LC32="./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp"
+. tools/c4lc.sh   # the host's c4lc, compiled unless C4LC=interp
+LC=$(lc 64)
+LC32=$(lc 32)
 T=.fold_link
 WANT="fold 2863 3 -1234 5000 268435200 1024 -72 63"
 rm -rf $T; mkdir -p $T

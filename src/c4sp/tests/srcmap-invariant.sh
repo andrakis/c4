@@ -9,7 +9,8 @@
 #
 #   bash src/c4sp/tests/srcmap-invariant.sh [-q]
 cd "$(dirname "$0")/../../.."
-LC="./c4sp32 -c 400000 src/c4sp/lisp/c4lc.lisp"
+. tools/c4lc.sh   # the host's c4lc, compiled unless C4LC=interp
+LC=$(lc 32)
 T=.srcmap_inv
 rm -rf $T; mkdir -p $T
 n=0; skipped=0; fail=0

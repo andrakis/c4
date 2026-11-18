@@ -141,7 +141,7 @@ lc64       = ./c4sc-host $(filter-out -R,$(1)) compile
 else
 $(error C4LC64 is "compiled" (the default) or "interp", not "$(C4LC64)")
 endif
-export C4LC32
+export C4LC32 C4LC64
 SRCS      := src
 INCLUDE   := include
 C4CC_SRCS := $(SRCS)/c4cc/c4cc.c $(SRCS)/c4cc/asm-c4r.c
@@ -1287,6 +1287,16 @@ test-c4sc32: c4sc-host32 c4sp32 c4cc32
 	@echo "  opt ok: plain and -mfuse, with and without a source map"
 	@rm -f .c4sc32_in.c4r .c4sc32_g.c4r
 	@rm -f .c4sc32_i.c4r .c4sc32_c.c4r .c4sc32_i.c4o .c4sc32_c.c4o .c4sc32_i.txt .c4sc32_c.txt
+	@# an error stops the compile, with c4lc.lisp's message (scrt.h's
+	@# sc_error: compiled code cannot unwind, so error ends the program)
+	@echo 'int x;' > .c4sc32_err.c; echo foo >> .c4sc32_err.c
+	@i=`./c4sp32 -c 400000 $(SRCS)/c4sp/lisp/c4lc.lisp .c4sc32_err.c .c4sc32_e.c4r 2>&1 | sed -n 's/^c4sp: error: //p'`; \
+	 c=`timeout 60 ./c4sc-host32 compile .c4sc32_err.c .c4sc32_e.c4r 2>&1`; r=$$?; \
+	 c=`echo "$$c" | sed -n 's/^c4sc-host: //p'`; \
+	 [ -n "$$i" ] && [ "$$i" = "$$c" ] && [ $$r = 1 ] \
+	   || { echo "test-c4sc32: a parse error: interpreted '$$i', compiled '$$c' (exit $$r)"; exit 1; }; \
+	 echo "  error ok: $$c"
+	@rm -f .c4sc32_err.c .c4sc32_e.c4r
 	@echo "test-c4sc32: OK -- c4sc-host32 writes c4lc.lisp's bytes at 32 bits"
 PHONY += test-c4sc32
 
@@ -1507,7 +1517,7 @@ test-ladder: cpp $(C4) $(C4M) $(C4CC) c4sp
 # Strict-c4 core: the same image runs on c4bb, under native c4m, and
 # under PLAIN c4 via c4l.c (the clockless build) - test-c4dos checks
 # all three plus the c4-inside-DOS-inside-c4bb nesting.
-test-c4dos: cpp $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
+test-c4dos: cpp $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r $(LC64_BIN)
 	bash src/c4dos/tests/test-c4dos.sh
 
 # C4DOS's DEVICE=HEAP.SYS on libjs, whose heap keeps generations
@@ -2683,7 +2693,7 @@ PHONY += $(GAMES_ALL:%=test-%)
 # memory and processors allow, longest first (tools/suite.mjs); its logs
 # and result.txt are in .suite/, and what it learns of each test --
 # time, peak memory, processors -- in .suite-stats.json, for the next run.
-SUITE := test test-c4lc test-c4fc test-srcmap test-c4sc test-c4sc32 test-c4sc-lex test-c4sc-image          test-c4bb test-c4bb-climb test-c4rstrip test-oisc4          test-c4ix test-c4ix-smp test-c4ix-c4ke test-c4ix-rebuild test-persist          test-c4dos test-c4dos-heap test-c4dos-c4fc test-c4dos-c4ix32 test-grin test-libc-bare          test-libjs test-libjs-ladder $(GAMES_ALL:%=test-%)
+SUITE := test test-c4lc test-c4fc test-srcmap test-c4sc test-c4sc32 test-c4sc-self test-c4sc-lex test-c4sc-image          test-c4bb test-c4bb-climb test-c4rstrip test-oisc4          test-c4ix test-c4ix-smp test-c4ix-c4ke test-c4ix-rebuild test-persist          test-c4dos test-c4dos-heap test-c4dos-c4fc test-c4dos-c4ix32 test-grin test-libc-bare          test-libjs test-libjs-ladder $(GAMES_ALL:%=test-%)
 print-suite:
 	@echo $(SUITE)
 suite:
@@ -2816,7 +2826,7 @@ test-c4bb: c4bb-images $(C4M) $(TESTS_C4R)
 # libjs: c4m as a direct JavaScript interpreter (docs/libjs-design.md).
 # It runs the same 32-bit corpus c4bb does, so it needs no images of its
 # own; the suite diffs against native c4m32/c4m and boots both kernels.
-test-libjs: c4bb-images $(C4M) $(TESTS_C4R) c4sp32
+test-libjs: c4bb-images $(C4M) $(TESTS_C4R) c4sp32 $(LC32_BIN)
 	bash libjs/tests/test-libjs.sh
 
 # The quick tier: only what the paths changed since c4ix_and_toppings can
@@ -4098,7 +4108,7 @@ test-c4rstrip: c4rstrip c4rstrip.c4r $(C4M) $(C4RDUMP) $(C4RLINK) hello.c4r fact
 # trailer; a damaged image is refused, not crashed on.
 SRCMAP_LOADERS64 = "$(C4M) load-c4r.c --" "./c4 c4l.c" "./c4mp" "$(OISC4)"
 SRCMAP_LOADERS32 = "./c4m32 load-c4r.c --" "node libjs/cli.js" "node src/c4bb/sim/cli.js"
-test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) $(C4R_C4RLINK) c4rlink32 $(BIN_D)/b4ke.c4r $(C4KE_C4R) c4rstrip hello.c4r hello32.c4r
+test-srcmap: c4sp c4sp32 $(LC64_BIN) $(LC32_BIN) c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) $(C4R_C4RLINK) c4rlink32 $(BIN_D)/b4ke.c4r $(C4KE_C4R) c4rstrip hello.c4r hello32.c4r
 	./c4sp src/c4sp/lisp/c4r-mapfixture.lisp hello.c4r .srcmap_f64.c4r > /dev/null
 	./c4sp32 src/c4sp/lisp/c4r-mapfixture.lisp hello32.c4r .srcmap_f32.c4r > /dev/null
 	$(C4RDUMP) -l .srcmap_f64.c4r | diff src/c4sp/tests/expected/srcmap-fixture.txt -
@@ -4130,6 +4140,9 @@ test-srcmap: c4sp c4sp32 c4 c4m c4m32 c4mp $(OISC4) $(C4RDUMP) $(C4RLINK) $(C4R_
 	@# line, an inlined call at the call -- and it prints __LINE__ counted
 	@# past a backslash-newline. Then the invariant over the corpus: -g
 	@# changes no byte of an image, only adds the trailer.
+	@# The two pinned maps come from c4lc.lisp under c4sp, as test-c4lc
+	@# holds c4lc's Lisp itself to its answers; the scripts compile with
+	@# the host's c4lc (tools/c4lc.sh), which test-c4sc32 holds to the Lisp.
 	./c4sp -c 400000 src/c4sp/lisp/c4lc.lisp -g -O -minline -P -I src/tests src/tests/srcmap_probe.c .srcmap_probe.c4r > /dev/null
 	$(C4RDUMP) -l .srcmap_probe.c4r | diff src/c4sp/tests/expected/srcmap-probe.txt -
 	$(C4M) load-c4r.c -- .srcmap_probe.c4r 2>&1 | grep -qx "66 28 27"
@@ -4208,8 +4221,8 @@ $(SRCS)/bench/%.c4r: $(SRCS)/bench/%.c $(C4KE_WATCH) $(C4CC)
 #     nothing from it -- puts/__time/__c4_cycles are c4lc builtins;
 #   - -D, which is also what turns the preprocessor ON. Compiled with
 #     no -D at all, BOTH sides of the RC_DOS #ifdef would be compiled.
-$(TESTS)/raycast.c4r: c4sp $(C4LC_LISP) $(TESTS)/raycast.c
-	./c4sp src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_KE=1 \
+$(TESTS)/raycast.c4r: $(LC64_BIN) $(C4LC_LISP) $(TESTS)/raycast.c
+	$(call lc64,) -O -conforming -D RC_KE=1 \
 		$(TESTS)/raycast.c $@ > /dev/null
 
 # A variety of test programs

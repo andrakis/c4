@@ -30,6 +30,9 @@ run () {
 }
 
 for w in "" 32; do
+  # c4lc.lisp under c4sp, not $(lc): this is part of make test-c4lc, which
+  # holds c4lc's Lisp itself to its answers (test-c4sc and test-c4sc32
+  # hold the compiled c4lc to the Lisp)
   lc="./c4sp$w -c 400000 src/c4sp/lisp/c4lc.lisp"
   for o in "" -O; do
     k="($w$o)"

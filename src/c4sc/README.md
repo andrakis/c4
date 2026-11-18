@@ -57,7 +57,7 @@ node src/c4bb/sim/cli.js -s -m 512 -d <disk> c4sc32-fused.c4r -c 8000000 \
 
 ## Test
 
-None of these is part of `make test`; `test-c4sc`, `test-c4sc32`, `test-c4sc-lex` and `test-c4sc-image` are in `make suite`.
+None of these is part of `make test`; `test-c4sc`, `test-c4sc32`, `test-c4sc-self`, `test-c4sc-lex` and `test-c4sc-image` are in `make suite`.
 
 | target | checks |
 |---|---|
@@ -69,7 +69,7 @@ None of these is part of `make test`; `test-c4sc`, `test-c4sc32`, `test-c4sc-lex
 | `make test-c4sc-back` | every image and object is byte-identical to the interpreted c4lc's; the twelve C4IX objects link to the same `c4ix.c4r` that `make c4ix.c4r` builds, and it boots |
 | `make test-c4sc-chain` | a 2000-term `a + a + ... + a`, 1000 products and 200 right-nested levels compile in seconds (they took time exponential in the length), byte-identical to the interpreted c4lc, and print the right sums |
 | `make test-c4sc-image` | `c4sc.c4r` under c4m produces the same object sizes as the native host |
-| `make test-c4sc-self` | fixed point: generations 1, 2 and 3 of c4sc are byte-identical, and it emits the same seven units |
+| `make test-c4sc-self` | fixed point: generations 1, 2 and 3 of c4sc are byte-identical, and it emits the same seven units (in the suite) |
 | `make test-c4sc-board` | on the simulated c4bb, `c4sc32-fused.c4r` compiles `boot.c` to the same bytes c4lc does |
 
 ## Layout

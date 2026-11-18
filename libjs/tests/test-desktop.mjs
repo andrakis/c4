@@ -944,12 +944,16 @@ check(listed().includes('sq') && listed().includes('main'), 'and its functions l
 // the same as c4r.js says for the object host c4lc makes of the same source
 {
   const top = fileURLToPath(new URL('../../', import.meta.url));
-  // c4sp32: the word C4IX's c4sc has
-  if (existsSync(join(top, 'c4sp32'))) {
+  // the host's 32-bit c4lc (the word C4IX's c4sc has), picked as
+  // tools/c4lc.sh picks it: c4sc-host32, or c4sp32 with C4LC32=interp
+  const interp = (process.env.C4LC32 || process.env.C4LC || 'compiled') === 'interp';
+  const [lcBin, lcArgs] = interp ? ['c4sp32', ['-R', '-c', '16000000', 'src/c4sp/lisp/c4lc.lisp']]
+                                 : ['c4sc-host32', ['compile']];
+  if (existsSync(join(top, lcBin))) {
     // a name of its own: another test-desktop may be running beside this one
     const sq = `/tmp/.td-sq-${process.pid}`;
     writeFileSync(sq + '.c', SQ + '\n');
-    execFileSync('./c4sp32', ['-R', '-c', '16000000', 'src/c4sp/lisp/c4lc.lisp', '-O', '-g', '-c', '-P', '-I', '/tmp', '-I', 'src/c4ix/include',
+    execFileSync('./' + lcBin, [...lcArgs, '-O', '-g', '-c', '-P', '-I', '/tmp', '-I', 'src/c4ix/include',
       '-D', 'C4CC=1', '-D', '__c4cc__=1', sq + '.c', sq + '.c4o'], { cwd: top, stdio: 'ignore' });
     const a = analyse(readC4r(new Uint8Array(readFileSync(sq + '.c4o'))));
     const f = a.funcs.find(g => g.name === 'main');
@@ -959,7 +963,7 @@ check(listed().includes('sq') && listed().includes('main'), 'and its functions l
     check(want.length > 3 && want.every((w, i) => got[i] === w), "each of main's instructions as libjs/c4r.js's insnText has it",
       `want:\n${want.join('\n')}\ngot:\n${got.join('\n')}`);
     unlinkSync(sq + '.c'); unlinkSync(sq + '.c4o');
-  } else console.log('test-desktop: (no ./c4sp32: the Code tab is not checked against c4r.js)');
+  } else console.log(`test-desktop: (no ./${lcBin}: the Code tab is not checked against c4r.js)`);
 }
 {
   const h = codeHdr(), t = find('sq').filter(t => h && t.x < h.x - 8).pop();

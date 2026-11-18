@@ -48,11 +48,13 @@ trap 'rm -rf $T' EXIT
 # raycast's C4DOS build: c4lc with -D RC_DOS=1, which swaps puts for
 # printf and stubs out the cycle counter and usleep, leaving an image
 # that uses nothing above EXIT except TIME -- exactly what a DOS with
-# DEVICE=CLOCK.SYS provides. Skipped if c4sp is not built; it is not a
-# prerequisite of the rest of this script.
+# DEVICE=CLOCK.SYS provides. Skipped if the host's 64-bit c4lc is not
+# built (tools/c4lc.sh: c4sc-host, or c4sp with C4LC64=interp); it is
+# not a prerequisite of the rest of this script.
 HAVE_RAYCAST=0
-if [ -x ./c4sp ]; then
-    ./c4sp -c 16000000 src/c4sp/lisp/c4lc.lisp -O -conforming -D RC_DOS=1 \
+. tools/c4lc.sh
+if [ -x $(lc_bin 64) ]; then
+    $(lc 64 16000000) -O -conforming -D RC_DOS=1 \
         src/tests/raycast.c $T/raycast.c4r > /dev/null && HAVE_RAYCAST=1
 fi
 

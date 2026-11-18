@@ -3,9 +3,10 @@
 A game can hand its heaviest loops to the host, in its own JavaScript: a wall's column, a floor's
 row, Quake's whole span lists, each one instruction however much it does. `libjs/accel.js` is the
 loader and the kit those modules use; the modules are the games' own, `games/duke3d/c4/accel.mjs`,
-`games/quake/c4/accel.mjs` and `games/rott/c4/accel.mjs`, and libjs knows no game. Duke Nukem 3D,
-Quake and Rise of the Triad use theirs when the machine has them and their menu says so, and run
-their own C everywhere else. The frames are the same either way, to the byte.
+`games/quake/c4/accel.mjs`, `games/rott/c4/accel.mjs` and `games/doom/c4/accel.mjs`, and libjs knows
+no game. Duke Nukem 3D, Quake, Rise of the Triad and Doom use theirs when the machine has them and
+their menu says so, and run their own C everywhere else. The frames are the same either way, to the
+byte.
 
 **In short** (2026-11-15, section 4):
 - In the page (400 MHz, the MMU on), Quake's demos average 26 to 28 fps where they averaged 12 to 14,
@@ -24,6 +25,11 @@ their own C everywhere else. The frames are the same either way, to the byte.
   instructions on average where they were 3.6 to 4.2 M, and the worst 2.6 to 2.9 M where it was
   11.5 M. 0.89 M of each is the timedemo's own checksum, which play does not do: a frame a player
   sees is a fifth or less of what it was. Its switch is Extended User Options' ACCELERATED.
+- Doom (2026-11-18, section 4.5): on node its three timedemos' median frames are 0.70 to 0.78 M
+  instructions where they were 3.76 to 3.94 M, a fifth, and the worst 1.7 to 1.8 M where it was 5.4
+  to 6.6 M. The walls', sprites' and floors' loops, the patches, the shadow, `FixedMul` and
+  `FixedDiv`, and the timedemo's own checksum of the frame (0.84 M of the before); without that
+  checksum, which play does not do, a median frame was 3.1 M. Its switch is Options' ACCELERATED.
 - C4IX has its own (section 7, 2026-11-17): libarc's CRC-32 and inflater, which unpack the root
   archive at boot. A boot to the desktop was 1,592 M instructions, 85% of them those two loops; it is
   now 202 M, and the page's boot 24 s to 10 s. A machine option of its own (`&osaccel=0`,
@@ -147,6 +153,23 @@ through the 64-bit library's division); the functions are there for every other 
 the game has asked. The translucent column and posts work out every pixel and make sure of the pages
 they write before writing, as Duke's translucent loops do.
 
+**Doom** (`games/doom/c4/accel.mjs`, `c4/c4accel.h`; `DA_*`):
+
+| op | macro | Doom's C | what it is |
+|---|---|---|---|
+| 0 | `doom_col` | `R_DrawColumn`, `R_DrawColumnLow`, `R_DrawTranslatedColumn`, `R_DrawTranslatedColumnLow` (r_draw.c) | a wall's or sprite's column, `*dest = colormap[src[(frac >> 16) & 127]]`, through the player's translation table where there is one, and a second column beside it in low detail |
+| 1 | `doom_fuzz` | `R_DrawFuzzColumn`, `R_DrawFuzzColumnLow` | the shadow (spectres, the invisible), each pixel from the row above or below through colormap 6, leaving `fuzzpos` |
+| 2 | `doom_span` | `R_DrawSpan`, `R_DrawSpanLow` | a floor's or ceiling's row out of its 64x64 flat |
+| 3 | `doom_sum` | `dg_frame` (dg-sum.c) | a timedemo's checksum of the frame and its palette |
+| 4, 5 | `doom_fixmul`, `doom_fixdiv` | `FixedMul`, `FixedDiv` (m_fixed.c) | `((int64_t)a * b) >> 16`; `((int64_t)a << 16) / b`, or `INT_MAX` or `INT_MIN` where it would not fit, as the C has it |
+| 6 | `doom_patch` | `V_DrawPatch`, `V_DrawPatchFlipped` (v_video.c) | a patch's columns: the status bar, its face and numbers, the menus, the intermission |
+
+`m_fixed.h` makes `FixedMul` a macro that chooses the operation where it stands, as ROTT's
+`watcom.h` does (some 2,000 calls a frame, about fifty instructions each with the call); `FixedDiv`
+asks inside the function, its long division being the cost. The shadow reads the screen a row above
+or below, which it may have just written: it works out every pixel first, as the loop would, and
+makes sure of the pages it writes before writing, as the translucent loops do.
+
 ## 3. In the games
 
 **Duke Nukem 3D**: Options, Video Setup, **ACCELERATED** (on, off; "OFF" where the machine has none,
@@ -175,8 +198,13 @@ config, on unless that says 0. `rott_accel` (rt_scale.c) is the first of ROTT's 
 columns, posts, rows, sky, turned screen, tiled regions and watcom.h's macros ask it
 (`ROTT_ACCEL()`).
 
-Doom, Wolf3D and Tyrian keep their loops: they run at a good speed in the page now, with idle to
-spare.
+**Doom**: Options, **ACCELERATED** (on, off, or "NOT ON THIS MACHINE"), a ninth line in Doom's small
+font, since the WAD has no picture for it; the Options menu sits 8 pixels higher to keep it above the
+status bar. It is `c4_accelerated` in the config, on unless that says 0. `doom_accel` (r_draw.c) is
+the first of Doom's numbers, or 0: the drawing loops, the patches, the checksum and m_fixed.c's
+helpers ask it (`DOOM_ACCEL()`).
+
+Wolf3D, Tyrian and Super Blit Kart keep their loops.
 
 ## 4. What they do
 
@@ -201,10 +229,15 @@ Duke's demo1 without its death (frames 1949 to 2782).
 | ROTT demo 2 | 3.53 / 5.08 / 11.52 | 1.29 / 1.57 / 2.58 |
 | ROTT demo 3 | 3.72 / 5.44 / 11.52 | 1.36 / 1.74 / 2.90 |
 | ROTT demo 4 | 4.17 / 5.44 / 11.52 | 1.55 / 1.77 / 2.79 |
+| Doom demo1 | 3.94 / 4.82 / 5.90 | 0.77 / 1.41 / 1.69 |
+| Doom demo2 | 3.79 / 4.75 / 5.44 | 0.70 / 1.36 / 1.84 |
+| Doom demo3 | 3.76 / 5.24 / 6.63 | 0.78 / 1.50 / 1.76 |
 
 ROTT's before is `c4ix_and_toppings` 38e0fe1 (2026-11-17), its runs `rott-demo1` to `rott-demo3`
 and `rott`, and each of its figures has the timedemo's own checksum of the frame in it, 0.89 M,
-which play does not do (section 4.4).
+which play does not do (section 4.4). Doom's before is `c4ix_and_toppings` 5325e8d (2026-11-18), its
+runs `doom-demo1` to `doom-demo3`, and its before has the timedemo's checksum in it too, 0.84 M,
+which its after does in one instruction (section 4.5).
 
 ### 4.2 The page: frame rates
 
@@ -282,14 +315,41 @@ worst:
 - The same frames: the four checksums with the accelerators and without, with a sound card and
   without, and demo 4's inside C4IX under the MMU.
 
+### 4.5 Doom
+
+The shareware's three timedemos on node's bare machine, M instructions a frame, mean / median / 99th
+percentile / worst:
+
+| demo | frames, checksum | before | after |
+|---|---|---|---|
+| 1 | 5,065, 2be7597c | 3.89 / 3.94 / 4.82 / 5.90 | 0.79 / 0.77 / 1.41 / 1.69 |
+| 2 | 3,875, 1abaeabe | 3.77 / 3.79 / 4.75 / 5.44 | 0.74 / 0.70 / 1.36 / 1.84 |
+| 3 | 2,173, 01914fe7 | 3.84 / 3.76 / 5.24 / 6.63 | 0.81 / 0.78 / 1.50 / 1.76 |
+
+- Before, a median frame was the walls' and sprites' columns (`R_DrawColumn`, 28%), the floors' and
+  ceilings' rows (`R_DrawSpan`, 28%), the timedemo's checksum (`dg_frame`, 0.84 M, 21%), then
+  `R_RenderSegLoop`, `FixedMul` (2,000 calls), `FixedDiv`'s long division, the patches and the
+  shadow. The heaviest 1% grew in `R_DrawSpan` (a third of their growth) and `R_DrawColumn`.
+- After, a median frame is the wall loop's own work (`R_RenderSegLoop`, a quarter of it: each
+  column's clipping, its texture column and its planes' marks), `R_DrawPlanes`, `R_MapPlane` and
+  `R_MakeSpans`, the sprites' set-up (`R_DrawMaskedColumn`, `R_DrawSprite`) and `R_GetColumn`. The
+  heaviest frames grow in the same, with more walls and sprites on the screen.
+- Without the accelerators (`--no-accel`) a frame is what it was before, within 0.03 M: the
+  macro's test of `doom_accel`.
+- The same frames: the three checksums with the accelerators, without, and before.
+
 ## 5. Tests
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
   palettes, steps and shifts, comparing every byte written and what is left behind: Duke's 4,200
   cases, Quake's surface blocks, sprite runs and light maps 1,000, ROTT's 6,900 (its posts with
-  solid and translucent runs, and the fixed-point helpers against `__int64`'s). test-duke3d,
-  test-quake and test-rott build them (in `.duke3d/test/`, `.quake/test/`, `.rott/test/`) and run
-  them first.
+  solid and translucent runs, and the fixed-point helpers against `__int64`'s), Doom's 14,500 (its
+  columns, shadows, rows, patches and checksums, and `FixedMul` and `FixedDiv` against the port's
+  32-bit pieces and `int64_t`'s). test-duke3d, test-quake, test-rott and test-doom build them (in
+  `.duke3d/test/`, `.quake/test/`, `.rott/test/`, `.doom/test/`) and run them first.
+- test-doom holds Doom's demo3 to gcc's build on the bare machine, under C4DOS and inside C4IX, with
+  the accelerators where the machine has them; its General MIDI run goes without (`--no-accel`), as
+  Duke's and ROTT's do.
 - test-rott holds ROTT's demo 4 to gcc's build on the bare machine, under C4DOS and inside C4IX,
   and with a sound card, with the accelerators where the machine has them (C4DOS's has none).
 - test-duke3d and test-quake hold the games' c4 frames to gcc's host build, frame by frame, on the

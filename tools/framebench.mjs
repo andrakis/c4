@@ -92,6 +92,11 @@ const RUNS = {
   ...Object.fromEntries([1, 2, 3].map(n => [`rott-demo${n}`, {
     image: 'rott.c4r', frame: 'rott_frame', mem: 64, skip: 2, args: ['--timedemo', `${n}`, 'NOSOUND'],
     page: `rott --timedemo ${n} NOSOUND --show`, about: `Rise of the Triad's --timedemo ${n} (shareware)` }])),
+  // Tyrian's data is the person's own (games/tyrian/data/README.md), in
+  // the games disk's tyrian/data once build-images.sh has had it
+  ...Object.fromEntries([1, 2, 3, 4, 5].map(n => [`tyrian-demo${n}`, {
+    image: 'tyrian.c4r', frame: 'tyr_frame', mem: 64, args: ['--timedemo', `${n}`, '-s', '-x', '-j'],
+    page: `tyrian --timedemo ${n} -s -x -j --show`, about: `Tyrian 2.1's demo ${n} (OpenTyrian's --timedemo)` }])),
 };
 // the games played for --lag: started at the shell, then a turn key held
 const LAG = {
@@ -188,7 +193,11 @@ function hookC4m(src) {
 // the disk: the games disk, with --data's files over it, any case
 class Disk extends Map {
   constructor(dirs) { super(); this.dirs = dirs; this.idx = new Map();
-    for (const d of dirs.slice().reverse()) for (const n of readdirSync(d)) if (statSync(join(d, n)).isFile()) this.idx.set(n.toLowerCase(), join(d, n)); }
+    // the files of each, and of its directories by their paths (Tyrian's
+    // tyrian/data/...), as cli.js -d gives them
+    const walk = (d, pre) => { for (const n of readdirSync(d)) { const p = join(d, n), s = statSync(p);
+      if (s.isFile()) this.idx.set((pre + n).toLowerCase(), p); else if (s.isDirectory()) walk(p, pre + n + '/'); } };
+    for (const d of dirs.slice().reverse()) walk(d, ''); }
   path(n) { return this.idx.get(n.replace(/^\.?\//, '').toLowerCase()); }
   has(n) { return super.has(n) || !!this.path(n); }
   get(n) { if (super.has(n)) return super.get(n); const p = this.path(n); if (!p) return undefined;

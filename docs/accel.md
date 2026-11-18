@@ -3,9 +3,10 @@
 A game can hand its heaviest loops to the host, in its own JavaScript: a wall's column, a floor's
 row, Quake's whole span lists, each one instruction however much it does. `libjs/accel.js` is the
 loader and the kit those modules use; the modules are the games' own, `games/duke3d/c4/accel.mjs`,
-`games/quake/c4/accel.mjs`, `games/rott/c4/accel.mjs` and `games/doom/c4/accel.mjs`, and libjs knows
-no game. Duke Nukem 3D, Quake, Rise of the Triad and Doom use theirs when the machine has them and
-their menu says so, and run their own C everywhere else. The frames are the same either way, to the
+`games/quake/c4/accel.mjs`, `games/rott/c4/accel.mjs`, `games/doom/c4/accel.mjs` and
+`games/wolf3d/c4/accel.mjs`, and libjs knows no game. Duke Nukem 3D, Quake, Rise of the Triad, Doom
+and Wolfenstein 3D use theirs when the machine has them and their menu says so, and run their own C
+everywhere else. The frames are the same either way, to the
 byte.
 
 **In short** (2026-11-15, section 4):
@@ -30,6 +31,10 @@ byte.
   to 6.6 M. The walls', sprites' and floors' loops, the patches, the shadow, `FixedMul` and
   `FixedDiv`, and the timedemo's own checksum of the frame (0.84 M of the before); without that
   checksum, which play does not do, a median frame was 3.1 M. Its switch is Options' ACCELERATED.
+- Wolfenstein 3D (2026-11-18, section 4.6): its four timedemos' median frame is 0.35 M instructions
+  where it was 2.10 M, a sixth, and the worst 1.6 M where it was 4.6 M: the walls' posts, the
+  sprites' columns, the status bar's blits, `FixedMul` and the timedemo's checksum (0.42 M of the
+  before). What is left is the ray caster. Its switch is the Control menu's Accelerated.
 - C4IX has its own (section 7, 2026-11-17): libarc's CRC-32 and inflater, which unpack the root
   archive at boot. A boot to the desktop was 1,592 M instructions, 85% of them those two loops; it is
   now 202 M, and the page's boot 24 s to 10 s. A machine option of its own (`&osaccel=0`,
@@ -170,6 +175,19 @@ asks inside the function, its long division being the cost. The shadow reads the
 or below, which it may have just written: it works out every pixel first, as the loop would, and
 makes sure of the pages it writes before writing, as the translucent loops do.
 
+**Wolfenstein 3D** (`games/wolf3d/c4/accel.mjs`, `c4/c4accel.h`; `WA_*`):
+
+| op | macro | Wolf3D's C | what it is |
+|---|---|---|---|
+| 0 | `wolf_post` | `ScalePost` (wl_draw.c) | a wall's post, from the bottom up, the rows below the view stepped over first |
+| 1 | `wolf_line` | `ScaleLine` (wl_scale.c) | a sprite's column, every segment of its compiled list |
+| 2 | `wolf_sum` | `c4sdl_present` (c4sdl.c) | a timedemo's checksum of the frame and its colours |
+| 3 | `wolf_fixmul` | `FixedMul` (wl_utils.c) | `((int64_t)a * b + 0x8000) >> 16` |
+| 4 | `wolf_blit` | `VL_MemToScreenScaledCoord`, `VL_MemToScreenScaledCoord2` (id_vl.c) | a block's part drawn to the screen, each pixel a square of the scale: the status bar's face and numbers |
+
+`wl_utils.h` makes `FixedMul` a macro choosing the operation where it stands, as Doom's and ROTT's do.
+Every one of them only writes, so a run again after a fault is the same run.
+
 ## 3. In the games
 
 **Duke Nukem 3D**: Options, Video Setup, **ACCELERATED** (on, off; "OFF" where the machine has none,
@@ -204,7 +222,12 @@ status bar. It is `c4_accelerated` in the config, on unless that says 0. `doom_a
 the first of Doom's numbers, or 0: the drawing loops, the patches, the checksum and m_fixed.c's
 helpers ask it (`DOOM_ACCEL()`).
 
-Wolf3D, Tyrian and Super Blit Kart keep their loops.
+**Wolfenstein 3D**: Options, Control, **Accelerated**, a fifth line with its box ticked or not,
+greyed out where the machine has none. The config keeps it after what the original kept, so a config
+from before it reads as on. `wolf_accel` (wl_draw.c) is the first of the game's numbers, or 0: the
+scalers, the blits, the checksum and `wl_utils.h`'s macro ask it (`WOLF_ACCEL()`).
+
+Tyrian and Super Blit Kart keep their loops.
 
 ## 4. What they do
 
@@ -232,12 +255,16 @@ Duke's demo1 without its death (frames 1949 to 2782).
 | Doom demo1 | 3.94 / 4.82 / 5.90 | 0.77 / 1.41 / 1.69 |
 | Doom demo2 | 3.79 / 4.75 / 5.44 | 0.70 / 1.36 / 1.84 |
 | Doom demo3 | 3.76 / 5.24 / 6.63 | 0.78 / 1.50 / 1.76 |
+| Wolf3D demo 0 | 2.10 / 2.53 / 4.40 | 0.33 / 0.54 / 1.39 |
+| Wolf3D, its four demos | 2.10 / 2.67 / 4.62 | 0.35 / 0.55 / 1.62 |
 
 ROTT's before is `c4ix_and_toppings` 38e0fe1 (2026-11-17), its runs `rott-demo1` to `rott-demo3`
 and `rott`, and each of its figures has the timedemo's own checksum of the frame in it, 0.89 M,
 which play does not do (section 4.4). Doom's before is `c4ix_and_toppings` 5325e8d (2026-11-18), its
 runs `doom-demo1` to `doom-demo3`, and its before has the timedemo's checksum in it too, 0.84 M,
-which its after does in one instruction (section 4.5).
+which its after does in one instruction (section 4.5). Wolf3D's before is `c4ix_and_toppings`
+f98aa85 (demo 0) and the game's C as `--no-accel` runs it (the four demos), its runs `wolf3d` and
+`wolf3d-4`, with its checksum, 0.42 M before (section 4.6).
 
 ### 4.2 The page: frame rates
 
@@ -338,6 +365,28 @@ percentile / worst:
   macro's test of `doom_accel`.
 - The same frames: the three checksums with the accelerators, without, and before.
 
+### 4.6 Wolfenstein 3D
+
+The shareware's four demos (`--timedemo 4`) on node's bare machine, M instructions a frame, mean /
+median / 99th percentile / worst:
+
+| demos | frames, checksums | before | after |
+|---|---|---|---|
+| demo 0 | 1,214, d7358845 | 2.04 / 2.10 / 2.53 / 4.40 | 0.33 / 0.33 / 0.54 / 1.39 |
+| all four | 3,988; d7358845, 1867c52a, 1c7166d3, 73562491 | 2.03 / 2.10 / 2.67 / 4.62 | 0.34 / 0.35 / 0.55 / 1.62 |
+
+- Before, a median frame was the walls' posts (`ScalePost`, 39%), the timedemo's checksum
+  (`c4sdl_present`, 0.42 M, 20%), the sprites' columns (`ScaleLine` and its `ReadShort`s, 21%), the
+  ray caster (`WallRefresh`, 11%) and `FixedMul`; the heaviest 1% grew in `ScalePost` (walls close
+  to, whose rows below the view the loop steps over one by one), `ScaleLine` and the status bar's
+  scaled blits.
+- After, a median frame is the ray caster, `WallRefresh` with `CalcHeight` and the `Hit*Wall`
+  functions, 0.21 M of 0.33 M; the heaviest frames are a level's loading and the ray caster in
+  open rooms. The ray caster is the game's whole map walk, its state shared with the C that draws
+  each hit, and is left as C.
+- Without the accelerators (`--no-accel`) a frame is what it was before, within 0.02 M.
+- The same frames: the four checksums with the accelerators and without, and demo 0's before.
+
 ## 5. Tests
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
@@ -345,8 +394,10 @@ percentile / worst:
   cases, Quake's surface blocks, sprite runs and light maps 1,000, ROTT's 6,900 (its posts with
   solid and translucent runs, and the fixed-point helpers against `__int64`'s), Doom's 14,500 (its
   columns, shadows, rows, patches and checksums, and `FixedMul` and `FixedDiv` against the port's
-  32-bit pieces and `int64_t`'s). test-duke3d, test-quake, test-rott and test-doom build them (in
-  `.duke3d/test/`, `.quake/test/`, `.rott/test/`, `.doom/test/`) and run them first.
+  32-bit pieces and `int64_t`'s), Wolf3D's 11,460 (posts of every height, sprites' segment lists,
+  blits at each scale, checksums, `FixedMul`). test-duke3d, test-quake, test-rott, test-doom and
+  test-wolf3d build them (in `.duke3d/test/`, `.quake/test/`, `.rott/test/`, `.doom/test/`,
+  `.wolf3d/test/`) and run them first.
 - test-doom holds Doom's demo3 to gcc's build on the bare machine, under C4DOS and inside C4IX, with
   the accelerators where the machine has them; its General MIDI run goes without (`--no-accel`), as
   Duke's and ROTT's do.

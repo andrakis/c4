@@ -114,7 +114,7 @@ were folders still play:
 | `/home/duke3d` | `duke3d -home`: `DUKE3D.GRP` (games/duke3d/README.c4.md) | Duke Nukem 3D (your files) | `duke3d-full` |
 | `/home/quake` | `quake -home`: `pak0.pak` and `pak1.pak`, the registered game (games/quake/README.c4.md) | Quake (your files) | `quake-full` (256 MB) |
 | `/home/doom` | `doom -home`: `doom.wad`, `doom2.wad`, `plutonia.wad`, `tnt.wad` (games/doom/README.md) | Doom (your files) > each IWAD | `doom-full`, or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` (128 MB) |
-| `/home/rott` | `rottreg`: `DARKWAR.WAD`, `.RTL`, `.RTC` (games/rott/README.md) | Rise of the Triad (your files) | `rottreg` |
+| `/home/rott` | `rottreg`: `DARKWAR.WAD`, `.RTL`, `.RTC`, and `REMOTE1.RTS` if you have it (games/rott/README.md) | Rise of the Triad (your files) | `rottreg` |
 
 On the bare machine and under C4DOS a game looks in `FOLDER/` at drive
 0's root, then at the root itself; not under `/home`, which the disk would

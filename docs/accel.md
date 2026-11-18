@@ -134,8 +134,8 @@ MMU a page that is not there faults then, before anything is written.
 | 0 | `rott_col` | `R_DrawColumn`, `R_DrawClippedColumn`, `R_DrawWallColumn` (rt_scale.c) | a column, `*dest = shade[src[frac >> sh]]`, the shift signed or not as each has it |
 | 1 | `rott_trans` | `R_TransColumn` | a translucent column, `*dest = shade[*dest]` |
 | 2 | `rott_row` | `DrawRow` (rt_floor.c) | a floor's or ceiling's row out of its 128x128 tile |
-| 3 | `rott_rotrow` | `DrawRotRow`, `DrawMaskedRotRow` (rt_draw.c) | the turned screen's row at 320 across (the player's death, a level's start), out of the 256x512 image; the masked one leaves 255 out |
-| 4 | `rott_sky` | `DrawSkyPost` | the sky's column at 320 across |
+| 3 | `rott_rotrow` | `DrawRotRow`, `DrawMaskedRotRow` (rt_draw.c) | the turned screen's row (the player's death, a level's start), out of its image, at 320, 640 or 800 across, each size's bounds and shift as arguments; the masked one leaves 255 out |
+| 4 | `rott_sky` | `DrawSkyPost` | the sky's column; above 320 across a column taller than the sky's 400 goes back over it, as the port's does |
 | 5, 6 | `rott_fixmul`, `rott_fixmulshift` | `FixedMul`, `FixedMulShift` (watcom.c) | `(int32_t)(((int64_t)a * b + 0x8000) >> 16)`; `(int32_t)((uint64_t)((int64_t)a * b) >> s)` |
 | 7, 8 | `rott_fixdiv2`, `rott_fixscale` | `FixedDiv2`, `FixedScale` | `(int32_t)((int64_t)a * 65536 / b)`; `(int32_t)((int64_t)a * b / c)`, each through c4's `__int64` library in the C |
 | 9 | `rott_tile` | `DrawTiledRegion` (rt_vid.c) | a region tiled with a pic's four planes: the border behind a small view, a message's line |
@@ -174,6 +174,12 @@ off; the item is greyed out where the machine has none). It is `BrowserAccelerat
 config, on unless that says 0. `rott_accel` (rt_scale.c) is the first of ROTT's numbers, or 0: the
 columns, posts, rows, sky, turned screen, tiled regions and watcom.h's macros ask it
 (`ROTT_ACCEL()`).
+
+ROTT's Extended User Options also has **RESOLUTION**: 320x200 (the original's, and what the
+timedemos and tests are made at), 640x480 and 800x600, the port's own sizes, taking at once and kept
+in the config (`ScreenWidth`, `ScreenHeight`). The display becomes the frame's size above 640x480,
+as Quake's does. Demo 4 at 640x480 and 800x600 gives the same frames with the accelerators, without
+them and in gcc's build.
 
 Doom, Wolf3D and Tyrian keep their loops: they run at a good speed in the page now, with idle to
 spare.
@@ -286,7 +292,7 @@ worst:
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
   palettes, steps and shifts, comparing every byte written and what is left behind: Duke's 4,200
-  cases, Quake's surface blocks, sprite runs and light maps 1,000, ROTT's 6,900 (its posts with
+  cases, Quake's surface blocks, sprite runs and light maps 1,000, ROTT's 7,200 (its posts with
   solid and translucent runs, and the fixed-point helpers against `__int64`'s). test-duke3d,
   test-quake and test-rott build them (in `.duke3d/test/`, `.quake/test/`, `.rott/test/`) and run
   them first.

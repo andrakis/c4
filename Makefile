@@ -1287,6 +1287,16 @@ test-c4sc32: c4sc-host32 c4sp32 c4cc32
 	@echo "  opt ok: plain and -mfuse, with and without a source map"
 	@rm -f .c4sc32_in.c4r .c4sc32_g.c4r
 	@rm -f .c4sc32_i.c4r .c4sc32_c.c4r .c4sc32_i.c4o .c4sc32_c.c4o .c4sc32_i.txt .c4sc32_c.txt
+	@# an error stops the compile, with c4lc.lisp's message (scrt.h's
+	@# sc_error: compiled code cannot unwind, so error ends the program)
+	@echo 'int x;' > .c4sc32_err.c; echo foo >> .c4sc32_err.c
+	@i=`./c4sp32 -c 400000 $(SRCS)/c4sp/lisp/c4lc.lisp .c4sc32_err.c .c4sc32_e.c4r 2>&1 | sed -n 's/^c4sp: error: //p'`; \
+	 c=`timeout 60 ./c4sc-host32 compile .c4sc32_err.c .c4sc32_e.c4r 2>&1`; r=$$?; \
+	 c=`echo "$$c" | sed -n 's/^c4sc-host: //p'`; \
+	 [ -n "$$i" ] && [ "$$i" = "$$c" ] && [ $$r = 1 ] \
+	   || { echo "test-c4sc32: a parse error: interpreted '$$i', compiled '$$c' (exit $$r)"; exit 1; }; \
+	 echo "  error ok: $$c"
+	@rm -f .c4sc32_err.c .c4sc32_e.c4r
 	@echo "test-c4sc32: OK -- c4sc-host32 writes c4lc.lisp's bytes at 32 bits"
 PHONY += test-c4sc32
 

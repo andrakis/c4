@@ -121,6 +121,7 @@ c4or1k-native
 # test-c4sc32's -minline-why reports
 /.c4sc32_i.txt
 /.c4sc32_c.txt
+/.c4sc32_err.c
 /src/c4sc/c4lex_gen.c
 /src/c4sc/c4pp_gen.c
 /src/c4sc/c4parse_gen.c

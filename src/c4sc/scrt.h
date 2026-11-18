@@ -184,7 +184,20 @@ int *sc_parse (int *s) {
 // error takes only its first argument, whatever the arity at the call
 // site, so the list is built for the same reason print's is: it is cold
 // and it stops the shim inventing a different truncation rule.
-int *sc_error (int *args) { return builtin_call(B_ERROR, args, 0); }
+//
+// It ends the program, with body.h's message. In c4sp an error unwinds
+// the evaluator, so c4lc's `error` never returns. Compiled code cannot
+// unwind, and c4sp_error only sets a flag, so `error` used to return
+// and the caller ran on. A parse error at the end of the tokens then
+// never stopped: the compiler looped and grew without bound.
+// srcmap-invariant.sh found it on 2026-11-18, compiling c4lc_pp.c
+// without -P. make test-c4sc32 checks the message.
+int *sc_error (int *args) {
+	builtin_call(B_ERROR, args, 0);
+	printf("c4sc-host: %s\n", c4sp_err_msg);
+	exit(1);
+	return 0;
+}
 int *sc_file_path (int *p) { return builtin_call(B_FILE_PATH, cons(p, 0), 0); }
 
 // print is variadic, and cold -- twice in all of c4opt -- so it is the

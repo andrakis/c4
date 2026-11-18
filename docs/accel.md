@@ -4,8 +4,9 @@ A game can hand its heaviest loops to the host, in its own JavaScript: a wall's 
 row, Quake's whole span lists, each one instruction however much it does. `libjs/accel.js` is the
 loader and the kit those modules use; the modules are the games' own, `games/duke3d/c4/accel.mjs`,
 `games/quake/c4/accel.mjs`, `games/rott/c4/accel.mjs`, `games/doom/c4/accel.mjs`,
-`games/wolf3d/c4/accel.mjs` and `games/tyrian/c4/accel.mjs`, and libjs knows no game. Duke Nukem 3D,
-Quake, Rise of the Triad, Doom, Wolfenstein 3D and Tyrian use theirs when the machine has them and
+`games/wolf3d/c4/accel.mjs`, `games/tyrian/c4/accel.mjs` and `games/sbk/c4/accel.mjs`, and libjs
+knows no game. Duke Nukem 3D, Quake, Rise of the Triad, Doom, Wolfenstein 3D, Tyrian and Super Blit
+Kart use theirs when the machine has them and
 their menu says so, and run their own C everywhere else. The frames are the same either way, to the
 byte.
 
@@ -41,6 +42,11 @@ byte.
   apiece, 2.7 M of demo 1's 4.1 M), the screen's filters and the timedemo's checksum (0.88 M of the
   before). What is left is the game's own logic, and a level's loading. Its switch is Setup >
   Graphics' Accelerated.
+- Super Blit Kart (2026-11-18, section 4.8): its demo's median frame is 0.45 M instructions where it
+  was 4.50 M, a tenth, and its heaviest 1% 1.1 M where they were 7.3 M: mode 7's scanlines, the
+  blits and their blends, the text and the demo's own frame hash (1.38 M of the before). What is
+  left is the minimap's build and the floats of each scanline's set-up. Its switch is the main
+  menu's Accelerated.
 - C4IX has its own (section 7, 2026-11-17): libarc's CRC-32 and inflater, which unpack the root
   archive at boot. A boot to the desktop was 1,592 M instructions, 85% of them those two loops; it is
   now 202 M, and the page's boot 24 s to 10 s. A machine option of its own (`&osaccel=0`,
@@ -208,6 +214,22 @@ Every one of them only writes, so a run again after a fault is the same run.
 The kinds that read the screen (the blends, `_dark`, `_darken`, the filters) work out every pixel
 first and make sure of the pages they write before writing, as Duke's translucent loops do.
 
+**Super Blit Kart** (`games/sbk/c4/accel.mjs`, `c4/c4accel.h`; `SA_*`):
+
+| op | macro | the rewrite's C | what it is |
+|---|---|---|---|
+| 0 | `sbk_hash` | `frame_hash` (game.c) | `-demo`'s FNV-1a of the frame |
+| 1, 2, 3 | `sbk_pixels`, `sbk_runs`, `sbk_edge` | `span_pixels`, `span_runs`, `span_edge` (track.c) | a mode 7 scanline over the plain background: wholly on the map, a texel's run at a time, or partly off it |
+| 4 | `sbk_pen` | `pen_span` (blit.c) | a span of one pen, filled or blended |
+| 5 | `sbk_row` | `row_blit` | a sprite's row through its palette, blended by its alphas |
+| 6 | `sbk_tint` | `scr_blit_tinted` | the minimap, its pens at one alpha |
+| 7 | `sbk_any` | `span_any` (track.c) | a scanline a fallen kart shows through: TileMap's `texture_span` as it is |
+| 8, 9 | `sbk_stretch1`, `sbk_stretchw` | `scr_stretch` | a scaled sprite, no wider than its source, or wider (its stepping worked out once, a source row's visible runs once for every row that shows it) |
+| 10 | `sbk_text` | `scr_text` | a string, each glyph down its columns, plain or blended |
+
+The frame is 32-bit (`fb`), so they read and write words. The ones that blend read the screen: they
+work out every pixel first and make sure of the pages they write before writing.
+
 ## 3. In the games
 
 **Duke Nukem 3D**: Options, Video Setup, **ACCELERATED** (on, off; "OFF" where the machine has none,
@@ -258,7 +280,11 @@ scalers, the blits, the checksum and `wl_utils.h`'s macro ask it (`WOLF_ACCEL()`
 (tyrian-sum.c) is the first of the game's numbers, or 0: the blits, the rows, the filters and the
 checksum ask it (`TYR_ACCEL()`).
 
-Super Blit Kart keeps its loops.
+**Super Blit Kart**: the main menu's fourth line, **Accelerated: on** (off, or none where the
+machine has none), A to turn it, kept in a save of its own (`S61440.SAV`). `-demo` leaves the line
+out: its recorded buttons and frames are the menu's three lines, as gcc's build draws them.
+`sbk_accel` (game.c) is the first of the game's numbers, or 0: the spans, the blits, the text and the
+hash ask it (`SBK_ACCEL()`).
 
 ## 4. What they do
 
@@ -293,6 +319,7 @@ Duke's demo1 without its death (frames 1949 to 2782).
 | Tyrian demo 3 | 1.83 / 2.09 / 18.06 | 0.12 / 0.18 / 17.16 |
 | Tyrian demo 4 | 1.72 / 2.13 / 18.64 | 0.12 / 0.34 / 17.74 |
 | Tyrian demo 5 | 2.71 / 5.90 / 18.82 | 0.09 / 0.17 / 17.92 |
+| Super Blit Kart, -demo | 4.50 / 7.25 / 31.74 | 0.45 / 1.11 / 28.85 |
 
 ROTT's before is `c4ix_and_toppings` 38e0fe1 (2026-11-17), its runs `rott-demo1` to `rott-demo3`
 and `rott`, and each of its figures has the timedemo's own checksum of the frame in it, 0.89 M,
@@ -302,7 +329,9 @@ which its after does in one instruction (section 4.5). Wolf3D's before is `c4ix_
 f98aa85 (demo 0) and the game's C as `--no-accel` runs it (the four demos), its runs `wolf3d` and
 `wolf3d-4`, with its checksum, 0.42 M before (section 4.6). Tyrian's before is `c4ix_and_toppings`
 4e43631, its runs `tyrian-demo1` to `tyrian-demo5` (the person's own data), with its checksum,
-0.88 M before; its worst frames are a level's loading, which is not drawing (section 4.7).
+0.88 M before; its worst frames are a level's loading, which is not drawing (section 4.7). Super
+Blit Kart's before is `c4ix_and_toppings` c16618c, its run `sbk`, with the demo's frame hash, 1.38 M
+before; its worst frame is a track's first, which makes the map's texture (section 4.8).
 
 ### 4.2 The page: frame rates
 
@@ -449,6 +478,26 @@ instructions a frame, mean / median / 99th percentile / worst:
 - Without the accelerators (`--no-accel`) a frame is what it was before, within 0.01 M.
 - The same frames: the five checksums with the accelerators and without.
 
+### 4.8 Super Blit Kart
+
+Its `-demo` (c4/demo.c: a recorded race on each track, the menus between), 8,158 frames, on node's
+bare machine, M instructions a frame, mean / median / 99th percentile / worst:
+
+| | before | after |
+|---|---|---|
+| `sbk` | 4.58 / 4.50 / 7.25 / 31.74 | 0.48 / 0.45 / 1.11 / 28.85 |
+
+- Before, a median frame was `-demo`'s frame hash (1.38 M, 31%), mode 7 (`span_runs` 27%,
+  `span_pixels` 9%, `span_any` where a kart has fallen), the minimap (`scr_blit_tinted`, 9%), the
+  scaled karts (`scr_stretch`) and the text; the heaviest 1% grew in `pen_span` (the fades), the
+  slow scanlines and the karts close to.
+- After, a median frame is the minimap's build (`mm_build`, 28%), mode 7's set-up of each scanline
+  in floats (`track_render` and c4's float helpers), and the karts' updates; the heaviest frames are a
+  track's start (`track_world`, the map made into one texture, once) and races of eight.
+- Without the accelerators (`--no-accel`) a frame is what it was before, within 0.04 M.
+- The same frames: all 8,158 of the demo's hashes with the accelerators and without; test-sbk holds
+  them to gcc's build on the bare machine, under C4DOS and inside C4IX.
+
 ## 5. Tests
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
@@ -459,9 +508,10 @@ instructions a frame, mean / median / 99th percentile / worst:
   32-bit pieces and `int64_t`'s), Wolf3D's 11,460 (posts of every height, sprites' segment lists,
   blits at each scale, checksums, `FixedMul`), Tyrian's 4,150 (sprites of both kinds in every
   kind of pixel, background rows and the screen's filters against OpenTyrian's own SWAR code,
-  checksums). test-duke3d, test-quake, test-rott, test-doom, test-wolf3d and test-tyrian build them
-  (in `.duke3d/test/`, `.quake/test/`, `.rott/test/`, `.doom/test/`, `.wolf3d/test/`,
-  `.tyrian/test/`) and run them first.
+  checksums), Super Blit Kart's 5,097 (mode 7's spans on and off the map, blends at every alpha,
+  scaled sprites both ways, text, the frame hash). test-duke3d, test-quake, test-rott, test-doom,
+  test-wolf3d, test-tyrian and test-sbk build them (in `.duke3d/test/`, `.quake/test/`,
+  `.rott/test/`, `.doom/test/`, `.wolf3d/test/`, `.tyrian/test/`, `.sbk/test/`) and run them first.
 - test-doom holds Doom's demo3 to gcc's build on the bare machine, under C4DOS and inside C4IX, with
   the accelerators where the machine has them; its General MIDI run goes without (`--no-accel`), as
   Duke's and ROTT's do.

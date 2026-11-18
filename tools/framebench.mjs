@@ -97,6 +97,10 @@ const RUNS = {
   ...Object.fromEntries([1, 2, 3, 4, 5].map(n => [`tyrian-demo${n}`, {
     image: 'tyrian.c4r', frame: 'tyr_frame', mem: 64, args: ['--timedemo', `${n}`, '-s', '-x', '-j'],
     page: `tyrian --timedemo ${n} -s -x -j --show`, about: `Tyrian 2.1's demo ${n} (OpenTyrian's --timedemo)` }])),
+  // Super Blit Kart's -demo: its recorded race (c4/demo.c), each frame
+  // hashed as it is drawn; the art is fetched (games/sbk/data/README.md)
+  'sbk': { image: 'sbk.c4r', frame: 'frame_hash', mem: 64, args: ['-demo'],
+           page: 'sbk -demo', about: "Super Blit Kart's -demo, its recorded race" },
 };
 // the games played for --lag: started at the shell, then a turn key held
 const LAG = {

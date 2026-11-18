@@ -30,7 +30,7 @@ export const FOLDERS = [
   ['duke3d', '/home/duke3d', 'Duke Nukem 3D: duke3d -home plays DUKE3D.GRP'],
   ['quake', '/home/quake', 'Quake: quake -home plays pak0.pak and pak1.pak'],
   ['doom', '/home/doom', 'Doom: doom -home plays doom.wad, doom2.wad, plutonia.wad, tnt.wad'],
-  ['rott', '/home/rott', 'Rise of the Triad: rottreg plays the registered DARKWAR.WAD, .RTL and .RTC'],
+  ['rott', '/home/rott', 'Rise of the Triad: rottreg plays the registered DARKWAR.WAD, .RTL and .RTC (and REMOTE1.RTS, if you have it: else the shareware\'s)'],
 ];
 
 // An upload's name: its folder's, if it has one, and the file's, lower case

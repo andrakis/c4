@@ -85,6 +85,8 @@ const RUNS = {
     page: `doom -timedemo demo${n} -nosound -show`, about: `Doom's -timedemo demo${n} (shareware)` }])),
   'wolf3d': { image: 'wolf3d.c4r', frame: 'c4sdl_present', mem: 64, skip: 1, args: ['--timedemo', '1'],
               page: 'wolf3d --timedemo 1 --show', about: "Wolfenstein 3D's --timedemo 1 (shareware)" },
+  'wolf3d-4': { image: 'wolf3d.c4r', frame: 'c4sdl_present', mem: 64, skip: 1, args: ['--timedemo', '4'],
+                page: 'wolf3d --timedemo 4 --show', about: "Wolfenstein 3D's four demos, --timedemo 4 (shareware)" },
   'rott': { image: 'rott.c4r', frame: 'rott_frame', mem: 64, skip: 2, args: ['--timedemo', '4', 'NOSOUND'],
             page: 'rott --timedemo 4 NOSOUND --show', about: "Rise of the Triad's --timedemo 4 (shareware)" },
   ...Object.fromEntries([1, 2, 3].map(n => [`rott-demo${n}`, {

@@ -887,6 +887,14 @@ int main(int argc, char **argv) {
     int last_input, last_frame, aside, ev[4];
 
     if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
+    // Run in the background (init --desktop has the console's shell run
+    // "desktop &"), the desktop's stdin is a pipe that has ended: sh.c
+    // gives a background job no input. The desktop never reads it, but
+    // its sleep (SYS_EVWAIT, below) wakes for every pipe it reads, and one
+    // at its end is always ready, so the desktop would never sleep. Its
+    // stdin becomes its stdout, which is no pipe it reads. Fd 0 stays
+    // open: the Terminals' spawns (term.c, start) save and put back 0.
+    if (uavail(STDIN) < 0) udup2(STDOUT, STDIN);
     // the display, from the kernel, giving way to a game that asks for it
     // (include/display.h, and "aside" below)
     if (!udisplay_take(DISP_YIELDS)) { printf("desktop: a program has the display\n"); return 1; }

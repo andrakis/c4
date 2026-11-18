@@ -3,10 +3,10 @@
 A game can hand its heaviest loops to the host, in its own JavaScript: a wall's column, a floor's
 row, Quake's whole span lists, each one instruction however much it does. `libjs/accel.js` is the
 loader and the kit those modules use; the modules are the games' own, `games/duke3d/c4/accel.mjs`,
-`games/quake/c4/accel.mjs`, `games/rott/c4/accel.mjs`, `games/doom/c4/accel.mjs` and
-`games/wolf3d/c4/accel.mjs`, and libjs knows no game. Duke Nukem 3D, Quake, Rise of the Triad, Doom
-and Wolfenstein 3D use theirs when the machine has them and their menu says so, and run their own C
-everywhere else. The frames are the same either way, to the
+`games/quake/c4/accel.mjs`, `games/rott/c4/accel.mjs`, `games/doom/c4/accel.mjs`,
+`games/wolf3d/c4/accel.mjs` and `games/tyrian/c4/accel.mjs`, and libjs knows no game. Duke Nukem 3D,
+Quake, Rise of the Triad, Doom, Wolfenstein 3D and Tyrian use theirs when the machine has them and
+their menu says so, and run their own C everywhere else. The frames are the same either way, to the
 byte.
 
 **In short** (2026-11-15, section 4):
@@ -35,6 +35,12 @@ byte.
   where it was 2.10 M, a sixth, and the worst 1.6 M where it was 4.6 M: the walls' posts, the
   sprites' columns, the status bar's blits, `FixedMul` and the timedemo's checksum (0.42 M of the
   before). What is left is the ray caster. Its switch is the Control menu's Accelerated.
+- Tyrian (2026-11-18, section 4.7): its five demos' median frames are 0.09 to 0.12 M instructions
+  where they were 1.7 to 4.1 M, from a fourteenth to a forty-fourth: every sprite blit, the
+  background's rows of tiles (with their 32-bit SWAR helpers, a `memcpy` and an unsigned division
+  apiece, 2.7 M of demo 1's 4.1 M), the screen's filters and the timedemo's checksum (0.88 M of the
+  before). What is left is the game's own logic, and a level's loading. Its switch is Setup >
+  Graphics' Accelerated.
 - C4IX has its own (section 7, 2026-11-17): libarc's CRC-32 and inflater, which unpack the root
   archive at boot. A boot to the desktop was 1,592 M instructions, 85% of them those two loops; it is
   now 202 M, and the page's boot 24 s to 10 s. A machine option of its own (`&osaccel=0`,
@@ -188,6 +194,20 @@ makes sure of the pages it writes before writing, as the translucent loops do.
 `wl_utils.h` makes `FixedMul` a macro choosing the operation where it stands, as Doom's and ROTT's do.
 Every one of them only writes, so a run again after a fault is the same run.
 
+**Tyrian** (`games/tyrian/c4/accel.mjs`, `c4/c4accel.h`; `TA_*`):
+
+| op | macro | OpenTyrian's C | what it is |
+|---|---|---|---|
+| 0 | `tyr_sum` | `tyr_frame` (tyrian-sum.c) | a timedemo's checksum of the frame and its palette |
+| 1 | `tyr_sprite` | `blit_sprite`, `_blend`, `_hv_unsafe`, `_hv`, `_hv_blend`, `_dark` (sprite.c) | a sprite of the sprite tables, each kind's pixel (`TS_*`): copied, blended, through a hue and value, darkened |
+| 2 | `tyr_sprite2` | `blit_sprite2`, `_blend`, `_darken`, `_filter` | a compressed sprite (the ships, the shots), unclipped at the sides |
+| 3 | `tyr_sprite2c` | `blit_sprite2_clip`, `_filter_clip` | the same clipped on every side |
+| 4 | `tyr_bgrow` | `blitBackground1Row`, `blitBackgroundRow`, `blitBackgroundRowBlend` (backgrnd.c) | a row of twelve 24x28 background tiles: opaque, 0 clear, or blended |
+| 5 | `tyr_filter` | `filterScreenHue`, `filterScreenValue` | the play area through a hue or a brightness |
+
+The kinds that read the screen (the blends, `_dark`, `_darken`, the filters) work out every pixel
+first and make sure of the pages they write before writing, as Duke's translucent loops do.
+
 ## 3. In the games
 
 **Duke Nukem 3D**: Options, Video Setup, **ACCELERATED** (on, off; "OFF" where the machine has none,
@@ -227,7 +247,12 @@ greyed out where the machine has none. The config keeps it after what the origin
 from before it reads as on. `wolf_accel` (wl_draw.c) is the first of the game's numbers, or 0: the
 scalers, the blits, the checksum and `wl_utils.h`'s macro ask it (`WOLF_ACCEL()`).
 
-Tyrian and Super Blit Kart keep their loops.
+**Tyrian**: Setup, Graphics, **Accelerated** (On, Off, or "None here"), after Scaling Mode. It is
+`accelerated` in `opentyrian.cfg`'s video section, on unless that says 0. `tyr_accel`
+(tyrian-sum.c) is the first of the game's numbers, or 0: the blits, the rows, the filters and the
+checksum ask it (`TYR_ACCEL()`).
+
+Super Blit Kart keeps its loops.
 
 ## 4. What they do
 
@@ -257,6 +282,11 @@ Duke's demo1 without its death (frames 1949 to 2782).
 | Doom demo3 | 3.76 / 5.24 / 6.63 | 0.78 / 1.50 / 1.76 |
 | Wolf3D demo 0 | 2.10 / 2.53 / 4.40 | 0.33 / 0.54 / 1.39 |
 | Wolf3D, its four demos | 2.10 / 2.67 / 4.62 | 0.35 / 0.55 / 1.62 |
+| Tyrian demo 1 | 4.14 / 7.74 / 20.03 | 0.09 / 0.15 / 19.13 |
+| Tyrian demo 2 | 1.91 / 2.64 / 20.00 | 0.11 / 0.25 / 19.10 |
+| Tyrian demo 3 | 1.83 / 2.09 / 18.06 | 0.12 / 0.18 / 17.16 |
+| Tyrian demo 4 | 1.72 / 2.13 / 18.64 | 0.12 / 0.34 / 17.74 |
+| Tyrian demo 5 | 2.71 / 5.90 / 18.82 | 0.09 / 0.17 / 17.92 |
 
 ROTT's before is `c4ix_and_toppings` 38e0fe1 (2026-11-17), its runs `rott-demo1` to `rott-demo3`
 and `rott`, and each of its figures has the timedemo's own checksum of the frame in it, 0.89 M,
@@ -264,7 +294,9 @@ which play does not do (section 4.4). Doom's before is `c4ix_and_toppings` 5325e
 runs `doom-demo1` to `doom-demo3`, and its before has the timedemo's checksum in it too, 0.84 M,
 which its after does in one instruction (section 4.5). Wolf3D's before is `c4ix_and_toppings`
 f98aa85 (demo 0) and the game's C as `--no-accel` runs it (the four demos), its runs `wolf3d` and
-`wolf3d-4`, with its checksum, 0.42 M before (section 4.6).
+`wolf3d-4`, with its checksum, 0.42 M before (section 4.6). Tyrian's before is `c4ix_and_toppings`
+4e43631, its runs `tyrian-demo1` to `tyrian-demo5` (the person's own data), with its checksum,
+0.88 M before; its worst frames are a level's loading, which is not drawing (section 4.7).
 
 ### 4.2 The page: frame rates
 
@@ -387,6 +419,30 @@ median / 99th percentile / worst:
 - Without the accelerators (`--no-accel`) a frame is what it was before, within 0.02 M.
 - The same frames: the four checksums with the accelerators and without, and demo 0's before.
 
+### 4.7 Tyrian
+
+Tyrian 2.1's five demos (OpenTyrian's `--timedemo N`, `-s -x -j`) on node's bare machine, M
+instructions a frame, mean / median / 99th percentile / worst:
+
+| demo | frames, checksum | before | after |
+|---|---|---|---|
+| 1 | 6,051, 89ee7639 | 3.97 / 4.14 / 7.74 / 20.03 | 0.09 / 0.09 / 0.15 / 19.13 |
+| 2 | 5,120, 5860cfb7 | 1.92 / 1.91 / 2.64 / 20.00 | 0.12 / 0.11 / 0.25 / 19.10 |
+| 3 | 2,316, 5e5f6bb1 | 1.80 / 1.83 / 2.09 / 18.06 | 0.13 / 0.12 / 0.18 / 17.16 |
+| 4 | 1,856, 389b26f7 | 1.70 / 1.72 / 2.13 / 18.64 | 0.14 / 0.12 / 0.34 / 17.74 |
+| 5 | 3,105, 932401e1 | 2.71 / 2.71 / 5.90 / 18.82 | 0.10 / 0.09 / 0.17 / 17.92 |
+
+- Before, a median frame was the timedemo's checksum (0.88 M), the background's rows (in demo 1,
+  `blitBackgroundRow` with what it calls -- `swar8Read`'s and `swar8Write`'s `memcpy`s, and the
+  unsigned division that `SWAR8()`'s `~0 / 0xFF` is at every use, as c4lc does not fold it -- 2.7 M
+  of 4.1 M), the compressed sprites (`blit_sprite2`, 0.3 M in demo 4) and the other blits; the
+  heaviest frames add a level's loading and the fades (`filterScreenValue`).
+- After, a median frame is the game itself (`JE_main`, the enemies, the shots, the player) and
+  what is left of drawing (`showNormal`, the fonts); the worst frames, 17 to 19 M, are a level's
+  loading (`JE_loadMap`, `fread`, the decompression), left as they were.
+- Without the accelerators (`--no-accel`) a frame is what it was before, within 0.01 M.
+- The same frames: the five checksums with the accelerators and without.
+
 ## 5. Tests
 
 - Each game's `c4/acceltest.c` holds its operations against the game's own C, on made-up textures,
@@ -395,9 +451,11 @@ median / 99th percentile / worst:
   solid and translucent runs, and the fixed-point helpers against `__int64`'s), Doom's 14,500 (its
   columns, shadows, rows, patches and checksums, and `FixedMul` and `FixedDiv` against the port's
   32-bit pieces and `int64_t`'s), Wolf3D's 11,460 (posts of every height, sprites' segment lists,
-  blits at each scale, checksums, `FixedMul`). test-duke3d, test-quake, test-rott, test-doom and
-  test-wolf3d build them (in `.duke3d/test/`, `.quake/test/`, `.rott/test/`, `.doom/test/`,
-  `.wolf3d/test/`) and run them first.
+  blits at each scale, checksums, `FixedMul`), Tyrian's 4,150 (sprites of both kinds in every
+  kind of pixel, background rows and the screen's filters against OpenTyrian's own SWAR code,
+  checksums). test-duke3d, test-quake, test-rott, test-doom, test-wolf3d and test-tyrian build them
+  (in `.duke3d/test/`, `.quake/test/`, `.rott/test/`, `.doom/test/`, `.wolf3d/test/`,
+  `.tyrian/test/`) and run them first.
 - test-doom holds Doom's demo3 to gcc's build on the bare machine, under C4DOS and inside C4IX, with
   the accelerators where the machine has them; its General MIDI run goes without (`--no-accel`), as
   Duke's and ROTT's do.

@@ -38,6 +38,7 @@ static int cur_scheme, cur_bg;
 static int cur_wall;               // the picture (wall.c) under everything, or the colour
 static int cur_saver, cur_wait;    // the screen saver (savers.c, 0 none) and after how many minutes
 static int cur_sort;               // Files' order: SORT_* * 2, plus 1 for descending
+static int cur_tree = 180;         // Files' folder tree: its width (its splitter)
 // The sizes offered: the window kit lays itself out at any of them, and
 // the page scales the display to its pane. 640x480 still fits Settings,
 // the Go menu and the desktop's icons.
@@ -61,12 +62,13 @@ int theme_wall() { return cur_wall; }
 int theme_saver() { return cur_saver; }
 int theme_wait() { return cur_wait; }
 int theme_sort() { return cur_sort; }
+int theme_tree() { return cur_tree; }
 int theme_font() { return cur_font; }
 int theme_fsize() { return cur_fsize; }
 int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
 
 // /etc/desktop.cfg: "scheme N bg V wall W saver S wait M style L sort O
-// res W H vol V mute M font F fsize Z", read
+// res W H vol V mute M font F fsize Z tree T", read
 // when the desktop starts, so a choice outlives Power Off (and, with
 // persist, a reload of the page). Read into a buffer longer than any
 // file it takes, zeroed, so looking a few bytes ahead stays inside it.
@@ -109,6 +111,7 @@ static void theme_load() {
         if (cfg[i] == 'm' && cfg[i + 1] == 'u' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); cur_mute = v != 0; }
         if (cfg[i] == 'f' && cfg[i + 1] == 'o' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 0 && v < WK_FACES) cur_font = v; }
         if (cfg[i] == 'f' && cfg[i + 1] == 's' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < WK_SIZES) cur_fsize = v; }
+        if (cfg[i] == 't' && cfg[i + 1] == 'r' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 100 && v < 2000) cur_tree = v; }
         ++i;
     }
     theme_apply();
@@ -139,6 +142,8 @@ static void theme_save() {
     ui_num(cfg + ui_len(cfg), cur_font);
     ui_cat(cfg, " fsize ");
     ui_num(cfg + ui_len(cfg), cur_fsize);
+    ui_cat(cfg, " tree ");
+    ui_num(cfg + ui_len(cfg), cur_tree);
     ui_cat(cfg, "\n");
     write(fd, cfg, ui_len(cfg));
     uclose(fd);
@@ -165,6 +170,11 @@ void theme_set_style(int style) {
 // Files' order, kept as the rest are; each Files window sorts its own list
 void theme_set_sort(int sort) {
     if (sort >= 0 && sort < N_SORTS * 2) cur_sort = sort;
+    theme_save();
+}
+// Files' folder tree dragged to a width: the one a Files window opens with
+void theme_set_tree(int w) {
+    if (w >= 100 && w < 2000) cur_tree = w;
     theme_save();
 }
 void theme_set_saver(int which, int wait) {

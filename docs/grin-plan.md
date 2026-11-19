@@ -445,7 +445,7 @@ beside the draw command it issues.
   setgen(grin); call; setgen(old)` through slot 27, so the plan's
   "every kit entry point reached from an application brackets setgen"
   lives here, once, rather than in a wrapper per function in grin. Its
-  constructor finds the table (version 4 or more, slot 25, the magic and
+  constructor finds the table (version 5 or more, slot 25, the magic and
   version) and calls `hello`: that is how grin tells an application from
   a DOS program it was asked to start.
 - **`apps.c`**, grin's side:

@@ -31,7 +31,7 @@ static struct tool tools[N_KINDS] = {
     [K_TERM]     = { .draw = term_draw, .mouse = term_mouse, .key = term_key, .keyup = term_keyup, .command = term_command,
                      .tick = term_tick, .drawn = term_drawn, .close = term_close, .pointer_shape = PTR_TEXT },
     [K_FILES]    = { .draw = files_draw, .mouse = files_mouse, .key = files_key,
-                     .command = files_command, .answer = files_answer },
+                     .command = files_command, .answer = files_answer, .pointer = files_pointer },
     [K_TASKS]    = { .draw = tasks_draw, .mouse = tasks_mouse, .key = tasks_key,
                      .answer = tasks_answer, .second = tasks_tick },
     [K_EDIT]     = { .draw = edit_draw, .mouse = edit_mouse, .key = edit_key, .command = edit_command,
@@ -41,6 +41,7 @@ static struct tool tools[N_KINDS] = {
 };
 static struct wk_class classes[N_KINDS];
 static int ready;
+int wm_button;                                // the button of the last press or release (desktop.h)
 
 static struct tool *tool(struct win *w) { return &tools[w->kind]; }
 
@@ -55,6 +56,7 @@ static void a_mouse(int i, int ev, int x, int y, int b) {
     int cw, ch;
     if (!(w = win_get(i))) return;
     wk_size(i, &cw, &ch);
+    if (ev == E_DOWN || ev == E_UP || ev == E_DBL) wm_button = b;
     tool(w)->mouse(w, ev, x, ev == E_WHEEL ? b : y, cw, ch);   // the wheel's steps came as y
 }
 static void a_key(int i, int down, int code, int ch, int mods) {

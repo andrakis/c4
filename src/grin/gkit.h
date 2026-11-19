@@ -13,7 +13,7 @@
 // moved them all one way once: every application is built with grin.
 // Version 3 (G7) added the clipboard's keys at the end, version 4 the
 // fonts (Notepad's Format menu).
-enum { GRIN_MAGIC = 1196575054, GRIN_KIT_VERSION = 4 };
+enum { GRIN_MAGIC = 1196575054, GRIN_KIT_VERSION = 5 };
 
 struct grin_kit {
     int magic, version;

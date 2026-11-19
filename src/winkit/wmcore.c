@@ -22,7 +22,10 @@ static int down_win, down_t, down_x, down_y;   // for double clicks
 enum { REP_WAIT = 400, REP_MS = 50 };
 static int rep_win, rep_x, rep_y, rep_b, rep_next;
 static int menu_win, menu_idx, menu_hot;  // an open drop-down: its window, menu (-1 the
-                                          // system menu), hot item
+                                          // system menu, M_POPUP a pop-up's), hot item
+static char **pop_items;                  // a pop-up menu's items (wk_popup), and where it is
+static int pop_x, pop_y;
+enum { M_POPUP = 0 - 2 };
 static int ptr_shape;
 static char *clip_text;
 static int clip_n;
@@ -170,6 +173,26 @@ void wk_menu(int i, struct wk_menu *m, int n) {
     struct win *w;
     if (!(w = win_get(i))) return;
     w->menus = m; w->nmenus = n;
+}
+
+static int drop_h(char **items);
+
+// A pop-up menu at (x, y) in window I's client area, kept on the screen:
+// drawn and chosen from as a drop-down is, the item chosen reaching the
+// window's command hook as WK_CMD(WK_POPUP, item).
+void wk_popup(int i, int x, int y, char **items) {
+    struct win *w;
+    int h;
+    if (!(w = win_get(i)) || !items || !items[0]) return;
+    pop_items = items;
+    pop_x = wk_client_x(w) + x; pop_y = wk_client_y(w) + y;
+    h = drop_h(items);
+    if (pop_x + DROP_W > wk.sw) pop_x = wk.sw - DROP_W;
+    if (pop_y + h > wk.sh) pop_y = pop_y - h;
+    if (pop_y < 0) pop_y = 0;
+    if (pop_x < 0) pop_x = 0;
+    menu_win = i; menu_idx = M_POPUP; menu_hot = 0 - 1;
+    wk_full = 1;
 }
 
 void wk_place(int i, int x, int y, int ww, int hh) {
@@ -333,6 +356,7 @@ int wk_menu_x(struct win *w, int k) {
 static int count_items(char **items) { int n; n = 0; while (items[n]) ++n; return n; }
 
 static char **drop_items(struct win *w) {
+    if (menu_idx == M_POPUP) return pop_items;
     if (menu_idx < 0) return w->dialog ? sys_dlg_items : sys_items;
     return w->menus[menu_idx].items;
 }
@@ -345,6 +369,7 @@ static int drop_h(char **items) {
 // A minimised window's control menu opens over its icon.
 static int drop_x(struct win *w) {
     int x, y;
+    if (menu_idx == M_POPUP) return pop_x;
     if (menu_idx < 0 && w->min && wk_icons_on) {
         wk_icon_xy(w, &x, &y);
         return x + DROP_W > wk.sw ? wk.sw - DROP_W : x;
@@ -353,6 +378,7 @@ static int drop_x(struct win *w) {
 }
 static int drop_y(struct win *w) {
     int x, y;
+    if (menu_idx == M_POPUP) return pop_y;
     if (menu_idx < 0 && w->min && wk_icons_on) {
         wk_icon_xy(w, &x, &y);
         y = y - drop_h(drop_items(w));
@@ -634,7 +660,8 @@ static void mouse_down(int x, int y, int button) {
         menu_win = 0; wk_full = 1;
         if (!w) return;
         if (k >= 0) {
-            if (i < 0) sys_command(w, k);
+            if (i == M_POPUP) { if (w->cls->command) w->cls->command(w->id, WK_CMD(WK_POPUP, k)); }
+            else if (i < 0) sys_command(w, k);
             else if (w->cls->command) w->cls->command(w->id, WK_CMD(i, k));
             return;
         }
@@ -699,6 +726,9 @@ static void mouse_down(int x, int y, int button) {
             if (ht == HT_CLIENT) {
                 ui_scroll_end();
                 client_mouse(w, E_DOWN, x, y, button);
+                // another button (a right click, which may open a pop-up):
+                // never half of a double click
+                if (button) { down_win = 0; wk_full = 1; return; }
                 if (ui_scroll_repeat()) { rep_win = i; rep_x = x; rep_y = y; rep_b = button; rep_next = wk_now() + REP_WAIT; }
                 if (w->used && down_win == i && t - down_t < 500 && x - down_x < 5 && down_x - x < 5 && y - down_y < 5 && down_y - y < 5) {
                     client_mouse(w, E_DBL, x, y, button);

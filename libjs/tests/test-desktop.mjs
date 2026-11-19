@@ -537,6 +537,53 @@ menu('File', 'Close');
 check(until(() => !has('libc.c4s - IDE')) && !has(/missing|unresolved|cannot resolve/i), 'File > Close closes that, and nothing ran', screen());
 key('\b');
 check(until(() => has('Files - /')), 'and up to the root again');
+// The right click's menu: on a folder, what Files does with it; on a
+// program, Open in IDE too, which shows its code in the IDE's Code tab
+// (the IDE's own way in for a compiled file)
+{
+  const rclick = t => { ev({ kind: 'move', x: t.x + 5, y: t.y + 5, buttons: 0 }); ev({ kind: 'down', x: t.x + 5, y: t.y + 5, button: 2 }); ev({ kind: 'up', x: t.x + 5, y: t.y + 5, button: 2 }); };
+  rclick(inList(find('bin')));
+  check(until(() => has('Open') && has('Rename') && has('Delete') && has('New Folder') && has('Download') && !has('Open in IDE')),
+    'a right click on a folder opens its menu: Open, Rename, Delete, New Folder, Download', screen());
+  key('ESC');
+  check(until(() => !has('Rename')), 'and Esc closes it', screen());
+  dbl('bin', inList);
+  until(() => has('Files - /bin') && !!inList(find('cat')));
+  rclick(inList(find('cat')));
+  check(until(() => has('Open in IDE') && has('Rename')), 'on a program: Open in IDE among them', screen());
+  clickText('Open in IDE');
+  check(until(() => has('cat - IDE') && has(/^main \(\d+ words/), 2000), "Open in IDE shows the program's code in the IDE's Code tab", screen());
+  menu('File', 'Close');
+  check(until(() => !has('cat - IDE')), 'and File > Close closes it', screen());
+  // Files' title, not its taskbar button (which would minimise it, in front already)
+  clickText(/^Files - /, all => all.filter(t => t.y < SH - TASK_H).pop()); key('\b');
+  check(until(() => has('Files - /')), 'back up to the root');
+}
+// The splitter between the folder tree and the list: the pointer's shape
+// over it, and dragged, a wider tree, which a Files window opened after
+// keeps; dragged back after
+{
+  const e = explorer();
+  const x0 = e.x + 4 + 2 + 180 + 3, y0 = e.y + 200;
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 });
+  check(until(() => pointer === 9), 'over the bar between the tree and the list the pointer is a splitter\'s', `pointer ${pointer}`);
+  const ux = inList(find('usr')).x;
+  drag(x0, y0, x0 + 60, y0);
+  check(until(() => inList(find('usr')) && inList(find('usr')).x === ux + 60), 'dragging it makes the tree 60 pixels wider, the list narrower', screen());
+  start('Files');
+  // the new window, on top: its title, and its list's usr drawn after it
+  const tops = () => frame.filter(t => /^Files - \/$/.test(t.s) && t.y < SH - TASK_H);
+  until(() => tops().length >= 2);
+  {
+    const w2 = tops().pop(), i2 = frame.indexOf(w2), x2 = w2.x - 27;
+    const u2 = frame.filter((t, k) => k > i2 && t.s.trimEnd() === 'usr' && t.x > x2 + 200).pop();
+    check(!!u2 && u2.x - x2 === ux - e.x + 60, 'a Files window opened after has the tree that wide too', screen());
+  }
+  menu('File', 'Close');
+  until(() => frame.filter(t => /^Files - \/$/.test(t.s) && t.y < SH - TASK_H).length === 1);
+  drag(x0 + 60, y0, x0, y0);
+  check(until(() => inList(find('usr')) && inList(find('usr')).x === ux), 'and dragged back', screen());
+}
 dbl('tmp', inList);
 check(until(() => has('Files - /tmp')), 'into /tmp');
 clickText('File'); settle(); clickText('New Folder');
@@ -1206,6 +1253,106 @@ check(until(() => has(/^Build: finished/) && has(/^c4rlink: wrote \d+ bytes to r
 }
 txt(':q\n');
 check(until(() => !has('edit.c - IDE')), 'and :q closes it');
+
+// ---- the IDE: the wheel to both ends, Find, the file pane's splitter ------------------------
+// (VIM mode, as Settings left it above.) The IDE's own source: some
+// thousands of lines, many longer than the window is wide.
+start('IDE');
+until(() => has('Untitled - IDE'));
+txt(':e /usr/src/c4ix/user/desktop/edit.c\n');
+check(until(() => has('edit.c - IDE')), 'the IDE opens edit.c', screen());
+{
+  const src = readFileSync(join(ROOT, '../../../src/c4ix/user/desktop/edit.c'), 'latin1').split('\n');
+  const LINES = src.length - 1;
+  const e = ed();
+  // the line numbers in the gutter, right of a file pane FW wide
+  const nums = (fw = 180) => frame.filter(t => t.adv > 0 && /^ *\d+$/.test(t.s) && t.x > e.x + fw + 4 && t.x < e.x + fw + 36 && t.y > e.y + 40 && t.y < e.y + 470).map(t => +t.s.trim());
+  const wheel = dy => ev({ kind: 'wheel', x: e.x + 450, y: e.y + 200, dy });
+  for (const w of ['wrap', 'nowrap']) {
+    txt(`:set ${w}\n`);
+    for (let i = 0; i < 400 && !nums().includes(LINES); i++) wheel(10);
+    check(until(() => nums().includes(LINES)), `${w}: the wheel down reaches the last line, ${LINES}`, nums().join(' '));
+    for (let i = 0; i < 10; i++) wheel(10);
+    check(until(() => nums().includes(LINES)), `${w}: and turned on, stays there`, nums().join(' '));
+    for (let i = 0; i < 400 && !nums().includes(1); i++) wheel(-10);
+    check(until(() => nums().includes(1)), `${w}: the wheel up reaches the first line`, nums().join(' '));
+    // the scroll bar's thumb, dragged to the bottom of its track
+    check(dragThumb(r => r.x > e.x + 400, 600) && until(() => nums().includes(LINES)), `${w}: the thumb dragged to the bottom shows the last line`, nums().join(' '));
+    for (let i = 0; i < 400 && !nums().includes(1); i++) wheel(-10);
+  }
+  txt(':set wrap\n:1\n');
+  // Find: the matches of a name, where the file has them
+  const word = 'e_findbar';
+  const at = []; src.forEach((l, i) => { let k = l.indexOf(word); while (k >= 0) { at.push([i + 1, k]); k = l.indexOf(word, k + 1); } });
+  // the status line: the line and column of the cursor, at a match's last character (VIM's Visual)
+  const atMatch = j => has(`${at[j][0]},${at[j][1] + word.length}`);
+  key('f', 2, 70);
+  check(until(() => has('Find:') && has('Next') && has('Previous') && has('Match case')), 'Ctrl+F opens the find bar under the text', screen());
+  txt(word);
+  check(at.length >= 3 && until(() => atMatch(0)), `typing finds the first ${word}, line ${at[0][0]}`, screen());
+  key('', 0, 114);                                             // F3
+  check(until(() => atMatch(1)), `F3 the next, line ${at[1][0]}`, screen());
+  key('\n');
+  check(until(() => atMatch(2)), `Enter the next again, line ${at[2][0]}`, screen());
+  key('', 1, 114); key('', 1, 114);                            // Shift+F3, twice
+  check(until(() => atMatch(0)), 'Shift+F3 the ones before', screen());
+  key('', 1, 114);
+  check(until(() => atMatch(at.length - 1) && has('Wrapped to the bottom')), `and before the first, round to the last, line ${at[at.length - 1][0]}, saying so`, screen());
+  clickText('Next');
+  check(until(() => atMatch(0) && has('Wrapped to the top')), 'Next past the last: the first again, saying so', screen());
+  for (let i = 0; i < word.length; i++) key('\b');
+  txt('E_FINDBAR');
+  check(until(() => atMatch(0)), 'without Match case, E_FINDBAR finds it too', screen());
+  clickText('Match case');
+  key('', 0, 114);
+  check(until(() => has('Not found')), 'with Match case, nothing', screen());
+  key('ESC');
+  check(until(() => !has('Find:')), 'Esc closes the bar', screen());
+  menu('Edit', 'Find...   Ctrl+F');
+  check(until(() => has('Find:') && has('Match case')), 'and Edit > Find... opens it again', screen());
+  key('ESC');
+  until(() => !has('Find:'));
+  // the file pane's splitter: the pointer, a drag, a new window as wide
+  const x0 = e.x + 4 + 180 + 2, y0 = e.y + 250;
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 });
+  check(until(() => pointer === 9), "over the file pane's right edge the pointer is a splitter's", `pointer ${pointer}`);
+  drag(x0, y0, x0 + 60, y0);
+  check(until(() => nums(240).length > 5 && !nums(180).length), 'dragging it makes the pane 60 pixels wider, the text along with it', screen());
+  // (the last match is VIM's Visual selection: Esc to Normal, or : takes it as a range)
+  key('ESC'); txt(':q\n');
+  check(until(() => !has('edit.c - IDE')), 'Esc and :q close edit.c', screen());
+  start('IDE');
+  until(() => has('Untitled - IDE'));
+  const e2 = ed();
+  const nums2 = fw => frame.filter(t => t.adv > 0 && /^ *\d+$/.test(t.s) && t.x > e2.x + fw + 4 && t.x < e2.x + fw + 36 && t.y > e2.y + 40 && t.y < e2.y + 470).map(t => +t.s.trim());
+  check(until(() => nums2(240).includes(1)), 'an IDE window opened after has the pane that wide too', screen());
+  drag(e2.x + 4 + 242, e2.y + 250, e2.x + 4 + 182, e2.y + 250);
+  check(until(() => nums2(180).includes(1)), 'and dragged back', screen());
+  txt(':q\n');
+  check(until(() => !has('Untitled - IDE')), 'and :q closes it');
+}
+// ---- Text Editor's Find: the same bar, the kit's ---------------------------------------------
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+type('alpha beta\ngamma beta\n');
+{
+  // the selection is the match drawn again, in white, over its row's text
+  const sel = row => { const r = find(row)[0]; return !!r && frame.some(t => t.s === 'beta' && t.y === r.y && t.rgb === 0xffffff); };
+  key('f', 2, 70);
+  check(until(() => has('Find:') && has('Match case')), "Text Editor's Ctrl+F opens the find bar", screen());
+  type('beta');
+  check(until(() => sel('alpha beta')), 'typing finds the first beta, round from the end', screen());
+  key('', 0, 114);
+  check(until(() => sel('gamma beta') && !sel('alpha beta')), 'F3 the next', screen());
+  key('', 1, 114);
+  check(until(() => sel('alpha beta') && !sel('gamma beta')), 'Shift+F3 the one before', screen());
+  key('ESC');
+  check(until(() => !has('Find:')), 'Esc closes it', screen());
+  menu('Edit', 'Find Next   F3');
+  check(until(() => sel('gamma beta')), 'Edit > Find Next finds the next', screen());
+  menu('File', 'Exit');
+  until(() => !has('Untitled * - Text Editor'));
+}
 
 // ---- System Monitor ------------------------------------------------------------------------
 clickText(/^Terminal - task/);

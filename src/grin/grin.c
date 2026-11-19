@@ -145,7 +145,10 @@ void grin_chime() {
         snd_opl(0x60 + op, 0xf4); snd_opl(0x63 + op, 0xf2);   // a strike, and a slow fall
         snd_opl(0x80 + op, 0x45); snd_opl(0x83 + op, 0x24);
         snd_opl(0xe0 + op, 0); snd_opl(0xe3 + op, 0);
-        snd_opl(0xc0 + k, 0x06);                              // feedback 3, FM
+        // feedback 3, FM; and both sides (0x30), which only an OPL3 in its
+        // OPL3 mode reads -- a program before grin (Doom) may have left it
+        // so, and there a channel without them is silent -- and an OPL2 ignores
+        snd_opl(0xc0 + k, 0x36);
         ++k;
     }
     k = 0;

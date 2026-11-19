@@ -23,7 +23,7 @@ class C4Sound extends AudioWorkletProcessor {
       if (m.stats) {
         const s = this.mix.synth;
         this.port.postMessage({
-          frame: this.mix.frame, resyncs: this.mix.resyncs, queued: this.mix.queue.length - this.mix.head,
+          frame: this.mix.frame, resyncs: this.mix.resyncs, queued: this.mix.queue.length - this.mix.head, opl: this.mix.oplState(),
           gm: s ? { ready: s.ready, failed: s.failed, name: s.name, presets: s.presets, messages: s.messages, voices: s.voices(), peak: this.peak } : null,
         });
         this.peak = 0;

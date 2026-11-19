@@ -264,6 +264,7 @@ async function main(argv) {
   flush();
   if (par) par.shutdown();
   if (process.stdin.isTTY && o.interactive) process.stdin.setRawMode(false);
+  const sndStats = {};
   if (snd) {
     const e = snd.drain();
     if (e) for (const x of e) played.push(x);
@@ -273,7 +274,7 @@ async function main(argv) {
       synth = new GmSynth(44100);
       await synth.load(readFileSync(o.sf2), o.sf2);
     }
-    if (o.wav) writeFileSync(o.wav, renderWav(played, 44100, Math.max(snd.now(), snd.cursor), { synth }));
+    if (o.wav) writeFileSync(o.wav, renderWav(played, 44100, Math.max(snd.now(), snd.cursor), { synth, stats: sndStats }));
     if (o.midi) writeFileSync(o.midi, played.filter(x => x[0] === EVT.MIDI)
       .map(x => `${Math.round(x[1])} ${x[2].map(b => b.toString(16).padStart(2, '0')).join(' ')}\n`).join(''));
   }
@@ -286,6 +287,11 @@ async function main(argv) {
     if (machine.heap) console.error(`libjs: heap ${Math.round(machine.heap.used / 1024)} KB in use at exit, ` +
       `${Math.round(machine.heap.peak / 1024)} KB at most, of ${Math.round((machine.heap.end - machine.heap.base) / 1024)} KB`);
     if (snd) { const st = snd.stats(); console.error(`libjs: sound: ${st.writes} OPL writes, ${st.plays} samples played, ${st.midis} MIDI messages`); }
+    // the OPL as --wav played it: a level of 0 for thousands of writes is
+    // music playing silence (snd-mix.js oplState)
+    const op = sndStats.opl;
+    if (op) console.error(`libjs: sound: the OPL's level ${op.rms} RMS, peak ${op.peak}, over ${op.seconds} s; ` +
+      `at the end its OPL3 mode ${op.opl3 ? 'on' : 'off'}`);
   }
   return status & 0xff;
 }

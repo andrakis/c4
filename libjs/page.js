@@ -154,7 +154,7 @@ class SoundOut {
       sp.connect(this.ctx.destination);
       this.how = 'main thread';
       this.send = m => { if (m.events) mix.push(m.events, m.now); };
-      this.ask = () => Promise.resolve({ frame: mix.frame, resyncs: mix.resyncs, queued: mix.queue.length - mix.head,
+      this.ask = () => Promise.resolve({ frame: mix.frame, resyncs: mix.resyncs, queued: mix.queue.length - mix.head, opl: mix.oplState(),
         gm: synth ? { ready: synth.ready, failed: synth.failed, name: synth.name, presets: synth.presets, messages: synth.messages, voices: synth.voices() } : null });
     }, () => { this.failed = true; });
   }
@@ -224,7 +224,10 @@ class SoundOut {
     this.send({ events, now }, transfer);
   }
 
-  // what the mixer has played -- { frame, resyncs, queued, state, how } -- or null
+  // what the mixer has played -- { frame, resyncs, queued, opl, state, how } -- or
+  // null. opl is snd-mix.js oplState(): window.c4m.sound.stats() in the
+  // console, when the music is silent, says whether the OPL is written at
+  // all (writes), plays anything (rms, peak) and in which mode (opl3, c0)
   async stats() {
     if (!this.ask) return null;
     return { ...(await this.ask()), state: this.ctx.state, how: this.how };

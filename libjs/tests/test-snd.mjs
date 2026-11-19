@@ -11,6 +11,7 @@
 //   node libjs/tests/test-snd.mjs
 
 import { SoundDevice, SND, EVT, HAS_START } from '../snd-device.js';
+import { SoundMixer } from '../snd-mix.js';
 
 let fail = 0;
 const check = (cond, what, extra = '') => {
@@ -67,6 +68,34 @@ snd.write32(SND.PCM_CHVOL, 5 | (0x4020 << 8));
 ev = (snd.drain() || []).filter(e => e[0] === EVT.VOL);
 check(ev.length === 1 && ev[0][2] === 5 && ev[0][3] === 0x4020, 'PCM_CHVOL sets the volume it carries, not PCM_VOL\'s', JSON.stringify(ev));
 check(snd.read32(SND.PCM_VOL) === 0x1111, '... and leaves PCM_VOL as it was');
+
+// The OPL's mode is the card's. Doom turns the OPL3's on (0x105 = 1) and,
+// before, never off: then an OPL2 program's voice -- 0xC0 without the
+// left/right bits, as ROTT's and Duke3D's al_midi.c write it -- is
+// silent, and the music of every such game after it was, until a reset.
+// The mixer's oplState() says so: writes, but a level of 0, in OPL3 mode.
+const voice = (c0, pre = []) => {
+  const mix = new SoundMixer(44100);
+  const ev = pre.map(([r, v]) => [EVT.OPL, 0, r, v]);
+  for (const [r, v] of [[0x20, 0x01], [0x23, 0x01], [0x40, 0x10], [0x43, 0x00], [0x60, 0xf4], [0x63, 0xf4],
+    [0x80, 0x55], [0x83, 0x56], [0xc0, c0], [0xa0, 0x6b], [0xb0, 0x31]]) ev.push([EVT.OPL, 1000, r, v]);
+  mix.push(ev);
+  const L = new Float32Array(4410), R = new Float32Array(4410);
+  mix.render(L, R, 4410);
+  return mix.oplState();
+};
+let st = voice(0x08);
+check(st.writes === 11 && st.rms > 500 && !st.opl3, 'an OPL2 voice plays, and oplState() says how loud', JSON.stringify(st));
+st = voice(0x08, [[0x105, 1]]);
+check(st.writes === 12 && st.rms === 0 && st.peak === 0 && st.opl3 && st.c0[0] === 0x08,
+  'the same voice on a card left in its OPL3 mode is silent, and oplState() shows why (opl3, c0 without 0x30)', JSON.stringify(st));
+st = voice(0x08, [[0x105, 1], [0x104, 0], [0x105, 0]]);
+check(st.rms > 500 && !st.opl3, '... and plays once the program turns the mode off first (ROTT, Duke3D)', JSON.stringify(st));
+st = voice(0x38, [[0x105, 1]]);
+check(st.rms > 500 && st.opl3, '... or sets both sides in 0xC0, which an OPL3 reads and an OPL2 ignores (grin\'s chime)', JSON.stringify(st));
+check(voice(0x38).rms > 500, '... and an OPL2 plays that voice too');
+st = new SoundMixer(44100); st.push([[EVT.OPL, 0, 0x105, 1], [EVT.RESET, 10]]); st.render(new Float32Array(64), new Float32Array(64), 64);
+check(!st.oplState().opl3, 'RESET (snd_reset, a machine reset) makes the OPL an OPL2 again');
 
 console.log(`test-snd: ${fail ? 'FAILED' : 'OK'}`);
 process.exit(fail);

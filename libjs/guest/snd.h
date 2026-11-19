@@ -12,6 +12,14 @@
 // as it keeps the stream ahead: make more while snd_ahead() is short.
 // Samples and the speaker play now.
 //
+// The OPL's registers are the card's, not a program's, and so is its mode:
+// it is an OPL3, and one program's 0x105 = 1 (Doom's) stays until another
+// writes it, or snd_reset(). In that mode a channel sounds only with its
+// 0xC0 left/right bits (0x10, 0x20), which an OPL2 program never sets, so
+// it plays silence. An OPL2 program puts the card back first, 0x104 and
+// 0x105 = 0, or snd_reset() (which also stops everyone's samples); an OPL3
+// program that turns the mode on turns it back off as it ends.
+//
 // The MIDI port is there to play when snd_caps() has SND_HAS_MIDI: the
 // person chose General MIDI music, and a synth hears it, as an MPU-401's
 // MIDI OUT would have had a Sound Canvas on it. A game then plays its

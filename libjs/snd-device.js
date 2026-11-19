@@ -54,6 +54,14 @@
 // A message is stamped at the stream's cursor, as an OPL write is, so
 // a player that keeps the stream ahead plays MIDI as evenly as FM.
 //
+// The OPL's mode is the card's, as its registers are: Doom turns the
+// OPL3's mode on (0x105 = 1), and in that mode a channel sounds only with
+// its 0xC0 left/right bits, which an OPL2 program never sets. Left on, it
+// silenced ROTT's and Duke3D's AdLib music, under C4DOS and C4IX alike,
+// until a reset made the card again. Now Doom turns it off as it ends, and
+// ROTT and Duke3D turn it off as they start (snd.h). The listener's stats
+// say what the OPL holds and how loud it has been (snd-mix.js oplState).
+//
 // The stream. An OPL write is stamped at the stream's cursor, which WAIT
 // moves on, so a player that makes music the way a sound card's
 // interrupt would -- write some registers, wait a tick, write more --

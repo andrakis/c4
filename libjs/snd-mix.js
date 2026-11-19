@@ -46,6 +46,28 @@ export class SoundMixer {
     // which adds n frames into L and R from at. Without one MIDI is lost,
     // as an MPU-401 with nothing on its MIDI OUT loses it.
     this.synth = opts.synth || null;
+    // the OPL alone, since oplState() last asked: how many writes, and how
+    // loud it played (sum of squares over frames, and the peak)
+    this.oplWrites = 0; this.oplSq = 0; this.oplFrames = 0; this.oplPeak = 0;
+  }
+
+  // What the OPL holds, and how loud it has been since the last ask: the
+  // page's stats (window.c4m.sound.stats()) and cli.js -s say it. Writes
+  // with a level of 0 is the OPL playing silence: in its OPL3 mode
+  // (opl3) a channel sounds only with its 0xC0 left/right bits (0x30), so
+  // an OPL2 program's music is silent there (snd-device.js).
+  oplState() {
+    const o = this.opl, n = this.oplFrames;
+    const s = {
+      opl3: !!o.opl3Active, reg104: o.reg104 & 0x3f, regBD: o.regBD,
+      c0: o.chan.map(c => c.regC0),
+      writes: this.oplWrites,
+      rms: n ? Math.round(Math.sqrt(this.oplSq / n) * 32767) : 0,
+      peak: Math.round(this.oplPeak * 32767),
+      seconds: +(n / this.rate).toFixed(2),
+    };
+    this.oplWrites = 0; this.oplSq = 0; this.oplFrames = 0; this.oplPeak = 0;
+    return s;
   }
 
   frameOf(t) { return Math.round(t * this.rate / 1e6 + this.offset); }
@@ -78,7 +100,7 @@ export class SoundMixer {
 
   apply(e) {
     switch (e[0]) {
-      case EVT.OPL: this.opl.write(e[2], e[3]); break;
+      case EVT.OPL: this.opl.write(e[2], e[3]); this.oplWrites++; break;
       case EVT.PCM: {
         if (this.frameOf(e[1]) < this.frame - PCM_STALE * this.rate) break;
         const v = this.voices[e[2] & (VOICES - 1)];
@@ -108,8 +130,19 @@ export class SoundMixer {
   segment(L, R, at, n) {
     const ob = this.obuf, stereo = !!this.opl.opl3Active;
     this.opl.generate(n, ob);
-    if (stereo) for (let i = 0; i < n; i++) { L[at + i] = ob[i * 2] * OPL_GAIN; R[at + i] = ob[i * 2 + 1] * OPL_GAIN; }
-    else for (let i = 0; i < n; i++) L[at + i] = R[at + i] = ob[i] * OPL_GAIN;
+    let sq = 0, pk = this.oplPeak;
+    if (stereo) for (let i = 0; i < n; i++) {
+      const l = ob[i * 2] * OPL_GAIN, r = ob[i * 2 + 1] * OPL_GAIN;
+      L[at + i] = l; R[at + i] = r;
+      sq += (l * l + r * r) / 2;
+      const a = Math.max(Math.abs(l), Math.abs(r)); if (a > pk) pk = a;
+    } else for (let i = 0; i < n; i++) {
+      const s = ob[i] * OPL_GAIN;
+      L[at + i] = R[at + i] = s;
+      sq += s * s;
+      const a = Math.abs(s); if (a > pk) pk = a;
+    }
+    this.oplSq += sq; this.oplFrames += n; this.oplPeak = pk;
     if (this.synth) this.synth.render(L, R, at, n);
     for (const v of this.voices) {
       if (!v.data) continue;
@@ -159,7 +192,8 @@ export class SoundMixer {
 }
 
 // A session's events as a 16-bit stereo WAV file (cli.js --wav), endUs
-// long: the events in the device's clock, from 0. opts.synth plays MIDI.
+// long: the events in the device's clock, from 0. opts.synth plays MIDI;
+// opts.stats, an object, gets the session's OPL (stats.opl, oplState()).
 export function renderWav(events, rate, endUs, opts = {}) {
   const mix = new SoundMixer(rate, { synth: opts.synth });
   mix.push(events);
@@ -180,5 +214,6 @@ export function renderWav(events, rate, endUs, opts = {}) {
       dv.setInt16(44 + (f + i) * 4 + 2, Math.round(R[i] * 32767), true);
     }
   }
+  if (opts.stats) opts.stats.opl = mix.oplState();
   return out;
 }

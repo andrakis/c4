@@ -340,19 +340,48 @@ void grin_picture(int pic, int x, int y) {
     }
 }
 
+// A label under a picture, centred on cx: on one line if it is no wider
+// than LABEL_ONE characters, else on two, broken at the last space that
+// leaves the first line no longer than that (or the first space), as 3.1
+// broke an icon's title. Selected, both lines on the selection's colour.
+enum { LABEL_ONE = 14, LABEL_MAX = 40 };
+static char label1[LABEL_MAX];
+void grin_label(int cx, int y, char *label, int sel, int colour) {
+    int n, k, cut, w1, w2, lw;
+    char *rest;
+    n = ui_len(label);
+    cut = 0 - 1;
+    if (n > LABEL_ONE) {
+        k = 0;
+        while (k < n) { if (label[k] == ' ' && (k <= LABEL_ONE || cut < 0)) cut = k; if (k > LABEL_ONE && cut >= 0) break; ++k; }
+    }
+    if (cut < 0 || cut >= LABEL_MAX) {
+        lw = n * 6 + 4;
+        if (sel) d_rect(cx - lw / 2, y + 35, lw, 14, C_SEL);
+        d_text(cx - lw / 2 + 2, y + 36, sel ? C_WHITE : colour, F_SANS, label);
+        return;
+    }
+    k = 0;
+    while (k < cut) { label1[k] = label[k]; ++k; }
+    label1[k] = 0;
+    rest = label + cut + 1;
+    w1 = cut * 6 + 4; w2 = ui_len(rest) * 6 + 4;
+    lw = w1 > w2 ? w1 : w2;
+    if (sel) d_rect(cx - lw / 2, y + 35, lw, 26, C_SEL);
+    d_text(cx - w1 / 2 + 2, y + 36, sel ? C_WHITE : colour, F_SANS, label1);
+    d_text(cx - w2 / 2 + 2, y + 48, sel ? C_WHITE : colour, F_SANS, rest);
+}
+
 void grin_item_dim(int cx, int y, int pic, char *label, int sel, int dim) {
-    int lw;
     grin_picture(pic, cx - 16, y);
     // not available: the picture greyed over, as 3.1 greyed a menu item
     if (dim) { k_grey(cx - 16, y); }
-    lw = ui_len(label) * 6 + 4;
-    if (sel) d_rect(cx - lw / 2, y + 35, lw, 14, C_SEL);
-    d_text(cx - lw / 2 + 2, y + 36, sel ? C_WHITE : dim ? C_SHADOW : C_DARK, F_SANS, label);
+    grin_label(cx, y, label, sel, dim ? C_SHADOW : C_DARK);
 }
 
 void grin_item(int cx, int y, int pic, char *label, int sel) { grin_item_dim(cx, y, pic, label, sel, 0); }
 
-int grin_item_hit(int px, int py, int cx, int y) { return ui_hit(px, py, cx - ITEM_W / 2, y, ITEM_W, 52); }
+int grin_item_hit(int px, int py, int cx, int y) { return ui_hit(px, py, cx - ITEM_W / 2, y, ITEM_W, ITEM_H); }
 
 int grin_dialog(struct wk_class *c, int size, char *title, int w, int h) {
     int i;
@@ -508,7 +537,7 @@ void grin_draw_now() {
 // kernel in it. Always from the top of the loop, never from inside a
 // window's code, where the kit is on the stack.
 
-enum { FULL_LINE = 256, Q_FULL = 1, Q_WINDOW = 2 };
+enum { FULL_LINE = 256, Q_FULL = 1, Q_WINDOW = 2, BUSY_SAY = 200 };
 static char full_cmd[FULL_LINE];
 static int full_queued;               // a line waits: Q_FULL, full screen, or Q_WINDOW
 static char full_dir[FULL_LINE];      // "A:\GAMES\DOOM": where it runs, or ""
@@ -517,25 +546,26 @@ static char full_back[FULL_LINE];     // ... and where that drive was
 // A program named by a path ("\GAMES\DOOM\DOOM", "A:/GAMES/DOOM/doom.c4r")
 // runs with its own directory current, as Program Manager's and File
 // Manager's did in Windows when an item gave no working directory: a
-// game finds its data beside it. The directory goes into full_dir, with
-// the program's drive; "" for a bare word.
-static void full_where(char *cmdline) {
+// game finds its data beside it. The directory goes into dir (n bytes),
+// with the program's drive; "" for a bare word.
+void grin_where(char *cmdline, char *dir, int n) {
     int k, e;
     while (*cmdline == ' ') ++cmdline;
     e = 0 - 1;
     k = 0;
-    while (cmdline[k] && cmdline[k] != ' ' && k < FULL_LINE - 1) {
+    while (cmdline[k] && cmdline[k] != ' ' && k < n - 1) {
         if (cmdline[k] == '\\' || cmdline[k] == '/') e = k;
         ++k;
     }
-    full_dir[0] = 0;
+    dir[0] = 0;
     if (e < 0) return;
     k = 0;
-    if (cmdline[1] != ':') { full_dir[0] = 'A' + gd_drive(); full_dir[1] = ':'; k = 2; }
-    while (e > 0 && k < FULL_LINE - 2) { full_dir[k] = *cmdline; ++k; ++cmdline; --e; }
-    if (full_dir[k - 1] == ':') { full_dir[k] = '\\'; ++k; }
-    full_dir[k] = 0;
+    if (cmdline[1] != ':') { dir[0] = 'A' + gd_drive(); dir[1] = ':'; k = 2; }
+    while (e > 0 && k < n - 2) { dir[k] = *cmdline; ++k; ++cmdline; --e; }
+    if (dir[k - 1] == ':') { dir[k] = '\\'; ++k; }
+    dir[k] = 0;
 }
+static void full_where(char *cmdline) { grin_where(cmdline, full_dir, FULL_LINE); }
 
 int grin_full_waiting() { return full_queued != 0; }
 
@@ -564,32 +594,61 @@ static void dir_leave() {
     if (full_back[0]) gd_chdir(full_back);
 }
 
-static void full_run() {
-    full_queued = 0;
-    dos_busy = 1;
-    dos_busy_set(full_cmd);
+// The display given up to a DOS program, full screen: grin's pointer
+// hidden, the screen cleared, the ring let go, and grin's table out of
+// slot 25 meanwhile -- the display is the program's, so a game finding no
+// grin takes it, as at A>. From the top of the loop (full_run), or a DOS
+// Prompt's line naming a program its Program Manager item runs full screen
+// (dosprmpt.c).
+void grin_display_give() {
     if (saver_active()) saver_stop();
     gui_cursor(GUI_PTR_NONE);
     gui_clear(0x000000);
     gui_show();
     gui_detach();
-    // grin's table out of slot 25 meanwhile: the display is the program's,
-    // so a game finding no grin takes it, as at A>
     apps_publish(0);
-    dir_enter();
-    gd_exec(full_cmd);
-    dir_leave();
+}
+
+// ... and back, as main first took it, after the program named name ended
+// with status st: grin's table in slot 25 again, the display at grin's
+// size, the sound card quiet, everything drawn. A program that ended with
+// a status other than 0 (one that could not start: no such program, too
+// little memory, a file it wants missing) said why on the console, which
+// the page shows beside the display: a message box says so. 1, or 0 when
+// it said that.
+static char ended[BUSY_SAY];
+int grin_display_take(char *name, int st) {
+    char num[16];
     apps_publish(1);
-    // the display back, as main first took it
-    if (!gui_attach(ring, RING, ini.sw, ini.sh)) printf("grin: the display refused the ring after %s\n", dos_busy_name);
+    if (!gui_attach(ring, RING, ini.sw, ini.sh)) printf("grin: the display refused the ring after %s\n", name);
     gui_events(EVENTS);
     gui_cursor(GUI_PTR_ARROW);
     if (snd_present()) snd_reset();
-    dos_busy = 0;
-    dos_busy_name[0] = 0;
     wk_repoint();
     wk_redraw_all();
     last_input = __time();
+    if (!st) return 1;
+    ended[0] = 0;
+    ui_ncat(ended, name, BUSY_SAY);
+    ui_ncat(ended, " ended with status ", BUSY_SAY);
+    ui_ncat(ended, ui_num(num, st), BUSY_SAY);
+    ui_ncat(ended, ". What it said is on the console (the page's terminal, beside the display).", BUSY_SAY);
+    wk_msgbox(0, 0, "grin", ended, WK_OK);
+    return 0;
+}
+
+static void full_run() {
+    int st;
+    full_queued = 0;
+    dos_busy = 1;
+    dos_busy_set(full_cmd);
+    grin_display_give();
+    dir_enter();
+    st = gd_exec(full_cmd);
+    dir_leave();
+    grin_display_take(dos_busy_name, st);
+    dos_busy = 0;
+    dos_busy_name[0] = 0;
 }
 
 // A DOS program in a window (fwin.c): the display is not given up, and

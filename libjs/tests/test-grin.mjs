@@ -207,7 +207,8 @@ check(pm0 && find('Program Manager').some(t => Math.abs(t.x + 7 * 15 / 2 - (pm0.
   'the Windows 3.1 look: the title is centred', JSON.stringify(pm0));
 
 // a double click on the desktop opens the Task List; Esc closes it
-click(600, 400); click(600, 400); settle();
+// (bottom right: Program Manager covers most of the screen, all but a margin)
+click(632, 472); click(632, 472); settle();
 check(until(() => has('Task List') && has('Switch To') && has('Arrange Icons')), 'a double click on the desktop opens the Task List');
 key(27); until(() => !has('Switch To'));
 check(!has('Switch To'), 'Esc closes it');
@@ -381,8 +382,10 @@ const inPm = all => { const p = pmWin(); return p ? all.filter(t => within(p, t.
 // Program Manager to the front first (a click on its title bar), then a
 // double click on the item
 const groupOf = { Clock: 'Accessories', Calculator: 'Accessories', 'Control Panel': 'Main', 'File Manager': 'Main',
-                  'DOS Prompt': 'Main', Notepad: 'Main', Doom: 'Games', 'Wolfenstein 3D': 'Games', Tyrian: 'Games',
-                  'Rise of the Triad': 'Games' };
+                  'DOS Prompt': 'Main', Notepad: 'Main', Doom: 'Action Games', 'Wolfenstein 3D': 'Action Games',
+                  Tyrian: 'Action Games', 'Rise of the': 'Action Games' };
+// (an item's label longer than fourteen letters is on two lines, as 3.1
+// broke them: Rise of the Triad is "Rise of the" over "Triad")
 // a group shown: Program Manager's Window menu lists the groups ("2
 // Accessories"), and choosing one brings its window in front, restored
 // if it was an icon (G7's MDI)
@@ -560,13 +563,19 @@ vm.dev.pushInput('GRIN\n');
 check(until(() => has('Program Manager'), 3000), 'GRIN again, for the shell applications (G4)');
 check(text().includes('files are written to B:'), "the disk's CONFIG.SYS has DRIVES.SYS HOME=B:, and B: can be written", text().slice(0, 600));
 const pmIni = storeText('PROGMAN.INI');
-check(pmIni && /^\[Main\]( |$)/m.test(pmIni) && /^\[Accessories\]( |$)/m.test(pmIni) && /^\[Games\]( |$)/m.test(pmIni) &&
-      /^Doom=\\GAMES\\DOOM\\DOOM,game,window$/m.test(pmIni) && /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
-  'PROGMAN.INI, written with the default groups, is on B:', pmIni);
+const GAME_GROUPS = ['Action Games', 'Full Games (Uploads)', 'Cards & Puzzles', 'Classic Games', 'Text Games'];
+const groupLine = g => new RegExp('^\\[' + g.replace(/[()]/g, '\\$&') + '\\]( |$)', 'm');
+check(pmIni && /^Version=2$/m.test(pmIni) && groupLine('Main').test(pmIni) && groupLine('Accessories').test(pmIni) &&
+      GAME_GROUPS.every(g => groupLine(g).test(pmIni)) &&
+      /^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(pmIni) && /^Quake=\\GAMES\\QUAKE\\QUAKE -home,game,full$/m.test(pmIni) &&
+      /^Net=\\GAMES\\PUZZLES\\NET,game,window$/m.test(pmIni) && /^Zork I=\\GAMES\\FROTZ\\FROTZ ZORK1\.Z3,game,prompt$/m.test(pmIni) &&
+      /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
+  'PROGMAN.INI, written with the default groups (the games in five, the action games full screen), is on B:', pmIni);
 showGroup('Main');
 check(['File Manager', 'DOS Prompt', 'Control Panel', 'Notepad'].every(s => inPm(find(s))), 'Main: File Manager, DOS Prompt, Control Panel, Notepad');
-showGroup('Games');
-check(['Wolfenstein 3D', 'Doom', 'Tyrian', 'Rise of the Triad'].every(s => inPm(find(s))), 'Games: the four games');
+showGroup('Action Games');
+check(['Doom', 'Duke Nukem 3D', 'Quake', 'Rise of the', 'Triad', 'Super Blit', 'Kart', 'Tyrian', 'Wolfenstein 3D'].every(s => inPm(find(s))),
+  'Action Games: the seven, two of them with their labels on two lines', JSON.stringify(frame.map(t => t.s.trimEnd())));
 
 // each item launches what it should (DOS Prompt and Doom: G5's, below)
 startItem('Control Panel');
@@ -781,6 +790,22 @@ const endTask2 = title => {
 const NOTEPAD = /^Untitled( \*)? - Notepad$/;
 const haveDoom = haveGame('doom.c4r', 'doom1.wad');
 if (!haveDoom) console.log('test-grin: Doom in a window SKIPPED (no doom on the disk)');
+// The action games' items run them full screen; G6's checks are of games
+// in a window, so four are set to run in one first, by their Properties,
+// as a person would (and Doom back to full screen after G6, below)
+const setMode = (title, label, group = 'Action Games') => {
+  switchTo('Program Manager');
+  showGroup(group);
+  clickText(title, inPm);
+  if (!menu('Program Manager', 'File', 'Properties...') || !until(() => has('Program Item Properties'))) return false;
+  clickText(label);
+  key(13);
+  return until(() => !has('Program Item Properties'));
+};
+for (const t of ['Doom', 'Wolfenstein 3D', 'Tyrian', 'Rise of the']) setMode(t, 'DOS program, in a window');
+check(['Doom=\\\\GAMES\\\\DOOM\\\\DOOM', 'Wolfenstein 3D=\\\\GAMES\\\\WOLF3D\\\\WOLF3D', 'Tyrian=\\\\GAMES\\\\TYRIAN\\\\TYRIAN',
+       'Rise of the Triad=\\\\GAMES\\\\ROTT\\\\ROTT'].every(l => new RegExp(`^${l},game,window$`, 'm').test(storeText('PROGMAN.INI') || '')),
+  'Properties, with its fourth mode: Doom, Wolfenstein 3D, Tyrian and Rise of the Triad set to run in a window', storeText('PROGMAN.INI'));
 if (haveDoom) {
   startItem('Clock');
   digital();
@@ -868,7 +893,7 @@ oneFrame('Wolfenstein 3D', () => {
 }, 'vswap.wl1', 'wolf3d.c4r');
 endTask2('File Manager');
 oneFrame('Tyrian', () => startItem('Tyrian'), 'tyrian', 'tyrian.c4r');
-oneFrame('Rise of the Triad', () => startItem('Rise of the Triad'), 'HUNTBGIN.WAD', 'rott.c4r');
+oneFrame('Rise of the Triad', () => startItem('Rise of the'), 'HUNTBGIN.WAD', 'rott.c4r');
 
 // A dialog opened while a game plays is grin's, in grin's heap generation,
 // and still works once the game has ended (docs/grin-plan.md 3.3): File >
@@ -916,7 +941,7 @@ const slowKey = (code, ch = 0) => {
 // (its item runs it in a window since G6: Properties sets it to full screen)
 if (haveDoom) {
   switchTo('Program Manager');
-  showGroup('Games');
+  showGroup('Action Games');
   clickText('Doom', inPm);
   check(menu('Program Manager', 'File', 'Properties...') && until(() => has('Program Item Properties')), "Doom's Properties, to run it full screen");
   clickText('DOS program, full screen');
@@ -1010,7 +1035,7 @@ const groupWin = name => {
 const CB = 3, CT = 18, CLIENT_DY = BORDER + 18 + 1 + 20;   // a window's client area: below its title bar and menu bar
 const overlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 const pmMenu = (label, item) => { switchTo('Program Manager'); return menu('Program Manager', label, item); };
-const GROUPS3 = ['Main', 'Accessories', 'Games'];
+const GROUPS3 = ['Main', 'Accessories', 'Action Games'];
 // (all three open: a PROGMAN.INI from before G7 has Main open and the others icons)
 switchTo('Program Manager');
 for (const g of GROUPS3) showGroup(g);
@@ -1029,21 +1054,21 @@ check(gws.every(Boolean) && !overlap(gws[0], gws[1]) && !overlap(gws[0], gws[2])
 switchTo('Program Manager');
 const wm = menuOf(pmWin(), 'Window');
 if (wm) { click(wm.x + 5, wm.y + 5); settle(); }
-check(until(() => has('Arrange Icons') && has('1 Main') && has('2 Accessories') && has('3 Games')),
+check(until(() => has('Arrange Icons') && has('1 Main') && has('2 Accessories') && has('3 Action Games')),
   'the Window menu lists the groups, numbered, under Cascade, Tile and Arrange Icons');
 key(27); settle();
 
-// Games minimised to an icon along Program Manager's bottom, and back
-let gg = groupWin('Games');
+// Action Games minimised to an icon along Program Manager's bottom, and back
+let gg = groupWin('Action Games');
 if (gg) click(gg.x + gg.w - CB - 2 * CT + 9, gg.y + CB + 9);
 settle();
-const gamesIcon = () => { const p = pmWin(); return p && find('Games').filter(t => within(p, t.x, t.y) && t.y > p.y + p.h - 64)[0]; };
-check(until(() => !groupWin('Games') && !!gamesIcon()), "Games' minimise button: an icon along Program Manager's bottom",
-  JSON.stringify(find('Games')));
-check(/^\[Games\] -?\d+,-?\d+,\d+,\d+,1,/m.test(storeText('PROGMAN.INI') || ''), '... minimised in PROGMAN.INI too', storeText('PROGMAN.INI'));
+const gamesIcon = () => { const p = pmWin(); return p && find('Action Games').filter(t => within(p, t.x, t.y) && t.y > p.y + p.h - 64)[0]; };
+check(until(() => !groupWin('Action Games') && !!gamesIcon()), "Action Games' minimise button: an icon along Program Manager's bottom",
+  JSON.stringify(find('Action Games')));
+check(/^\[Action Games\] -?\d+,-?\d+,\d+,\d+,1,/m.test(storeText('PROGMAN.INI') || ''), '... minimised in PROGMAN.INI too', storeText('PROGMAN.INI'));
 const gi = gamesIcon();
 if (gi) { click(gi.x + 5, gi.y + 5); click(gi.x + 5, gi.y + 5); settle(); }
-check(until(() => !!groupWin('Games') && !gamesIcon()), '... and a double click on the icon restores it');
+check(until(() => !!groupWin('Action Games') && !gamesIcon()), '... and a double click on the icon restores it');
 check(until(() => inPm(find('Doom'))), '... with its items');
 // Main maximised: it fills Program Manager, whose title names it; and back
 let gm = groupWin('Main');
@@ -1058,7 +1083,7 @@ settle();
 check(until(() => has('Program Manager') && !has('Program Manager - [Main]')), '... and its restore button brings it back');
 // Ctrl+F6: the next group after Main, the active one, in front
 key(117, 0, 2);
-check(until(() => groupWin('Accessories') && groupWin('Accessories').i > groupWin('Main').i && groupWin('Accessories').i > groupWin('Games').i),
+check(until(() => groupWin('Accessories') && groupWin('Accessories').i > groupWin('Main').i && groupWin('Accessories').i > groupWin('Action Games').i),
   'Ctrl+F6 brings the next group after Main, Accessories, in front');
 // cascaded again, every group's items in sight (a tiled group is too
 // small to show all of them, and those below its edge are clipped away)
@@ -1160,6 +1185,74 @@ check(keyOns.length === 0, `boot again: no chime, as GRIN.INI says (${keyOns.len
 const ga3 = groupWin('Accessories');
 check(ga3 && accPlace && ga3.x === accPlace.x && ga3.y === accPlace.y && ga3.w === accPlace.w,
   '... and Accessories is where it was dragged to', JSON.stringify([accPlace, ga3]));
+
+// ---- the games' groups (docs/grin.md 3.7, "The games' groups") ----
+// A line typed in a DOS Prompt naming a program Program Manager runs full
+// screen runs full screen (Doom's item is full screen again, above): grin
+// gives the display up, the game draws on it, and after F10 and Y grin has
+// it back, the DOS Prompt at its prompt.
+if (haveDoom) {
+  startItem('DOS Prompt');
+  until(() => !!dosWin(1));
+  typeRaw('CD \\GAMES\\DOOM');
+  const f0 = presents;
+  typeLine('DOOM');
+  check(until(() => presents > f0 + 40 && !has('Program Manager'), 4000),
+    'DOOM typed in a DOS Prompt: its item runs it full screen, so it runs full screen from there too', text().slice(-300));
+  frame = []; cur = []; rects = []; curRects = [];
+  slowKey(121); slowKey(89, 121);       // F10, Y
+  check(until(() => gui.stats().attached && has('Program Manager') && inWin(dosWin(1), /^A:\\GAMES\\DOOM>$/), 4000),
+    '... F10 and Y: grin has the display back, and the DOS Prompt is at A:\\GAMES\\DOOM> again', JSON.stringify(frame.map(t => t.s)));
+  check(!find(/ended with status/).length, '... with no message box: Doom ended with status 0');
+  typeLine('EXIT');
+  until(() => !dosWin(1));
+}
+// Cards & Puzzles: Net, in a window of grin's
+if (existsSync(join(DISK, 'GAMES/PUZZLES/net.c4r'))) {
+  const b0 = blitCount;
+  startItem('Net', 'Cards & Puzzles');
+  check(until(() => !!gameWin() && blitCount > b0 && framesIn(gameWin(), 1), 4000), "Cards & Puzzles > Net plays in a window of grin's",
+    text().slice(-300));
+  if (gameWin()) closeBox(gameWin());
+  check(until(() => !gameWin(), 3000) && has('Program Manager'), '... and closing its window ends it');
+}
+// Text Games: Quiz in a DOS Prompt of its own, started in its directory
+// (with no subject, it lists them and ends)
+if (existsSync(join(DISK, 'GAMES/BSDGAMES/quiz.c4r'))) {
+  startItem('Quiz', 'Text Games');
+  // (its list of subjects is longer than the window: the line typed has
+  // scrolled away by the time it ends)
+  check(until(() => inWin(dosWin(1), /^province capital$/)), 'Text Games > Quiz: a DOS Prompt of its own, where QUIZ lists its subjects',
+    JSON.stringify(frame.map(t => t.s)));
+  check(until(() => frame.filter(t => within(dosWin(1) || { x: 0, y: 0, w: 0, h: 0 }, t.x, t.y) && /^A:\\GAMES\\BSDGAMES>$/.test(t.s.trimEnd())).length > 0, 3000),
+    '... it runs there, and the prompt comes back when it ends', JSON.stringify(frame.map(t => t.s)));
+  typeLine('EXIT');
+  check(until(() => !dosWin(1)), '... and EXIT closes it');
+}
+
+// An old PROGMAN.INI, from before the games' groups (no Version= line):
+// the Games group renamed Action Games, its games full screen, the new
+// groups and the missing default items added; the person's own item, in
+// Games, and their own group, kept as they were
+endSession(); clickText('OK');
+until(() => !gui.stats().attached, 3000);
+const OLD_INI = ['[Main]', 'File Manager=FILEMAN,files,app', 'DOS Prompt=DOSPRMPT,dos,app', 'Control Panel=CONTROL,control,app',
+  'Notepad=NOTEPAD,notepad,app', '[Accessories]', 'Clock=CLOCK,clock,app', '[Games]',
+  'Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,window', 'Doom=\\GAMES\\DOOM\\DOOM,game,window',
+  'Doom, level 2=\\GAMES\\DOOM\\DOOM -warp 2,game,window', '[Mine]', 'Hello=HELLO,app,full', ''].join('\n');
+store.set('PROGMAN.INI', new Uint8Array(Buffer.from(OLD_INI, 'latin1')));
+bootG7();
+settle();
+const upIni = storeText('PROGMAN.INI') || '';
+check(/^Version=2$/m.test(upIni) && groupLine('Action Games').test(upIni) && !groupLine('Games').test(upIni) &&
+      GAME_GROUPS.every(g => groupLine(g).test(upIni)),
+  'an old PROGMAN.INI is upgraded: Version=2, Games renamed Action Games, the new groups added', upIni);
+check(/^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(upIni) && /^Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,full$/m.test(upIni) &&
+      /^Calculator=CALC,calc,app$/m.test(upIni) && /^Quake=\\GAMES\\QUAKE\\QUAKE,game,full$/m.test(upIni),
+  '... its games full screen, and the default items it lacked added (Calculator, Quake)', upIni);
+check(/^Doom, level 2=\\GAMES\\DOOM\\DOOM -warp 2,game,window$/m.test(upIni) && /^\[Mine\]\nHello=HELLO,app,full$/m.test(upIni),
+  "... the person's own item and group as they were", upIni);
+check(upIni.split('\n').filter(l => /^Doom=/.test(l)).length === 1, '... and nothing twice', upIni);
 
 console.log(fail ? 'test-grin: FAILED' : 'test-grin: OK');
 process.exit(fail);

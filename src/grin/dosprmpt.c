@@ -372,6 +372,7 @@ static void ke_run(int w) {
 static void run_line(int w) {
     struct dosprompt *d;
     char sel[4];
+    int st;
     queued = 0;
     if (!(d = D(w)) || !d->g) return;
     if (gd_c4ke()) { ke_run(w); return; }
@@ -383,9 +384,18 @@ static void run_line(int w) {
     if (gd_drive() != d->drive) { sel[0] = 'A' + d->drive; sel[1] = ':'; sel[2] = 0; gd_exec(sel); }
     gd_chdir(d->dir);
     last_draw = __time();
-    gd_sink((int)dp_write, (int)dp_read, w);
-    gd_exec(d->cmd);
-    gd_sink(0, 0, 0);
+    if (progman_mode(d->cmd) == RUN_FULL) {
+        // a program its Program Manager item runs full screen (the action
+        // games, as a PIF said): full screen from here too, the console
+        // DOS's own meanwhile, as from Program Manager
+        grin_display_give();
+        st = gd_exec(d->cmd);
+        grin_display_take(dos_busy_name, st);
+    } else {
+        gd_sink((int)dp_write, (int)dp_read, w);
+        gd_exec(d->cmd);
+        gd_sink(0, 0, 0);
+    }
     if ((d = D(w)) && d->g) {
         dp_where(d);
         d->running = 0; d->inlen = 0; d->eof = 0;
@@ -412,8 +422,30 @@ static int free_num() {
 }
 
 // A new DOS Prompt window; with cmd, that line is typed at its first
-// prompt and runs (File Manager running a batch file).
-int dosprompt_open(char *cmd) {
+// prompt and runs (File Manager running a batch file); with dir
+// ("A:\GAMES\FROTZ"), the window starts there rather than where DOS's
+// prompt is.
+static int open_at(char *dir, char *cmd);
+int dosprompt_open(char *cmd) { return open_at(0, cmd); }
+
+// A DOS program of lines in a DOS Prompt of its own (Program Manager's
+// prompt items: the text games), in the program's directory, so that it
+// finds its files beside it: "\GAMES\FROTZ\FROTZ ZORK1.Z3" is
+// FROTZ ZORK1.Z3 typed at A:\GAMES\FROTZ>. The window, or -1.
+static char where[DP_LINE];
+int dosprompt_run(char *cmdline) {
+    char *p, *b;
+    grin_where(cmdline, where, DP_LINE);
+    while (*cmdline == ' ') ++cmdline;
+    b = cmdline;
+    if (where[0]) {
+        p = cmdline;
+        while (*p && *p != ' ') { if (*p == '\\' || *p == '/' || *p == ':') b = p + 1; ++p; }
+    }
+    return open_at(where, b);
+}
+
+static int open_at(char *dir, char *cmd) {
     struct dosprompt *d;
     int w, ww, hh, n;
     char title[24];
@@ -432,6 +464,7 @@ int dosprompt_open(char *cmd) {
     d->num = n;
     if (!(d->g = tg_new(w))) { wk_close(w); return 0 - 1; }
     dp_where(d);
+    if (dir && dir[0] && dir[1] == ':' && !gd_c4ke()) { d->drive = up(dir[0]) - 'A'; ui_ncpy(d->dir, dir + 2, DP_LINE); }
     if (gd_c4ke())
         tg_say(d->g, "C4KE's programs, in a window: ls, ps, top, rps, doom ... each runs as a task,\na last word & runs it in the background, kill PID 9 ends it. EXIT closes this.\n\n");
     else

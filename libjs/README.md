@@ -78,7 +78,7 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|doom-full\|tyrian\|rott\|rottreg\|quake\|quake-full\|duke3d\|duke3d-full\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on the games' disk, with Wolfenstein 3D, Doom, Tyrian and Rise of the Triad; `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), `doom-full` (or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` for one IWAD of several), `quake-full`, `duke3d-full` and `rottreg` the others that play the person's own files (the Uploads' folders, below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
+| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|doom-full\|tyrian\|rott\|rottreg\|quake\|quake-full\|duke3d\|duke3d-full\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on a disk of its own with every game, booting into grin, its graphical shell (docs/grin.md; 256 MB, for the games that read their files whole, and the full games from the Uploads); `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), `doom-full` (or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` for one IWAD of several), `quake-full`, `duke3d-full` and `rottreg` the others that play the person's own files (the Uploads' folders, below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?args=A+B` | More arguments for the system's program, after its own: `?system=wolf3d&args=--secrets+--nodeath` (games/wolf3d/README.md). |
 | `?uploads=0` | The Uploads are not put on the disk. |
@@ -119,6 +119,13 @@ were folders still play:
 On the bare machine and under C4DOS a game looks in `FOLDER/` at drive
 0's root, then at the root itself; not under `/home`, which the disk would
 answer by a path's last part, from the root (devices.js `diskFind`).
+Under C4DOS, grin's Program Manager has the same games in its Full Games
+(Uploads) group (docs/grin.md 3.7), or at `A>`: `\GAMES\WOLF3D\WOLF3D6`,
+`\GAMES\DUKE3D\DUKE3D -home`, `\GAMES\QUAKE\QUAKE -home`,
+`\GAMES\DOOM\DOOM -home` (`-iwad NAME` for one of several) and
+`\GAMES\ROTT\ROTTREG`. The dialog lists what each game wants (`NEEDS` in
+`uploads.js`): each of its files, found among the uploads or not, and
+where to start it on each system.
 
 **Downloads.** What a system keeps can be taken away as files, two ways:
 

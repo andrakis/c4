@@ -35,6 +35,7 @@ TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
 				README.txt: src/c4ix/examples/README.txt
 				hello.c: src/c4ix/examples/hello.c
 				bounce.c: src/c4ix/examples/bounce.c
+				mouselock.c: src/c4ix/examples/mouselock.c
 			include/:
 				c4ix.h: src/c4ix/c4ix.h
 				c4ix_user.h: src/c4ix/include/c4ix_user.h

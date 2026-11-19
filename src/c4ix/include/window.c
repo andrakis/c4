@@ -121,6 +121,8 @@ void win_menu(int n, char *title) { win_begin('M'); win_num(n); win_ch(';'); win
 void win_item(int n, char *label) { win_begin('I'); win_num(n); win_ch(';'); win_str(label); win_end(); }
 // the canvas follows the window's size: WIN_SIZE tells each new one
 void win_resizable() { win_begin('z'); win_num(1); win_end(); win_flush(); }
+// the mouse locked to the canvas at a click, its motion as WIN_REL (on 0: not)
+void win_lock(int on) { win_begin('L'); win_num(on != 0); win_end(); win_flush(); }
 
 void win_fb(char *pixels, int w, int h, int pitch, int *pal) {
     win_begin('f'); win_arg((int)pixels, 1); win_arg(w, 1); win_arg(h, 1);
@@ -131,8 +133,8 @@ void win_fb(char *pixels, int w, int h, int pitch, int *pal) {
 void win_sleep(int ms) { win_sys(220, ms, 0, 0); }                  // SYS_SLEEP
 
 // The next event, or WIN_NONE; never waits. ev[0..2] get its numbers:
-// x, y and the button for the mouse; keycode, character and modifiers
-// for a key. -1 when stdin has ended (the window was closed).
+// x, y and the button for the mouse (dx, dy and the buttons for WIN_REL);
+// keycode, character and modifiers for a key. -1 when stdin has ended (the window was closed).
 int win_poll(int *ev) {
     int n, i, j, k, kind, v, neg;
     // take what has arrived
@@ -161,6 +163,7 @@ int win_poll(int *ev) {
         else if (k == 'K') kind = WIN_KEYUP;
         else if (k == 'f') kind = WIN_FRAME;
         else if (k == 'c') kind = WIN_MENU;
+        else if (k == 'r') kind = WIN_REL;
         j = 3; k = 0;
         while (k < 3) {
             v = 0; neg = 0;

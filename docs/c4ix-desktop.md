@@ -1904,3 +1904,49 @@ stretch's):
 
 Text Editor's own scrolling was already in rows (`row_count`), and costs
 the same both ways: each redraw walks the buffer to its top row.
+
+## Part twenty-nine: the mouse locked to a game in a window (asked for 2026-11-19)
+
+Tyrian steers its ship with the mouse. Full screen, the page locks the
+mouse to the display at a click (GUI_PTR_LOCK, the browser's Pointer
+Lock), and its motion comes as GUI_EV_REL. In a desktop window
+(`tyrian --window`) the ship followed the pointer only while it was over
+the window: the pointer left at the edge, and only the left button came
+through. grin's game windows already lock the mouse (src/grin/fwin.c);
+the desktop's windows now do the same.
+
+- [x] **window.h**: an op `L 1` (`win_lock(1)`), "lock the mouse to this
+      canvas at a click", and `L 0`; an event `r dx,dy,buttons`, which
+      win_poll gives as WIN_REL (9), the motion in the canvas's pixels.
+      `d` and `u` carry the button pressed, 0 the left, 1 the middle, 2
+      the right, as the header always said; `m` the buttons held, a bit
+      each.
+- [x] **term.c**: a canvas that asked has a pointer hook that says
+      GUI_PTR_LOCK over it ("click to capture"), so the page locks the
+      mouse at the next click. Locked, the display's GUI_EV_REL goes to
+      the program of the window that has the focus, as `r`, and the
+      buttons as `d` and `u` at the pointer's place, which the desktop
+      keeps by adding up the motion (`term_lock_event`). A plain move says
+      the page let the mouse go (Esc, which the browser keeps); the window
+      losing the focus, a dialog or menu, the program ending, giving up
+      its canvas or sending `L 0` let it go from this side, its buttons up
+      first (`term_lock_tick`, `lk_drop`). A click takes it again.
+- [x] **shell.c**: GUI_M_REL in the desktop's event mask (only a locked
+      mouse sends it), the locked mouse's events taken before the kit's,
+      and `desk_unlock()`, the display told to let go.
+- [x] **Tyrian** (games/tyrian, tyr-c4ix.c): `win_lock(1)` after
+      `win_open`; WIN_REL as GUI_EV_REL, scaled as the pointer is
+      (640x400 to the display's 640x480); the buttons as they are.
+- [x] `src/c4ix/examples/mouselock.c`, beside bounce.c: a dot steered by
+      the locked mouse, its moves and presses counted, to compile inside
+      C4IX with c4cc. test-desktop.mjs runs it: the pointer over its
+      canvas, a click, three locked moves (30 across, 12 up), the right
+      button as the right, a plain move letting go, and the totals it
+      prints when q ends it.
+- [x] In the browser (CDP 9222): `tyrian --window` from a Terminal, the
+      pointer over the canvas `none` (the lock's), locked at a click, into
+      a level by the keys, the ship steered left and right and firing
+      with the left button, the lock held throughout. (A CDP-sent Esc does
+      not end the browser's lock; a real one does.)
+
+Duke Nukem 3D's and Quake's windows could use the same op.

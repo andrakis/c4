@@ -69,6 +69,10 @@ void term_drawn(struct win *w);
 void term_tick(struct win *w);
 void term_close(struct win *w);
 void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
+int  term_pointer(struct win *w, int x, int y, int cw, int ch);   // PTR_LOCK over a canvas that asked (L 1)
+int  term_lock_event(int *ev);        // a display event the locked mouse's (shell.c, before the kit): 1 taken
+void term_lock_tick();                // each pass: the lock let go once its canvas no longer has it
+void desk_unlock();                   // shell.c: the display lets the mouse go, the pointer an arrow
 void term_command(struct win *w, int menu, int item);   // Edit: Copy, Paste, Select All, Copy All
 
 int  files_open(char *path);

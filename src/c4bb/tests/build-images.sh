@@ -640,7 +640,7 @@ cp src/c4ix/include/c4ix_accel.h $DISK/c4ix_accel.h
 lc32 -c $C4IX_CELLS -O $G -P -I src/c4ix/include -I include -I . -D C4CC=1 -D __c4cc__=1 c4m.c $DISK/c4ix-c4m.c4r > /dev/null
 # what C4IX's own compilers are for (docs/c4ix-desktop.md, part three)
 cp src/c4ix/include/window.h $DISK/c4ix-window.h
-for f in README.txt hello.c bounce.c; do cp src/c4ix/examples/$f $DISK/c4ix-examples-$f; done
+for f in README.txt hello.c bounce.c mouselock.c; do cp src/c4ix/examples/$f $DISK/c4ix-examples-$f; done
 # c4th, the Forth that compiles images to stdout (the C4IX shell's
 # redirection is its file write), with the sources it reads.
 cp c4th32.c4r $DISK/c4th.c4r

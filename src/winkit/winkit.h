@@ -102,8 +102,9 @@ enum { KEY_BACK = 8, KEY_TAB = 9, KEY_ENTER = 13, KEY_ESC = 27, KEY_PGUP = 33, K
        KEY_END = 35, KEY_HOME = 36, KEY_LEFT = 37, KEY_UP = 38, KEY_RIGHT = 39, KEY_DOWN = 40,
        KEY_INS = 45, KEY_DEL = 46, KEY_F2 = 113, KEY_F3 = 114, KEY_F4 = 115, KEY_F5 = 116 };
 enum { M_SHIFT = 1, M_CTRL = 2, M_ALT = 4 };
-// pointer shapes, GUI_PTR_*'s numbers (PTR_COLS: a splitter's, left and right)
-enum { PTR_ARROW = 0, PTR_TEXT = 1, PTR_RESIZE = 2, PTR_COLS = 9 };
+// pointer shapes, GUI_PTR_*'s numbers (PTR_COLS: a splitter's, left and right;
+// PTR_LOCK: "click to capture", the mouse locked to the display at a click)
+enum { PTR_ARROW = 0, PTR_TEXT = 1, PTR_RESIZE = 2, PTR_LOCK = 8, PTR_COLS = 9 };
 // 16x16 icons (d_icon), which a class names by its kind; the numbers are
 // the C4IX desktop's window kinds
 enum { ICON_TERM = 1, ICON_INFO = 2, ICON_FILES = 3, ICON_TASKS = 4, ICON_NOTE = 5,

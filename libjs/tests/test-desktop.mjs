@@ -441,6 +441,35 @@ key('q');
 check(until(() => has(/bounce: \d+ frames, 1 clicks/) && !has('Click me'), 800), 'q ends it and the window is a terminal again', screen());
 check(has(/^Terminal - task \d+/), 'with its own title back');
 
+// ---- the mouse locked to a window (window.h's win_lock), as a game in one steers --------------
+type('c4cc -o /tmp/mouselock.c4r /usr/include/window.h /usr/include/window.c /usr/src/c4ix/examples/mouselock.c\n');
+check(until(() => has(/c4cc: wrote \d+ bytes to ramfs:\/tmp\/mouselock\.c4r/), 3000), 'c4cc compiles mouselock.c inside C4IX', screen());
+type('/tmp/mouselock.c4r\n');
+check(until(() => has('Mouse lock') && has('Locked moves:'), 1500), 'it makes its Terminal its window', screen());
+{
+  const l = find('Locked moves:')[0];
+  const cx = l.x + 300, cy = l.y + 150;                         // a place on its canvas
+  ev({ kind: 'move', x: cx, y: cy, buttons: 0 });
+  check(until(() => pointer === 8), 'over its canvas the pointer says "click to capture" (GUI_PTR_LOCK)', `pointer ${pointer}`);
+  // the click the page locks the mouse at: an ordinary one, the left button
+  ev({ kind: 'down', x: cx, y: cy, button: 0 }); ev({ kind: 'up', x: cx, y: cy, button: 0 });
+  check(until(() => sameRow('Presses:', '1') && sameRow('Last button:', '0'), 400), 'the click reaches it, the left button', screen());
+  // locked: the motion as the display's GUI_EV_REL, the buttons where the pointer has got to
+  for (let k = 0; k < 3; k++) ev({ kind: 'move', x: cx, y: cy, dx: 10, dy: -4, locked: 1, buttons: 0 });
+  check(until(() => sameRow('Locked moves:', '3') && sameRow('Moved across:', '30') && sameRow('Moved down:', '-12'), 400),
+    'locked, the motion reaches it as WIN_REL, however far it goes', screen());
+  ev({ kind: 'down', x: cx, y: cy, button: 2 }); ev({ kind: 'up', x: cx, y: cy, button: 2 });
+  check(until(() => sameRow('Presses:', '2') && sameRow('Releases:', '2') && sameRow('Last button:', '2'), 400), 'and the right button, as the right', screen());
+  // a plain move again: the page let it go (Esc); the kit has the mouse
+  ev({ kind: 'move', x: cx + 4, y: cy, buttons: 0 });
+  check(until(() => pointer === 8), 'let go, the pointer over the canvas still offers it', `pointer ${pointer}`);
+  key('q');
+  check(until(() => has(/mouselock: 3 locked moves, 30 across, -12 down, 2 presses, last button 2/) && !has('Locked moves:'), 800),
+    'q ends it, having had every move and press', screen());
+  ev({ kind: 'move', x: cx, y: cy + 2, buttons: 0 });
+  check(until(() => pointer === 1), 'and the Terminal has its text beam back', `pointer ${pointer}`);
+}
+
 // ---- Files ---------------------------------------------------------------------------
 start('Files');
 check(until(() => has('Files - /')), 'Go > Files opens at the root', screen());

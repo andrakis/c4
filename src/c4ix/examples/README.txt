@@ -18,6 +18,13 @@ bounce makes its Terminal into a window of its own: see
 /usr/include/window.h for the calls. q or Esc ends it, and so does
 Ctrl-C.
 
+  c4cc -o /tmp/mouselock.c4r /usr/include/window.h /usr/include/window.c /usr/src/c4ix/examples/mouselock.c
+  /tmp/mouselock.c4r
+
+mouselock asks for the mouse locked to its window (win_lock), as a game
+in a window steered by the mouse does: a click captures it, Esc lets it
+go, and its motion and buttons are counted. q ends it.
+
 c4th is a Forth that compiles images to its standard output, so the
 shell's redirection is where they are written:
 

@@ -890,7 +890,12 @@ static void shutdown_screen() {
 // of the picture's tiles (wall.c): 128x96 at 1024x768, 48 KB. A frame
 // longer than half of it is placed only when the ring's head happens to
 // allow (gui_frame), so the half is 128 KB.
-enum { RING = 262144, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW };
+// GUI_M_REL: the mouse's motion while it is locked to the display, which
+// only a canvas that asked for it (window.h's L) has it be (term.c)
+enum { RING = 262144, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW | GUI_M_REL };
+
+// The display lets the mouse go, and the kit draws its pointer again
+void desk_unlock() { gui_cursor(GUI_PTR_ARROW); wk_repoint(); }
 
 int main(int argc, char **argv) {
     int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
@@ -979,6 +984,8 @@ int main(int argc, char **argv) {
                 wk_redraw_all();
                 continue;
             }
+            // the mouse locked to a canvas: its motion and buttons the program's
+            if (term_lock_event(ev)) continue;
             wk_event(ev);
         }
         // the first frame, once more half a second in, in case the page was
@@ -986,6 +993,7 @@ int main(int argc, char **argv) {
         if (!second_draw && now_ms() - start_ms >= 500) { second_draw = 1; wk_redraw_all(); }
         // the windows closed meanwhile freed; the terminals' pipes read; the timers due
         wk_tick();
+        term_lock_tick();
         // the CPU meter, every other MACHINE second, and a redraw only when
         // it moved: machine time is what its numbers count (cpustat's ms)
         // and what the desktop sleeps on. Host time runs at another rate

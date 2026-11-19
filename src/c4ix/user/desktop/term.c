@@ -63,6 +63,7 @@
 
 #include "desktop.h"
 #include "textgrid.h"
+#include "wkgui.h"
 
 enum { IOBUF = 8192 };
 // graphics mode: the canvas (the grid's own area), and the two display
@@ -82,6 +83,7 @@ struct term {
     int raw;                      // keys go to the program as typed (ESC _ T r)
     int fpend;                    // a frame with a framebuffer presented, not yet drawn
     int fit, gw, gh;              // the canvas follows the window (z); its size
+    int lock, mx, my;             // the mouse is to be locked to the canvas (L 1); the pointer in it
     int nw, nh, nat;              // the size the window last had, and since when
     char title[48];               // the window's own title, while a program's shows
     int ncur, nshow;
@@ -116,7 +118,11 @@ static void event(struct term *t, int kind, int a, int b, int c) {
     send(t, tmp);
 }
 
+static void lk_drop(struct term *t);
+
 static void gfx_mode(struct term *t, int on) {
+    lk_drop(t);
+    t->lock = 0;
     if (on && !t->gfx) ui_ncpy(t->title, wk_get_title(t->win), 48);
     if (!on && t->gfx && t->title[0]) wk_title(t->win, t->title);
     if (on && t->g) tg_unselect(t->g);
@@ -228,6 +234,8 @@ static void apc(char *ctx, char *abuf, int alen) {
     // a menu bar: a program's own window's only (a Terminal has its own)
     if (op == 'M' || op == 'I') { if (t->bare) prog_menu(t, op, n ? nums[0] : 0, s); return; }
     if (op == 'z') { fit(t, n ? nums[0] : 1); return; }
+    // the mouse locked to the canvas at a click, or not: the pointer says which
+    if (op == 'L') { t->lock = n ? nums[0] != 0 : 1; if (!t->lock) lk_drop(t); wk_repoint(); return; }
     if (op == 'p') {
         memcpy(t->gshow, t->gcur, t->ncur * sizeof(int));
         t->nshow = t->ncur;
@@ -447,6 +455,7 @@ static void term_adopt(int pid, char *title) {
 void term_close(struct win *w) {
     struct term *t;
     t = T(w);
+    lk_drop(t);
     if (t->g) { tg_free(t->g); t->g = 0; }
     if (t->ended) return;
     uintr(t->pid);
@@ -652,6 +661,7 @@ void term_key(struct win *w, int code, int ch, int mods) {
 
 void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct term *t;
+    int b;
     t = T(w);
     if (!t->g) return;
     if (!t->gfx) {
@@ -664,9 +674,100 @@ void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     x = x - 2; y = y - 2;                          // inside the sunken edge
     if (x < 0) x = 0; if (y < 0) y = 0;
     if (x >= t->gw) x = t->gw - 1; if (y >= t->gh) y = t->gh - 1;
-    if (ev == E_DOWN) { t->buttons = 1; event(t, 'd', x, y, 0); }
-    else if (ev == E_UP) { if (t->buttons) event(t, 'u', x, y, 0); t->buttons = 0; }
+    t->mx = x; t->my = y;
+    // each button as it is (0 the left, 1 the middle, 2 the right), and a
+    // move with those held, a bit each
+    b = wm_button & 7;
+    if (ev == E_DOWN) { t->buttons = t->buttons | (1 << b); event(t, 'd', x, y, b); }
+    else if (ev == E_UP) { if (t->buttons & (1 << b)) event(t, 'u', x, y, b); t->buttons = t->buttons & ~(1 << b); }
     else if (ev == E_MOVE) event(t, 'm', x, y, t->buttons);
+}
+
+// Over a canvas that asked for the mouse locked (L 1), the pointer says
+// "click to capture" (GUI_PTR_LOCK): the page locks the mouse to the
+// display at the next click (libjs/display.js). Elsewhere a text beam.
+int term_pointer(struct win *w, int x, int y, int cw, int ch) {
+    struct term *t;
+    t = T(w);
+    if (t->gfx && t->lock && !t->ended && x >= 2 && y >= 2 && x < t->gw + 2 && y < t->gh + 2) return PTR_LOCK;
+    return PTR_TEXT;
+}
+
+// ---- the mouse locked to a canvas ---------------------------------------------------
+//
+// Locked, the page sends the mouse's motion as GUI_EV_REL (the desktop's
+// event mask asks for it, shell.c), and the canvas whose window had the
+// focus when it began has it, as `r dx,dy,buttons` (window.h); its buttons
+// go there too, as d and u at the pointer's place, kept here by adding up
+// the motion. A plain move again says the page let it go (Esc, which the
+// browser keeps for itself); the window losing the focus, the canvas
+// going, its program ending or L 0 let it go from this side, all buttons
+// let go first. Then a click locks it again. grin's game windows do the
+// same (src/grin/fwin.c).
+static int lk_win;                 // the window the mouse is locked to, or 0
+
+static struct term *lk_term() {
+    struct win *w;
+    if (!lk_win || !(w = win_get(lk_win)) || w->kind != K_TERM) return 0;
+    return T(w);
+}
+
+// let the lock go, if it is T's: its buttons up, the display told
+static void lk_drop(struct term *t) {
+    int b;
+    if (!lk_win || !t || t->win != lk_win) return;
+    b = 0;
+    while (b < 3) {
+        if ((t->buttons & (1 << b)) && !t->ended && t->gfx) event(t, 'u', t->mx, t->my, b);
+        ++b;
+    }
+    t->buttons = 0;
+    lk_win = 0;
+    desk_unlock();
+}
+
+int term_lock_event(int *ev) {
+    struct term *t;
+    struct win *w;
+    int f, b;
+    if (ev[0] == GUI_EV_REL) {
+        if (!lk_win) {
+            // the page has just locked it: the focused canvas's, if it asked
+            f = wk_focus();
+            if (f && (w = win_get(f)) && w->kind == K_TERM && T(w)->gfx && T(w)->lock && !T(w)->ended && !wk_modal() && !wk_menu_open())
+                lk_win = f;
+            else { desk_unlock(); return 1; }       // nobody's: let it go
+        }
+        if (!(t = lk_term())) { lk_win = 0; desk_unlock(); return 1; }
+        t->mx = t->mx + ev[1]; t->my = t->my + ev[2];
+        if (t->mx < 0) t->mx = 0; if (t->my < 0) t->my = 0;
+        if (t->mx >= t->gw) t->mx = t->gw - 1; if (t->my >= t->gh) t->my = t->gh - 1;
+        if (ev[1] || ev[2]) event(t, 'r', ev[1], ev[2], t->buttons);
+        return 1;
+    }
+    if (!lk_win) return 0;
+    if (!(t = lk_term())) { lk_win = 0; desk_unlock(); return 0; }
+    // a plain move: the page let it go (Esc); the kit has the mouse again
+    if (ev[0] == GUI_EV_MOVE) { t->buttons = 0; lk_win = 0; wk_repoint(); return 0; }
+    b = ev[3] & 7;
+    if (ev[0] == GUI_EV_DOWN) { t->buttons = t->buttons | (1 << b); event(t, 'd', t->mx, t->my, b); return 1; }
+    if (ev[0] == GUI_EV_UP) {
+        if (t->buttons & (1 << b)) event(t, 'u', t->mx, t->my, b);
+        t->buttons = t->buttons & ~(1 << b);
+        return 1;
+    }
+    if (ev[0] == GUI_EV_WHEEL) return 1;
+    // the page lost the keyboard, and with it the lock
+    if (ev[0] == GUI_EV_FOCUS && !ev[1]) lk_drop(t);
+    return 0;
+}
+
+// each pass: the lock let go once its canvas is no longer the one to have it
+void term_lock_tick() {
+    struct term *t;
+    if (!lk_win) return;
+    if (!(t = lk_term())) { lk_win = 0; desk_unlock(); return; }
+    if (t->ended || !t->gfx || !t->lock || wk_focus() != lk_win || wk_modal() || wk_menu_open()) lk_drop(t);
 }
 
 void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {

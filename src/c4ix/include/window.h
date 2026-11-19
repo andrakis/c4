@@ -29,6 +29,17 @@
 // canvas and its coordinates stay as they were. A Terminal, which has a
 // menu of its own, ignores both: there the keys are the game's controls.
 //
+// A game steered by the mouse calls win_lock(1): over its canvas the
+// pointer then says "click to capture", and a click locks the mouse to the
+// display, as a game on the whole display has it (the page's Pointer
+// Lock). From then on the mouse's motion comes from win_poll as WIN_REL,
+// ev[0] and ev[1] how far it moved in the canvas's pixels, ev[2] the
+// buttons held (a bit each, 1 the left); its buttons as WIN_DOWN and
+// WIN_UP, at a place the desktop keeps by adding up the motion. Esc lets
+// the mouse go (the page sees to that), and so does the window losing the
+// focus, or the program ending or giving up its canvas; win_lock(0) stops
+// asking. A click locks it again.
+//
 // The canvas is WIN_W by WIN_H however big the window is, unless the
 // program calls win_resizable(): then the canvas is the whole of the
 // window's inside, a window of the program's own may be dragged to any
@@ -65,10 +76,12 @@
 //     M n;title  menu n of the menu bar (0: the bar anew)
 //     z 1       the canvas follows the window's size (z 0: WIN_W by WIN_H)
 //     I n;label  an item of menu n ("-" a rule, "*label" checked)
+//     L 1       lock the mouse to this canvas at a click (L 0: do not)
 //   window -> program   ESC E <kind> <a>,<b>,<c> newline
 //     s w,h,0 the canvas size (after o, and each time it changes)
-//     d x,y,button  u x,y,button
+//     d x,y,button  u x,y,button   (button: 0 left, 1 middle, 2 right)
 //     m x,y,buttons             k keycode,char,mods
+//     r dx,dy,buttons  the mouse moved while locked to the canvas (L 1)
 //     K keycode,char,mods (let go)  f 0,0,0 (a framebuffer frame was drawn)
 //     c menu,item,0 (an item of the menu bar picked)
 
@@ -79,7 +92,7 @@ enum {
     WIN_W = 640, WIN_H = 400,
     // win_poll's answers
     WIN_NONE = 0, WIN_DOWN = 1, WIN_UP = 2, WIN_MOVE = 3, WIN_KEY = 4, WIN_SIZE = 5,
-    WIN_KEYUP = 6, WIN_FRAME = 7, WIN_MENU = 8,
+    WIN_KEYUP = 6, WIN_FRAME = 7, WIN_MENU = 8, WIN_REL = 9,
     // key codes (browser keyCodes) and modifiers
     WIN_K_ESC = 27, WIN_K_ENTER = 13, WIN_K_LEFT = 37, WIN_K_UP = 38,
     WIN_K_RIGHT = 39, WIN_K_DOWN = 40, WIN_SHIFT = 1, WIN_CTRL = 2, WIN_ALT = 4,
@@ -109,6 +122,7 @@ void win_fb(char *pixels, int w, int h, int pitch, int *pal);
 void win_menu(int n, char *title);
 void win_item(int n, char *label);
 void win_resizable();
+void win_lock(int on);
 void win_sleep(int ms);
 int win_poll(int *ev);
 

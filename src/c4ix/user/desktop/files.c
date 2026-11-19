@@ -10,6 +10,15 @@
 // New Folder, Delete (confirmed)
 // and Rename go through the kernel's mkdir, unlink and rename.
 //
+// A right click on an item opens a menu of what can be done with it:
+// Open, Open in IDE (a program, an object file or a library into the IDE's
+// Code tab; a source into its editor), Rename, Delete and Download, and New
+// Folder; on the empty part of the list, New Folder and Refresh; on a
+// folder in the tree, which it shows, Expand or Collapse, New Folder in it
+// and Refresh. The bar between the tree and the list is a splitter, which
+// sizes the tree; the width it is left at is every Files window's, kept
+// in /etc/desktop.cfg (theme_tree).
+//
 // Several items can be selected, as in Explorer: Ctrl-click adds or
 // removes one, Shift-click (or Shift with the arrows) takes the range from
 // the last one clicked, Ctrl+A takes them all. Delete takes what is
@@ -41,6 +50,9 @@
 // archive's tree (some 70 folders, 80 files in the largest), and to fit
 // ST_BYTES with room to spare.
 enum { MAXE = 400, NAMEW = 64, MAXT = 256, TPW = 128, MAXDEPTH = 10, TREE_W = 180, ROW_H = 17, TOOL_H = 30, STATUS_H = 20 };
+// the splitter between the tree and the list: its width; the narrowest
+// the tree and the list may be made
+enum { SPW = 6, TREE_MIN = 100, LIST_MIN = 280 };
 // a tree node's flags: it has folders under it, and it is collapsed
 enum { T_KIDS = 1, T_COLL = 2, MAXOPEN = 64 };
 
@@ -59,6 +71,7 @@ struct files {
     int tleft;                         // the tree scrolled across: 6-pixel steps
     char mark[MAXE];                   // the selected items (sel is the one with the focus)
     int anchor;                        // where a Shift-click's range starts
+    int tw, twx, tdrag;                // the tree's width: chosen, as drawn; its splitter being dragged
 };
 
 static struct files *F(struct win *w) { return (struct files *)w->st; }
@@ -448,14 +461,15 @@ static int t_maxw(struct files *f) {
     }
     return mx;
 }
-enum { THB_X = 4, THB_W = TREE_W - 22 };
-static int t_hvis() { return THB_W / 6; }
-static int t_hbar(struct files *f) { return t_maxw(f) > t_hvis(); }
+enum { THB_X = 4 };
+#define THB_W (f->twx - 22)
+static int t_hvis(struct files *f) { return THB_W / 6; }
+static int t_hbar(struct files *f) { return t_maxw(f) > t_hvis(f); }
 static int t_rows(struct files *f, int ch) { return (ch - TOOL_H - STATUS_H - 2 - 6 - (t_hbar(f) ? 16 : 0)) / ROW_H; }
 static int t_hby(int ch) { return ch - STATUS_H - 2 - 18; }
 static void t_hclamp(struct files *f) {
     int max;
-    max = t_maxw(f) - t_hvis();
+    max = t_maxw(f) - t_hvis(f);
     if (max < 0) max = 0;
     if (f->tleft > max) f->tleft = max;
     if (f->tleft < 0) f->tleft = 0;
@@ -468,7 +482,15 @@ static int t_clamp(struct files *f, int rows) {
     if (f->ttop < 0) f->ttop = 0;
     return max;
 }
-enum { TSB_X = 2 + TREE_W - 18 };
+#define TSB_X (2 + f->twx - 18)
+// the tree's width in a window CW wide: the one chosen, as far as the list keeps its own
+static int t_width(struct files *f, int cw) {
+    int w;
+    w = f->tw;
+    if (w > cw - SPW - 4 - LIST_MIN) w = cw - SPW - 4 - LIST_MIN;
+    if (w < TREE_MIN) w = TREE_MIN;
+    return w;
+}
 
 static void go(struct win *w, char *path) {
     struct files *f;
@@ -569,6 +591,7 @@ int files_open(char *path) {
     i = win_open(K_FILES, "Files", 600, 420, sizeof(struct files));
     if (i < 0) return i;
     w = win_get(i);
+    F(w)->tw = theme_tree();
     menus[0].title = "File"; menus[1].title = "View"; menus[2].title = "Go";
     file_items[0] = "Open"; file_items[1] = "New Folder"; file_items[2] = "Delete";
     file_items[3] = "Rename"; file_items[4] = "Show Code"; file_items[5] = "Download";
@@ -629,6 +652,7 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct files *f;
     int i, y, lx, lw, lh, rows, tx, th, trows, sel_bg, nv, r, hb, dx;
     f = F(w);
+    f->twx = t_width(f, cw);
     d_rect(ox, oy, cw, ch, C_FACE);
     // the toolbar: Up, and the address
     ui_button(ox + 4, oy + 4, 26, 22, "", 0, 0);
@@ -638,15 +662,15 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     ui_field(ox + 86, oy + 4, cw - 90, f->path, 0, 0);
     // the tree
     tx = ox + 2; th = ch - TOOL_H - STATUS_H - 2;
-    d_rect(tx, oy + TOOL_H, TREE_W, th, C_WHITE);
-    d_bevel(tx, oy + TOOL_H, TREE_W, th, B_SUNKEN);
+    d_rect(tx, oy + TOOL_H, f->twx, th, C_WHITE);
+    d_bevel(tx, oy + TOOL_H, f->twx, th, B_SUNKEN);
     trows = t_rows(f, ch);
     nv = t_shown(f);
     hb = t_hbar(f);
     t_hclamp(f);
     dx = f->tleft * 6;
     // the names and lines stay inside the tree, under its bars
-    d_clip(tx + 2, oy + TOOL_H + 2, TREE_W - 4 - (nv > trows ? 16 : 0), th - 4 - (hb ? 16 : 0));
+    d_clip(tx + 2, oy + TOOL_H + 2, f->twx - 4 - (nv > trows ? 16 : 0), th - 4 - (hb ? 16 : 0));
     if (f->tfollow) {
         r = t_row(f, f->tsel);
         if (r >= 0 && r < f->ttop) f->ttop = r;
@@ -681,9 +705,10 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     }
     d_clip_end();
     if (nv > trows) ui_scrollbar(ox + TSB_X, oy + TOOL_H + 2, th - 4 - (hb ? 16 : 0), nv, trows, f->ttop);
-    if (hb) ui_hscrollbar(ox + THB_X, oy + t_hby(ch), THB_W, t_maxw(f), t_hvis(), f->tleft);
-    // the list
-    lx = tx + TREE_W + 4; lw = cw - TREE_W - 8;
+    if (hb) ui_hscrollbar(ox + THB_X, oy + t_hby(ch), THB_W, t_maxw(f), t_hvis(f), f->tleft);
+    // the splitter, and the list
+    ui_splitter(tx + f->twx, oy + TOOL_H, SPW, th);
+    lx = tx + f->twx + SPW; lw = cw - f->twx - SPW - 4;
     d_rect(lx, oy + TOOL_H, lw, th, C_WHITE);
     d_bevel(lx, oy + TOOL_H, lw, th, B_SUNKEN);
     widths[0] = lw - 4 - 16 - 170; widths[1] = 70; widths[2] = 100;
@@ -722,16 +747,103 @@ void files_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 
 // ---- input ------------------------------------------------------------------------------
 
+// The right click's menus: their items as drawn, and what each does
+enum { P_OPEN = 1, P_IDE = 2, P_NEWDIR = 3, P_RENAME = 4, P_DELETE = 5, P_DOWNLOAD = 6,
+       P_REFRESH = 7, P_TOGGLE = 8, P_MAX = 12 };
+static char *pop_items[P_MAX];
+static int pop_act[P_MAX], pop_n;
+static void pop_add(char *label, int act) { pop_items[pop_n] = label; pop_act[pop_n] = act; ++pop_n; pop_items[pop_n] = 0; }
+
+// what opens in the IDE: a compiled file (into its Code tab), or a source
+static int ide_ok(struct files *f, int i) {
+    if (f->isdir[i]) return 0;
+    return f->prog[i] || is_linkable(ename(f, i)) || is_source(ename(f, i));
+}
+
+// A right click on the list: on an item (taking it, unless it is among
+// those selected already), or on the list's empty part
+static void pop_list(struct win *w, int row, int x, int y) {
+    struct files *f;
+    f = F(w);
+    pop_n = 0;
+    if (row >= 0 && row < f->n) {
+        if (!f->mark[row]) mark_only(f, row);
+        f->sel = row;
+        pop_add("Open", P_OPEN);
+        if (ide_ok(f, row)) pop_add("Open in IDE", P_IDE);
+        pop_add("-", 0);
+        pop_add("Rename", P_RENAME);
+        pop_add("Delete", P_DELETE);
+        pop_add("-", 0);
+        pop_add("New Folder", P_NEWDIR);
+        pop_add("Download", P_DOWNLOAD);
+    } else {
+        pop_add("New Folder", P_NEWDIR);
+        pop_add("Refresh", P_REFRESH);
+    }
+    wk_popup(w->id, x, y, pop_items);
+}
+
+// ... and on a folder in the tree, the one now shown
+static void pop_tree(struct win *w, int x, int y) {
+    struct files *f;
+    f = F(w);
+    pop_n = 0;
+    if (f->tflag[f->tsel] & T_KIDS) pop_add(f->tflag[f->tsel] & T_COLL ? "Expand" : "Collapse", P_TOGGLE);
+    pop_add("New Folder", P_NEWDIR);
+    pop_add("Refresh", P_REFRESH);
+    wk_popup(w->id, x, y, pop_items);
+}
+
+// an item of those menus chosen
+static void pop_do(struct win *w, int k) {
+    struct files *f;
+    f = F(w);
+    if (k < 0 || k >= pop_n) return;
+    k = pop_act[k];
+    if (k == P_OPEN) open_sel(w);
+    else if (k == P_IDE && f->sel >= 0 && f->sel < f->n) {
+        // a compiled file opens in the IDE's Code tab alone, as its own
+        // File > Open does one (edit.c, e_open); a source in its editor
+        join(tbuf, f->path, ename(f, f->sel));
+        edit_open(tbuf);
+    }
+    else if (k == P_NEWDIR) files_command(w, 0, 1);
+    else if (k == P_RENAME) files_command(w, 0, 3);
+    else if (k == P_DELETE) files_command(w, 0, 2);
+    else if (k == P_DOWNLOAD) files_command(w, 0, 5);
+    else if (k == P_REFRESH) files_command(w, 1, 0);
+    else if (k == P_TOGGLE) t_toggle(w, f->tsel);
+}
+
+// The pointer: arrows, but for the splitter's left and right
+int files_pointer(struct win *w, int x, int y, int cw, int ch) {
+    struct files *f;
+    f = F(w);
+    f->twx = t_width(f, cw);
+    if (x >= 2 + f->twx && x < 2 + f->twx + SPW && y >= TOOL_H && y < ch - STATUS_H) return PTR_COLS;
+    return PTR_ARROW;
+}
+
 void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct files *f;
     int th, lx, lw, rows, row, t, lh, trows, nv, node, bx, k;
     f = F(w);
+    f->twx = t_width(f, cw);
     th = ch - TOOL_H - STATUS_H - 2;
-    lx = 2 + TREE_W + 4; lw = cw - TREE_W - 8;
+    lx = 2 + f->twx + SPW; lw = cw - f->twx - SPW - 4;
     lh = th - 22;
     rows = (lh - 4) / ROW_H;
     trows = t_rows(f, ch);
     nv = t_shown(f);
+    // the splitter let go: its width kept, for Files windows opened after
+    if (ev == E_UP) { if (f->tdrag) { f->tdrag = 0; theme_set_tree(f->tw); } return; }
+    if (ev == E_MOVE && f->tdrag && (t = ui_split_drag(x)) >= 0) {
+        f->tw = t;
+        if (f->tw > cw - SPW - 4 - LIST_MIN) f->tw = cw - SPW - 4 - LIST_MIN;
+        if (f->tw < TREE_MIN) f->tw = TREE_MIN;
+        return;
+    }
     if (ev == E_MOVE) {
         t = ui_scroll_drag(TSB_X, TOOL_H + 2, y);
         if (t >= 0) { f->ttop = t; t_clamp(f, trows); return; }
@@ -745,7 +857,7 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         }
         return;
     }
-    if (ev == E_WHEEL && x < 2 + TREE_W) {
+    if (ev == E_WHEEL && x < 2 + f->twx) {
         f->ttop = f->ttop + y * 3;
         t_clamp(f, trows);
         return;
@@ -761,22 +873,25 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     }
     if (ev != E_DOWN && ev != E_DBL) return;
     if (ui_hit(x, y, 4, 4, 26, 22)) { if (ev == E_DOWN) up(w); return; }
+    if (ev == E_DOWN && wm_button == 0 && ui_split_click(x, y, 2 + f->twx, TOOL_H, SPW, th, f->twx)) { f->tdrag = 1; return; }
     if (nv > trows && ui_hit(x, y, TSB_X, TOOL_H + 2, 16, th - 4 - (t_hbar(f) ? 16 : 0))) {
         if (ev != E_DOWN) return;
         t = ui_scroll_click(x, y, TSB_X, TOOL_H + 2, th - 4 - (t_hbar(f) ? 16 : 0), nv, trows, f->ttop);
         if (t >= 0) f->ttop = t;
         return;
     }
-    if (t_hbar(f) && ui_hit(x, y, 2, t_hby(ch), TREE_W, 16)) {
+    if (t_hbar(f) && ui_hit(x, y, 2, t_hby(ch), f->twx, 16)) {
         if (ev != E_DOWN) return;
-        t = ui_hscroll_click(x, y, THB_X, t_hby(ch), THB_W, t_maxw(f), t_hvis(), f->tleft);
+        t = ui_hscroll_click(x, y, THB_X, t_hby(ch), THB_W, t_maxw(f), t_hvis(f), f->tleft);
         if (t >= 0) f->tleft = t;
         return;
     }
-    if (ui_hit(x, y, 2, TOOL_H, TREE_W, th)) {
+    if (ui_hit(x, y, 2, TOOL_H, f->twx, th)) {
         f->pane = 1;
         node = t_at(f, f->ttop + (y - TOOL_H - 3) / ROW_H);
         if (node < 0) return;
+        // a right click: that folder shown, and its menu
+        if (wm_button == 2) { if (ev == E_DOWN) { t_select(w, node); pop_tree(w, x, y); } return; }
         bx = 2 + 18 + f->tdepth[node] * 14 - 13 - f->tleft * 6;
         if (x >= bx - 2 && x < bx + 11 && (f->tflag[node] & T_KIDS)) { if (ev == E_DOWN) t_toggle(w, node); return; }
         if (ev == E_DOWN) t_select(w, node);
@@ -797,6 +912,7 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     if (ui_hit(x, y, lx, TOOL_H + 22, lw, lh)) {
         f->pane = 0;
         row = f->top + (y - TOOL_H - 22) / ROW_H;
+        if (wm_button == 2) { if (ev == E_DOWN) pop_list(w, row, x, y); return; }
         if (row >= 0 && row < f->n) {
             f->sel = row;
             if (ev == E_DBL) { mark_only(f, row); open_sel(w); }
@@ -860,6 +976,7 @@ void files_command(struct win *w, int menu, int item) {
     char *av[3];
     int n, i, dirs, pid;
     f = F(w);
+    if (menu == WK_POPUP) { pop_do(w, item); return; }
     if (menu == 0) {
         if (item == 0) open_sel(w);
         else if (item == 1) inputbox(w, "New Folder", "Name of the new folder:", "New Folder", A_NEWDIR);

@@ -38,6 +38,7 @@ enum { A_NONE = 0, A_DELETE = 1, A_RENAME = 2, A_NEWDIR = 3, A_OPEN = 4, A_SAVEA
        A_RUN = 6, A_ENDPROC = 7 };
 
 #define wm_mods (wk.mods)     // the modifiers held now, for a click
+extern int wm_button;         // the button of the last press: 0 the left, 2 the right (tools.c)
 
 // ---- tools.c: windows as the tools see them (struct win, wkwin.h) ----
 int  win_open(int kind, char *title, int w, int h, int size);   // size: the tool's state
@@ -76,6 +77,7 @@ void files_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
 void files_key(struct win *w, int code, int ch, int mods);
 void files_command(struct win *w, int menu, int item);
 void files_answer(struct win *w, int action, int yes);
+int  files_pointer(struct win *w, int x, int y, int cw, int ch);   // PTR_COLS over the tree's splitter
 
 int  tasks_open();
 int  tasks_open_perf();           // System Monitor on its Performance tab
@@ -152,6 +154,9 @@ int  theme_swatch(int i);          // the desktop colours Settings offers, 0..7
 enum { SORT_NAME = 0, SORT_TYPE = 1, SORT_SIZE = 2, SORT_DATE = 3, N_SORTS = 4 };
 int  theme_sort();
 void theme_set_sort(int sort);
+// Files' folder tree: its width, as its splitter was last left
+int  theme_tree();
+void theme_set_tree(int w);
 // the interface's font: one of the kit's faces and sizes (WK_FACES, WK_SIZES)
 int  theme_font();
 int  theme_fsize();

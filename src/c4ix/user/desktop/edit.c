@@ -46,7 +46,21 @@
 // Files. A pane down the left is the disk as a tree, closed folders to
 // start with: a click opens or closes a folder, and opens a file in the
 // editor. Opening a file opens the folders on the way to it. Ctrl+B,
-// View > Files or :Ex shows and hides it.
+// View > Files or :Ex shows and hides it. The bar on its right is a
+// splitter: dragged, it sizes the pane, a size every IDE window opens
+// with after that (kept in /etc/ide.cfg).
+//
+// Find. Ctrl+F (Edit > Find..., in either way of typing) opens the kit's
+// find bar under the text: Enter, F3 or Next finds the next match after
+// the selection, Shift+Enter, Shift+F3 or Previous the one before, round
+// past the end or the top with a note that it went round; the match is
+// selected (VIM's Visual, in VIM mode) and scrolled to. Match case or not.
+//
+// Scrolling. The wheel and the scroll bar move the view by lines, and the
+// cursor with it when it would leave the view; the last line comes to the
+// bottom however its lines wrap. The colouring's state at each line's
+// start is kept as far as it was worked out, so the view moves up as
+// cheaply as down.
 //
 // Code. View > Code (F7, :code) opens a Code tab beside the text's, in
 // the text's place: explore.c, a cut-down Code Explorer, with the
@@ -91,12 +105,12 @@ int ide_face = F_MONO;
 enum { TABH = 24 };
 // the file pane: its width, its header, a row; a node's flags; how many
 // entries of one folder it lists
-enum { FW = 180, FHDR = 20, FROW = 16, F_DIR = 1, F_OPEN = 2, F_KIDS = 400, FNAME = 64 };
+enum { FW = 180, SPW = 5, FMIN = 100, FHDR = 20, FROW = 16, F_DIR = 1, F_OPEN = 2, F_KIDS = 400, FNAME = 64 };
 // the languages it colours, and what each character is (desktop.h, hl.c):
 // the scheme's colour for it is ec[that] (below)
 enum { M_NORMAL = 0, M_INSERT = 1, M_VISUAL = 2, M_VLINE = 3, M_CMD = 4 };
 // Edit's items, and the answer this window asks for itself
-enum { E_CUT = 0, E_COPY = 1, E_PASTE = 2, E_ALL = 4 };
+enum { E_CUT = 0, E_COPY = 1, E_PASTE = 2, E_ALL = 4, E_FIND = 6, E_FNEXT = 7, E_FPREV = 8 };
 enum { A_BINARY = 40 };
 
 // The colour schemes: the text's colours by HC_*, then the rest. A gutter
@@ -115,6 +129,7 @@ static int scheme_cols[N_SCHEMES * SC_N] = {
 // face and size, for every IDE window, kept in /etc/ide.cfg
 static int ide_scheme, ide_vim, ide_loaded, ide_mono;
 static int ide_size = 1;
+static int ide_fw = FW;                // the file pane's width (its splitter), for each window opened
 static int *ec;                       // the scheme in use: ec[HC_KW] and the rest
 
 struct edit {
@@ -143,7 +158,7 @@ struct edit {
     char **fpath; int *fdepth; int *fflag;         // the file pane: a node's path, depth, F_ flags
     int fn, fcap, ftop, fshown, ffollow;
     int hver, nosyn;                               // a count of changes; colouring off
-    int hl_line, hl_ver, hl_lang, hl_state;        // the colouring state at the top, cached
+    int *hls; int hlsn, hlscap, hl_lang;           // the colouring's state at each line's start, known for the first hlsn
     int wrap;                                      // long lines fold onto the rows below
     int lcx, lcy;                                  // the cursor at the last draw: the view follows it when it moves
     int tah, ph, hb, maxw;                         // the text area's height, the build pane's, a bar across, the longest line
@@ -154,13 +169,17 @@ struct edit {
     char ask[WK_PATH];                             // a file box's path, in and out
     char pend[128];                                // a binary file waiting to be opened, once asked
     int *xp; int xshown, xtab, xobj;               // the Code tab (explore.c): open, in front; a compiled file, shown alone
+    int fw, fwx, fdrag;                            // the file pane's width: chosen, as drawn; its splitter dragged
+    int vis;                                       // the scroll bar's lines at once: the text's less the last top line
+    int fh;                                        // the find bar's height as drawn (0: closed)
+    struct ui_find fb;                             // the find bar
 };
 
 static struct edit *E(struct win *w) { return (struct edit *)w->st; }
 static char sb[512];
 static struct wk_menu edit_menus[5];
 static char *edit_file_items[7];
-static char *edit_edit_items[6];
+static char *edit_edit_items[10];
 static char *edit_build_items[7];
 static char *edit_view_items[7];
 static char *edit_help_items[2];
@@ -181,6 +200,14 @@ static int e_class(int c, int big) {
 static void e_say(struct edit *e, char *s) { ui_cpy(e->msg, s); }
 
 // ---- lines -------------------------------------------------------------------------
+
+// Line Y changed: the file is modified, and the colouring's state after
+// Y has to be worked out again
+static void e_touched(struct edit *e, int y) {
+    e->modified = 1; e->changed = 1; ++e->hver;
+    if (y < 0) y = 0;
+    if (e->hlsn > y + 1) e->hlsn = y + 1;
+}
 
 static void e_lines_reserve(struct edit *e, int need) {
     char **nln;
@@ -224,7 +251,7 @@ static void e_insline(struct edit *e, int at, char *s, int n) {
     e->len[at] = n;
     e->cap[at] = c;
     ++e->nl;
-    e->modified = 1; e->changed = 1; ++e->hver;
+    e_touched(e, at);
 }
 
 static void e_delline(struct edit *e, int at) {
@@ -235,7 +262,7 @@ static void e_delline(struct edit *e, int at) {
     while (i < e->nl - 1) { e->ln[i] = e->ln[i + 1]; e->len[i] = e->len[i + 1]; e->cap[i] = e->cap[i + 1]; ++i; }
     --e->nl;
     if (e->nl == 0) e_insline(e, 0, "", 0);
-    e->modified = 1; e->changed = 1; ++e->hver;
+    e_touched(e, at);
 }
 
 static void e_clear(struct edit *e) {
@@ -243,6 +270,7 @@ static void e_clear(struct edit *e) {
     i = 0;
     while (i < e->nl) { free(e->ln[i]); ++i; }
     e->nl = 0;
+    e->hlsn = 0;
 }
 
 // The text, split into lines; a final newline makes no empty line after it.
@@ -330,7 +358,7 @@ static void e_delrange(struct edit *e, int y0, int x0, int y1, int x1) {
     e->len[y0] = x0 + tail;
     k = y1;
     while (k > y0) { e_delline(e, y0 + 1); --k; }
-    e->modified = 1; e->changed = 1; ++e->hver;
+    e_touched(e, y0);
 }
 
 static int e_ry, e_rx;    // where e_instext left off
@@ -339,6 +367,7 @@ static int e_ry, e_rx;    // where e_instext left off
 static void e_instext(struct edit *e, int y, int x, char *s, int n) {
     int i, start, tail;
     char *t;
+    e_touched(e, y);
     if (x > e->len[y]) x = e->len[y];
     // cut the rest of the line off, append the pieces, put it back
     tail = e->len[y] - x;
@@ -362,7 +391,6 @@ static void e_instext(struct edit *e, int y, int x, char *s, int n) {
     if (tail > 0) memcpy(e->ln[y] + e->len[y], t, tail);
     e->len[y] = e->len[y] + tail;
     free(t);
-    e->modified = 1; e->changed = 1; ++e->hver;
 }
 
 static void e_inschar(struct edit *e, int c) {
@@ -424,6 +452,10 @@ static void e_undo(struct edit *e, int redo) {
 // ---- files ---------------------------------------------------------------------------
 
 static void f_reveal(struct edit *e, char *path);
+static void e_findbar(struct win *w, int dir, int here);
+static void e_find_open(struct win *w);
+static void e_find_act(struct win *w, int a);
+static void ide_save();
 static void x_compile(struct edit *e);
 static void f_add(struct edit *e, char *path);
 static void e_dirname(char *path, char *out);
@@ -1604,7 +1636,7 @@ static void e_normal_key(struct win *w, int code, int ch, int mods) {
             e_save_undo(e);
             while (n > 0 && e->cx < e->len[e->cy]) { e->ln[e->cy][e->cx] = ch; ++e->cx; --n; }
             --e->cx;
-            e->modified = 1; e->changed = 1; ++e->hver;
+            e_touched(e, e->cy);
             return;
         }
         if (r == 'i' || r == 'a') {
@@ -1709,7 +1741,7 @@ static void e_normal_key(struct win *w, int code, int ch, int mods) {
             if (r >= 'a' && r <= 'z') r = r - 32; else if (r >= 'A' && r <= 'Z') r = r + 32;
             e->ln[e->cy][e->cx] = r; ++e->cx;
         }
-        e->modified = 1; e->changed = 1; ++e->hver;
+        e_touched(e, e->cy);
         e_clamp(e);
         return;
     }
@@ -1799,6 +1831,8 @@ static void e_paste(struct edit *e) {
 static void e_edit(struct win *w, int item) {
     struct edit *e;
     e = E(w);
+    if (item == E_FIND) { e_find_open(w); return; }
+    if (item == E_FNEXT || item == E_FPREV) { e_findbar(w, item == E_FNEXT ? 1 : 0 - 1, 0); return; }
     if (e->mode == M_CMD) e->mode = e->vim ? M_NORMAL : M_INSERT;
     if (item == E_COPY) e_copy(e);
     else if (item == E_CUT) {
@@ -1816,6 +1850,73 @@ static void e_edit(struct win *w, int item) {
     }
     e->tlast = 0;
     e_retitle(w);
+}
+
+// ---- Find -----------------------------------------------------------------------------
+
+// The match after the selection's start (DIR 1; from that start itself
+// when HERE, as the text to find is typed) or the one before it (-1),
+// round past the end or the top, selected -- Traditional's selection, or
+// VIM's Visual -- and so scrolled to; or the bar says there is none.
+static void e_findbar(struct win *w, int dir, int here) {
+    struct edit *e;
+    int m, y, x, y0, x0, y1, x1, k, sel;
+    e = E(w);
+    if (e->xobj) { e_say(e, "A compiled file: its Code tab finds a function by its name, typed"); return; }
+    m = ui_len(e->fb.text);
+    if (!m) { ui_find_open(&e->fb, 0, 0); return; }        // nothing to look for yet: ask
+    e->xtab = 0;                                           // the text in front, not its Code tab
+    if (e->mode == M_CMD) e->mode = e->vim ? M_NORMAL : M_INSERT;
+    sel = e_sel_range(e, &y0, &x0, &y1, &x1);
+    if (sel) { y = y0; x = x0; } else { y = e->cy; x = e->cx; }
+    if (dir > 0) { if (sel && !here) ++x; }
+    else --x;
+    e->fb.note[0] = 0; e->fb.bad = 0;
+    k = 0;
+    while (k <= e->nl + 1) {
+        if (dir > 0) {
+            while (x + m <= e->len[y]) { if (ui_find_at(&e->fb, e->ln[y] + x, e->len[y] - x)) break; ++x; }
+            if (x + m <= e->len[y]) break;
+            ++y; x = 0;
+            if (y >= e->nl) { y = 0; ui_find_say(&e->fb, "Wrapped to the top", 0); }
+        } else {
+            if (x > e->len[y] - m) x = e->len[y] - m;
+            while (x >= 0) { if (ui_find_at(&e->fb, e->ln[y] + x, e->len[y] - x)) break; --x; }
+            if (x >= 0) break;
+            --y;
+            if (y < 0) { y = e->nl - 1; ui_find_say(&e->fb, "Wrapped to the bottom", 0); }
+            x = e->len[y];
+        }
+        ++k;
+    }
+    if (k > e->nl + 1) { ui_find_say(&e->fb, "Not found", 1); return; }
+    e->vy = y; e->vx = x; e->cy = y; e->tlast = 0;
+    if (e->vim) { e->mode = M_VISUAL; e->cx = x + m - 1; }
+    else { e->cx = x + m; e->tsel = 1; }
+    e->want = e->cx;
+}
+
+// what the find bar asked for
+static void e_find_act(struct win *w, int a) {
+    if (a == UF_NEXT) e_findbar(w, 1, 0);
+    else if (a == UF_PREV) e_findbar(w, 0 - 1, 0);
+    else if (a == UF_TYPED) e_findbar(w, 1, 1);
+}
+
+// Find: the bar, with the selection to look for if it is on one line
+static void e_find_open(struct win *w) {
+    struct edit *e;
+    char *t;
+    int n, y0, x0, y1, x1;
+    e = E(w);
+    if (e->xobj) { e_say(e, "A compiled file: its Code tab finds a function by its name, typed"); return; }
+    e->xtab = 0;
+    if (e->mode == M_CMD) e->mode = e->vim ? M_NORMAL : M_INSERT;
+    if (e_sel_range(e, &y0, &x0, &y1, &x1) && y0 == y1 && x1 - x0 < UI_FIND_MAX) {
+        t = e_range(e, y0, x0, y1, x1, &n);
+        ui_find_open(&e->fb, t, n);
+        free(t);
+    } else ui_find_open(&e->fb, 0, 0);
 }
 
 static int e_ctrl(int code, int ch, int mods, int c) { return (mods & M_CTRL) && (code == c || ch == c || ch == c + 32); }
@@ -1890,11 +1991,17 @@ static void e_key(struct win *w, int code, int ch, int mods) {
     if ((mods & M_CTRL) && (code == 83 || ch == 's' || ch == 'S')) { e_save(e, e->path); e_retitle(w); return; }
     // Ctrl+B: the file pane, as IDEs have it (VIM's page back is not here)
     if ((mods & M_CTRL) && (code == 66 || ch == 'b' || ch == 'B')) { e->fshown = !e->fshown; return; }
+    // Ctrl+F: Find, in either way of typing (VIM's page forward is not here
+    // either); F3 and Shift+F3 the next and the one before
+    if ((mods & M_CTRL) && (code == 70 || ch == 'f' || ch == 'F')) { e_find_open(w); return; }
+    if (code == KEY_F3) { if (!e->fb.text[0]) e_find_open(w); else e_findbar(w, (mods & M_SHIFT) ? 0 - 1 : 1, 0); return; }
     if (code == KEY_F5) { e_make(w); return; }
     if (code == KEY_F6) { e_run(w); return; }
     if (code == KEY_F8) { e_goto_error(w, (mods & M_SHIFT) ? e->ecur - 1 : e->ecur + 1); return; }
     if (code == KEY_F4) { e->bshown = !e->bshown; return; }
     if (code == KEY_F7) { e_code(w); return; }
+    // the find bar's keys while it has them (the text's Code tab not in front)
+    if (e->fb.on && e->fb.keys && !(e->xshown && e->xtab && e->xp)) { e_find_act(w, ui_find_key(&e->fb, code, ch, mods)); return; }
     // the Code tab in front: its keys, and Esc back to the text
     if (e->xshown && e->xtab && e->xp) {
         k = xp_key(e->xp, code, ch, mods);
@@ -1950,9 +2057,10 @@ void edit_key(struct win *w, int code, int ch, int mods) { e_key(w, code, ch, mo
 
 // ---- syntax colours ---------------------------------------------------------------------
 //
-// hl.c colours a line; what is kept here is where the colouring stands
-// at the top of the view, with the count of changes it was worked out
-// for, so scrolling down does not read the file again.
+// hl.c colours a line; what is kept here is the state the colouring is in
+// at the start of each line, as far down as it has been worked out (a
+// change cuts it back to the line changed: e_touched), so neither
+// scrolling down nor up reads the file from its start again.
 
 static int e_hcol(int i) { return ec[hl_at(i)]; }
 
@@ -1962,12 +2070,24 @@ static int e_hl(struct edit *e, int y, int st, int lang) { return hl_line(e->ln[
 
 // the state at the start of line LINE
 static int e_hlstate(struct edit *e, int line, int lang) {
-    int y, st;
+    int y, st, m, *n;
     if (lang != L_C && lang != L_JS) return 0;
-    y = 0; st = 0;
-    if (e->hl_ver == e->hver && e->hl_lang == lang && e->hl_line <= line) { y = e->hl_line; st = e->hl_state; }
-    while (y < line && y < e->nl) { st = e_hl(e, y, st, lang); ++y; }
-    e->hl_line = line; e->hl_state = st; e->hl_ver = e->hver; e->hl_lang = lang;
+    if (line >= e->nl) line = e->nl - 1;
+    if (line < 0) line = 0;
+    if (e->hl_lang != lang) { e->hlsn = 0; e->hl_lang = lang; }
+    if (line + 1 > e->hlscap) {
+        m = e->hlscap ? e->hlscap : 256;
+        while (m < line + 1) m = m * 2;
+        n = (int *)ualloc(m * sizeof(int));
+        if (e->hlsn > 0) memcpy(n, e->hls, e->hlsn * sizeof(int));
+        if (e->hls) free((char *)e->hls);
+        e->hls = n; e->hlscap = m;
+    }
+    if (e->hlsn == 0) { e->hls[0] = 0; e->hlsn = 1; }
+    if (line < e->hlsn) return e->hls[line];
+    y = e->hlsn - 1; st = e->hls[y];
+    while (y < line) { st = e_hl(e, y, st, lang); ++y; e->hls[y] = st; }
+    e->hlsn = line + 1;
     return st;
 }
 
@@ -2125,20 +2245,28 @@ static int f_maxw(struct edit *e) {
     }
     return mx;
 }
-static int f_hvis() { return (FW - 17) / 6; }
-static int f_hbar(struct edit *e) { return f_maxw(e) > f_hvis(); }
+static int f_hvis(struct edit *e) { return (e->fwx - 17) / 6; }
+static int f_hbar(struct edit *e) { return f_maxw(e) > f_hvis(e); }
 static int f_rows(struct edit *e, int ch) { return (ch - FHDR - 2 - (f_hbar(e) ? 16 : 0)) / FROW; }
 static void f_clamp(struct edit *e, int rows) {
     int max;
     if (e->ftop > e->fn - rows) e->ftop = e->fn - rows;
     if (e->ftop < 0) e->ftop = 0;
-    max = f_maxw(e) - f_hvis();
+    max = f_maxw(e) - f_hvis(e);
     if (max < 0) max = 0;
     if (e->fleft > max) e->fleft = max;
     if (e->fleft < 0) e->fleft = 0;
 }
 // the pane is drawn only where the text keeps some room
-static int f_on(struct edit *e, int cw) { return e->fshown && e->fpath && cw >= FW + 200; }
+static int f_on(struct edit *e, int cw) { return e->fshown && e->fpath && cw >= FMIN + SPW + 200; }
+// the pane's width in a window CW wide: the one chosen, as far as the text keeps 220 pixels
+static int f_width(struct edit *e, int cw) {
+    int w;
+    w = e->fw;
+    if (w > cw - SPW - 220) w = cw - SPW - 220;
+    if (w < FMIN) w = FMIN;
+    return w;
+}
 
 static void f_draw(struct edit *e, int ox, int oy, int ch) {
     int rows, i, y, x, cur, k, hb, vb, dx;
@@ -2154,16 +2282,16 @@ static void f_draw(struct edit *e, int ox, int oy, int ch) {
     e->ffollow = 0;
     f_clamp(e, rows);
     dx = e->fleft * 6;
-    d_rect(ox, oy, FW, ch, 0xf4f4f4);
-    d_rect(ox, oy, FW, FHDR, C_FACE);
-    d_bevel(ox, oy, FW, FHDR, B_RAISED);
+    d_rect(ox, oy, e->fwx, ch, 0xf4f4f4);
+    d_rect(ox, oy, e->fwx, FHDR, C_FACE);
+    d_bevel(ox, oy, e->fwx, FHDR, B_RAISED);
     d_text(ox + 6, oy + 4, C_DARK, F_BOLD, "Files");
-    d_clip(ox, oy + FHDR, FW - (vb ? 17 : 0), ch - FHDR - (hb ? 16 : 0));
+    d_clip(ox, oy + FHDR, e->fwx - (vb ? 17 : 0), ch - FHDR - (hb ? 16 : 0));
     i = e->ftop;
     y = oy + FHDR + 2;
     while (i < e->fn && i < e->ftop + rows) {
         x = ox + 4 + e->fdepth[i] * 12 - dx;
-        if (i == cur) d_rect(ox, y, FW, FROW, 0xc8dcff);
+        if (i == cur) d_rect(ox, y, e->fwx, FROW, 0xc8dcff);
         if (e->fflag[i] & F_DIR) {
             if (e->fflag[i] & F_OPEN) { d_line(x, y + 6, x + 4, y + 10, C_DARK); d_line(x + 4, y + 10, x + 8, y + 6, C_DARK); }
             else { d_line(x + 2, y + 4, x + 6, y + 8, C_DARK); d_line(x + 6, y + 8, x + 2, y + 12, C_DARK); }
@@ -2181,9 +2309,8 @@ static void f_draw(struct edit *e, int ox, int oy, int ch) {
         ++i;
     }
     d_clip_end();
-    if (vb) ui_scrollbar(ox + FW - 17, oy + FHDR, ch - FHDR - (hb ? 16 : 0), e->fn, rows, e->ftop);
-    if (hb) ui_hscrollbar(ox, oy + ch - 16, FW - 17, f_maxw(e), f_hvis(), e->fleft);
-    d_rect(ox + FW, oy, 2, ch, C_SHADOW);
+    if (vb) ui_scrollbar(ox + e->fwx - 17, oy + FHDR, ch - FHDR - (hb ? 16 : 0), e->fn, rows, e->ftop);
+    if (hb) ui_hscrollbar(ox, oy + ch - 16, e->fwx - 17, f_maxw(e), f_hvis(e), e->fleft);
 }
 
 // a file picked in the pane: into the editor, unless that loses changes
@@ -2206,16 +2333,16 @@ static void f_mouse(struct win *w, int ev, int x, int y, int ch) {
     hb = f_hbar(e);
     if (ev == E_WHEEL) { e->ftop = e->ftop + y * 3; f_clamp(e, rows); return; }
     if (ev != E_DOWN) return;
-    if (e->fn > rows && x >= FW - 17) {
-        t = ui_scroll_click(x, y, FW - 17, FHDR, ch - FHDR - (hb ? 16 : 0), e->fn, rows, e->ftop);
+    if (e->fn > rows && x >= e->fwx - 17) {
+        t = ui_scroll_click(x, y, e->fwx - 17, FHDR, ch - FHDR - (hb ? 16 : 0), e->fn, rows, e->ftop);
         if (t >= 0) { e->ftop = t; return; }
     }
     if (hb && y >= ch - 16) {
-        t = ui_hscroll_click(x, y, 0, ch - 16, FW - 17, f_maxw(e), f_hvis(), e->fleft);
+        t = ui_hscroll_click(x, y, 0, ch - 16, e->fwx - 17, f_maxw(e), f_hvis(e), e->fleft);
         if (t >= 0) e->fleft = t;
         return;
     }
-    if (y < FHDR + 2 || x >= FW) return;
+    if (y < FHDR + 2 || x >= e->fwx) return;
     i = e->ftop + (y - FHDR - 2) / FROW;
     if (i < 0 || i >= e->fn || i >= e->ftop + rows) return;
     if (e->fflag[i] & F_DIR) { if (e->fflag[i] & F_OPEN) f_close_dir(e, i); else f_open_dir(e, i); }
@@ -2247,6 +2374,33 @@ static int e_wseg(struct edit *e, int y, int x, int cols) {
     return s < h ? s : h - 1;
 }
 
+// The top line that brings the last line to the bottom: wrapped, the
+// rows of the lines from it to the end fill the view (as last drawn)
+static int e_maxtop(struct edit *e) {
+    int t, used, h;
+    if (!e->wrap) return e->nl > e->rows ? e->nl - e->rows : 0;
+    t = e->nl; used = 0;
+    while (t > 0) {
+        h = e_wh(e, t - 1, e->cols);
+        if (used + h > e->rows) break;
+        used = used + h; --t;
+    }
+    return t < e->nl ? t : e->nl - 1;           // (the last line alone taller than the view)
+}
+// the last line every row of which shows with line T at the top (T, if it
+// alone is taller than the view)
+static int e_lastfull(struct edit *e, int t) {
+    int l, used, h;
+    if (!e->wrap) return t + e->rows - 1 < e->nl ? t + e->rows - 1 : e->nl - 1;
+    l = t; used = 0;
+    while (l < e->nl) {
+        h = e_wh(e, l, e->cols);
+        if (used + h > e->rows) break;
+        used = used + h; ++l;
+    }
+    return l > t ? l - 1 : t;
+}
+
 // the build pane: its header (a line of the interface's text), its log (BROWS of the grid's)
 enum { BHDR = 17 };
 #define BLOG_H (BROWS * ECH + 2)
@@ -2254,20 +2408,24 @@ enum { BHDR = 17 };
 
 static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct edit *e;
-    int rows, cols, gw, y, line, x, n, sx, ph, sy, k, i, c, endsel, lang, st, tah, hb, h, seg, a, cseg, r, used, l, by;
+    int rows, cols, gw, y, line, x, n, sx, ph, sy, k, i, c, endsel, lang, st, tah, hb, h, seg, a, cseg, r, used, l, by, fh;
     char num[16];
     e = E(w);
     ec = scheme_cols + ide_scheme * SC_N;
     ph = e->bshown ? BPANE : 0;
+    fh = e->fb.on ? UI_FIND_H : 0;                // the find bar, under the text
     sy = oy + ch - ECH - 4;                       // the status line
-    tah = ch - ECH - 4 - ph;                      // the text's area, its bars included
+    tah = ch - ECH - 4 - ph - fh;                 // the text's area, its bars included
     hb = !e->wrap;
     rows = (tah - 6 - (hb ? 16 : 0)) / ECH;
     if (rows < 1) rows = 1;
     gw = e->nu ? 5 * ECW : 0;
     cols = (cw - 8 - gw - 17) / ECW;
     if (cols < 1) cols = 1;
-    e->rows = rows; e->cols = cols; e->gw = gw; e->tah = tah; e->ph = ph; e->hb = hb;
+    e->rows = rows; e->cols = cols; e->gw = gw; e->tah = tah; e->ph = ph; e->hb = hb; e->fh = fh;
+    // the scroll bar's lines at once: what makes its end the last top line
+    e->vis = e->nl - e_maxtop(e);
+    if (e->vis < 1) e->vis = 1;
     e->maxw = 0;
     i = 0;
     while (i < e->nl) { if (e->len[i] > e->maxw) e->maxw = e->len[i]; ++i; }
@@ -2338,7 +2496,7 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
                 x = k;
             }
             // the cursor: a block in Normal, a bar in Insert
-            if (focused && line == e->cy && seg == cseg && e->mode != M_CMD) {
+            if (focused && !e->fb.keys && line == e->cy && seg == cseg && e->mode != M_CMD) {
                 x = sx + (e->cx - a) * ECW;
                 if (e->vim && e->mode != M_INSERT) {
                     d_rect(x, y, ECW, ECH, ec[SC_CUR]);
@@ -2352,15 +2510,17 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
         ++line;
     }
     while (r < rows) { d_textn(sx, y, ec[SC_TILDE], EFONT, EFACE, ECW, "~", 1); y = y + ECH; ++r; }
-    ui_scrollbar(ox + cw - 17, oy, tah - (hb ? 16 : 0), e->nl, rows, e->top);
+    ui_scrollbar(ox + cw - 17, oy, tah - (hb ? 16 : 0), e->nl, e->vis, e->top);
     if (hb) {
         ui_hscrollbar(ox, oy + tah - 16, cw - 17, e->maxw + 1, cols, e->left);
         d_rect(ox + cw - 17, oy + tah - 16, 17, 16, C_FACE);
     }
 
+    if (fh) ui_find_draw(&e->fb, ox, oy + tah, cw, focused);
+
     // the build pane: a header with Cancel while it runs, the log, its bars
     if (e->bshown) {
-        y = oy + tah;
+        y = oy + tah + fh;
         d_rect(ox, y, cw, BHDR, C_FACE);
         d_bevel(ox, y, cw, BHDR, B_RAISED);
         ui_cpy(sb, e->building ? "Build: running" : (e->blogn == 0 ? "Build" : (e->bcancel ? "Build: cancelled" : (e->bstatus == 0 ? "Build: finished" : "Build: failed"))));
@@ -2421,13 +2581,19 @@ static void e_draw_text(struct win *w, int ox, int oy, int cw, int ch, int focus
     d_textn(ox + cw - 12 - k * ECW, sy + 2, C_DARK, EFONT, EFACE, ECW, sb, k);
 }
 
-// the view moved to T: the cursor comes along, as the redraw keeps it in view
+// The view moved to T, no further than brings the last line to the
+// bottom: the cursor comes along onto a line wholly in view, as the
+// redraw keeps it in view (it would move the view back for a cursor on a
+// line whose rows run off the bottom).
 static void e_scrolled(struct edit *e, int t) {
+    int last;
+    last = e_maxtop(e);
+    if (t > last) t = last;
+    if (t < 0) t = 0;
     e->top = t;
-    if (e->top > e->nl - e->rows) e->top = e->nl - e->rows;
-    if (e->top < 0) e->top = 0;
-    if (e->cy < e->top) e->cy = e->top;
-    if (e->cy >= e->top + e->rows) e->cy = e->top + e->rows - 1;
+    last = e_lastfull(e, t);
+    if (e->cy < t) e->cy = t;
+    if (e->cy > last) e->cy = last;
     e_clamp(e);
 }
 
@@ -2463,7 +2629,7 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct edit *e;
     int row, line, t, by, r, l, h;
     e = E(w);
-    by = e->tah + BHDR;                            // the build log's top
+    by = e->tah + e->fh + BHDR;                    // the build log's top
     if (ev == E_WHEEL) { e_scrolled(e, e->top + y * 3); return; }
     if (ev == E_MOVE) {
         t = ui_scroll_drag(cw - 17, 0, y);
@@ -2486,10 +2652,15 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
         return;
     }
     if (ev != E_DOWN && ev != E_DBL) return;
-    if (e->bshown && y >= e->tah && y < e->tah + e->ph) {
+    if (e->fh && y >= e->tah && y < e->tah + e->fh) {
+        e->drag = 0;
+        e_find_act(w, ui_find_mouse(&e->fb, ev, x, y, 0, e->tah, cw));
+        return;
+    }
+    if (e->bshown && y >= e->tah + e->fh && y < e->tah + e->fh + e->ph) {
         if (ev != E_DOWN && y < by) return;
         if (y < by) {
-            if (e->building && ui_hit(x, y, cw - 72, e->tah + 1, 66, BHDR - 2)) e_cancel(w);
+            if (e->building && ui_hit(x, y, cw - 72, e->tah + e->fh + 1, 66, BHDR - 2)) e_cancel(w);
             return;
         }
         if (y >= by + BLOG_H) {
@@ -2514,7 +2685,7 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
         return;
     }
     if (y >= e->tah) return;
-    t = ui_scroll_click(x, y, cw - 17, 0, e->tah - (e->hb ? 16 : 0), e->nl, e->rows, e->top);
+    t = ui_scroll_click(x, y, cw - 17, 0, e->tah - (e->hb ? 16 : 0), e->nl, e->vis, e->top);
     if (t >= 0) { e_scrolled(e, t); return; }
     if (e->hb && y >= e->tah - 16) {
         t = ui_hscroll_click(x, y, 0, e->tah - 16, cw - 17, e->maxw + 1, e->cols, e->left);
@@ -2523,6 +2694,7 @@ static void e_mouse_text(struct win *w, int ev, int x, int y, int cw, int ch) {
     }
     if (e->mode == M_VISUAL || e->mode == M_VLINE || e->mode == M_CMD) e->mode = e->vim ? M_NORMAL : M_INSERT;
     e->tlast = 0;
+    e->fb.keys = 0;                                // a click in the text: the keys are the text's again
     // Shift+click: Traditional's selection runs from where the cursor was
     if (!e->vim && (wk.mods & M_SHIFT) && ev == E_DOWN) { if (!e->tsel) { e->vy = e->cy; e->vx = e->cx; } }
     else e->tsel = 0;
@@ -2558,8 +2730,10 @@ int edit_pointer(struct win *w, int x, int y, int cw, int ch) {
     struct edit *e;
     e = E(w);
     if (f_on(e, cw)) {
-        if (x < FW + 2) return PTR_ARROW;
-        x = x - FW - 2; cw = cw - FW - 2;
+        e->fwx = f_width(e, cw);
+        if (x >= e->fwx && x < e->fwx + SPW) return PTR_COLS;
+        if (x < e->fwx) return PTR_ARROW;
+        x = x - e->fwx - SPW; cw = cw - e->fwx - SPW;
     }
     if (x_tabs(e)) { if (y < TABH) return PTR_ARROW; y = y - TABH; }
     if (x_front(e)) return PTR_ARROW;
@@ -2573,7 +2747,12 @@ void edit_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct edit *e;
     e = E(w);
     ec = scheme_cols + ide_scheme * SC_N;
-    if (f_on(e, cw)) { f_draw(e, ox, oy, ch); ox = ox + FW + 2; cw = cw - FW - 2; }
+    if (f_on(e, cw)) {
+        e->fwx = f_width(e, cw);
+        f_draw(e, ox, oy, ch);
+        ui_splitter(ox + e->fwx, oy, SPW, ch);
+        ox = ox + e->fwx + SPW; cw = cw - e->fwx - SPW;
+    }
     if (x_tabs(e)) {
         x_tab_labels(e);
         d_rect(ox, oy, cw, TABH, C_FACE);
@@ -2593,15 +2772,24 @@ void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     struct edit *e;
     int t;
     e = E(w);
-    if (ev == E_UP) { e->drag = 0; return; }
+    // the splitter let go: its width kept, for the IDE windows opened after
+    if (ev == E_UP) { e->drag = 0; if (e->fdrag) { e->fdrag = 0; ide_fw = e->fw; ide_save(); } return; }
     if (f_on(e, cw)) {
+        e->fwx = f_width(e, cw);
         if (ev == E_MOVE) {
-            t = ui_scroll_drag(FW - 17, FHDR, y);
+            if (e->fdrag && (t = ui_split_drag(x)) >= 0) {
+                e->fw = t;
+                if (e->fw > cw - SPW - 220) e->fw = cw - SPW - 220;
+                if (e->fw < FMIN) e->fw = FMIN;
+                return;
+            }
+            t = ui_scroll_drag(e->fwx - 17, FHDR, y);
             if (t >= 0) { e->ftop = t; return; }
             t = ui_scroll_drag(0, ch - 16, x);
             if (t >= 0) { e->fleft = t; return; }
-        } else if (x < FW + 2) { e->drag = 0; f_mouse(w, ev, x, y, ch); return; }
-        x = x - FW - 2; cw = cw - FW - 2;
+        } else if (ev == E_DOWN && ui_split_click(x, y, e->fwx, 0, SPW, ch, e->fwx)) { e->drag = 0; e->fdrag = 1; return; }
+        else if (x < e->fwx + SPW) { e->drag = 0; if (x < e->fwx) f_mouse(w, ev, x, y, ch); return; }
+        x = x - e->fwx - SPW; cw = cw - e->fwx - SPW;
     }
     if (x_tabs(e)) {
         // a tab picked, or the Code tab closed (a wheel's y is how far, not where)
@@ -2631,9 +2819,9 @@ void edit_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
 //
 // One page for every IDE window, a window of its own: each choice is used
 // at once, in every IDE window open, and kept in /etc/ide.cfg as
-// "scheme N input M font F size S" (M 1 for VIM; F and S the kit's
-// fixed-width faces and sizes), as Settings keeps the desktop's in
-// /etc/desktop.cfg.
+// "scheme N input M font F size S pane P" (M 1 for VIM; F and S the kit's
+// fixed-width faces and sizes; P the file pane's width), as Settings keeps
+// the desktop's in /etc/desktop.cfg.
 
 static char icfg[64];
 
@@ -2656,6 +2844,7 @@ static void ide_load() {
         if (icfg[i] == 'i' && icfg[i + 1] == 'n' && icfg[i + 5] == ' ' && e_digits(icfg + i + 6, &v) > 0) ide_vim = v != 0;
         if (icfg[i] == 'f' && icfg[i + 1] == 'o' && icfg[i + 4] == ' ' && e_digits(icfg + i + 5, &v) > 0 && v < WK_FACES) ide_mono = v;
         if (icfg[i] == 's' && icfg[i + 1] == 'i' && icfg[i + 4] == ' ' && e_digits(icfg + i + 5, &v) > 0 && v < WK_SIZES) ide_size = v;
+        if (icfg[i] == 'p' && icfg[i + 1] == 'a' && icfg[i + 4] == ' ' && e_digits(icfg + i + 5, &v) > 0 && v >= FMIN && v < 2000) ide_fw = v;
         ++i;
     }
     ide_grid();
@@ -2670,6 +2859,8 @@ static void ide_save() {
     ui_num(icfg + ui_len(icfg), ide_mono);
     ui_cat(icfg, " size ");
     ui_num(icfg + ui_len(icfg), ide_size);
+    ui_cat(icfg, " pane ");
+    ui_num(icfg + ui_len(icfg), ide_fw);
     ui_cat(icfg, "\n");
     write(fd, icfg, ui_len(icfg));
     uclose(fd);
@@ -2787,7 +2978,9 @@ int edit_open(char *path) {
     edit_file_items[0] = "New"; edit_file_items[1] = "Open..."; edit_file_items[2] = "Save";
     edit_file_items[3] = "Save As..."; edit_file_items[4] = "-"; edit_file_items[5] = "Close"; edit_file_items[6] = 0;
     edit_edit_items[E_CUT] = "Cut   Ctrl+X"; edit_edit_items[E_COPY] = "Copy   Ctrl+C"; edit_edit_items[E_PASTE] = "Paste   Ctrl+V";
-    edit_edit_items[3] = "-"; edit_edit_items[E_ALL] = "Select All   Ctrl+A"; edit_edit_items[5] = 0;
+    edit_edit_items[3] = "-"; edit_edit_items[E_ALL] = "Select All   Ctrl+A"; edit_edit_items[5] = "-";
+    edit_edit_items[E_FIND] = "Find...   Ctrl+F"; edit_edit_items[E_FNEXT] = "Find Next   F3";
+    edit_edit_items[E_FPREV] = "Find Previous  Shift+F3"; edit_edit_items[9] = 0;
     edit_build_items[0] = "Build   F5"; edit_build_items[1] = "Run   F6"; edit_build_items[2] = "Next Error   F8";
     edit_build_items[3] = "Previous Error"; edit_build_items[4] = "Show Output   F4";
     edit_build_items[5] = "Cancel Build"; edit_build_items[6] = 0;
@@ -2810,7 +3003,8 @@ int edit_open(char *path) {
     e->elog = (int *)ualloc(ERR_MAX * sizeof(int));
     e->vim = ide_vim; e->nu = 1; e->mode = ide_vim ? M_NORMAL : M_INSERT; e->ecur = 0 - 1; e->bsel = 0 - 1;
     e->wrap = 1;
-    e->hl_line = 0 - 1;
+    e->hl_lang = 0 - 1;
+    e->fw = ide_fw;
     e->lcx = 0 - 1; e->lcy = 0 - 1;
     e_insline(e, 0, "", 0);
     // the file pane: the top of the disk, every folder closed

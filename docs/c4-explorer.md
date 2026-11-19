@@ -632,6 +632,13 @@ against libdesk:
   fixed state).
 - **Opening files:** Files, the IDE icon and Go > Editor launch `/bin/ide
   FILE`.
+- **Find and the file pane's splitter** (c4ix-desktop.md, part
+  twenty-eight) are the kit's widgets, `ui_find_*` and `ui_splitter`, in
+  ui.c, which libdesk carries. A splitter's drag, like a thumb's, ends when
+  the button comes up (`ui_scroll_end`), so the protocol has to bring the
+  client its button-up, wherever the pointer is. Files' **Open in IDE**
+  (its right-click menu) becomes a launch of `/bin/ide FILE`, as its
+  double click on a compiled file does.
 
 **One IDE, many windows** (decided). The IDE is `single` in
 `/etc/desktop.apps`. The first launch starts it, and every later one

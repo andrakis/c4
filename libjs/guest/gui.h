@@ -51,7 +51,7 @@ enum {
 // the motion itself, which the display's edges do not stop.
 enum { GUI_PTR_ARROW = 0, GUI_PTR_TEXT = 1, GUI_PTR_RESIZE = 2, GUI_PTR_HAND = 3,
        GUI_PTR_MOVE = 4, GUI_PTR_WAIT = 5, GUI_PTR_CROSS = 6, GUI_PTR_NONE = 7,
-       GUI_PTR_LOCK = 8 };
+       GUI_PTR_LOCK = 8, GUI_PTR_COLS = 9 };   // COLS: a splitter's, left and right
 // fonts for gui_text2: the first three, and more faces for a choice of
 // them (the window kit's Settings); a font the display does not know is
 // drawn as GUI_SANS (or GUI_MONO, for 0)

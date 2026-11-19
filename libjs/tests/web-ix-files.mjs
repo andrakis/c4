@@ -1,15 +1,17 @@
 // web-ix-files.mjs - the C4IX desktop's Files in the browser
 // (docs/c4ix-desktop.md, part fifteen): files given to the page's Uploads
 // listed in /home, and the list sorted by its column headers and View >
-// Sort. Over CDP, in a tab of its own in one of the user's Chromes
+// Sort; the splitter between the folder tree and the list, dragged; and
+// the right click's menus, Open in IDE among them for a source or a
+// program. Over CDP, in a tab of its own in one of the user's Chromes
 // (cdp.mjs), against a page served from this tree:
 //
 //   node libjs/serve.mjs PORT --isolate &
 //   node libjs/tests/web-ix-files.mjs http://127.0.0.1:9222 https://PORT.code.home.stargazer.onl OUTDIR
 //
 // The uploads are put in the page's store for the check and taken out
-// again after it, and every boot is ?persist=reset, so it leaves nothing
-// behind in that origin's stores.
+// again after it, and every boot is ?persist=0, so the system's files are
+// neither read from nor kept in that origin's store.
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { Browser } from './cdp.mjs';
@@ -31,7 +33,7 @@ const b = await Browser.connect(cdp);
 console.log(`web-ix-files: ${b.version}`);
 const tab = await b.newTab(false);
 try {
-  const page = `${base}/libjs/web/?system=c4ix&persist=reset&mmu=1`;
+  const page = `${base}/libjs/web/?system=c4ix&persist=0&mmu=1`;
   // window.c4m is the page's machine. The page can reload itself after it
   // is up (coi.js isolating it on a first visit, ../coi.js), so what needs
   // the machine is done in a waitFor, which tries again until it can.
@@ -104,6 +106,74 @@ try {
   ok('View > Sort by Type, still descending: txt dat c', await orderIs('alpha.txt bravo.dat charlie.c'), await order());
   await clickT(await inList('Name'));
   ok("clicking Name's header: by name again", await orderIs('alpha.txt bravo.dat charlie.c'), await order());
+  // ---- the splitter between the tree and the list ----
+  // (a window's title is the highest string of it: its taskbar button, lower,
+  // would minimise a window already in front)
+  const sleepUntil = async (f, t = 8000) => { const end = Date.now() + t; while (Date.now() < end) { if (await f()) return true; await sleep(250); } return !!await f(); };
+  const pressAt = async (x, y, button) => {
+    const p = await at(x, y);
+    await tab.mouse('mouseMoved', p.x, p.y);
+    await tab.mouse('mousePressed', p.x, p.y, button, button === 'right' ? 2 : 1);
+    await tab.mouse('mouseReleased', p.x, p.y, button, 0);
+    await sleep(400);
+  };
+  const dragAt = async (x0, y0, x1, y1) => {
+    const p = await at(x0, y0), q = await at(x1, y1);
+    await tab.mouse('mouseMoved', p.x, p.y); await tab.mouse('mousePressed', p.x, p.y, 'left', 1);
+    for (let k = 1; k <= 5; k++) { await tab.mouse('mouseMoved', p.x + ((q.x - p.x) * k) / 5, p.y + ((q.y - p.y) * k) / 5, 'left', 1); await sleep(40); }
+    await tab.mouse('mouseReleased', q.x, q.y, 'left', 0);
+    await sleep(400);
+  };
+  {
+    const t = (await find('Files - /home')).sort((p, q) => p.y - q.y)[0];
+    const wx = t.x - 27, wy = t.y - 7;
+    const nx = (await inList('alpha.txt')).x;
+    const sx = wx + 4 + 2 + 180 + 3, sy = wy + 200;
+    await dragAt(sx, sy, sx + 80, sy);
+    ok('dragging the bar between the tree and the list widens the tree', await sleepUntil(async () => (await inList('alpha.txt'))?.x === nx + 80), JSON.stringify(await inList('alpha.txt')));
+    await shot('splitter');
+    // ---- the right click's menus ----
+    const rclick = async n => { const c = await inList(n); await pressAt(c.x + 5, c.y + 5, 'right'); };
+    await rclick('alpha.txt');
+    ok('a right click on a text file: Open, Rename, Delete, but not Open in IDE',
+      await shownHas('Rename', 5000) && await shownHas('Delete', 5000) && !(await find('Open in IDE')).length);
+    await shot('context-menu-text');
+    await clickT((await find('Delete')).pop());
+    ok('Delete asks first', await shownHas('Delete File', 5000) && await shownHas("Delete 'alpha.txt'?", 5000));
+    await shot('context-menu-delete-asks');
+    await clickT((await find('No')).pop());
+    ok('and No leaves it', await sleepUntil(async () => !(await find('Delete File')).length) && !!await inList('alpha.txt'));
+    await rclick('charlie.c');
+    ok('on a C source: Open in IDE', await shownHas('Open in IDE', 5000));
+    await shot('context-menu-source');
+    await clickT((await find('Open in IDE')).pop());
+    ok('which opens it in the IDE', await shownHas('charlie.c - IDE', 15000));
+    await shot('open-source-in-ide');
+    await clickT((await find('File')).pop());
+    await shownHas('Close', 5000);
+    await clickT((await find('Close')).pop());
+    await sleepUntil(async () => !(await find('charlie.c - IDE')).length);
+    // a program, in /bin: Open in IDE is its code in the IDE's Code tab
+    await clickT((await find('Files - /home')).sort((p, q) => p.y - q.y)[0]);
+    await tab.key('Backspace');
+    await shownHas('Files - /', 8000);
+    await clickT(await inList('bin'), true);
+    ok('/bin', await shownHas('Files - /bin', 8000) && await sleepUntil(async () => !!await inList('cat')));
+    await rclick('cat');
+    ok('on a program: Open in IDE', await shownHas('Open in IDE', 5000));
+    await shot('context-menu-program');
+    await clickT((await find('Open in IDE')).pop());
+    ok("which shows the program's code in the IDE's Code tab", await shownHas('cat - IDE', 20000) &&
+      await tab.waitFor(`${shown}.some(t => /^main \\(\\d+ words/.test(t.s))`, 20000).then(v => !!v, () => false));
+    await shot('open-program-in-ide');
+    await clickT((await find('File')).pop());
+    await shownHas('Close', 5000);
+    await clickT((await find('Close')).pop());
+    await sleepUntil(async () => !(await find('cat - IDE')).length);
+    // the splitter back where it was
+    const t2 = (await find('Files - /bin')).sort((p, q) => p.y - q.y)[0];
+    await dragAt(t2.x - 27 + 4 + 2 + 260 + 3, t2.y - 7 + 200, t2.x - 27 + 4 + 2 + 180 + 3, t2.y - 7 + 200);
+  }
   ok('no errors on the page', !tab.errors.length, tab.errors.join('\n'));
 } finally {
   try {

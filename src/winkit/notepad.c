@@ -12,6 +12,12 @@
 // Cut, Copy and Paste (and Ctrl+X, C and V, or Shift+Del, Ctrl+Ins and
 // Shift+Ins) go through the kit's clipboard, which every window shares.
 //
+// Find (Edit > Find..., Ctrl+F): the kit's find bar under the text (ui.c),
+// which looks from the selection for the next match (Enter, F3, Next) or
+// the one before (Shift+Enter, Shift+F3, Previous), round past the end or
+// the top with a note that it went round, and selects it. Match case or
+// not; a selection on one line is what it looks for to start with.
+//
 // Format: Word Wrap, on until it is turned off, folds a long line onto the
 // rows below; off, the text scrolls across under a bar. And the face and
 // size the text is drawn in, the kit's fixed-width ones. The choices are
@@ -22,7 +28,8 @@
 enum { CHUNK = 4096 };
 enum { D_OPEN = 1, D_SAVEAS = 2 };                // its dialogs
 enum { N_NEW = 0, N_OPEN = 1, N_SAVE = 2, N_SAVEAS = 3, N_EXIT = 5 };   // File's items
-enum { E_CUT = 0, E_COPY = 1, E_PASTE = 2, E_DELETE = 3, E_ALL = 5 };    // Edit's
+enum { E_CUT = 0, E_COPY = 1, E_PASTE = 2, E_DELETE = 3, E_ALL = 5,     // Edit's
+       E_FIND = 7, E_FNEXT = 8, E_FPREV = 9 };
 enum { FM_WRAP = 0, FM_FACE = 2, FM_SIZE = 6, FM_N = 9 };                // Format's: then the faces, the sizes
 
 char *notepad_name = "Notepad";
@@ -45,6 +52,7 @@ struct note {
     int lcaret;                                   // the caret when it last drew (the view follows it when it moves)
     int rows, cols, maxw;                         // as it last drew: rows and columns shown, the longest line
     int lwrap;                                    // ... and whether it folded
+    struct ui_find fb;                            // the find bar
 };
 
 // Format's choices: Word Wrap, the face and the size; the text grid they make
@@ -61,7 +69,8 @@ static char buf[WK_PATH + 64];
 static char about_item[64];
 static char about_title[64];
 static char *file_items[7] = { "New", "Open...", "Save", "Save As...", "-", "Exit", 0 };
-static char *edit_items[7] = { "Cut", "Copy", "Paste", "Delete", "-", "Select All", 0 };
+static char *edit_items[11] = { "Cut", "Copy", "Paste", "Delete", "-", "Select All", "-",
+                                "Find...   Ctrl+F", "Find Next   F3", "Find Previous", 0 };
 static char *format_items[FM_N + 1];
 static char fmt_buf[FM_N * 20];
 static char *help_items[2];
@@ -69,6 +78,7 @@ static struct wk_menu menus[4];
 static char cfgb[72];
 
 static struct note *N(int w) { return (struct note *)wk_state(w); }
+static void find_act(int w, int a);
 
 static void retitle(int w) {
     struct note *n;
@@ -388,6 +398,10 @@ static void note_draw(int w, int cw, int ch, int focused) {
     int rows, cols, i, row, y, start, end, next, cr, cc, a, b, k, hb, left;
     n = N(w);
     hb = !wrap;                                    // the bar across
+    if (n->fb.on) {
+        ui_find_draw(&n->fb, 0, ch - UI_FIND_H, cw, focused);
+        ch = ch - UI_FIND_H;                       // the text above the find bar
+    }
     d_rect(0, 0, cw, ch, C_WHITE);
     d_bevel(0, 0, cw, ch, B_SUNKEN);
     rows = (ch - 6 - (hb ? 16 : 0)) / nch;
@@ -436,7 +450,7 @@ static void note_draw(int w, int cw, int ch, int focused) {
                 if (k > 0) d_textn(4 + a * ncw, y, C_WHITE, nfs, nfont, ncw, n->text + start + left + a, k);
             }
         }
-        if (focused && row == cr && cc >= left && cc - left <= cols) d_rect(4 + (cc - left) * ncw, y, 1, nch - 1, C_DARK);
+        if (focused && !n->fb.keys && row == cr && cc >= left && cc - left <= cols) d_rect(4 + (cc - left) * ncw, y, 1, nch - 1, C_DARK);
         y = y + nch;
         ++row;
         i = next;
@@ -466,6 +480,14 @@ static void note_mouse(int w, int ev, int x, int y, int b) {
     lay(n);
     hb = !wrap;
     rows = n->rows > 0 ? n->rows : 1;
+    if (n->fb.on) {
+        ch = ch - UI_FIND_H;                       // the text's, above the find bar
+        if (ev != E_WHEEL && ev != E_MOVE && ev != E_UP && (t = ui_find_mouse(&n->fb, ev, x, y, 0, ch, cw)) >= 0) {
+            find_act(w, t);
+            return;
+        }
+        if (ev == E_DOWN) n->fb.keys = 0;          // a click in the text: the keys are its again
+    }
     if (ev == E_WHEEL) {
         n->top = n->top + b * 3;
         if (n->top > row_count(n) - rows) n->top = row_count(n) - rows;
@@ -501,12 +523,62 @@ static void note_mouse(int w, int ev, int x, int y, int b) {
 
 static void note_command(int w, int id);
 
+// ---- Find --------------------------------------------------------------------------
+
+// The next match (DIR 1) after the selection's start -- from it, when
+// HERE, as the text to find is typed -- or the one before it (-1), round
+// past the end or the top; selected, or the bar says there is none.
+static void find(int w, int dir, int here) {
+    struct note *n;
+    int m, s0, p, k;
+    n = N(w);
+    m = ui_len(n->fb.text);
+    if (!m) { ui_find_open(&n->fb, 0, 0); return; }   // nothing to look for yet: ask
+    s0 = has_sel(n) ? sel0(n) : n->caret;
+    if (dir > 0) p = here || !has_sel(n) ? s0 : s0 + 1;
+    else p = s0 - 1;
+    n->fb.note[0] = 0; n->fb.bad = 0;
+    k = 0;
+    while (k <= n->len + 1) {
+        if (dir > 0 && p + m > n->len) { p = 0; ui_find_say(&n->fb, "Wrapped to the top", 0); }
+        if (dir < 0 && p < 0) { p = n->len - m; ui_find_say(&n->fb, "Wrapped to the bottom", 0); }
+        if (p >= 0 && ui_find_at(&n->fb, n->text + p, n->len - p)) {
+            n->anchor = p; n->caret = p + m;
+            row_of(n, n->caret, &n->want_col);
+            return;
+        }
+        p = p + dir;
+        ++k;
+    }
+    ui_find_say(&n->fb, "Not found", 1);
+}
+
+// what the find bar asked for
+static void find_act(int w, int a) {
+    if (a == UF_NEXT) find(w, 1, 0);
+    else if (a == UF_PREV) find(w, 0 - 1, 0);
+    else if (a == UF_TYPED) find(w, 1, 1);
+    wk_invalidate(w, 0, 0, 0, 0);
+}
+
+// Find: the bar, with the selection to look for if it is one short line
+static void find_open(int w) {
+    struct note *n;
+    n = N(w);
+    ui_find_open(&n->fb, has_sel(n) ? n->text + sel0(n) : 0, has_sel(n) ? sel1(n) - sel0(n) : 0);
+    wk_invalidate(w, 0, 0, 0, 0);
+}
+
 static void note_key(int w, int down, int code, int ch, int mods) {
     struct note *n;
     int row, col, was, moved;
     if (!down) return;
     n = N(w);
     was = n->modified;
+    if ((mods & M_CTRL) && (ch == 'f' || ch == 'F' || code == 'F')) { find_open(w); return; }
+    if (code == KEY_F3) { if (!n->fb.text[0]) find_open(w); else find(w, (mods & M_SHIFT) ? 0 - 1 : 1, 0); return; }
+    if (n->fb.on && n->fb.keys) { find_act(w, ui_find_key(&n->fb, code, ch, mods)); return; }
+    if (code == KEY_ESC && n->fb.on) { n->fb.on = 0; return; }
     if (ui_key_copy(code, ch, mods)) { note_command(w, WK_CMD(1, E_COPY)); return; }
     if (ui_key_cut(code, ch, mods)) { note_command(w, WK_CMD(1, E_CUT)); return; }
     if (ui_key_paste(code, ch, mods)) { note_command(w, WK_CMD(1, E_PASTE)); return; }
@@ -561,6 +633,9 @@ static void note_command(int w, int id) {
         if (item == E_CUT || item == E_DELETE) cut_sel(n);
         else if (item == E_PASTE) paste(n);
         else if (item == E_ALL) { n->anchor = 0; n->caret = n->len; }
+        else if (item == E_FIND) find_open(w);
+        else if (item == E_FNEXT) find(w, 1, 0);
+        else if (item == E_FPREV) find(w, 0 - 1, 0);
         row_of(n, n->caret, &n->want_col);
         if (n->modified != was) retitle(w);
         wk_invalidate(w, 0, 0, 0, 0);
@@ -595,6 +670,7 @@ static void note_answer(int w, int dialog, int yes) {
 static int note_pointer(int w, int x, int y) {
     int cw, ch;
     wk_size(w, &cw, &ch);
+    if (N(w)->fb.on) { if (y >= ch - UI_FIND_H) return PTR_ARROW; ch = ch - UI_FIND_H; }
     return x < cw - 18 && (wrap || y < ch - 18) ? PTR_TEXT : PTR_ARROW;
 }
 

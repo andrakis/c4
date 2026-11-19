@@ -100,10 +100,10 @@ enum { E_DOWN = 1, E_UP = 2, E_MOVE = 3, E_DBL = 4, E_WHEEL = 5 };
 // keys (browser keyCodes) and modifiers
 enum { KEY_BACK = 8, KEY_TAB = 9, KEY_ENTER = 13, KEY_ESC = 27, KEY_PGUP = 33, KEY_PGDN = 34,
        KEY_END = 35, KEY_HOME = 36, KEY_LEFT = 37, KEY_UP = 38, KEY_RIGHT = 39, KEY_DOWN = 40,
-       KEY_INS = 45, KEY_DEL = 46, KEY_F2 = 113, KEY_F4 = 115, KEY_F5 = 116 };
+       KEY_INS = 45, KEY_DEL = 46, KEY_F2 = 113, KEY_F3 = 114, KEY_F4 = 115, KEY_F5 = 116 };
 enum { M_SHIFT = 1, M_CTRL = 2, M_ALT = 4 };
-// pointer shapes, GUI_PTR_*'s numbers
-enum { PTR_ARROW = 0, PTR_TEXT = 1, PTR_RESIZE = 2 };
+// pointer shapes, GUI_PTR_*'s numbers (PTR_COLS: a splitter's, left and right)
+enum { PTR_ARROW = 0, PTR_TEXT = 1, PTR_RESIZE = 2, PTR_COLS = 9 };
 // 16x16 icons (d_icon), which a class names by its kind; the numbers are
 // the C4IX desktop's window kinds
 enum { ICON_TERM = 1, ICON_INFO = 2, ICON_FILES = 3, ICON_TASKS = 4, ICON_NOTE = 5,
@@ -138,7 +138,7 @@ struct wk_menu { char *title; char **items; };
 // an item whose first byte is WK_CHECKED is drawn with a check mark beside
 // it, and without that byte ("-" is a separator)
 enum { WK_CHECKED = 1 };
-enum { WK_CMD_STEP = 256 };
+enum { WK_CMD_STEP = 256, WK_POPUP = 200 };
 #define WK_CMD(m, i) ((m) * WK_CMD_STEP + (i))
 
 // wk_open's flags
@@ -163,6 +163,9 @@ void  wk_invalidate_covered(int w, int x, int y, int ww, int hh);
                                       // program's frame): when nothing else changed, only it is
                                       // drawn there, not what is under it or its own frame
 void  wk_menu(int w, struct wk_menu *m, int n);
+void  wk_popup(int w, int x, int y, char **items);          // a menu of its own at (x, y) in the
+                                      // client area (a right click's): ITEMS as a menu bar's, the
+                                      // one chosen reaching command as WK_CMD(WK_POPUP, item)
 int   wk_timer(int w, int id, int ms);                      // every ms (0 stops it); 1 if set
 void  wk_raise(int w);
 int   wk_focus();                     // the window with the keyboard, or 0
@@ -234,6 +237,33 @@ int  ui_key_copy(int code, int ch, int mods);
 int  ui_key_cut(int code, int ch, int mods);
 int  ui_key_paste(int code, int ch, int mods);
 int  ui_field_hit(int px, int x, int w, char *text, int caret);   // the caret for a click
+void ui_check(int x, int y, char *label, int on);  // a check box and its label
+// a splitter: the bar between two panes side by side, dragged across
+void ui_splitter(int x, int y, int w, int h);
+int  ui_split_click(int px, int py, int x, int y, int w, int h, int pos);   // 1: pressed, a drag from POS begun
+int  ui_split_drag(int px);                    // POS as the pointer has moved it, or -1 for no drag
+int  ui_split_active();
+// A find bar, under an editor's text (ui.c): the editor keeps one and does
+// the looking, the bar says what was asked for -- UF_NEXT, UF_PREV,
+// UF_TYPED (the text changed), UF_CLOSE -- and keeps a note of what the
+// last look found.
+enum { UI_FIND_H = 30, UI_FIND_MAX = 64 };
+enum { UF_NONE = 0, UF_NEXT = 1, UF_PREV = 2, UF_TYPED = 3, UF_CLOSE = 4 };
+struct ui_find {
+    char text[UI_FIND_MAX];           // what to find
+    int caret;
+    int on;                           // shown
+    int keys;                         // it has the keyboard, not the text
+    int mcase;                        // Match case
+    char note[64];                    // what the last look found
+    int bad;                          // ... and it was nothing (drawn in red)
+};
+void ui_find_open(struct ui_find *f, char *seed, int n);   // shown, with the keys; SEED (a selection) to find
+void ui_find_draw(struct ui_find *f, int x, int y, int w, int focused);
+int  ui_find_mouse(struct ui_find *f, int ev, int px, int py, int x, int y, int w);   // UF_*, or -1 off it
+int  ui_find_key(struct ui_find *f, int code, int ch, int mods);                      // UF_*
+void ui_find_say(struct ui_find *f, char *note, int bad);
+int  ui_find_at(struct ui_find *f, char *s, int n);       // 1 if what F finds starts at S (N characters there)
 void ui_tabs(int x, int y, char **labels, int n, int sel);
 int  ui_tab_hit(int px, int py, int x, int y, char **labels, int n);
 void ui_group(int x, int y, int w, int h, char *label);

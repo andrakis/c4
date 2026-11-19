@@ -15,7 +15,7 @@
 
 import { CMD, RGB_ABGR } from './gui-device.js';
 // GUI_PTR_* (libjs/guest/gui.h) as CSS cursors
-const POINTERS = ['default', 'text', 'nwse-resize', 'pointer', 'move', 'wait', 'crosshair', 'none', 'none'];
+const POINTERS = ['default', 'text', 'nwse-resize', 'pointer', 'move', 'wait', 'crosshair', 'none', 'none', 'col-resize'];
 const PTR_LOCK = 8;
 import { RingReader, FbConsumer } from './shared.js';
 

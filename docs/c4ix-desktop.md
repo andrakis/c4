@@ -1805,3 +1805,102 @@ Three `pin N quake --window &` from one Terminal, for 300 s of simulated
 time: three windows drew, none froze, and no line said `cannot find`.
 The gate (c4bb-images, test-c4ix, test-c4ix-rebuild, test-libjs, test,
 test-c4fc, test-quake) passed.
+
+## Part twenty-eight: the IDE scrolls both ways alike, Find, splitters, and Files' right click (asked for 2026-11-19)
+
+The user's report: scrolling up in the IDE was much slower than down; the
+wheel often stopped just short of the file's first or last lines; the IDE
+and Text Editor need Find; the IDE's file pane and Files' folder tree
+should be sizable; Files wants a right-click menu, with Open in IDE for a
+program.
+
+The IDE (`edit.c`) and Text Editor (the kit's `notepad.c`, grin's Notepad
+too) are two editors, a line array and one buffer, so Find is the kit's
+find bar, which both keep, each looking in its own text.
+
+### What it was
+
+Measured with `libjs/tests/try-scroll.mjs`: the IDE on its own source
+(edit.c, 2,894 lines then), from its middle, 30 turns of the wheel down
+and 30 up, counting the instructions each turn runs until the desktop is
+idle with the frame drawn (cycles less those skipped asleep, less an idle
+stretch's):
+
+| | down | up |
+|---|---|---|
+| before, Word Wrap off | 2.24 M | 49.9 M (22 times) |
+| before, Word Wrap on | 1.92 M | 1.82 M, but 30 turns moved the view back 31 lines, not 90 |
+| after, Word Wrap off | 2.27 M | 2.28 M |
+| after, Word Wrap on | 2.14 M | 1.98 M, 90 lines each way |
+
+- **Up re-read the file.** The colouring's state was kept for the top of
+  the view only (part five), good for going down. Going up asked for an
+  earlier line, and the state was worked out again from line 1: 50 M
+  instructions halfway down this file, a second or so in the browser.
+- **Wrapped, the view came back.** The wheel moved the cursor to the
+  view's last line, counted in file lines; with folded lines above it
+  that line was below the bottom, and the redraw, which keeps the cursor
+  in view, moved the view down again. At the top this left lines 1..6
+  out of reach; the wheel scrolled less than it should all the way up.
+- **Wrapped, the end was out of reach.** The last top line was the
+  file's lines less the view's rows, and the folded lines near the end
+  need more rows than that: the last 8 lines of edit.c never showed.
+
+### What was done
+
+- [x] **The colouring's state at every line's start** (`e_hlstate`): an
+      array, worked out as far down as it has been asked for. A change
+      (`e_touched`, which the four primitives and `r` and `~` call) cuts
+      it back to the line changed. Up and down cost the same.
+- [x] **Scrolling in display rows** (`e_maxtop`, `e_lastfull`,
+      `e_scrolled`): the last top line is the one that puts the last line
+      at the bottom however its lines fold, and the cursor comes onto a
+      line wholly in view, so the redraw leaves the view where the wheel
+      put it. The scroll bar's thumb reaches the same last top line (it
+      is given the text's lines less that line as "visible").
+- [x] **Find** (the kit's `struct ui_find`, `ui_find_*` in ui.c): a bar
+      under the text with what to find, Next, Previous, Match case, a
+      note and a close box. Ctrl+F or Edit > Find... opens it, with the
+      selection to look for if that is on one line; typing looks from the
+      match as it grows; Enter, F3 or Next finds the next, Shift+Enter,
+      Shift+F3 or Previous the one before; past the end or the top it goes
+      round and says so ("Wrapped to the top"), or says
+      "Not found". The match is selected, Traditional's selection or VIM's
+      Visual, and the view follows the cursor to it. Esc closes the bar; a
+      click in the text gives the keys back to it. Ctrl+F is Find in VIM
+      mode too, as Ctrl+B is the file pane. Edit > Find Next and Find
+      Previous in both editors.
+- [x] **Splitters** (the kit's `ui_splitter`, `ui_split_click`,
+      `ui_split_drag`, ended with a thumb's drag by `ui_scroll_end`): the
+      bar right of the IDE's file pane and the one between Files' tree and
+      list. The pointer over one is a new shape, GUI_PTR_COLS (9,
+      `col-resize`). The IDE's pane keeps 100 pixels and leaves the text
+      220; Files' tree keeps 100 and the list 280. Let go, the width is
+      every window's opened after: the IDE's in /etc/ide.cfg (`pane P`),
+      Files' in /etc/desktop.cfg (`tree T`).
+- [x] **Pop-up menus** (`wk_popup`, wmcore.c): a menu at a point in a
+      window, drawn and chosen from as a drop-down is, its item reaching
+      the window's command hook as `WK_CMD(WK_POPUP, item)`. A press of
+      another button than the left one is never half of a double click.
+      The desktop's tools see which button pressed in `wm_button`.
+- [x] **Files' right click**: on an item, Open, Open in IDE (a program,
+      an object file or a library into the IDE's Code tab alone, as the
+      IDE's File > Open does one; a source into the IDE's text), Rename,
+      Delete (which asks, as before), New Folder and Download, all that
+      Files does already; on a folder in the tree, which it then shows,
+      Expand or Collapse, New Folder in it and Refresh. A right click on
+      an item not selected selects it alone; on one among a selection,
+      Delete takes them all.
+- [x] grin's table of the kit's functions (`kitfns.h`) gains the find
+      bar, the check box, the splitter and `wk_popup`: version 5.
+- [x] test-desktop.mjs: Files' right-click menus and Open in IDE on
+      /bin/cat; its splitter (the pointer, a drag, a second window as
+      wide); the IDE on edit.c reaching its last and first lines with the
+      wheel and the thumb, wrapped and not; Find, F3, Enter, Shift+F3,
+      round both ways, Match case, Not found, Esc and Edit > Find...; the
+      pane's splitter and a second IDE window as wide; Text Editor's Find.
+- [x] web-ix-edit.mjs and web-ix-files.mjs, in the browser: the same, with
+      screenshots; both now boot with `?persist=0` rather than reset.
+
+Text Editor's own scrolling was already in rows (`row_count`), and costs
+the same both ways: each redraw walks the buffer to its top row.

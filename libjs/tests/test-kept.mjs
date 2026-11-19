@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { layUploads, FOLDERS, uploadName, uploadParts } from '../uploads.js';
+import { layUploads, FOLDERS, uploadName, uploadParts, NEEDS, needsStatus } from '../uploads.js';
 import { untar, tar, keptFiles, keptFolders, folderTar } from '../kept.js';
 
 let fail = 0;
@@ -27,6 +27,17 @@ check(FOLDERS[0][0] === '' && ['wolf3d', 'duke3d', 'quake', 'doom', 'rott'].ever
 check(uploadName('doom', 'DOOM2.WAD') === 'doom/doom2.wad' && uploadName('', 'X.WL6') === 'x.wl6' && uploadName('nope', 'a') === 'a',
   'an upload\'s name: its folder\'s (one of them only) and the file\'s, lower case');
 check(uploadParts('doom/doom2.wad').join('|') === 'doom|doom2.wad' && uploadParts('a.txt').join('|') === '|a.txt', 'and back');
+// what each game wants, for the Uploads' list: in its folder or in /home
+{
+  check(NEEDS.every(n => FOLDERS.some(([f]) => f === n.folder)) && NEEDS.length === FOLDERS.length - 1,
+    "the Uploads' list says what each game of a folder wants");
+  const st = Object.fromEntries(needsStatus(['duke3d/duke3d.grp', 'pak1.pak', 'doom/tnt.wad', 'rott/darkwar.wad', 'wolf3d/vswap.wl6'])
+    .map(s => [s.need.folder, s]));
+  check(st.duke3d.ready && st.quake.ready && st.doom.ready, 'a game with its files, in its folder or in /home, is ready (Duke, Quake, Doom)');
+  check(!st.rott.ready && st.rott.missing.join() === 'darkwar.rtl,darkwar.rtc' && !st.wolf3d.ready && st.wolf3d.missing.length === 7,
+    "one without them says which are still to add (ROTT's .RTL and .RTC, Wolfenstein's seven)", JSON.stringify([st.rott.missing, st.wolf3d.missing]));
+  check(!needsStatus([]).find(s => s.need.folder === 'doom').ready, 'Doom wants one of its IWADs');
+}
 
 {
   const files = new Map([['c4dos.dir', t('BIN/\nGAMES/\nDOOM/\nautoexec.bat\n')], ['c4ix.sizes', t('5 x\n')]]);

@@ -137,6 +137,16 @@ body {
 #uploads-list li .name, #saved-list li .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 #uploads-list li.none, #saved-list li.none { color: var(--dim); border: none; }
 #uploads-list li .name .dim { margin-right: 1px; }
+#uploads-needs-box { margin: 10px 0; }
+#uploads-needs-box summary { cursor: pointer; color: var(--cyan); }
+#uploads-needs-box p { margin: 6px 0; font-size: 12px; }
+#uploads-needs { list-style: none; margin: 0; padding: 0; max-height: 32vh; overflow: auto; font-size: 12px; }
+#uploads-needs li { padding: 4px 0; border-bottom: 1px solid var(--edge); }
+#uploads-needs .mark { display: inline-block; width: 1.4em; color: var(--dim); }
+#uploads-needs li.ready .mark, #uploads-needs .got { color: var(--cyan); }
+#uploads-needs .game { color: var(--text); }
+#uploads-needs .files, #uploads-needs .run { margin-left: 1.4em; overflow-wrap: anywhere; }
+#uploads-needs .want { color: var(--pink); }
 /* Saved Files: what this system keeps in this browser, to download (app.js) */
 #saved-list li.folder { color: var(--cyan); padding-top: 8px; }
 #saved-list li.file .name { padding-left: 14px; }

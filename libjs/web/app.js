@@ -45,7 +45,7 @@
 import { C4M } from '../page.js';
 import { SITE } from './site.js';
 import { MediaStore, indexedDbBackend } from '../../src/c4bb/web/store.js';
-import { FOLDERS, uploadName, uploadParts } from '../uploads.js';
+import { FOLDERS, uploadName, uploadParts, needsStatus } from '../uploads.js';
 import { keptFiles, keptFolders, folderTar } from '../kept.js';
 
 // On a host that cannot isolate the page, coi.js reloads it once with a
@@ -67,8 +67,13 @@ const SYSTEMS = {
   // whose File > Exit grin comes back to the prompt. The games are on it
   // too, each in its directory (\GAMES\DOOM: CD there, then DOOM). Its CONFIG.SYS
   // says DRIVES.SYS HOME=B:, so what is saved goes to B:, the store.
+  // 256 MB, as the bare machine's biggest games have: the bare libc reads a
+  // file into memory whole, in a buffer that doubles as it fills, so Quake's
+  // 18 MB pak0 wants 48 MB free while it is read (64 MB, less the RAM disk's
+  // 16 and grin's, found no pak at all), and the person's own files, from
+  // the Uploads, more: Duke's 44 MB GRP, Quake's 34 MB pak1.
   c4dos: { label: 'C4DOS', image: `${LJIMAGES}/dos/c4dos32.c4r`, disk: `${LJIMAGES}/dos`, argv: ['c4dos32.c4r'], mhz: 400,
-           persist: 'c4dos' },
+           mem: 256, persist: 'c4dos' },
   // The Build Ladder (build-images.sh, libjs/images/ladder;
   // docs/c4dos-ladder.md): C4DOS with the games, and what it takes to
   // climb in one sitting -- BUILD compiles C4KE, dosload boots it, C4KE
@@ -618,6 +623,34 @@ async function upShow() {
     upList.append(li);
   }
   $('uploadsbtn').textContent = files.length ? `Uploads (${files.length})` : 'Uploads';
+  upNeeds(files.map(([n]) => n));
+}
+// What the games that play your own files want (uploads.js NEEDS), each
+// file found or not among the uploads, and where to start the game: so the
+// list says what is still to add, and in which folder.
+function upNeeds(names) {
+  const el = $('uploads-needs');
+  el.replaceChildren();
+  const span = (cls, text) => { const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; return s; };
+  for (const { need, have, missing, anyMissing, ready } of needsStatus(names)) {
+    const li = document.createElement('li');
+    if (ready) li.className = 'ready';
+    const head = document.createElement('div');
+    head.append(span('mark', ready ? '✓' : '·'), span('game', need.game), span('dim', ` in /home/${need.folder}`));
+    const files = document.createElement('div'); files.className = 'files';
+    const file = (f, how) => {
+      const got = have.includes(f);
+      files.append(span(got ? 'got' : how === 'opt' ? 'dim' : 'want', (got ? '✓ ' : '') + f + (how === 'opt' ? ' (if you have it)' : '')), ' ');
+    };
+    for (const f of need.all || []) file(f, 'all');
+    if (need.any) { files.append(span('dim', need.all ? 'and one of: ' : 'one of: ')); for (const f of need.any) file(f, 'any'); }
+    for (const f of need.opt || []) file(f, 'opt');
+    const left = missing.length ? `${missing.length} to add` : anyMissing.length ? 'one of them to add' : 'ready';
+    const run = document.createElement('div'); run.className = 'run dim';
+    run.textContent = `${left} — C4DOS (grin): ${need.c4dos}; C4IX: ${need.c4ix}; bare machine: system ${need.bare}`;
+    li.append(head, files, run);
+    el.append(li);
+  }
 }
 async function upAdd(list) {
   try {

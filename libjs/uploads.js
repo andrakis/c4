@@ -33,6 +33,45 @@ export const FOLDERS = [
   ['rott', '/home/rott', 'Rise of the Triad: rottreg plays the registered DARKWAR.WAD, .RTL and .RTC (and REMOTE1.RTS, if you have it: else the shareware\'s)'],
 ];
 
+// What each of those games wants of the person's files, for the Uploads'
+// list (app.js): `all` are needed, one of `any` is, `opt` are used when
+// there. And where to start it on each system: C4IX's Go > Games and a
+// Terminal, C4DOS's grin (Program Manager's Full Games group, progman.c)
+// and its prompt, and the page's own system for the bare machine. Names
+// are as uploadName makes them, lower case.
+export const NEEDS = [
+  { folder: 'wolf3d', game: 'Wolfenstein 3D (registered)',
+    all: ['audiohed.wl6', 'audiot.wl6', 'gamemaps.wl6', 'maphead.wl6', 'vgadict.wl6', 'vgagraph.wl6', 'vgahead.wl6', 'vswap.wl6'],
+    c4ix: 'wolf3d6', c4dos: 'Full Games > Wolfenstein 3D, or \\GAMES\\WOLF3D\\WOLF3D6', bare: 'wolf3d6' },
+  { folder: 'doom', game: 'Doom (The Ultimate Doom, Doom II, Final Doom)',
+    any: ['doom.wad', 'doom2.wad', 'tnt.wad', 'plutonia.wad'],
+    c4ix: 'doom -home', c4dos: 'Full Games > The Ultimate Doom, Doom II, TNT, Plutonia, or \\GAMES\\DOOM\\DOOM -home', bare: 'doom-full' },
+  { folder: 'duke3d', game: 'Duke Nukem 3D (1.3D, 1.4, Atomic 1.5)',
+    all: ['duke3d.grp'],
+    c4ix: 'duke3d -home', c4dos: 'Full Games > Duke Nukem 3D, or \\GAMES\\DUKE3D\\DUKE3D -home', bare: 'duke3d-full' },
+  { folder: 'quake', game: 'Quake (registered)',
+    all: ['pak1.pak'], opt: ['pak0.pak'],
+    c4ix: 'quake -home', c4dos: 'Full Games > Quake, or \\GAMES\\QUAKE\\QUAKE -home', bare: 'quake-full' },
+  { folder: 'rott', game: 'Rise of the Triad (registered)',
+    all: ['darkwar.wad', 'darkwar.rtl', 'darkwar.rtc'], opt: ['remote1.rts'],
+    c4ix: 'rottreg', c4dos: 'Full Games > Rise of the Triad, or \\GAMES\\ROTT\\ROTTREG', bare: 'rottreg' },
+];
+
+// How far the uploads (their names, as kept) go towards each game of NEEDS:
+// [{ need, have: [names found], missing: [names], ready }]. A file counts in
+// the game's own folder or in /home, as the games look.
+export function needsStatus(names) {
+  const set = new Set(names.map(n => n.toLowerCase()));
+  const has = (folder, f) => set.has(`${folder}/${f}`) || set.has(f);
+  return NEEDS.map(need => {
+    const all = need.all || [], any = need.any || [], opt = need.opt || [];
+    const have = [...all, ...any, ...opt].filter(f => has(need.folder, f));
+    const missing = all.filter(f => !has(need.folder, f));
+    const anyOk = !any.length || any.some(f => has(need.folder, f));
+    return { need, have, missing, anyMissing: anyOk ? [] : any, ready: !missing.length && anyOk };
+  });
+}
+
 // An upload's name: its folder's, if it has one, and the file's, lower case
 export const uploadName = (folder, file) => (FOLDERS.some(([f]) => f === folder) && folder ? folder + '/' : '') + file.toLowerCase();
 // ... and back: [folder, file]

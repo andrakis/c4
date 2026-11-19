@@ -51,6 +51,7 @@ static int rx, ry, mx, my;            // motion short of a frame pixel; the poin
 static int held[8];                   // the keys the game was told are down, a bit each
 static int had_focus;
 static int me;                        // grin's image (C4DOS v8), 0 without
+static char named[40];                // the Program Manager item's title that started it, or ""
 
 static void push(int t, int a, int b, int c) {
     int n;
@@ -213,6 +214,8 @@ static int open_win(char *title, int w, int h, int fl) {
     while (i < 8) { held[i] = 0; ++i; }
     scale = fits(2) ? 2 : 1;
     fw_class.size = 16;
+    // the item's title, when an item started it: Tetris, not PDCurses' "curses"
+    if (named[0]) title = named;
     if ((win = wk_open(&fw_class, title, win_w(scale), win_h(scale), WK_FIXED, 0)) <= 0) {
         win = 0;
         free(pix); free((char *)pal); pix = 0; pal = 0;
@@ -232,11 +235,24 @@ int grin_fwin_open(char *title, int w, int h, int fl) {
     return ok;
 }
 
-// copied, so that a redraw for another window's sake has a whole frame to show
+// copied, so that a redraw for another window's sake has a whole frame to show.
+// A frame of another size than the window was opened for (Duke Nukem 3D
+// opens 640x400 and draws its menus at 320x200, its levels at the size
+// chosen) is scaled to it, nearest pixel, rather than dropped.
 void grin_fwin_frame(char *p, int w, int h, int pitch, int *colours) {
-    int y;
-    if (!win || closed || w != fw || h != fh || !p || !colours) return;
-    if (pitch == w) memcpy(pix, p, w * h);
+    int x, y, sy;
+    char *d, *s;
+    if (!win || closed || w <= 0 || h <= 0 || !p || !colours) return;
+    if (w != fw || h != fh) {
+        y = 0;
+        while (y < fh) {
+            sy = y * h / fh;
+            s = p + sy * pitch; d = pix + y * fw;
+            x = 0;
+            while (x < fw) { d[x] = s[x * w / fw]; ++x; }
+            ++y;
+        }
+    } else if (pitch == w) memcpy(pix, p, w * h);
     else { y = 0; while (y < h) { memcpy(pix + y * w, p + y * pitch, w); ++y; } }
     memcpy((char *)pal, (char *)colours, 256 * sizeof(int));
     fresh = 1;
@@ -266,6 +282,10 @@ int grin_fwin_poll(int *ev) {
 // ---- grin's side: starting one, and after it ----------------------------------------
 
 void fwin_init() { me = gd_image(0); }
+
+// the next game's window is titled so (Program Manager's item), or as the
+// game says with 0
+void fwin_name(char *title) { named[0] = 0; if (title) ui_ncpy(named, title, 40); }
 
 // The window gone with the program, from the top of the loop: closed if
 // the program left it open, its frame freed, the mouse let go
@@ -320,6 +340,7 @@ void fwin_run(char *cmdline) {
     gd_sink((int)cap_write, (int)cap_read, 0);
     gd_exec(cmdline);
     gd_sink(0, 0, 0);
+    named[0] = 0;
     if (!ever) {
         ui_ncpy(say, dos_busy_name, SAY_N);
         ui_ncat(say, " ended without opening a window.", SAY_N);

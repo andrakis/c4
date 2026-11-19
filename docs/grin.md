@@ -1,6 +1,7 @@
 # grin: a graphical shell for C4DOS
 
-Status: **G0 to G7 are built** (2026-10-24 to 2026-10-28). G8, a system
+Status: **G0 to G7 are built** (2026-10-24 to 2026-10-28), and the games'
+groups since (2026-11-19, "The games' groups" in section 4). G8, a system
 monitor, and G9, two games at once, are planned and not built (section
 9). This document is grin's design and status: what grin is, how it is
 built and how it works, each milestone as it was built and where it left
@@ -94,19 +95,38 @@ polling its window (no nap, no saver, its frame drawn at once).
 
 - **Full screen**: grin gives the display up (`gui_detach`), takes its
   table out of slot 25, and runs the line with `exec`; then takes the
-  display back at its size, quiets the sound card, and draws everything.
+  display back at its size, quiets the sound card, and draws everything
+  (`grin_display_give`, `grin_display_take`). Each game's bare layer
+  finds no grin, so it takes the display itself, as at `A>`. A program
+  that ends with a status other than 0 (one that could not start: no such
+  program, too little memory, its files missing) said why on the console,
+  the page's terminal beside the display; a message box says so.
 - **In a window** (the games, G6): the game's bare platform layer finds
   the table and calls `fwin_open`, `fwin_frame`, `fwin_poll`; grin copies
   each frame and blits it in its next redraw, 1x or 2x; keys go to the
   game while its window has the focus; Tyrian and ROTT get pointer lock.
+  A frame of another size than the window was opened for is scaled to it,
+  nearest pixel (Duke Nukem 3D opens 640x400 and draws its menus at
+  320x200; such frames used to be dropped, and its window stayed black).
+  A window started from a Program Manager item has the item's title
+  (Tetris, not PDCurses' "curses"; Solitaire, not its path).
 - **In a DOS Prompt** (G5): C4DOS's interpreter with its console sink
   pointed at a text window, so builtins, batch files and redirection work
   as at `A>`. A `bare.c` program's read pumps grin's loop until a line is
   typed; a c4cc program's output comes through the console tap when it
-  ends.
+  ends. A line naming a program that Program Manager runs full screen
+  (`DUKE3D` typed at `A:\GAMES\DUKE3D>`) runs full screen from there too.
 - One at a time: grin refuses a second one with a message box.
 - Program Manager's item says which way (its mode, as a PIF said), and File
-  Manager and File > Run follow the item that runs the same program.
+  Manager, File > Run and a line typed in a DOS Prompt follow the item that
+  runs the same program (`progman_mode`); with no such item, File Manager
+  and File > Run run it full screen, and a DOS Prompt in itself.
+- **Memory**: the page's C4DOS machine has 256 MB (`libjs/web/app.js`).
+  The bare libc reads a file into memory whole, in a buffer that doubles
+  as it fills, so Quake's 18 MB `pak0.pak` wants some 48 MB free while it
+  is read: at the 64 MB C4DOS had (16 of them the RAM disk's), Quake
+  found no pak and stopped, saying it could not find `gfx.wad`. The
+  person's own files are bigger still (Duke's Atomic GRP is 44 MB).
 
 ### 3.6 Persistence
 
@@ -131,6 +151,39 @@ its icon's slot. A PROGMAN.INI from before G7 has the bare `[Main]`: Main
 then opens over the icons' row and the other groups are icons, as 3.1
 first showed them. Items: double click or Enter starts one; File > New,
 Properties and Delete edit them in the active group.
+
+An item's mode is `app` (a grin application, or one of grin's own
+windows), `full` (a DOS program full screen), `window` (a DOS program in a
+window of grin's) or `prompt` (a DOS program of lines, in a DOS Prompt of
+its own, started in the program's directory). A label wider than fourteen
+letters is on two lines, broken at a space, as 3.1 broke icon titles; the
+minimised groups' icons wrap into rows along the bottom.
+
+The default groups (`progman.c`'s `defaults`) are Main and Accessories,
+then the games the page's C4DOS disk has, each in its directory in
+`\GAMES`, in five groups:
+
+| group | mode | games |
+|---|---|---|
+| Action Games | full | Doom, Duke Nukem 3D, Quake, Rise of the Triad, Super Blit Kart, Tyrian, Wolfenstein 3D |
+| Full Games (Uploads) | full | the same games with the person's own files, which the page's Uploads put on the disk: The Ultimate Doom, Doom II, TNT, Plutonia (`DOOM -home -iwad`), Duke Nukem 3D (`DUKE3D -home`), Quake (`QUAKE -home`), Rise of the Triad (`ROTTREG`), Wolfenstein 3D (`WOLF3D6`); each says what it wants when its files are not there |
+| Cards & Puzzles | window | the Ace of Penguins' eleven, and Puzzles' Fifteen, Mines and Net |
+| Classic Games | window | the BSD games on curses: Air Traffic Control, Battlestar, Boggle, Canfield, Cribbage, Gomoku, Hangman, Mille Bornes, Rain, Robots, Sail, Snake, Tetris, Worm |
+| Text Games | prompt | Zork I to III (Frotz), Open Adventure, and the BSD games of lines: Adventure, Backgammon, Go Fish, Hunt the Wumpus, Monopoly, Pig, Quiz, Star Trek |
+
+The action games are full screen because grin runs one DOS program at a
+time: a game in a window gains nothing from the desktop beside it, and
+loses half its speed to the copy. They can still be set to a window by
+Properties.
+
+PROGMAN.INI has a `Version=2` line before its groups (a grin before it
+skips any line there). One without it, or older, is upgraded when it is
+read (`pm_upgrade`): the Games group is renamed Action Games, the default
+groups it lacks are added (as icons), every default item whose command
+line it has takes the default's mode (the old Games group's four, which
+ran in a window, now full screen), and every default item it lacks is
+added to its group. The person's own items and groups are left as they
+are, and the file is written back.
 
 ### 3.8 The clipboard
 
@@ -181,6 +234,41 @@ out; Sound's Test plays it.
 | G5 | DOS programs | `grin-g5`, 2026-10-26 | full-screen launch, REDIR.SYS and the console tap (API v6), DOS Prompt windows |
 | G6 | games in a window | `grin-g6`, 2026-10-27 | `fwin.c`, the games' bare layers, `image()` (API v8), sizes, pointer lock |
 | G7 | finishing | `grin-g7`, 2026-10-28 | MDI groups with Cascade and Tile; the clipboard in Notepad, the fields, Calculator and the DOS Prompt; the startup chime and Control Panel's Sound; the screen saver checked; this document |
+| | the games' groups | `grin-games`, 2026-11-19 | every game on the disk in five groups, the action games full screen, the Uploads' games; `prompt` items; PROGMAN.INI upgraded; full screen from a DOS Prompt; frames scaled in a game's window; C4DOS at 256 MB |
+
+### The games' groups, as built (2026-11-19)
+
+What the user found, testing grin on the page: the games list was the
+four of G6; Duke Nukem 3D drew nothing in grin; Quake did not start in
+grin or at `A>` ("can't find gfx/pop.lmp" and others); Rise of the Triad,
+Doom and Tyrian stayed in a window, the card and puzzle games went full
+screen; and grin had no way to the full games from the Uploads. What was
+found and done:
+
+- **The list** (3.7): five groups of games, every one on the disk.
+- **Duke drew nothing in a window**: its bare layer opens grin's window
+  at 640x400 and draws 320x200 frames, which `grin_fwin_frame` dropped
+  (it took only frames of the window's size). Duke typed in a DOS Prompt
+  found grin's table and played in such a window. Frames of another size
+  are scaled now (3.5), and a line in a DOS Prompt naming a full-screen
+  program runs full screen.
+- **Quake**: `gfx/pop.lmp` missing is the shareware's ordinary check for
+  the registered game. What stopped it was memory: `pak0.pak` could not be
+  read whole at 64 MB, so there was no pak and no `gfx.wad`. C4DOS has
+  256 MB now (3.5); Quake says what it needs when it cannot read its pak0
+  (`qg_no_pak0`, games/quake).
+- **Full screen and windows** followed each item's mode: the four games
+  ran in windows by their items, and the cards and puzzles had no item,
+  so ran full screen as any DOS program with none does. The modes are the
+  groups' now, and an old PROGMAN.INI is upgraded (3.7).
+- **The Uploads** were already laid over drive 0 for C4DOS
+  (`libjs/uploads.js`), and the games' `-home` builds look in their
+  folder at the disk's root, then at the root, from their own directory
+  too (`DUKE3D -home` at `A:\GAMES\DUKE3D>` plays `duke3d/duke3d.grp`).
+  What was missing was a way to start them in grin, and the memory: the
+  Full Games (Uploads) group, and 256 MB. The page's Uploads dialog now
+  lists what each game wants (`NEEDS` in uploads.js), each file found or
+  not, and where to start the game on each system.
 
 ### G7, as built
 
@@ -261,6 +349,15 @@ G6's games in a window, and G7's:
   in Notepad giving the screen's text;
 - the screen saver: Desktop's Test runs Marquee with grin's line, a key
   ends it and everything is drawn again.
+
+And the games' groups' (2026-11-19): PROGMAN.INI written with the five
+games' groups and their modes; Action Games' seven, two labels on two
+lines; Properties' fourth mode (G6's four games set to a window by it, as
+they now default to full screen); DOOM typed in a DOS Prompt running full
+screen and grin back after F10 and Y, with no message box; Cards &
+Puzzles > Net in a window; Text Games > Quiz in a DOS Prompt of its own;
+and an old PROGMAN.INI (no Version=, a Games group, an item and a group of
+the person's own) upgraded, nothing lost and nothing twice.
 
 ## 6. Decisions
 

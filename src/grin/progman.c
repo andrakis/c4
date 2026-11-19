@@ -13,11 +13,24 @@
 // An item is a title, a command line, an icon and a run mode: app (a grin
 // application, or one of grin's own windows, named by the command lines
 // FILEMAN, CONTROL, PROGMAN and DOSPRMPT), full (a DOS program, full
-// screen) or window (a DOS program in a window of its own: the games,
-// whose bare platform layers find grin and play in it, fwin.c). A DOS
-// program started from File Manager or File > Run runs as the first item
-// that names the same program says, as a PIF said, else full screen
-// (grin_dos).
+// screen), window (a DOS program in a window of its own: the games,
+// whose bare platform layers find grin and play in it, fwin.c) or prompt
+// (a DOS program that reads and writes lines, in a DOS Prompt window of
+// its own: the text adventures). A DOS program started from File
+// Manager or File > Run, or typed in a DOS Prompt, runs as the first item
+// that names the same program says, as a PIF said (grin_dos,
+// progman_mode); else full screen from File Manager and File > Run, and
+// in the DOS Prompt where it was typed.
+//
+// The games have a group each of their kind: the action games full
+// screen, since grin runs one DOS program at a time and gains nothing by
+// keeping its desktop beside them; the same games playing the person's own
+// files, which the page's Uploads put on the disk (libjs/uploads.js); the
+// cards and puzzles, and the BSD games on curses, in windows; and the text
+// games in DOS Prompts. A PROGMAN.INI from before them (no Version= line,
+// or an older one) gets them when it is read (pm_upgrade): the groups it
+// lacks, the default items it lacks, and the default items it has given
+// their default mode, its own items left as they are.
 //
 // Each group is a window inside Program Manager's (MDI, below), with its
 // place kept on its [name] line. File > New and Properties edit an item in
@@ -32,8 +45,11 @@
 #include <unistd.h>
 #include "shell.h"
 
-enum { GROUPS = 8, ITEMS = 48, G_NAME = 24, I_TITLE = 32, I_CMD = 96, I_ICON = 12, INI_MAX = 8192 };
-enum { RUN_APP = 0, RUN_FULL = 1, RUN_WINDOW = 2, N_MODES = 3 };
+enum { GROUPS = 12, ITEMS = 128, G_NAME = 24, I_TITLE = 32, I_CMD = 96, I_ICON = 12, INI_MAX = 16384 };
+enum { N_MODES = 4 };                 // RUN_APP, RUN_FULL, RUN_WINDOW, RUN_PROMPT (shell.h)
+// PROGMAN.INI's version, on a line of its own before the groups (a grin
+// before it reads no line there): 2 has the games' groups and modes
+enum { PM_VERSION = 2 };
 
 enum { GS_NORMAL = 0, GS_MIN = 1, GS_MAX = 2 };
 // a group, and its window inside Program Manager's (below): placed once it
@@ -45,7 +61,10 @@ static struct group groups[GROUPS];
 static struct item items[ITEMS];
 static int ngroups, loaded;
 
-static char *defaults[16] = {
+// The games are those the page's C4DOS disk has, each in its directory in
+// \GAMES (build-images.sh; C4IX's Go > Games has the same, desktop.apps).
+// A game not built is not on the disk: its item says so when started.
+static char *defaults[72] = {
     "[Main]",
     "File Manager=FILEMAN,files,app",
     "DOS Prompt=DOSPRMPT,dos,app",
@@ -54,13 +73,74 @@ static char *defaults[16] = {
     "[Accessories]",
     "Clock=CLOCK,clock,app",
     "Calculator=CALC,calc,app",
-    "[Games]",
-    "Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,window",
-    "Doom=\\GAMES\\DOOM\\DOOM,game,window",
-    "Tyrian=\\GAMES\\TYRIAN\\TYRIAN,game,window",
-    "Rise of the Triad=\\GAMES\\ROTT\\ROTT,game,window",
+    "[Action Games]",
+    "Doom=\\GAMES\\DOOM\\DOOM,game,full",
+    "Duke Nukem 3D=\\GAMES\\DUKE3D\\DUKE3D,game,full",
+    "Quake=\\GAMES\\QUAKE\\QUAKE,game,full",
+    "Rise of the Triad=\\GAMES\\ROTT\\ROTT,game,full",
+    "Super Blit Kart=\\GAMES\\SBK\\SBK,game,full",
+    "Tyrian=\\GAMES\\TYRIAN\\TYRIAN,game,full",
+    "Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,full",
+    // the person's own files, from the page's Uploads (libjs/uploads.js):
+    // each game says what it wants when they are not there
+    "[Full Games (Uploads)]",
+    "The Ultimate Doom=\\GAMES\\DOOM\\DOOM -home -iwad doom.wad,game,full",
+    "Doom II=\\GAMES\\DOOM\\DOOM -home -iwad doom2.wad,game,full",
+    "TNT: Evilution=\\GAMES\\DOOM\\DOOM -home -iwad tnt.wad,game,full",
+    "The Plutonia Experiment=\\GAMES\\DOOM\\DOOM -home -iwad plutonia.wad,game,full",
+    "Duke Nukem 3D=\\GAMES\\DUKE3D\\DUKE3D -home,game,full",
+    "Quake=\\GAMES\\QUAKE\\QUAKE -home,game,full",
+    "Rise of the Triad=\\GAMES\\ROTT\\ROTTREG,game,full",
+    "Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D6,game,full",
+    "[Cards & Puzzles]",
+    "Solitaire=\\GAMES\\ACE\\SOLITAIRE,game,window",
+    "Canfield=\\GAMES\\ACE\\CANFIELD,game,window",
+    "FreeCell=\\GAMES\\ACE\\FREECELL,game,window",
+    "Golf=\\GAMES\\ACE\\GOLF,game,window",
+    "Spider=\\GAMES\\ACE\\SPIDER,game,window",
+    "Thornq=\\GAMES\\ACE\\THORNQ,game,window",
+    "Mastermind=\\GAMES\\ACE\\MASTERMIND,game,window",
+    "Merlin=\\GAMES\\ACE\\MERLIN,game,window",
+    "Minesweeper=\\GAMES\\ACE\\MINESWEEPER,game,window",
+    "Pegged=\\GAMES\\ACE\\PEGGED,game,window",
+    "Taipei=\\GAMES\\ACE\\TAIPEI,game,window",
+    "Fifteen=\\GAMES\\PUZZLES\\FIFTEEN,game,window",
+    "Mines=\\GAMES\\PUZZLES\\MINES,game,window",
+    "Net=\\GAMES\\PUZZLES\\NET,game,window",
+    // the BSD games on curses (PDCurses' bare layer finds grin's table)
+    "[Classic Games]",
+    "Air Traffic Control=\\GAMES\\BSDGAMES\\ATC,game,window",
+    "Battlestar=\\GAMES\\BSDGAMES\\BATTLEST,game,window",
+    "Boggle=\\GAMES\\BSDGAMES\\BOGGLE,game,window",
+    "Canfield (BSD)=\\GAMES\\BSDGAMES\\CANFLD,game,window",
+    "Cribbage=\\GAMES\\BSDGAMES\\CRIBBAGE,game,window",
+    "Gomoku=\\GAMES\\BSDGAMES\\GOMOKU,game,window",
+    "Hangman=\\GAMES\\BSDGAMES\\HANGMAN,game,window",
+    "Mille Bornes=\\GAMES\\BSDGAMES\\MILLE,game,window",
+    "Rain=\\GAMES\\BSDGAMES\\RAIN,game,window",
+    "Robots=\\GAMES\\BSDGAMES\\ROBOTS,game,window",
+    "Sail=\\GAMES\\BSDGAMES\\SAIL,game,window",
+    "Snake=\\GAMES\\BSDGAMES\\SNAKE,game,window",
+    "Tetris=\\GAMES\\BSDGAMES\\TETRIS,game,window",
+    "Worm=\\GAMES\\BSDGAMES\\WORM,game,window",
+    // games of lines read and written: in a DOS Prompt
+    "[Text Games]",
+    "Zork I=\\GAMES\\FROTZ\\FROTZ ZORK1.Z3,game,prompt",
+    "Zork II=\\GAMES\\FROTZ\\FROTZ ZORK2.Z3,game,prompt",
+    "Zork III=\\GAMES\\FROTZ\\FROTZ ZORK3.Z3,game,prompt",
+    "Open Adventure=\\GAMES\\ADVENT\\ADVENT,game,prompt",
+    "Adventure (BSD)=\\GAMES\\BSDGAMES\\ADVENTUR,game,prompt",
+    "Backgammon=\\GAMES\\BSDGAMES\\BACKGAMM,game,prompt",
+    "Go Fish=\\GAMES\\BSDGAMES\\FISH,game,prompt",
+    "Hunt the Wumpus=\\GAMES\\BSDGAMES\\WUMP,game,prompt",
+    "Monopoly=\\GAMES\\BSDGAMES\\MONOP,game,prompt",
+    "Pig=\\GAMES\\BSDGAMES\\PIG,game,prompt",
+    "Quiz=\\GAMES\\BSDGAMES\\QUIZ,game,prompt",
+    "Star Trek=\\GAMES\\BSDGAMES\\TREK,game,prompt",
     0
 };
+// groups renamed since: the old name, the new
+static char *renamed[3] = { "Games", "Action Games", 0 };
 // A PROGMAN.INI written before the games had directories (C4DOS's API
 // v7) names them by their bare words, which no longer find their data:
 // such an item is given the new command line when it is read.
@@ -72,8 +152,10 @@ static char *moved[9] = {
     0
 };
 static int ini_moved;
-static char *mode_names[N_MODES] = { "app", "full", "window" };
-static char *mode_labels[N_MODES] = { "grin application", "DOS program, full screen", "DOS program, in a window" };
+static int ini_version;               // PROGMAN.INI's Version= line, 0 without
+static char *mode_names[N_MODES] = { "app", "full", "window", "prompt" };
+static char *mode_labels[N_MODES] = { "grin application", "DOS program, full screen", "DOS program, in a window",
+                                      "DOS program, in a DOS Prompt" };
 enum { N_ICONS = 8 };
 static char *icon_names[N_ICONS] = { "app", "files", "dos", "control", "notepad", "clock", "calc", "game" };
 static int icon_pics[N_ICONS] = { PIC_APP, PIC_FILES, PIC_DOS, PIC_CONTROL, PIC_NOTEPAD, PIC_CLOCK, PIC_CALC, PIC_GAME };
@@ -120,6 +202,31 @@ static int nums(char *p, int *v, int max) {
     return n;
 }
 
+// An item's line, "Doom=\GAMES\DOOM\DOOM,game,full", into it (cut up in
+// place): 1, or 0 if it is not one
+static int item_parse(char *p, struct item *it) {
+    char *f;
+    int k;
+    k = 0;
+    while (p[k] && p[k] != '=') ++k;
+    if (!p[k] || !k) return 0;
+    memset(it, 0, sizeof(struct item));
+    p[k] = 0;
+    ui_ncpy(it->title, p, I_TITLE);
+    p = p + k + 1;
+    // command line, icon, mode: split at commas
+    f = p; while (*f && *f != ',') ++f;
+    if (*f) { *f = 0; ++f; }
+    ui_ncpy(it->cmd, p, I_CMD);
+    p = f; while (*f && *f != ',') ++f;
+    if (*f) { *f = 0; ++f; }
+    ui_ncpy(it->icon, *p ? p : "app", I_ICON);
+    it->mode = RUN_APP;
+    k = 0;
+    while (k < N_MODES) { if (ieq(f, mode_names[k])) it->mode = k; ++k; }
+    return it->cmd[0] != 0;
+}
+
 // one line of it, in `line`: "[Main] 6,6,340,190,0,3,0" is a group, with
 // its window's place (G7's; a grin before G7 reads the name and no more)
 static void ini_take() {
@@ -146,29 +253,18 @@ static void ini_take() {
         ++ngroups;
         return;
     }
-    if (!ngroups) return;
-    k = 0;
-    while (p[k] && p[k] != '=') ++k;
-    if (!p[k] || !k) return;
+    if (!ngroups) {
+        // before the groups: the file's version
+        f = "VERSION=";
+        while (*f && up(*p) == *f) { ++p; ++f; }
+        if (!*f) { n = 0; while (*p >= '0' && *p <= '9') { n = n * 10 + *p - '0'; ++p; } ini_version = n; }
+        return;
+    }
     n = 0;
     while (n < ITEMS && items[n].used) ++n;
     if (n == ITEMS) return;
     it = &items[n];
-    memset(it, 0, sizeof(struct item));
-    p[k] = 0;
-    ui_ncpy(it->title, p, I_TITLE);
-    p = p + k + 1;
-    // command line, icon, mode: split at commas
-    f = p; while (*f && *f != ',') ++f;
-    if (*f) { *f = 0; ++f; }
-    ui_ncpy(it->cmd, p, I_CMD);
-    p = f; while (*f && *f != ',') ++f;
-    if (*f) { *f = 0; ++f; }
-    ui_ncpy(it->icon, *p ? p : "app", I_ICON);
-    it->mode = RUN_APP;
-    k = 0;
-    while (k < N_MODES) { if (ieq(f, mode_names[k])) it->mode = k; ++k; }
-    if (!it->cmd[0]) return;
+    if (!item_parse(p, it)) return;
     k = 0;
     while (moved[k]) {
         if (it->mode == RUN_FULL && ieq(it->cmd, moved[k])) { ui_ncpy(it->cmd, moved[k + 1], I_CMD); ini_moved = 1; }
@@ -178,10 +274,68 @@ static void ini_take() {
     it->used = 1;
 }
 
+// the group named so, or -1
+static int group_named(char *name) {
+    int g;
+    g = 0;
+    while (g < ngroups) { if (ieq(groups[g].name, name)) return g; ++g; }
+    return 0 - 1;
+}
+
+// A PROGMAN.INI older than PM_VERSION: the groups renamed since take their
+// new names; the default groups it lacks are added (with no place, so
+// they open as icons along Program Manager's bottom, as 3.1 showed a new
+// group); each default item whose command line it has takes the default's
+// mode (the games now full screen, and so on), and each it lacks is added
+// to its group. The person's own items and groups are left as they are.
+static struct item def_item;
+static void pm_upgrade() {
+    int k, g, i, n, cur;
+    struct item *it;
+    it = &def_item;
+    k = 0;
+    while (renamed[k]) {
+        if ((g = group_named(renamed[k])) >= 0 && group_named(renamed[k + 1]) < 0) ui_ncpy(groups[g].name, renamed[k + 1], G_NAME);
+        k = k + 2;
+    }
+    cur = 0 - 1;
+    k = 0;
+    while (defaults[k]) {
+        ui_ncpy(line, defaults[k], 200);
+        if (line[0] == '[') {
+            n = 1;
+            while (line[n] && line[n] != ']') ++n;
+            line[n] = 0;
+            cur = group_named(line + 1);
+            if (cur < 0 && ngroups < GROUPS) {
+                cur = ngroups;
+                memset(&groups[cur], 0, sizeof(struct group));
+                ui_ncpy(groups[cur].name, line + 1, G_NAME);
+                ++ngroups;
+            }
+        } else if (cur >= 0 && item_parse(line, it)) {
+            i = 0;
+            while (i < ITEMS && !(items[i].used && ieq(items[i].cmd, it->cmd))) ++i;
+            if (i < ITEMS) items[i].mode = it->mode;
+            else {
+                n = 0;
+                while (n < ITEMS && items[n].used) ++n;
+                if (n < ITEMS) {
+                    memcpy((char *)&items[n], (char *)it, sizeof(struct item));
+                    items[n].group = cur; items[n].used = 1;
+                }
+            }
+        }
+        ++k;
+    }
+}
+
 static void pm_save() {
     int g, k, fd, v[7];
     char num[16];
     inibuf[0] = 0;
+    ui_ncat(inibuf, "Version=", INI_MAX); ui_ncat(inibuf, ui_num(num, PM_VERSION), INI_MAX); ui_ncat(inibuf, "
+", INI_MAX);
     g = 0;
     while (g < ngroups) {
         ui_ncat(inibuf, "[", INI_MAX); ui_ncat(inibuf, groups[g].name, INI_MAX); ui_ncat(inibuf, "]", INI_MAX);
@@ -223,6 +377,7 @@ static void pm_load() {
     }
     inibuf[n] = 0;
     ini_moved = 0;
+    ini_version = 0;
     i = 0;
     while (i < n) {
         k = 0;
@@ -231,7 +386,11 @@ static void pm_load() {
         line[k] = 0;
         if (k) ini_take();
     }
-    if (ngroups) { if (ini_moved) pm_save(); return; }
+    if (ngroups) {
+        if (ini_version < PM_VERSION) { pm_upgrade(); ini_moved = 1; }
+        if (ini_moved) pm_save();
+        return;
+    }
     k = 0;
     while (defaults[k]) { ui_ncpy(line, defaults[k], 200); ini_take(); ++k; }
     pm_save();
@@ -261,7 +420,8 @@ int grin_start(char *cmdline) {
 
 static void launch(struct item *it) {
     if (it->mode == RUN_FULL) { grin_full(it->cmd); return; }
-    if (it->mode == RUN_WINDOW) { grin_window(it->cmd); return; }
+    if (it->mode == RUN_WINDOW) { if (!grin_window(it->cmd)) fwin_name(it->title); return; }
+    if (it->mode == RUN_PROMPT) { dosprompt_run(it->cmd); return; }
     grin_start(it->cmd);
 }
 
@@ -278,23 +438,35 @@ static void prog_of(char *cmd, char *out, int n) {
     out[k] = 0;
 }
 
-// A DOS program from File Manager or File > Run (apps.c's grin_run, when
-// the program is not an application): in a window when the first
-// Program Manager item that runs the same program runs it in one, else
-// full screen
-int grin_dos(char *cmdline) {
+// How the first Program Manager item that runs the same program as the
+// command line runs it (RUN_FULL, RUN_WINDOW, RUN_PROMPT), or -1 when
+// none does, as a PIF said: File Manager, File > Run and a line typed in a
+// DOS Prompt follow it (grin_dos below, dosprmpt.c)
+int progman_mode(char *cmdline) {
     char want[16], have[16];
     int k;
     if (!loaded) pm_load();
     prog_of(cmdline, want, 16);
+    if (!want[0]) return 0 - 1;
     k = 0;
     while (k < ITEMS) {
         if (items[k].used && items[k].mode != RUN_APP) {
             prog_of(items[k].cmd, have, 16);
-            if (want[0] && ieq(want, have)) return items[k].mode == RUN_WINDOW ? grin_window(cmdline) : grin_full(cmdline);
+            if (ieq(want, have)) return items[k].mode;
         }
         ++k;
     }
+    return 0 - 1;
+}
+
+// A DOS program from File Manager or File > Run (apps.c's grin_run, when
+// the program is not an application): as its Program Manager item says,
+// else full screen
+int grin_dos(char *cmdline) {
+    int m;
+    m = progman_mode(cmdline);
+    if (m == RUN_WINDOW) return grin_window(cmdline);
+    if (m == RUN_PROMPT) return dosprompt_run(cmdline) < 0 ? 0 - 1 : 0;
     return grin_full(cmdline);
 }
 
@@ -332,7 +504,7 @@ enum { A_EXIT = 1, A_ABOUT = 2, A_RUN = 3, A_DELETE = 4 };
 enum { KEY_F6 = 117 };
 // a group window's measures: its border, title bar and smallest size; the
 // icons' row along the bottom, and an icon's step along it
-enum { CB = 3, CT = 18, CMIN_W = 140, CMIN_H = 60, ICON_ROW = 64, ICON_STEP = ITEM_W + 4 };
+enum { CB = 3, CT = 18, CMIN_W = 140, CMIN_H = 60, ICON_ROW = 70, ICON_STEP = ITEM_W + 4 };
 static char runbuf[WK_PATH];
 static char about[160];
 static char pm_title[G_NAME + 32];
@@ -373,8 +545,19 @@ static int item_cx(int g, int k, int cw) { return gx(g) + CB + 5 + ITEM_W / 2 + 
 static int item_y(int g, int k, int cw) { return gy(g) + CB + CT + 6 + (k / cols(g, cw)) * (ITEM_H + 6); }
 
 // a minimised group's icon: its centre and top
-static int icon_cx(int g) { return 8 + ICON_STEP / 2 + groups[g].islot * ICON_STEP; }
-static int icon_y(int ch) { return ch - ICON_ROW + 6; }
+// (in rows along the bottom, as many as a row of the client area's width
+// holds, the first row lowest)
+static int icons_per_row(int cw) { int n; n = (cw - 8) / ICON_STEP; return n < 1 ? 1 : n; }
+static int icon_cx(int g, int cw) { return 8 + ICON_STEP / 2 + (groups[g].islot % icons_per_row(cw)) * ICON_STEP; }
+static int icon_y(int g, int cw, int ch) { return ch - ICON_ROW * (1 + groups[g].islot / icons_per_row(cw)) + 6; }
+// the height the icons' rows take at the bottom: none without icons
+static int icon_area(int cw) {
+    int g, top;
+    top = 0 - 1;
+    g = 0;
+    while (g < ngroups) { if (groups[g].state == GS_MIN && groups[g].islot > top) top = groups[g].islot; ++g; }
+    return top < 0 ? 0 : ICON_ROW * (1 + top / icons_per_row(cw));
+}
 
 // g to the front of the order
 static void to_front(int g) {
@@ -407,14 +590,16 @@ static void default_places(int cw, int ch) {
     g = 0;
     while (g < ngroups) {
         if (!groups[g].placed) {
-            w = 4 * (ITEM_W + 4) + 2 * CB + 14;
-            if (w > cw - 12) w = cw - 12;
-            h = ch - 12 - ICON_ROW;
+            // as wide as Program Manager lets it be (the games' groups have
+            // fourteen items: two rows of seven at 640x480)
+            w = cw - 12 - g * (CT + 4);
+            if (w < CMIN_W) w = CMIN_W;
+            h = ch - 12 - ICON_ROW * (1 + (ngroups - 2) / icons_per_row(cw));
             if (h < CMIN_H) h = CMIN_H;
             groups[g].x = 6 + g * (CT + 4); groups[g].y = 6 + g * (CT + 4); groups[g].w = w; groups[g].h = h;
             groups[g].placed = 1;
             if (g == 0) { groups[g].state = GS_NORMAL; to_front(g); }
-            else { groups[g].state = GS_MIN; groups[g].islot = free_slot(); }
+            else { groups[g].islot = 0 - 1; groups[g].state = GS_MIN; groups[g].islot = free_slot(); }
         }
         ++g;
     }
@@ -460,6 +645,8 @@ static void activate(int w, int g) {
 
 static void minimise(int w, int g) {
     if (groups[g].state == GS_MIN) return;
+    // (its own old slot not counted: it would take the next)
+    groups[g].islot = 0 - 1;
     groups[g].state = GS_MIN;
     groups[g].islot = free_slot();
     retitle(w);
@@ -508,7 +695,7 @@ static void cascade(int w) {
     wk_size(w, &cw, &ch);
     if ((g = maxed()) >= 0) groups[g].state = GS_NORMAL;
     n = open_count();
-    if (any_min()) ch = ch - ICON_ROW;
+    ch = ch - icon_area(cw);
     ww = cw * 3 / 4; hh = ch * 3 / 4;
     if (ww < CMIN_W) ww = CMIN_W;
     if (hh < CMIN_H) hh = CMIN_H;
@@ -531,7 +718,7 @@ static void tile(int w) {
     if ((g = maxed()) >= 0) groups[g].state = GS_NORMAL;
     n = open_count();
     if (!n) return;
-    if (any_min()) ch = ch - ICON_ROW;
+    ch = ch - icon_area(cw);
     c = 1; while (c * c < n) ++c;
     rows = (n + c - 1) / c;
     rh = ch / rows;
@@ -617,17 +804,15 @@ static void draw_group(struct progman *p, int g, int cw, int ch, int active) {
 }
 
 // a minimised group: a little group window, its name under it
-static void draw_icon(int g, int ch, int sel) {
-    int cx, y, lw, k;
-    cx = icon_cx(g); y = icon_y(ch);
+static void draw_icon(int g, int cw, int ch, int sel) {
+    int cx, y, k;
+    cx = icon_cx(g, cw); y = icon_y(g, cw, ch);
     d_rect(cx - 15, y + 4, 30, 24, C_DARK);
     d_rect(cx - 14, y + 5, 28, 22, C_WHITE);
     d_rect(cx - 14, y + 5, 28, 5, C_TITLE);
     k = 0;
     while (k < 4) { d_rect(cx - 11 + (k % 2) * 12, y + 13 + (k / 2) * 7, 8, 5, k == 3 ? C_SHADOW : C_SEL); ++k; }
-    lw = ui_len(groups[g].name) * 6 + 4;
-    if (sel) d_rect(cx - lw / 2, y + 35, lw, 14, C_SEL);
-    d_text(cx - lw / 2 + 2, y + 36, sel ? C_WHITE : C_DARK, F_SANS, groups[g].name);
+    grin_label(cx, y, groups[g].name, sel, C_DARK);
 }
 
 static void pm_draw(int w, int cw, int ch, int focused) {
@@ -641,7 +826,7 @@ static void pm_draw(int w, int cw, int ch, int focused) {
     while (g < ngroups) { if (groups[g].state == GS_NORMAL) fit(g, cw, ch); ++g; }
     if ((m = maxed()) >= 0) { draw_group(p, m, cw, ch, focused && p->group == m); return; }
     g = 0;
-    while (g < ngroups) { if (groups[g].state == GS_MIN) draw_icon(g, ch, p->group == g); ++g; }
+    while (g < ngroups) { if (groups[g].state == GS_MIN) draw_icon(g, cw, ch, p->group == g); ++g; }
     k = 0;
     while ((g = open_nth(k)) >= 0) { draw_group(p, g, cw, ch, focused && p->group == g); ++k; }
 }
@@ -685,12 +870,12 @@ static int group_at(int x, int y, int cw, int ch, int *ht) {
 }
 
 // the minimised group whose icon is at x, y, or -1
-static int icon_at(int x, int y, int ch) {
+static int icon_at(int x, int y, int cw, int ch) {
     int g;
     if (maxed() >= 0) return 0 - 1;
     g = 0;
     while (g < ngroups) {
-        if (groups[g].state == GS_MIN && ui_hit(x, y, icon_cx(g) - ITEM_W / 2, icon_y(ch), ITEM_W, 52)) return g;
+        if (groups[g].state == GS_MIN && ui_hit(x, y, icon_cx(g, cw) - ITEM_W / 2, icon_y(g, cw, ch), ITEM_W, ITEM_H)) return g;
         ++g;
     }
     return 0 - 1;
@@ -732,7 +917,7 @@ static void pm_mouse(int w, int ev, int x, int y, int b) {
     drag_g = 0; size_g = 0;
     if ((g = group_at(x, y, cw, ch, &ht)) < 0) {
         // the icons: a click makes the group active, a double click restores it
-        if ((g = icon_at(x, y, ch)) >= 0) { if (ev == E_DBL) restore(w, g); else activate(w, g); }
+        if ((g = icon_at(x, y, cw, ch)) >= 0) { if (ev == E_DBL) restore(w, g); else activate(w, g); }
         return;
     }
     if (ev == E_DOWN || p->group != g) activate(w, g);
@@ -902,7 +1087,8 @@ int progman_open() {
     menus[2].title = "Help"; menus[2].items = help_items;
     if ((w = wk_open(&progman_class, "Program Manager", 500, 300, 0, 0)) < 0) return w;
     wk_menu(w, menus, 3);
-    wk_place(w, 16, 16, 500, 300);
+    // most of the screen: the games' groups have up to fourteen items
+    wk_place(w, 16, 16, wk.sw - 32, wk.sh - 40);
     // the active group: the one in front
     top = 0 - 1;
     g = 0;
@@ -923,7 +1109,7 @@ struct props {
     char title[I_TITLE];
     char cmd[I_CMD];
 };
-enum { P_W = 420, P_H = 196, P_FX = 112, BTN_W = 76, BTN_H = 24 };
+enum { P_W = 420, P_H = 214, P_FX = 112, BTN_W = 76, BTN_H = 24 };
 
 static void pr_draw(int w, int cw, int ch, int focused) {
     struct props *r;
@@ -934,7 +1120,7 @@ static void pr_draw(int w, int cw, int ch, int focused) {
     ui_field(P_FX, 10, cw - P_FX - 12, r->title, r->caret0, r->field == 0);
     d_text(12, 44, C_DARK, F_SANS, "Command Line:");
     ui_field(P_FX, 40, cw - P_FX - 12, r->cmd, r->caret1, r->field == 1);
-    ui_group(P_FX - 10, 72, cw - P_FX - 2, 76, "Run as");
+    ui_group(P_FX - 10, 72, cw - P_FX - 2, 94, "Run as");
     k = 0;
     while (k < N_MODES) { ui_radio(P_FX, 88 + k * 18, mode_labels[k], r->mode == k); ++k; }
     // the icon, and a button that steps through the others

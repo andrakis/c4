@@ -258,11 +258,12 @@ config, on unless that says 0. `rott_accel` (rt_scale.c) is the first of ROTT's 
 columns, posts, rows, sky, turned screen, tiled regions and watcom.h's macros ask it
 (`ROTT_ACCEL()`).
 
-ROTT's Extended User Options also has **RESOLUTION**: 320x200 (the original's, and what the
-timedemos and tests are made at), 640x480 and 800x600, the port's own sizes, taking at once and kept
-in the config (`ScreenWidth`, `ScreenHeight`). The display becomes the frame's size above 640x480,
-as Quake's does. Demo 4 at 640x480 and 800x600 gives the same frames with the accelerators, without
-them and in gcc's build.
+ROTT's Extended User Options also has **RESOLUTION**: Duke3D's sizes, 320x200 (the original's, and
+what the timedemos and tests are made at), 320x240, 400x300, 512x384, 640x400, 640x480 and 800x600,
+taking at once and kept in the config (`ScreenWidth`, `ScreenHeight`). The display becomes the
+frame's size above 640x480, as Quake's does. The menus stay 320x200 at every size and the display
+scales them, so they are as quick at 800x600 as at 320x200. Demo 4 gives gcc's frames at every size
+with the accelerators and without (games/rott/README.md, "Resolution").
 
 **Doom**: Options, **ACCELERATED** (on, off, or "NOT ON THIS MACHINE"), a ninth line in Doom's small
 font, since the WAD has no picture for it; the Options menu sits 8 pixels higher to keep it above the

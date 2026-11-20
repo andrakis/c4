@@ -279,6 +279,9 @@ export class Devices {
     this.onByte = opts.onByte || null;// UART TX sink: fn(byteValue)
     this.rxFifo = [];                 // keyboard bytes
     this.rxEof = false;               // Ctrl-D / end of input stream
+    this.rxStarved = false;           // the guest read the keyboard and found
+                                      // it empty: a paste's next line may go
+                                      // in (libjs/keys.js Paste)
     this.rawKbd = 0;                  // open raw keyboards; a host UI
                                       // suppresses local echo while > 0
     this.sleepMs = 0;                 // accumulated USLP time
@@ -524,7 +527,7 @@ export class Devices {
   // Backspace, breaking line editing; waiting for \n here is what
   // keeps not-yet-committed characters available to erase.
   kbdRead(addr, len, nonblock, raw) {
-    if (this.rxFifo.length === 0) return this.rxEof ? 0 : (nonblock ? -1 : -2);
+    if (this.rxFifo.length === 0) { this.rxStarved = true; return this.rxEof ? 0 : (nonblock ? -1 : -2); }
     // A raw fd is the one caller that has opted out of line buffering,
     // so it takes whatever has arrived. Everyone else still waits for
     // the newline that commits the line.
@@ -687,8 +690,8 @@ export class Devices {
 
   read32(addr) {
     switch (addr) {
-      case UART_RX:    return this.rxFifo.length ? this.rxFifo.shift() : -1;
-      case UART_RXAVL: return this.rxFifo.length;
+      case UART_RX:    if (this.rxFifo.length) return this.rxFifo.shift(); this.rxStarved = true; return -1;
+      case UART_RXAVL: if (!this.rxFifo.length) this.rxStarved = true; return this.rxFifo.length;
       case UART_TXADDR: return this.uartTxAddr | 0;
       case UART_TXLEN: return this.uartTxResult | 0;
       case TIME_MS:    return this.simMs();

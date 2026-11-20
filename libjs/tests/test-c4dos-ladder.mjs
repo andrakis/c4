@@ -161,6 +161,17 @@ o = cmd('RUN dosload.c4r c4ke.c4r', KE, 300);
 check(/seeded \d+\/\d+ file\(s\) from the C4DOS RAM disk/.test(o) && o.includes('C4SH - The C4 SHell'),
   'dosload boots the C4KE it built, seeded from the RAM disk', o);
 cost('dosload c4ke.c4r');
+// The ladder's instructions are C4KE's too: the disk's one LADDER.TXT
+// (src/c4dos/fs), at the root of C4KE's tree, which TYPE LADDER.TXT
+// at A:\> says is there
+const ladderTxt = readFileSync(join(disk, 'ladder.txt'), 'latin1').replace(/\r/g, '');
+const keBoot = o;
+o = cmd('cat ladder.txt', KE, 60);
+check(o.replace(/\r/g, '').includes(ladderTxt.trimEnd()) && ladderTxt.includes('cat ladder.txt'),
+  'cat ladder.txt at c4sh> shows the ladder\'s instructions', o.slice(-600));
+o = cmd('ls', KE, 60);
+check(/(^|\s)ladder\.txt(\s|$)/m.test(o), 'and ls lists ladder.txt in C4KE\'s root', o);
+o = keBoot;
 
 // ---- C4KE -----------------------------------------------------------------
 // Three rounds. C4KE gives each task a heap generation of HEAP.SYS's

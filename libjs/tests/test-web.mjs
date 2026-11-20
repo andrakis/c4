@@ -102,6 +102,13 @@ const term = () => tab.eval('document.getElementById("terminal").innerText');
 const waitTerm = (s, t = 30000) => tab.waitFor(`document.getElementById("terminal").innerText.includes(${JSON.stringify(s)})`, t);
 const focusTerm = () => tab.eval('document.getElementById("terminal").focus()');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// A paste, as the browser delivers one to the terminal (page.js): the
+// event a Ctrl+Shift+V or Shift+Insert brings, with the text in it
+const paste = text => tab.eval(`(() => {
+  const dt = new DataTransfer(); dt.setData('text/plain', ${JSON.stringify(text)});
+  document.getElementById('terminal').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+})()`);
+const cursorShown = () => tab.eval('!!document.querySelector("#terminal .c4-term-cursor")');
 
 try {
   if (!GUI) {
@@ -117,6 +124,7 @@ try {
     const disk = await tab.eval('window.c4m.status.disk');
     ok(`the disk is lazy: boot fetched ${disk && disk.fetched} of ${disk && disk.files} files`,
        !!disk && disk.lazy && disk.fetched < 15, JSON.stringify(disk));
+    ok('the terminal shows the cursor at the prompt', await cursorShown());
     await focusTerm();
     await tab.type('ps\n');
     ok('typed ps lists the tasks', await waitTerm('tasks,', 30000), (await term()).slice(-400));
@@ -154,6 +162,19 @@ try {
     await focusTerm();
     await tab.type('hello.c4r\n');
     ok('runs a program from the disk', await waitTerm('yello', 30000));
+    ok('the terminal shows the cursor at the prompt', await cursorShown());
+    // two lines pasted: each typed at the prompt that reads it, the
+    // second's quotes made plain (and taken off by the shell)
+    await paste('echo paste-one\r\necho \u201cpaste-two\u201d\n');
+    ok('a pasted pair of commands runs in turn', await tab.waitFor(
+      String.raw`/c4sh>\s*echo paste-one\npaste-one\n[^]*c4sh>\s*echo "paste-two"\npaste-two\n/.test(document.getElementById("terminal").innerText)`, 30000),
+      (await term()).slice(-300));
+    // the right button: a menu with Copy (nothing selected: off) and Paste
+    await tab.eval(`document.getElementById('terminal').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 120 }))`);
+    const menu = await tab.eval(`[...document.querySelectorAll('.c4-term-menu button')].map(b => b.textContent + (b.disabled ? ':off' : ''))`);
+    ok('the right-click menu: Copy and Paste', JSON.stringify(menu) === JSON.stringify(['CopyCtrl+Shift+C:off', 'PasteCtrl+Shift+V']), JSON.stringify(menu));
+    await tab.key('Escape');
+    ok('and Escape closes it', !(await tab.eval('!!document.querySelector(".c4-term-menu")')));
     await shot('c4ke');
     ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
   } else {

@@ -84,6 +84,39 @@ body {
 #terminal:focus { box-shadow: 0 0 0 1px var(--green) inset; }
 #terminal:empty::before { content: attr(data-placeholder); color: var(--dim); font-style: italic; }
 
+/* The terminal's right-click menu, and the box a paste goes in when the
+   browser will not read the clipboard (page.js termMenu, pasteBox) */
+.c4-term-menu {
+  position: fixed; z-index: 20; display: flex; flex-direction: column; min-width: 200px;
+  background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; padding: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.c4-term-menu button {
+  display: flex; justify-content: space-between; gap: 24px; text-align: left;
+  background: none; color: var(--text); border: none; border-radius: 4px; padding: 5px 10px;
+  font: inherit; cursor: pointer;
+}
+.c4-term-menu button:hover:not(:disabled), .c4-term-menu button:focus-visible { background: var(--chip); color: var(--cyan); outline: none; }
+.c4-term-menu button:disabled { color: var(--dim); opacity: 0.6; cursor: default; }
+.c4-paste-box {
+  background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 8px; padding: 16px 20px; width: min(560px, calc(100vw - 32px));
+}
+.c4-paste-box::backdrop { background: rgba(6, 5, 18, 0.7); }
+.c4-paste-box h2 { margin: 0 0 4px; color: var(--pink); font-size: 15px; }
+.c4-paste-box p { margin: 0 0 12px; }
+.c4-paste-box textarea {
+  width: 100%; background: var(--screen); color: var(--green); border: 1px solid var(--edge);
+  border-radius: 4px; padding: 6px 8px; font: inherit; resize: vertical;
+}
+.c4-paste-box textarea:focus { outline: none; border-color: var(--cyan); }
+.c4-paste-box button {
+  background: var(--chip); color: var(--text); border: 1px solid var(--edge);
+  border-radius: 4px; padding: 4px 12px; font: inherit; cursor: pointer;
+}
+.c4-paste-box button:hover { border-color: var(--cyan); color: var(--cyan); }
+.c4-paste-box button.primary { border-color: var(--pink); color: var(--pink); }
+
 #display-wrap {
   flex: 1 1 0; min-height: 0; min-width: 0; display: flex; align-items: flex-start; justify-content: center;
   background: var(--screen); border-radius: 0 0 6px 6px; padding: 8px; overflow: hidden;

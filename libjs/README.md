@@ -152,8 +152,27 @@ ships with c4: the free ones are tens of megabytes. GeneralUser GS
 (https://schristiancollins.com/generaluser.php, free to use and to pass
 on) is a good one.
 
+The terminal pastes and copies as a terminal does, on every system:
+- **Paste**: Ctrl+Shift+V, Shift+Insert, Ctrl+V while no program has the
+  keyboard raw (a full-screen program gets its Ctrl+V), the right-click
+  menu's Paste, or the Paste button. The text goes in as typed keys, a
+  line at a time: the next line waits until the machine has read the last
+  one and asks the keyboard for more (`keys.js`'s `Paste`, fed by the
+  worker), so a list of commands runs as if typed at each prompt, and a
+  long paste waits its turn. It is made ASCII first: CRLF is Enter,
+  typographic quotes and dashes are plain, accents come off, other
+  characters are `?`. Ctrl-C drops what has not gone in yet. Where the
+  browser will not let the page read the clipboard (the menu and the
+  button need its permission; the keys do not), a box opens to paste into.
+- **Copy**: select text, then Ctrl+Shift+C, Ctrl+Insert, Ctrl+C (with
+  nothing selected Ctrl+C is still SIGINT) or the menu's Copy.
+- **The cursor** is drawn where the guest's is, as an underline that blinks
+  while the terminal has the focus. A program that hides it (`ESC[?25l`)
+  hides it here too.
+
 The running machine is `window.c4m` on the page, so the console or a test
-can drive it (`c4m.write('ps\n')`).
+can drive it (`c4m.write('ps\n')`, or `c4m.paste('ps\nls\n')` a line at a
+time).
 
 ## The Code Explorer
 

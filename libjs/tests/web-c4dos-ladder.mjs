@@ -44,6 +44,12 @@ try {
   const simSecs = async () => { const m = /t ([\d.]+)s/.exec(await status()); return m ? +m[1] : 0; };
   const shot = async name => { writeFileSync(`${outdir}/${name}.png`, await tab.screenshot()); console.log(`${W}: screenshot ${outdir}/${name}.png`); };
   const focusTerm = () => tab.eval('document.getElementById("terminal").focus()');
+  // a paste as the browser delivers one to the terminal (page.js), and its cursor
+  const paste = text => tab.eval(`(() => {
+    const dt = new DataTransfer(); dt.setData('text/plain', ${JSON.stringify(text)});
+    document.getElementById('terminal').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  })()`);
+  const cursorShown = () => tab.eval('!!document.querySelector("#terminal .c4-term-cursor")');
   const focusDisplay = async () => {
     const p = await tab.eval(`(() => { const r = document.getElementById('display').getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
@@ -83,7 +89,17 @@ try {
 
   ok('the page boots C4DOS on the ladder disk', await waitRe(/TYPE LADDER\.TXT[^]*A:\\>\s*$/, 0, 90000), await tail());
   ok("drive 1 is the ladder's own store", (await tab.eval('window.c4m.persistName')) === 'ladder');
-  await step('TYPE LADDER.TXT', 'TYPE LADDER.TXT', A);
+  let o = await step('TYPE LADDER.TXT', 'TYPE LADDER.TXT', A);
+  ok('LADDER.TXT says cat ladder.txt shows it in C4KE', o && o.includes('cat ladder.txt'), await tail());
+  ok('a cursor at A:\\>', await cursorShown());
+  // pasted, as the browser delivers a Ctrl+Shift+V (page.js): two lines,
+  // each typed at the prompt that reads it
+  {
+    const from = (await term()).length;
+    await paste('ECHO paste-one\r\nECHO paste-two\n');
+    ok('a pasted pair of commands runs in turn at A:\\>',
+      await waitRe(/^ECHO paste-one\npaste-one\n[^]*A:\\>\s*ECHO paste-two\npaste-two\n[^]*A:\\>\s*$/, from, 30000), await tail());
+  }
   await shot('1-c4dos');
   let d = await step('DIR at the root', 'DIR', A, 60000);
   ok('DIR at A:\\: the directories', d && /^GAMES  <DIR>$/m.test(d) && /^BUILD  <DIR>$/m.test(d) && !/doom1\.wad/.test(d), d);
@@ -94,11 +110,19 @@ try {
   ok('CD \\ back to the root', await step('CD \\', 'CD \\', A, 60000));
   await game('Doom at A:\\, played and quit (found along APPEND)', 'DOOM', A, '2-doom-c4dos');
 
-  let o = await step('BUILD', 'BUILD', A, 600000);
+  o = await step('BUILD', 'BUILD', A, 600000);
   ok('BUILD compiles C4KE on the RAM disk', o && o.includes('ram:c4ke.c4r') && o.includes('ram:init.c4r'), await tail());
   o = await step('RUN dosload.c4r c4ke.c4r', 'RUN dosload.c4r c4ke.c4r', KE, 120000);
   ok('dosload boots the C4KE it built', o && o.includes('C4SH - The C4 SHell'), await tail());
   await shot('3-c4ke');
+  ok('a cursor at c4sh>', await cursorShown());
+  {
+    const from = (await term()).length;
+    await paste('cat ladder.txt\necho paste-two\n');
+    ok('pasted at c4sh>: cat ladder.txt shows the instructions, then the next line runs',
+      await waitRe(/^cat ladder\.txt\nThe Build Ladder[^]*c4sh>\s*echo paste-two\npaste-two\n[^]*c4sh>\s*$/, from, 60000), await tail());
+  }
+  await shot('3b-c4ke-ladder-txt');
   await game('Doom under C4KE, played and quit', 'doom', KE, '4-doom-c4ke');
 
   o = await step('tar x c4ix-src.tar', 'tar x c4ix-src.tar', KE, 120000);
@@ -109,6 +133,7 @@ try {
   o = await step('kboot c4ix.c4r', 'kboot c4ix.c4r', IX, 120000);
   ok('kboot: C4KE stops and the C4IX it built boots', o && o.includes('c4ke: booting c4ix.c4r') && o.includes('C4IX booting'), await tail());
   await step('ls', 'ls', IX);
+  ok('a cursor at c4ix:/$', await cursorShown());
   await shot('6-c4ix');
   await game('Doom under C4IX, played and quit', 'doom', IX, '7-doom-c4ix');
   o = await step('exit', 'exit', A, 120000);

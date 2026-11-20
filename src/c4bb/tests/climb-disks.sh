@@ -145,10 +145,18 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
     # place of the shared disk's here, or the other way round, depending
     # on which was made last. C4IX's tree is the shared disk's, so the
     # C4IX the ladder builds comes up as ?system=c4ix does.
-    rm -f $LJLAD/C4IX/c4ix.vfs.txt $LJLAD/BUILD/build.bat $LJLAD/ladder.txt
+    rm -f $LJLAD/C4IX/c4ix.vfs.txt $LJLAD/BUILD/build.bat $LJLAD/ladder.txt $LJLAD/C4KE/c4ke.vfs.txt
     cp $DISK/c4ix.vfs.txt $LJLAD/C4IX/c4ix.vfs.txt
     cp src/c4dos/fs/BUILD.BAT $LJLAD/BUILD/build.bat
     cp src/c4dos/fs/LADDER.TXT $LJLAD/ladder.txt
+    # C4KE's tree is the climb floppy's, with the ladder's instructions at
+    # its root: cat ladder.txt at c4sh> is TYPE LADDER.TXT at A:\>, the one
+    # file, and ls lists it. (The floppy itself has no LADDER.TXT: what it
+    # says of directories and games is this disk's.)
+    { cat src/c4bb/fs/c4ke-climb.vfs.txt
+      printf '\t# the Build Ladder'"'"'s instructions (src/c4dos/fs/LADDER.TXT)\n'
+      printf '\tladder.txt: ladder.txt\n'
+    } > $LJLAD/C4KE/c4ke.vfs.txt
     # the climb floppy's RAM disk (32 MB: LADDER and the kernel's sources),
     # and the page's devices: HEAP.SYS gives each rung's memory back when
     # it returns to the one below, REDIR.SYS TAP is for grin's DOS Prompts.

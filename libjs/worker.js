@@ -18,6 +18,7 @@
 //           shared: { ring, fb } SharedArrayBuffers from shared.js, when the page is isolated
 //   key     { key, ctrlKey, altKey, metaKey }     a keydown on the terminal
 //   input   { bytes: Uint8Array }                 typed programmatically
+//   paste   { text }                              pasted: typed a line at a time, as the guest reads (keys.js Paste)
 //   signal  { sig }                               2 = Ctrl-C
 //   eof     {}                                    Ctrl-D
 //   gui     { kind, ... }                         a display event (gui-device.js)
@@ -46,7 +47,7 @@
 
 import { createMachine, boot } from './boot.js';
 import { STOP } from './c4m.js';
-import { keyDown, typeBytes } from './keys.js';
+import { keyDown, typeBytes, Paste } from './keys.js';
 import { GuiDevice } from './gui-device.js';
 import { SoundDevice, EVT } from './snd-device.js';
 import { RingWriter, FbProducer } from './shared.js';
@@ -188,6 +189,7 @@ function start(msg) {
   par = vm.smp && vm.smp.parallel ? vm.smp : null;
   watchPar();
   paused = false; halted = false; parked = false;
+  paste.clear();
   tRun = performance.now(); lostMs = 0; busyMs = 0;
   lastStatus = { t: tRun, cycle: 0, busy: 0 };
   ipsLast = null;
@@ -196,9 +198,19 @@ function start(msg) {
   schedule(0);
 }
 
+// A paste waiting to go in (keys.js Paste): its next line, when the guest
+// has read the last one and asked for more. True if one went in.
+const paste = new Paste();
+function feedPaste() {
+  const e = vm && paste.pending ? paste.feed(vm) : null;
+  if (e) echo(e);
+  return !!e;
+}
+
 function tick() {
   if (!vm || paused || halted) return;
   if (parWaiting()) return;
+  feedPaste();
   const now = performance.now();
   if (parked) { lostMs += now - parkedAt; parked = false; }
   const dev = vm.dev;
@@ -259,6 +271,8 @@ function tick() {
     return;
   }
   if (r === STOP.INPUT) {
+    // a paste's next line, which this read was waiting for
+    if (feedPaste()) { schedule(0); return; }
     // Waiting for a key with no timer armed: nothing happens until a
     // message arrives. With the PIT armed, come back when it is due.
     parked = true; parkedAt = performance.now(); state = 'blocked';
@@ -410,9 +424,14 @@ const onMessage = e => {
         if (bootMsg) start(bootMsg);
         postMessage({ type: 'files-reset' });
         break;
-      case 'key': if (vm) { echo(keyDown(vm, m).echo); wake(); } break;
+      case 'key':
+        // Ctrl-C ends a paste too: what had not gone in yet is dropped
+        if (m.ctrlKey && (m.key === 'c' || m.key === 'C')) paste.clear();
+        if (vm) { echo(keyDown(vm, m).echo); wake(); }
+        break;
       case 'input': if (vm) { echo(typeBytes(vm, m.bytes)); wake(); } break;
-      case 'signal': if (vm) { vm.pendingSignal = m.sig | 0 || 2; wake(); } break;
+      case 'paste': if (vm && paste.add(m.text)) { feedPaste(); wake(); } break;
+      case 'signal': paste.clear(); if (vm) { vm.pendingSignal = m.sig | 0 || 2; wake(); } break;
       case 'eof': if (vm) { vm.dev.rxEof = true; wake(); } break;
       case 'gui': if (gui) { gui.event(m); wake(); } break;
       case 'pause':

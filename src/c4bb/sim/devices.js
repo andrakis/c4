@@ -630,6 +630,8 @@ export class Devices {
     if (!media || !media.writable || !media.sink) return -1;
     const clean = this.wPath(media, rest);
     if (!media.files.has(clean)) return -1;
+    // a file the drive will not give up (C4DOS's uploads on B:, uploads.js HomeFiles)
+    if (media.files.locked && media.files.locked(clean)) return -1;
     media.files.delete(clean);
     if (media.remove) { try { media.remove(clean); } catch { return -1; } }
     return 0;

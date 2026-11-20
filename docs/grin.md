@@ -188,7 +188,7 @@ then the games the page's C4DOS disk has, each in its directory in
 | group | mode | games |
 |---|---|---|
 | Action Games | full | Doom, Duke Nukem 3D, Quake, Rise of the Triad, Super Blit Kart, Tyrian, Wolfenstein 3D |
-| Full Games (Uploads) | full | the same games with the person's own files, which the page's Uploads put on the disk: The Ultimate Doom, Doom II, TNT, Plutonia (`DOOM -home -iwad`), Duke Nukem 3D (`DUKE3D -home`), Quake (`QUAKE -home`), Rise of the Triad (`ROTTREG`), Wolfenstein 3D (`WOLF3D6`); each says what it wants when its files are not there |
+| Full Games (Uploads) | full | README.TXT (how to add the files, written from libjs/uploads.js's NEEDS), then the same games with the person's own files, which the page's Uploads put on B:, the home drive: The Ultimate Doom, Doom II, TNT, Plutonia (`DOOM -home -iwad`), Duke Nukem 3D (`DUKE3D -home`), Quake (`QUAKE -home`), Rise of the Triad (`ROTTREG`), Wolfenstein 3D (`WOLF3D6`); each says what it wants when its files are not there |
 | Cards & Puzzles | window | the Ace of Penguins' eleven, and Puzzles' Fifteen, Mines and Net |
 | Classic Games | window | the BSD games on curses: Air Traffic Control, Battlestar, Boggle, Canfield, Cribbage, Gomoku, Hangman, Mille Bornes, Rain, Robots, Sail, Snake, Tetris, Worm |
 | Text Games | prompt | Zork I to III (Frotz), Open Adventure, and the BSD games of lines: Adventure, Backgammon, Go Fish, Hunt the Wumpus, Monopoly, Pig, Quiz, Star Trek |
@@ -257,7 +257,35 @@ out; Sound's Test plays it.
 | G6 | games in a window | `grin-g6`, 2026-10-27 | `fwin.c`, the games' bare layers, `image()` (API v8), sizes, pointer lock |
 | G7 | finishing | `grin-g7`, 2026-10-28 | MDI groups with Cascade and Tile; the clipboard in Notepad, the fields, Calculator and the DOS Prompt; the startup chime and Control Panel's Sound; the screen saver checked; this document |
 | | the games' groups | `grin-games`, 2026-11-19 | every game on the disk in five groups, the action games full screen, the Uploads' games; `prompt` items; PROGMAN.INI upgraded; full screen from a DOS Prompt; frames scaled in a game's window; C4DOS at 256 MB |
+| | the Uploads on B:, and README.TXT | `grin-uploads`, 2026-11-20 | C4DOS has the page's Uploads on B: (`B:\DUKE3D\DUKE3D.GRP`), A: only the system; Full Games (Uploads) has README.TXT, from uploads.js's NEEDS; PROGMAN.INI version 3 |
 | | game windows of any size, with menus | `grin-windows`, 2026-11-20 | table version 6 (`fwin_ctl`, flag 4): the cards and puzzles lay out to their window and to it maximised, with their C4IX menu bars; Minesweeper's whole board; long menus in columns |
+
+### The Uploads on B:, as built (2026-11-20)
+
+The user: putting the uploads on A:, where the system files are, gave
+two folders for each game, `A:\GAMES\DUKE3D` and `A:\DUKE3D`. They chose
+B:, the home drive, where C4IX has `/home`:
+
+    A:\GAMES\DUKE3D\DUKE3D        the game (the shareware)
+    B:\DUKE3D\DUKE3D.GRP          the upload
+    B:\DUKE3D\DUKE3D.CFG          the full game's settings
+    Full Games > Duke Nukem 3D runs A:\GAMES\DUKE3D\DUKE3D -home
+
+- The page's worker lays the uploads over drive 1 for the c4dos system
+  (`libjs/uploads.js` `HomeFiles`; libjs/README.md, "Uploads"): B:'s
+  listings show them, the page never keeps them, DEL cannot remove one,
+  and one forgotten leaves nothing on B:. The Build Ladder, whose C4DOS
+  has no home drive, keeps them on A: as before.
+- The games needed no change to find them: C4DOS looks for a name with
+  no drive in the home drive's current directory first, so
+  `duke3d/duke3d.grp` is `B:\DUKE3D\DUKE3D.GRP`. Duke's `-home` keeps its
+  settings beside the GRP now (`duke_setup_name`).
+- Full Games (Uploads) has README.TXT first, `NOTEPAD \GAMES\README.TXT`:
+  how to upload, each game's files, where they go and how to start the
+  game, written from `NEEDS` at build time (`libjs/uploads-readme.mjs`,
+  `page-disks.sh`), so they cannot part. PROGMAN.INI version 3 adds it to
+  a saved one (an upgrade from version 2 adds what is missing and changes
+  no mode).
 
 ### Game windows of any size, with menus, as built (2026-11-20)
 
@@ -392,6 +420,12 @@ G6's games in a window, and G7's:
   in Notepad giving the screen's text;
 - the screen saver: Desktop's Test runs Marquee with grin's line, a key
   ends it and everything is drawn again.
+
+The Uploads on B: (2026-11-20): a boot with an upload on B: (`HomeFiles`
+as worker.js makes it), PROGMAN.INI version 3 with README.TXT, which opens
+in Notepad saying how to upload each game's files; at A>, DIR B:\DUKE3D
+lists the upload, A:\DUKE3D is no directory, TYPE reads it, DEL refuses
+it, and nothing of it is in what the page keeps of B:.
 
 The game windows' (2026-11-20): Net (Puzzles) with Game, Type and Help
 on its bar, its frames the window's inside, maximised and laid out to the

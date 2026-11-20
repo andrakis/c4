@@ -48,8 +48,9 @@
 enum { GROUPS = 12, ITEMS = 128, G_NAME = 24, I_TITLE = 32, I_CMD = 96, I_ICON = 12, INI_MAX = 16384 };
 enum { N_MODES = 4 };                 // RUN_APP, RUN_FULL, RUN_WINDOW, RUN_PROMPT (shell.h)
 // PROGMAN.INI's version, on a line of its own before the groups (a grin
-// before it reads no line there): 2 has the games' groups and modes
-enum { PM_VERSION = 2 };
+// before it reads no line there): 2 has the games' groups and modes, 3
+// README.TXT in Full Games (Uploads)
+enum { PM_VERSION = 3 };
 
 enum { GS_NORMAL = 0, GS_MIN = 1, GS_MAX = 2 };
 // a group, and its window inside Program Manager's (below): placed once it
@@ -81,9 +82,12 @@ static char *defaults[72] = {
     "Super Blit Kart=\\GAMES\\SBK\\SBK,game,full",
     "Tyrian=\\GAMES\\TYRIAN\\TYRIAN,game,full",
     "Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,full",
-    // the person's own files, from the page's Uploads (libjs/uploads.js):
-    // each game says what it wants when they are not there
+    // the person's own files, from the page's Uploads (libjs/uploads.js),
+    // which C4DOS has on B:: each game says what it wants when they are not
+    // there, and README.TXT (A:\GAMES, written from uploads.js's NEEDS by
+    // page-disks.sh) says how to add them
     "[Full Games (Uploads)]",
+    "README.TXT=NOTEPAD \\GAMES\\README.TXT,notepad,app",
     "The Ultimate Doom=\\GAMES\\DOOM\\DOOM -home -iwad doom.wad,game,full",
     "Doom II=\\GAMES\\DOOM\\DOOM -home -iwad doom2.wad,game,full",
     "TNT: Evilution=\\GAMES\\DOOM\\DOOM -home -iwad tnt.wad,game,full",
@@ -288,8 +292,10 @@ static int group_named(char *name) {
 // group); each default item whose command line it has takes the default's
 // mode (the games now full screen, and so on), and each it lacks is added
 // to its group. The person's own items and groups are left as they are.
+// From version 2 on the modes are the person's: an upgrade from 2 (to 3,
+// README.TXT in Full Games) only adds what is missing.
 static struct item def_item;
-static void pm_upgrade() {
+static void pm_upgrade(int from) {
     int k, g, i, n, cur;
     struct item *it;
     it = &def_item;
@@ -316,7 +322,7 @@ static void pm_upgrade() {
         } else if (cur >= 0 && item_parse(line, it)) {
             i = 0;
             while (i < ITEMS && !(items[i].used && ieq(items[i].cmd, it->cmd))) ++i;
-            if (i < ITEMS) items[i].mode = it->mode;
+            if (i < ITEMS) { if (from < 2) items[i].mode = it->mode; }
             else {
                 n = 0;
                 while (n < ITEMS && items[n].used) ++n;
@@ -334,8 +340,7 @@ static void pm_save() {
     int g, k, fd, v[7];
     char num[16];
     inibuf[0] = 0;
-    ui_ncat(inibuf, "Version=", INI_MAX); ui_ncat(inibuf, ui_num(num, PM_VERSION), INI_MAX); ui_ncat(inibuf, "
-", INI_MAX);
+    ui_ncat(inibuf, "Version=", INI_MAX); ui_ncat(inibuf, ui_num(num, PM_VERSION), INI_MAX); ui_ncat(inibuf, "\n", INI_MAX);
     g = 0;
     while (g < ngroups) {
         ui_ncat(inibuf, "[", INI_MAX); ui_ncat(inibuf, groups[g].name, INI_MAX); ui_ncat(inibuf, "]", INI_MAX);
@@ -387,7 +392,7 @@ static void pm_load() {
         if (k) ini_take();
     }
     if (ngroups) {
-        if (ini_version < PM_VERSION) { pm_upgrade(); ini_moved = 1; }
+        if (ini_version < PM_VERSION) { pm_upgrade(ini_version); ini_moved = 1; }
         if (ini_moved) pm_save();
         return;
     }

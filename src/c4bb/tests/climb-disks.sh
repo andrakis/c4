@@ -181,6 +181,7 @@ if [ -n "$CLIMBSRC" ] && [ -f $LJDOS/c4dos32.c4r ]; then
         printf 'ECHO Climb: BUILD, then RUN dosload.c4r c4ke.c4r boots the kernel it built.\n'
         printf 'ECHO TYPE LADDER.TXT says every step, up to C4IX.\n'
     } > $LJLAD/autoexec.bat
+    uploads_readme $LJLAD A
     listings $LJLAD
     disk_indexes $LJLAD
     echo "c4bb: ladder disk: $LJLAD ($(find $LJLAD -type f | wc -l) files, $(du -sh $LJLAD | cut -f1))"

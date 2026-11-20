@@ -72,8 +72,10 @@ const SYSTEMS = {
   // 18 MB pak0 wants 48 MB free while it is read (64 MB, less the RAM disk's
   // 16 and grin's, found no pak at all), and the person's own files, from
   // the Uploads, more: Duke's 44 MB GRP, Quake's 34 MB pak1.
+  // The Uploads are on B:, the home drive, not on A: with the system
+  // (uploadsHome: uploads.js HomeFiles): B:\DUKE3D\DUKE3D.GRP.
   c4dos: { label: 'C4DOS', image: `${LJIMAGES}/dos/c4dos32.c4r`, disk: `${LJIMAGES}/dos`, argv: ['c4dos32.c4r'], mhz: 400,
-           mem: 256, persist: 'c4dos' },
+           mem: 256, persist: 'c4dos', uploadsHome: true },
   // The Build Ladder (build-images.sh, libjs/images/ladder;
   // docs/c4dos-ladder.md): C4DOS with the games, and what it takes to
   // climb in one sitting -- BUILD compiles C4KE, dosload boots it, C4KE
@@ -240,6 +242,7 @@ const opts = {
   persist: params.get('persist') === '0' ? null : sys.persist || null,
   persistReset: params.get('persist') === 'reset',
   uploads: params.get('uploads') === '0' ? null : UPLOADS,
+  uploadsHome: !!sys.uploadsHome,
 };
 // Configuration: the URL's parameters (above) as a form. OK writes the ones
 // that differ from their defaults into the URL, keeps any it does not know,
@@ -648,7 +651,7 @@ function upNeeds(names) {
     for (const f of need.opt || []) file(f, 'opt');
     const left = missing.length ? `${missing.length} to add` : anyMissing.length ? 'one of them to add' : 'ready';
     const run = document.createElement('div'); run.className = 'run dim';
-    run.textContent = `${left} — C4DOS (grin): ${need.c4dos}; C4IX: ${need.c4ix}; bare machine: system ${need.bare}`;
+    run.textContent = `${left} — C4DOS: on ${need.dos}, grin's ${need.c4dos}; C4IX: ${need.c4ix}; bare machine: system ${need.bare}`;
     li.append(head, files, run);
     el.append(li);
   }

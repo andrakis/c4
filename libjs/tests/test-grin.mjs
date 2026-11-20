@@ -48,6 +48,7 @@ import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
 import { STOP } from '../c4m.js';
 import { GuiDevice, CMD } from '../gui-device.js';
+import { HomeFiles } from '../uploads.js';
 import { SoundDevice, EVT } from '../snd-device.js';
 import { fileURLToPath } from 'node:url';
 
@@ -565,7 +566,7 @@ check(text().includes('files are written to B:'), "the disk's CONFIG.SYS has DRI
 const pmIni = storeText('PROGMAN.INI');
 const GAME_GROUPS = ['Action Games', 'Full Games (Uploads)', 'Cards & Puzzles', 'Classic Games', 'Text Games'];
 const groupLine = g => new RegExp('^\\[' + g.replace(/[()]/g, '\\$&') + '\\]( |$)', 'm');
-check(pmIni && /^Version=2$/m.test(pmIni) && groupLine('Main').test(pmIni) && groupLine('Accessories').test(pmIni) &&
+check(pmIni && /^Version=3$/m.test(pmIni) && groupLine('Main').test(pmIni) && groupLine('Accessories').test(pmIni) &&
       GAME_GROUPS.every(g => groupLine(g).test(pmIni)) &&
       /^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(pmIni) && /^Quake=\\GAMES\\QUAKE\\QUAKE -home,game,full$/m.test(pmIni) &&
       /^Net=\\GAMES\\PUZZLES\\NET,game,window$/m.test(pmIni) && /^Zork I=\\GAMES\\FROTZ\\FROTZ ZORK1\.Z3,game,prompt$/m.test(pmIni) &&
@@ -1282,15 +1283,52 @@ store.set('PROGMAN.INI', new Uint8Array(Buffer.from(OLD_INI, 'latin1')));
 bootG7();
 settle();
 const upIni = storeText('PROGMAN.INI') || '';
-check(/^Version=2$/m.test(upIni) && groupLine('Action Games').test(upIni) && !groupLine('Games').test(upIni) &&
+check(/^Version=3$/m.test(upIni) && groupLine('Action Games').test(upIni) && !groupLine('Games').test(upIni) &&
       GAME_GROUPS.every(g => groupLine(g).test(upIni)),
-  'an old PROGMAN.INI is upgraded: Version=2, Games renamed Action Games, the new groups added', upIni);
+  'an old PROGMAN.INI is upgraded: Version=3, Games renamed Action Games, the new groups added', upIni);
 check(/^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(upIni) && /^Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,full$/m.test(upIni) &&
       /^Calculator=CALC,calc,app$/m.test(upIni) && /^Quake=\\GAMES\\QUAKE\\QUAKE,game,full$/m.test(upIni),
   '... its games full screen, and the default items it lacked added (Calculator, Quake)', upIni);
 check(/^Doom, level 2=\\GAMES\\DOOM\\DOOM -warp 2,game,window$/m.test(upIni) && /^\[Mine\]\nHello=HELLO,app,full$/m.test(upIni),
   "... the person's own item and group as they were", upIni);
 check(upIni.split('\n').filter(l => /^Doom=/.test(l)).length === 1, '... and nothing twice', upIni);
+
+// The Uploads under C4DOS (libjs/uploads.js HomeFiles), on B:, the home
+// drive, as worker.js lays them: B:\DUKE3D\DUKE3D.GRP, and no A:\DUKE3D.
+// Full Games (Uploads) has README.TXT, written from uploads.js's NEEDS.
+endSession(); clickText('OK');
+until(() => !gui.stats().attached, 3000);
+{
+  const base = new Map([...store].map(([n, b]) => [n, b.slice()]));
+  const over = new HomeFiles(base, [['duke3d/duke3d.grp', new Uint8Array(Buffer.from('not really a GRP'))]], (n, b) => store.set(n, b.slice()));
+  gui = new GuiDevice({ w: 640, h: 480 });
+  out = []; frame = []; cur = []; rects = []; curRects = []; partial = false; halted = false; presents = 0;
+  vm = createMachine({ arenaMb: 64, mhz: 400, gui, drives: [{ files: new LazyDisk(index), writable: false, sink: null },
+    { files: over, writable: true, sink: (n, b) => store.set(n, over.kept(n, b).slice()), remove: n => store.delete(n) }], onByte: b => out.push(b) });
+  boot(vm, image, ['c4dos32.c4r']);
+}
+check(until(() => has('Program Manager'), 3000), 'a boot with an upload, duke3d/duke3d.grp: grin comes up');
+// (PROGMAN.INI version 3: README.TXT added to the group the person has)
+check(/^Version=3$/m.test(storeText('PROGMAN.INI') || '') && /^README\.TXT=NOTEPAD \\GAMES\\README\.TXT,notepad,app$/m.test(storeText('PROGMAN.INI') || ''),
+  'PROGMAN.INI is version 3, with README.TXT in Full Games (Uploads)', storeText('PROGMAN.INI'));
+if (existsSync(join(DISK, 'GAMES/README.TXT'))) {
+  startItem('README.TXT', 'Full Games \\(Uploads\\)');
+  check(until(() => find(/README\.TXT - Notepad$/).length > 0 && find(/^FULL GAMES \(UPLOADS\)/).length > 0 && find(/^Duke Nukem 3D/).length > 0),
+    "Full Games (Uploads) > README.TXT opens it in Notepad: how to upload each game's files", JSON.stringify(frame.map(t => t.s.trimEnd())));
+  endTask2(/README\.TXT - Notepad$/);
+}
+endSession(); clickText('OK');
+check(until(() => !gui.stats().attached && /A:\\>$/.test(text().trimEnd()), 3000), '... and Exit grin, to A>');
+let dirOut = typed('DIR B:\\DUKE3D');
+check(/duke3d\.grp/i.test(dirOut), 'DIR B:\\DUKE3D lists the upload', dirOut);
+dirOut = typed('DIR A:\\DUKE3D');
+check(!/duke3d\.grp/i.test(dirOut) && /invalid directory/i.test(dirOut), 'A: has no DUKE3D: it keeps only the system', dirOut);
+dirOut = typed('TYPE B:\\DUKE3D\\DUKE3D.GRP');
+check(/not really a GRP/.test(dirOut), 'TYPE B:\\DUKE3D\\DUKE3D.GRP reads it', dirOut);
+dirOut = typed('DEL B:\\DUKE3D\\DUKE3D.GRP');
+check(/cannot delete/i.test(dirOut) && /duke3d\.grp/i.test(typed('DIR B:\\DUKE3D')), 'DEL cannot take an upload off B:', dirOut);
+check(![...store.keys()].some(n => /duke3d\.grp/i.test(n)) && !/duke3d/i.test(storeText('c4dos.dir') || ''),
+  "and nothing of it is in what the page keeps of B:, its listing neither", JSON.stringify([...store.keys(), storeText('c4dos.dir')]));
 
 console.log(fail ? 'test-grin: FAILED' : 'test-grin: OK');
 process.exit(fail);

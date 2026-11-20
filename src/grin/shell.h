@@ -56,6 +56,7 @@ void apps_publish(int on);            // the table in slot 25 (1), or out of it 
 int  grin_fwin_open(char *title, int w, int h, int flags);
 void grin_fwin_frame(char *pixels, int w, int h, int pitch, int *pal);
 int  grin_fwin_poll(int *ev);
+int  grin_fwin_ctl(int op, int n, char *s);
 void fwin_init();                     // at the start: grin's image (C4DOS v8)
 int  fwin_event(int *ev);             // an event from the display: 1 if it was the game's
 int  fwin_fresh();                    // a game's frame waits to be drawn

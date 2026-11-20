@@ -1207,14 +1207,52 @@ if (haveDoom) {
   typeLine('EXIT');
   until(() => !dosWin(1));
 }
-// Cards & Puzzles: Net, in a window of grin's
+// Cards & Puzzles in windows of any size (the table's version 6, fwin.c):
+// the game's own menu bar, as C4IX's desktop gives it; frames the size of
+// the window's inside; maximised, laid out to the whole of it; a pick from
+// a menu reaching the game. Net (Puzzles) lays itself out; Minesweeper (the
+// Ace of Penguins) keeps its size, and its whole board is fitted to the
+// window rather than cut off at 640 x 400.
+const lastBlit = () => blits[blits.length - 1];
+// an item from a menu of the window w's bar
+const pickIn = (w, label, item) => {
+  const m = menuOf(w, label);
+  if (!m) return false;
+  click(m.x + 5, m.y + 5); settle();
+  return until(() => has(item)) && clickText(item);
+};
 if (existsSync(join(DISK, 'GAMES/PUZZLES/net.c4r'))) {
   const b0 = blitCount;
   startItem('Net', 'Cards & Puzzles');
-  check(until(() => !!gameWin() && blitCount > b0 && framesIn(gameWin(), 1), 4000), "Cards & Puzzles > Net plays in a window of grin's",
-    text().slice(-300));
-  if (gameWin()) closeBox(gameWin());
-  check(until(() => !gameWin(), 3000) && has('Program Manager'), '... and closing its window ends it');
+  const netWin = () => win('Game');
+  check(until(() => !!netWin() && blitCount > b0 && framesIn(netWin(), 1), 4000) && ['Type', 'Help'].every(m => !!menuOf(netWin(), m)),
+    "Cards & Puzzles > Net plays in a window of grin's, with the game's menu bar: Game, Type, Help", JSON.stringify(frame.map(t => t.s)));
+  settle();
+  const lb = lastBlit();
+  check(lb && lb.w === lb.dw && lb.h === lb.dh, `... its frames the size of the window's inside, drawn as they are (${JSON.stringify(lb)})`);
+  const nw = netWin(), b1 = blitCount;
+  if (nw) click(...maxButton(nw));
+  settle();
+  check(until(() => { const b = lastBlit(); return blitCount > b1 && b && lb && b.w === b.dw && b.h === b.dh && b.dw > lb.dw && b.dh > lb.dh; }, 3000),
+    `... maximised, it lays itself out again to the whole of it (${JSON.stringify([lb, lastBlit()])})`);
+  const b2 = blitCount;
+  check(pickIn(netWin(), 'Type', '7x7') && until(() => blitCount > b2, 2000), "... Type > 7x7 from its menu bar: the game deals one, and draws it");
+  if (netWin()) closeBox(netWin());
+  check(until(() => !netWin(), 3000) && has('Program Manager'), '... and closing its window ends it');
+}
+if (existsSync(join(DISK, 'GAMES/ACE/minesweeper.c4r'))) {
+  const b0 = blitCount;
+  startItem('Minesweeper', 'Cards & Puzzles');
+  const mw = () => win('Game');
+  check(until(() => !!mw() && blitCount > b0 && framesIn(mw(), 1), 4000) && ['Level', 'Help'].every(m => !!menuOf(mw(), m)),
+    'Cards & Puzzles > Minesweeper in a window, with Game, Level and Help, as under C4IX', JSON.stringify(frame.map(t => t.s)));
+  settle();
+  const fb = lastBlit();
+  check(fb && fb.h >= 427 && fb.dh <= mw().h, `... its whole board (401 x 427) in each frame, fitted to the window (${JSON.stringify([fb, mw()])})`);
+  const b1 = blitCount;
+  check(pickIn(mw(), 'Level', '8x8, 6 Mines') && until(() => blitCount > b1, 2000), '... Level > 8x8 from its menu bar: a new board, drawn');
+  if (mw()) closeBox(mw());
+  check(until(() => !mw(), 3000) && has('Program Manager'), '... and closing its window ends it');
 }
 // Text Games: Quiz in a DOS Prompt of its own, started in its directory
 // (with no subject, it lists them and ends)

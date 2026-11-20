@@ -176,6 +176,7 @@ void wk_menu(int i, struct wk_menu *m, int n) {
 }
 
 static int drop_h(char **items);
+static int drop_w(char **items);
 
 // A pop-up menu at (x, y) in window I's client area, kept on the screen:
 // drawn and chosen from as a drop-down is, the item chosen reaching the
@@ -187,7 +188,7 @@ void wk_popup(int i, int x, int y, char **items) {
     pop_items = items;
     pop_x = wk_client_x(w) + x; pop_y = wk_client_y(w) + y;
     h = drop_h(items);
-    if (pop_x + DROP_W > wk.sw) pop_x = wk.sw - DROP_W;
+    if (pop_x + drop_w(items) > wk.sw) pop_x = wk.sw - drop_w(items);
     if (pop_y + h > wk.sh) pop_y = pop_y - h;
     if (pop_y < 0) pop_y = 0;
     if (pop_x < 0) pop_x = 0;
@@ -366,15 +367,56 @@ static int drop_h(char **items) {
     k = 0; while (items[k]) { if (items[k][0] == '-') mh = mh + 8; else mh = mh + 20; ++k; }
     return mh;
 }
+// A column's width: DROP_W, or the widest item's (text widths are guesses,
+// six pixels a letter, as elsewhere), the check mark's room and a margin
+static int drop_w(char **items) {
+    int k, n, w;
+    w = DROP_W;
+    k = 0;
+    while (items[k]) {
+        n = ui_len(items[k]);
+        if (items[k][0] == WK_CHECKED) --n;
+        if (n * 6 + 34 > w) w = n * 6 + 34;
+        ++k;
+    }
+    return w > wk.sw ? wk.sw : w;
+}
+// A drop-down taller than the screen below its top breaks into columns, as
+// 3.1's long menus did: item k's column and its top, from the drop-down's
+// top y; *cols, the columns, and *tall, the tallest one's height
+static int drop_lay(char **items, int y, int k, int *iy, int *cols, int *tall) {
+    int i, c, cy, h, limit, at;
+    limit = wk.sh - y - 3;
+    if (limit < 40) limit = 40;
+    c = 0; cy = 3; *tall = 6; at = 0;
+    i = 0;
+    while (items[i]) {
+        h = items[i][0] == '-' ? 8 : 20;
+        if (cy + h > limit && cy > 3) { c = c + 1; cy = 3; }
+        if (i == k) { at = c; *iy = y + cy; }
+        cy = cy + h;
+        if (cy + 3 > *tall) *tall = cy + 3;
+        ++i;
+    }
+    *cols = c + 1;
+    return at;
+}
 // A minimised window's control menu opens over its icon.
+static int drop_y(struct win *w);
 static int drop_x(struct win *w) {
-    int x, y;
+    int x, y, k, cw;
     if (menu_idx == M_POPUP) return pop_x;
     if (menu_idx < 0 && w->min && wk_icons_on) {
         wk_icon_xy(w, &x, &y);
         return x + DROP_W > wk.sw ? wk.sw - DROP_W : x;
     }
-    return menu_idx < 0 ? w->x + BORDER : wk_menu_x(w, menu_idx);
+    if (menu_idx < 0) return w->x + BORDER;
+    // a menu bar's: kept on the screen, its columns and all
+    x = wk_menu_x(w, menu_idx);
+    drop_lay(drop_items(w), drop_y(w), 0 - 1, &y, &k, &cw);
+    cw = drop_w(drop_items(w)) * k;
+    if (x + cw > wk.sw) x = wk.sw - cw;
+    return x < 0 ? 0 : x;
 }
 static int drop_y(struct win *w) {
     int x, y;
@@ -398,24 +440,24 @@ static void draw_dropdown() {
     struct win *w;
     char **items;
     char *s;
-    int n, x, y, k, iy, mh;
+    int n, x, y, k, iy, mh, dw, cols, cx;
     if (!(w = win_get(menu_win))) return;
     items = drop_items(w);
     n = count_items(items);
     x = drop_x(w); y = drop_y(w);
-    mh = drop_h(items);
-    gui_rect(x, y, DROP_W, mh, C_FACE);
-    d_bevel(x, y, DROP_W, mh, B_RAISED);
-    iy = y + 3;
+    dw = drop_w(items);
+    drop_lay(items, y, 0 - 1, &iy, &cols, &mh);
+    gui_rect(x, y, dw * cols, mh, C_FACE);
+    d_bevel(x, y, dw * cols, mh, B_RAISED);
     k = 0;
     while (k < n) {
-        if (items[k][0] == '-') { gui_rect(x + 3, iy + 3, DROP_W - 6, 1, C_SHADOW); gui_rect(x + 3, iy + 4, DROP_W - 6, 1, C_LIGHT); iy = iy + 8; }
+        cx = x + drop_lay(items, y, k, &iy, &cols, &mh) * dw;
+        if (items[k][0] == '-') { gui_rect(cx + 3, iy + 3, dw - 6, 1, C_SHADOW); gui_rect(cx + 3, iy + 4, dw - 6, 1, C_LIGHT); }
         else {
-            if (k == menu_hot) gui_rect(x + 3, iy, DROP_W - 6, 20, C_SEL);
+            if (k == menu_hot) gui_rect(cx + 3, iy, dw - 6, 20, C_SEL);
             s = items[k];
-            if (s[0] == WK_CHECKED) { check_mark(x + 7, iy + 5, k == menu_hot ? C_WHITE : C_DARK); ++s; }
-            d_text(x + 20, iy + 4, k == menu_hot ? C_WHITE : C_DARK, F_SANS, s);
-            iy = iy + 20;
+            if (s[0] == WK_CHECKED) { check_mark(cx + 7, iy + 5, k == menu_hot ? C_WHITE : C_DARK); ++s; }
+            d_text(cx + 20, iy + 4, k == menu_hot ? C_WHITE : C_DARK, F_SANS, s);
         }
         ++k;
     }
@@ -425,17 +467,16 @@ static void draw_dropdown() {
 static int dropdown_hit(int px, int py) {
     struct win *w;
     char **items;
-    int n, x, k, iy;
+    int n, x, y, k, iy, dw, cx, cols, mh;
     if (!(w = win_get(menu_win))) return 0 - 1;
     items = drop_items(w);
     n = count_items(items);
-    x = drop_x(w);
-    if (px < x || px >= x + DROP_W) return 0 - 1;
-    iy = drop_y(w) + 3;
+    x = drop_x(w); y = drop_y(w);
+    dw = drop_w(items);
     k = 0;
     while (k < n) {
-        if (items[k][0] == '-') iy = iy + 8;
-        else { if (py >= iy && py < iy + 20) return k; iy = iy + 20; }
+        cx = x + drop_lay(items, y, k, &iy, &cols, &mh) * dw;
+        if (items[k][0] != '-' && px >= cx && px < cx + dw && py >= iy && py < iy + 20) return k;
         ++k;
     }
     return 0 - 1;

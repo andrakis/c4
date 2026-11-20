@@ -324,6 +324,7 @@ void apps_init() {
     kit.fwin_open = grin_fwin_open;
     kit.fwin_frame = grin_fwin_frame;
     kit.fwin_poll = grin_fwin_poll;
+    kit.fwin_ctl = grin_fwin_ctl;
 #define K(r, n, p, a) kit.n = n;
 #define V(n, p, a) kit.n = n;
 #include "kitfns.h"

@@ -76,11 +76,14 @@ into Calculator after Notepad has been unloaded.
 
 grin publishes `struct grin_kit` (`gkit.h`) in C4DOS's slot 25: a magic,
 a version, grin's generation, the kit's `wk_env` (screen, look, colours),
-`hello`, the game window's three calls, then the kit's functions in
+`hello`, the game window's four calls, then the kit's functions in
 `kitfns.h`'s order, one line each. Version 3 (G7) added the clipboard's
-keys (`ui_key_copy`, `ui_key_cut`, `ui_key_paste`) at the end. An
-application refuses a grin whose table is older than it was built for;
-the games need version 2.
+keys (`ui_key_copy`, `ui_key_cut`, `ui_key_paste`) at the end, version 4
+the fonts. Version 6 (2026-11-20) put a fourth game call, `fwin_ctl`,
+after the other three, moving the kit's functions one word as version 2
+did (every application is built with grin). An application refuses a
+grin whose table is older than it was built for; the games need version
+2, and use what version 6 adds only where they find it.
 
 ### 3.4 The loop
 
@@ -110,6 +113,25 @@ polling its window (no nap, no saver, its frame drawn at once).
   320x200; such frames used to be dropped, and its window stayed black).
   A window started from a Program Manager item has the item's title
   (Tetris, not PDCurses' "curses"; Solitaire, not its path).
+- **A window of any size, and a menu bar** (version 6), as C4IX's desktop
+  gives a program's own window (window.h's `win_resizable`, `win_menu`,
+  `win_item`), so that the same game code has them under both:
+  `fwin_open`'s flag 4 makes the window sizable and maximisable; it
+  opens as big as the screen lets it (a 640x480 grin cannot show a 640x480
+  frame and the chrome), and each new size of its inside comes from
+  `fwin_poll` as event 101 (w, h) once it has held still for 100 ms; the
+  game's frames follow, drawn as they are, and one of another size is
+  stretched to fill. `fwin_ctl(1, n, title)` starts menu n of the bar (0
+  starts the bar again), `fwin_ctl(2, n, label)` adds an item ("-" a rule,
+  "*x" checked), and a pick comes from `fwin_poll` as event 100 (menu,
+  item, rules counted). The Puzzles (Game, Type, Help) and the Ace of
+  Penguins (Game, and Level, Suits, Layout, Help where the game has them)
+  use both from their `plat-bare.c`. A Puzzle lays itself out to the
+  window; an Ace game that keeps its size is fitted to it, as on C4IX
+  (`plat-c4ix.c`'s frame in the window's shape).
+- **Long menus**: the kit's drop-down (wmcore.c, the C4IX desktop's too)
+  is as wide as its widest item, and one taller than the screen breaks
+  into columns, as 3.1's did (Mines' 25 presets).
 - **In a DOS Prompt** (G5): C4DOS's interpreter with its console sink
   pointed at a text window, so builtins, batch files and redirection work
   as at `A>`. A `bare.c` program's read pumps grin's loop until a line is
@@ -235,6 +257,27 @@ out; Sound's Test plays it.
 | G6 | games in a window | `grin-g6`, 2026-10-27 | `fwin.c`, the games' bare layers, `image()` (API v8), sizes, pointer lock |
 | G7 | finishing | `grin-g7`, 2026-10-28 | MDI groups with Cascade and Tile; the clipboard in Notepad, the fields, Calculator and the DOS Prompt; the startup chime and Control Panel's Sound; the screen saver checked; this document |
 | | the games' groups | `grin-games`, 2026-11-19 | every game on the disk in five groups, the action games full screen, the Uploads' games; `prompt` items; PROGMAN.INI upgraded; full screen from a DOS Prompt; frames scaled in a game's window; C4DOS at 256 MB |
+| | game windows of any size, with menus | `grin-windows`, 2026-11-20 | table version 6 (`fwin_ctl`, flag 4): the cards and puzzles lay out to their window and to it maximised, with their C4IX menu bars; Minesweeper's whole board; long menus in columns |
+
+### Game windows of any size, with menus, as built (2026-11-20)
+
+The user: the card and puzzle games in grin's windows did not use a
+maximised window's room, Minesweeper's board was cut off at the bottom,
+and they had none of the menus (Game, Level, Help) they have under C4IX.
+
+- Grin's game window was fixed at the game's first frame size, 1x or 2x,
+  with a Size menu. It is now sizable for a game that asks (3.5), and the
+  Puzzles and Ace's `plat-bare.c` ask, give their menus, and take the size
+  and menu events, as their `plat-c4ix.c` do under C4IX.
+- Minesweeper's table is 401 x 427, and Ace (`xwin-c4.c`) cut a windowed
+  table to 640 x 400, under C4IX too. A game that keeps its size (no
+  resize callback, `table_keeps_size`) may now be as big as the display's
+  800 x 600 in a window, which scales it to fit; the games that lay
+  themselves out keep 640 x 400 to begin with.
+- Ace's menu rows are for the games by name, and under C4DOS the name was
+  the path typed (`\GAMES\ACE\MINESWEEPER`): it is now the file's name
+  alone, in small letters.
+- Long drop-downs: wider, and in columns (3.5).
 
 ### The games' groups, as built (2026-11-19)
 
@@ -349,6 +392,12 @@ G6's games in a window, and G7's:
   in Notepad giving the screen's text;
 - the screen saver: Desktop's Test runs Marquee with grin's line, a key
   ends it and everything is drawn again.
+
+The game windows' (2026-11-20): Net (Puzzles) with Game, Type and Help
+on its bar, its frames the window's inside, maximised and laid out to the
+whole of it, Type > 7x7 picked from the bar; Minesweeper (Ace) with Game,
+Level and Help, its whole 401 x 427 board in each frame, Level > 8x8
+picked.
 
 And the games' groups' (2026-11-19): PROGMAN.INI written with the five
 games' groups and their modes; Action Games' seven, two labels on two

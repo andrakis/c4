@@ -10,6 +10,7 @@
 //     snd:      true,                                   // optional: a sound card, played here
 //     persist:  'c4ix',                                 // optional: drive 1, kept in IndexedDB under this name
 //     uploads:  'uploads',                              // optional: files laid over drive 0, kept in IndexedDB under this name
+//     uploadsHome: true,                                // optional: ... over drive 1 instead, C4DOS's B: (uploads.js HomeFiles)
 //     music:    'gm',                                   // optional: 'opl' (default), 'gm' (a SoundFont from the uploads), 'midi' (Web MIDI)
 //     soundfont: 'soundfonts/gm.sf2',                   // optional: which upload is the SoundFont (default: the first)
 //   });
@@ -308,6 +309,8 @@ export class C4M {
       midi,
       persist,
       uploads,
+      // C4DOS has them on B:, its home drive, rather than on A: (uploads.js)
+      uploadsHome: !!opts.uploadsHome,
       shared: this.shared || null,
     };
     this.worker.postMessage(this.bootMsg);

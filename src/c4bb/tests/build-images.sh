@@ -800,7 +800,7 @@ if ls .grin/*.c4o > /dev/null 2>&1 && ls .libc-bare/*.c4o > /dev/null 2>&1 && [ 
     $CC -o $LJDOS/BIN/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
     cp $OUT/hello32.c4r $LJDOS/BIN/hello.c4r
     cp $OUT/c4dos32.c4r $LJDOS/
-    if [ -d $GAMESDISK ]; then games_put $LJDOS; fi
+    if [ -d $GAMESDISK ]; then games_put $LJDOS; uploads_readme $LJDOS B; fi
     sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $LJDOS/config.sys
     printf 'DEVICE=CONSOLE.SYS FLUSH\nDEVICE=DRIVES.SYS HOME=B:\nDEVICE=HEAP.SYS\nDEVICE=REDIR.SYS TAP\n' >> $LJDOS/config.sys
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')

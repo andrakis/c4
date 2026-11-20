@@ -59,9 +59,11 @@
 <dialog id="uploads">
   <form method="dialog">
     <h2>Uploads</h2>
-    <p class="dim">Files of your own, kept in this browser and put on the machine's disk (drive 0)
+    <p class="dim">Files of your own, kept in this browser and put on the machine's disk
       at every boot, beside the disk's own files, so a program opens them by name. C4IX lists
-      them in <code>/home</code>, or in the folder picked below. Names are made lower case. Drop files on the page, or add them here.
+      them in <code>/home</code>, or in the folder picked below; C4DOS has them on <code>B:</code>, its home
+      drive (<code>B:\DUKE3D</code> for <code>/home/duke3d</code>), where an upload hides a file of the same
+      name of your own while it is uploaded. Names are made lower case. Drop files on the page, or add them here.
       A game that plays your own files looks in its folder first, then in <code>/home</code>.</p>
     <div class="uploads-to">
       <label>Put new files in <select id="uploads-folder"></select></label>
@@ -72,7 +74,7 @@
       <summary>What the games need</summary>
       <p class="dim">Each game that plays your own files, the files it wants (put them in its folder, or in
         <code>/home</code>), and where to start it once they are here: under C4DOS, grin's Program Manager
-        has them in its Full Games (Uploads) group.</p>
+        has them in its Full Games (Uploads) group, with a README.TXT that says this too.</p>
       <ul id="uploads-needs"></ul>
     </details>
     <div class="config-buttons">

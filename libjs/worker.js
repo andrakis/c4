@@ -11,7 +11,9 @@
 //           it a General MIDI synth on its MIDI port (page.js, opts.music)
 //           persist: { files: [[name, Uint8Array]] } fits a writable drive 1, kept by the page
 //           uploads: [[name, Uint8Array]] laid over drive 0: the disk's file of that name is hidden
-//                    (and C4IX lists them in /home: uploads.js)
+//                    (and C4IX lists them in /home: uploads.js); with uploadsHome (C4DOS),
+//                    over drive 1, B:, instead (uploads.js HomeFiles), which is there for them
+//                    even where nothing is kept
 //           cpus, quantum: that many processors, simulated (smp.js)
 //           parallel: ... each on a worker of its own (par.js), when the page is
 //           cross-origin isolated; simulated otherwise
@@ -51,7 +53,7 @@ import { keyDown, typeBytes, Paste } from './keys.js';
 import { GuiDevice } from './gui-device.js';
 import { SoundDevice, EVT } from './snd-device.js';
 import { RingWriter, FbProducer } from './shared.js';
-import { layUploads } from './uploads.js';
+import { layUploads, HomeFiles } from './uploads.js';
 import { LazyFiles } from './lazy.js';
 import { loadAccel, accelManifest, osAccelOn } from './accel.js';
 
@@ -166,17 +168,32 @@ function start(msg) {
     postMessage({ type: 'cache', name, hash, bytes: bytes.slice() });
   }) : new Map((msg.disk || []).map(([n, b]) => [n, b instanceof Uint8Array ? b : new Uint8Array(b)]));
   if (msg.lazy) files.fill(cacheFiles);
-  // the uploads over them, and in C4DOS's and C4IX's listings (uploads.js)
-  layUploads(files, msg.uploads);
+  // the uploads over them, and in C4DOS's and C4IX's listings (uploads.js);
+  // under C4DOS on B: instead (below)
+  const home = !!msg.uploadsHome && !!(msg.uploads && msg.uploads.length);
+  layUploads(files, msg.uploads, !!msg.uploadsHome);
   const drives = [{ files, writable: false, sink: null }];
+  const keep = (name, bytes) => { const b = bytes.slice(); postMessage({ type: 'persist', name, bytes: b }, [b.buffer]); };
   if (msg.persist) {
     if (!persistDrive) persistDrive = {
       files: new Map(msg.persist.files), writable: true,
-      sink: (name, bytes) => { const b = bytes.slice(); postMessage({ type: 'persist', name, bytes: b }, [b.buffer]); },
+      sink: keep,
       // a file the machine took off the drive (DISK_UNLINK): gone from the page's store too
       remove: name => postMessage({ type: 'persist', name, bytes: null }),
     };
     drives.push(persistDrive);
+  }
+  // C4DOS's uploads on B: (drive 1): over what the page keeps there, which
+  // gets only what is the person's own (HomeFiles.kept); or, where nothing
+  // is kept (?persist=0), over a B: for this boot alone
+  if (home) {
+    const base = msg.persist ? persistDrive : { files: new Map() };
+    const over = new HomeFiles(base.files, msg.uploads, msg.persist ? keep : null);
+    drives[1] = {
+      files: over, writable: true,
+      sink: msg.persist ? (name, bytes) => keep(name, over.kept(name, bytes)) : () => {},
+      remove: msg.persist ? persistDrive.remove : null,
+    };
   }
   vm = createMachine({
     arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu, accel: msg.accel, osAccel: msg.osAccel,

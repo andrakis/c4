@@ -95,7 +95,10 @@ or dropped on the page, kept in this browser (IndexedDB, as C4IX's
 drive 1 is) and laid over drive 0 at every boot (`page.js`'s
 `opts.uploads`, `worker.js`), so a program opens them by name as if the
 disk had them; on C4IX that is a file its own tree does not have
-(`sys_open`). Names are made lower case. Boot with them reloads the page.
+(`sys_open`). Under the page's C4DOS (`?system=c4dos`, `uploadsHome` in
+`app.js`) they are laid over drive 1 instead, B:, its home drive, and A:
+keeps only the system (below). Names are made lower case. Boot with them
+reloads the page.
 
 Each upload goes in a **folder**, picked from the dialog's list before the
 files are added (or dropped): `/home`, as before, or one for each game that
@@ -103,8 +106,10 @@ plays the person's own files (`FOLDERS` in `uploads.js`). The list shows
 each file's folder, and Forget takes it out of that folder alone. In the
 store an upload in a folder is named `FOLDER/NAME`, and `uploads.js`
 (`layUploads`) puts it where each system finds it: on drive 0 as
-`FOLDER/NAME` (the bare games open that name), in C4DOS's listing as the
-directory `A:\FOLDER`, and in C4IX as `/home/FOLDER/NAME`. Each game looks
+`FOLDER/NAME` (the bare games open that name), and in C4IX as
+`/home/FOLDER/NAME`; under the page's C4DOS on B: as `B:\FOLDER\NAME`
+(`HomeFiles`), and under the Build Ladder's, which has no home drive, on
+A: as `A:\FOLDER\NAME`. Each game looks
 in its own folder first, then in `/home`, so uploads from before there
 were folders still play:
 
@@ -116,16 +121,31 @@ were folders still play:
 | `/home/doom` | `doom -home`: `doom.wad`, `doom2.wad`, `plutonia.wad`, `tnt.wad` (games/doom/README.md) | Doom (your files) > each IWAD | `doom-full`, or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` (128 MB) |
 | `/home/rott` | `rottreg`: `DARKWAR.WAD`, `.RTL`, `.RTC`, and `REMOTE1.RTS` if you have it (games/rott/README.md) | Rise of the Triad (your files) | `rottreg` |
 
-On the bare machine and under C4DOS a game looks in `FOLDER/` at drive
-0's root, then at the root itself; not under `/home`, which the disk would
-answer by a path's last part, from the root (devices.js `diskFind`).
+On the bare machine a game looks in `FOLDER/` at drive 0's root, then at
+the root itself; not under `/home`, which the disk would answer by a
+path's last part, from the root (devices.js `diskFind`). Under C4DOS the
+same names, which have no drive, are looked for in the home drive's
+current directory first (`c4dos.c`, `dos_open`): `B:\FOLDER`, then `B:\`.
+
+B: under C4DOS is what the page keeps of it (the `c4dos` store) with the
+uploads over it (`HomeFiles` in `uploads.js`): DIR and grin's File Manager
+list both, since B:'s listings (`c4dos.dir`) are the person's with the
+uploads added. An upload hides a file of the person's of the same name
+while it is uploaded, and DEL cannot take one off (devices.js
+`diskUnlink`, `locked`): Forget in the Uploads dialog does, from the next
+boot. Nothing of an upload is ever kept in the store -- a listing C4DOS
+writes back, for a file saved there, is kept without the uploads' names
+-- so a forgotten one leaves nothing behind. With `?persist=0` B: is there
+for the uploads alone, kept for that boot.
 Under C4DOS, grin's Program Manager has the same games in its Full Games
 (Uploads) group (docs/grin.md 3.7), or at `A>`: `\GAMES\WOLF3D\WOLF3D6`,
 `\GAMES\DUKE3D\DUKE3D -home`, `\GAMES\QUAKE\QUAKE -home`,
 `\GAMES\DOOM\DOOM -home` (`-iwad NAME` for one of several) and
-`\GAMES\ROTT\ROTTREG`. The dialog lists what each game wants (`NEEDS` in
-`uploads.js`): each of its files, found among the uploads or not, and
-where to start it on each system.
+`\GAMES\ROTT\ROTTREG`; and README.TXT there says how to add each game's
+files (`A:\GAMES\README.TXT`, written from `NEEDS` at build time by
+`libjs/uploads-readme.mjs`). The dialog lists what each game wants
+(`NEEDS` in `uploads.js`): each of its files, found among the uploads or
+not, and where to start it on each system.
 
 **Downloads.** What a system keeps can be taken away as files, two ways:
 

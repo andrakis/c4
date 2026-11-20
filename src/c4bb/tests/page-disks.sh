@@ -46,6 +46,15 @@ games_put () {          # games_put DISK: each game's files into DISK/GAMES/NAME
     done
     return 0
 }
+# GAMES/README.TXT: what grin's Full Games (Uploads) say of the page's
+# Uploads, from libjs/uploads.js's NEEDS (libjs/uploads-readme.mjs), the
+# files on drive DRIVE (B the page's C4DOS, A the ladder's). Written anew:
+# the ladder's GAMES are hard links to the page C4DOS disk's.
+uploads_readme () {     # uploads_readme DISK DRIVE
+    [ -d "$1/GAMES" ] || return 0
+    rm -f "$1/GAMES/README.TXT"
+    node libjs/uploads-readme.mjs "$2" > "$1/GAMES/README.TXT" || rm -f "$1/GAMES/README.TXT"
+}
 # the games' directories, for APPEND: "\GAMES\DOOM;\GAMES\ROTT"
 games_dirs () {
     for gf in $GAMEFILES/*; do if [ -s "$gf" ]; then printf '\\GAMES\\%s;' "$(basename $gf)"; fi; done | sed 's/;$//'

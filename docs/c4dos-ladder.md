@@ -13,13 +13,15 @@ toolchain, and C4IX's userland.
 
 ## Using it
 
-At each prompt (the disk's `LADDER.TXT` says the same; `TYPE LADDER.TXT`):
+At each prompt (the disk's `LADDER.TXT` says the same: `TYPE LADDER.TXT`
+at `A:\>`, and `cat ladder.txt` at `c4sh>`, the same file):
 
 | at | type | what happens |
 |---|---|---|
 | `A:\>` | `DOOM`, `WOLF3D`, `TYRIAN`, `ROTT`, `GRIN` | play; HEAP.SYS gives a game's memory back when it quits |
 | `A:\>` | `BUILD` | C4KE and its init compiled onto the RAM disk (`LADDER` rebuilds the compiler first) |
 | `A:\>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel just compiled, its RAM filesystem seeded from the RAM disk |
+| `c4sh>` | `cat ladder.txt` | these instructions again |
 | `c4sh>` | `doom`, `wolf3d`, `rps`, `raycast` | play, as C4KE tasks |
 | `c4sh>` | `grin` | grin as a C4KE task; its DOS Prompt is a C4KE Prompt (below) |
 | `c4sh>` | `tar x c4ix-src.tar` | C4IX's sources into the RAM filesystem |
@@ -111,7 +113,12 @@ Its own `CONFIG.SYS` (CLOCK, a 32 MB RAMDISK, CONSOLE FLUSH, DRIVES, HEAP,
 REDIR TAP; no `HOME=B:`, which would send what cpp and c4cc write to B:
 instead of the RAM disk C4KE is seeded from),
 `AUTOEXEC.BAT`, `BUILD.BAT`, `LADDER.TXT`, a `c4dos.dir` in every
-directory, `index.json` and `manifest.json`. The prebuilt C4IX kernel is left out, so the one that
+directory, `index.json` and `manifest.json`. `LADDER.TXT` is
+`src/c4dos/fs/LADDER.TXT`, copied; C4KE's tree (`C4KE\c4ke.vfs.txt`) is
+the climb floppy's with `ladder.txt` added at its root, so C4KE's `ls`
+lists the same file and `cat ladder.txt` shows it. (The floppy itself
+has no `LADDER.TXT`: what it says of directories and games is this
+disk's.) The prebuilt C4IX kernel is left out, so the one that
 boots is the one b4ke linked. Like the climb disk beside it, the ladder
 disk is copied from the climb floppy, not built from it
 (`src/c4bb/tests/climb-disks.sh`). `make c4bb-images` does it all in
@@ -210,9 +217,9 @@ C4IX needs nothing for this: it boots as it does from dosload
 
 | target | what |
 |---|---|
-| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 27 checks, about 90 s; also in `make test-libjs` (which skips it without the disk). Under C4KE it also runs grin, opens a C4KE Prompt, starts `spin x &` in it, checks with `ps` that the spinning task ran on while grin waited (more than 1,000 of 2,000 ms), and kills it. Under C4IX it checks `/lib` has the shared libraries and starts the desktop (which loads `/lib/libgui.c4s`) |
+| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 36 checks (`cat ladder.txt` and `ls` at `c4sh>` among them), about 90 s; also in `make test-libjs` (which skips it without the disk). Under C4KE it also runs grin, opens a C4KE Prompt, starts `spin x &` in it, checks with `ps` that the spinning task ran on while grin waited (more than 1,000 of 2,000 ms), and kills it. Under C4IX it checks `/lib` has the shared libraries and starts the desktop (which loads `/lib/libgui.c4s`) |
 | `node libjs/tests/test-c4dos-ladder.mjs --quick` | the same to C4KE and back, without b4ke |
-| `node libjs/tests/web-c4dos-ladder.mjs` | the page in the user's Chrome over CDP: the same climb typed into the terminal, with screenshots |
+| `node libjs/tests/web-c4dos-ladder.mjs` | the page in the user's Chrome over CDP: the same climb typed into the terminal, with screenshots; two lines pasted at `A:\>`, and `cat ladder.txt` with a second line pasted at `c4sh>`; the cursor at each rung's prompt |
 
 ## Not done
 

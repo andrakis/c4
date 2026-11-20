@@ -88,12 +88,18 @@ export class UcodePanel {
 // preserved -- lines simply accumulate, and "the screen" is the last
 // `rows` of them, which is what ESC[H homes to. A program that never
 // positions the cursor behaves exactly as it did before.
+//
+// The cursor is drawn where it is, as an underline that blinks while
+// the terminal has the focus (a DOS or Linux console's), and steady
+// when it has not. A program that hides it (ESC[?25l, a full-screen
+// one) hides it here too, until ESC[?25h.
 export class Terminal {
   constructor(el, rows = 25, cols = 80) {
     this.el = el;
     this.rows = rows;
     this.cols = cols;
     this.maxLines = 1000;
+    if (el) { el.classList.add('c4-term'); cursorStyle(); }
     this.clear();
   }
 
@@ -250,18 +256,32 @@ export class Terminal {
 
   toHtml() {
     let html = '';
+    const cur = this.cursorHidden ? -1 : this.cy;
     for (let r = 0; r < this.lines.length; r++) {
       const row = this.lines[r];
       let end = row.length;
       while (end > 0 && row[end - 1].ch === ' ' && !row[end - 1].style) end--;
+      // the cursor's cell: one of the row's, or past its end (the
+      // prompt's, usually), where it is an empty cell of its own
+      const cx = r === cur ? this.cx : -1;
       let i = 0;
       while (i < end) {
+        if (i === cx) {
+          const c = row[i];
+          html += `<span class="c4-term-cursor"${c.style ? ` style="${c.style}"` : ''}>${escapeHtml(c.ch)}</span>`;
+          i++;
+          continue;
+        }
         const style = row[i].style;
         let j = i;
         let chunk = '';
-        while (j < end && row[j].style === style) { chunk += row[j].ch; j++; }
+        while (j < end && j !== cx && row[j].style === style) { chunk += row[j].ch; j++; }
         html += style ? `<span style="${style}">${escapeHtml(chunk)}</span>` : escapeHtml(chunk);
         i = j;
+      }
+      if (cx >= end) {
+        // blanks up to it, so it stands where the next character goes
+        html += ' '.repeat(cx - end) + `<span class="c4-term-cursor c4-term-cursor-pad"></span>`;
       }
       if (r < this.lines.length - 1) html += '\n';
     }
@@ -273,6 +293,23 @@ export class Terminal {
     this.el.innerHTML = this.toHtml();
     this.el.scrollTop = this.el.scrollHeight;
   }
+}
+
+// The cursor's look, once per document, first in <head> so a page's own
+// stylesheet can restyle it: an underline in the text's colour, blinking
+// while the terminal is focused. Past the end of a row it is a cell of
+// its own, a character wide, with nothing in it to copy.
+let cursorStyled = false;
+function cursorStyle() {
+  if (cursorStyled || typeof document === 'undefined') return;
+  cursorStyled = true;
+  const s = document.createElement('style');
+  s.textContent =
+    '.c4-term-cursor { box-shadow: inset 0 -0.2em 0 currentColor; }\n' +
+    '.c4-term-cursor-pad { display: inline-block; width: 1ch; height: 1em; vertical-align: text-bottom; }\n' +
+    '.c4-term:focus .c4-term-cursor { animation: c4-term-blink 1.06s step-end infinite; }\n' +
+    '@keyframes c4-term-blink { 50% { box-shadow: none; } }\n';
+  document.head.prepend(s);
 }
 
 function escapeHtml(s) {

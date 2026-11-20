@@ -110,6 +110,7 @@ node libjs/tests/test-snd.mjs    || fail=1   # the sound card: a sample in one w
 node libjs/tests/test-shared.mjs || fail=1
 node libjs/tests/test-rom.mjs    || fail=1
 node libjs/tests/test-kept.mjs   || fail=1   # the Uploads' folders, and Saved Files' lists and tars
+node libjs/tests/test-paste.mjs  || fail=1   # a paste typed a line at a time into C4DOS and C4KE; the terminal's cursor
 }
 
 # ---- machines booted and driven ------------------------------------------

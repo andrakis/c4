@@ -417,6 +417,41 @@ export class C4M {
   key(e) {
     this.worker.postMessage({ type: 'key', key: e.key, ctrlKey: !!e.ctrlKey, altKey: !!e.altKey, metaKey: !!e.metaKey });
   }
+  // Text typed as keys, a line at a time as the machine reads them
+  // (keys.js Paste): what the terminal's Paste does, for any system.
+  paste(text) { if (text) this.worker.postMessage({ type: 'paste', text: String(text) }); }
+  // The clipboard, pasted. It needs a click or a key behind it (a user
+  // gesture) and a secure context; where the browser will not read it,
+  // or the person said no, a box to paste into instead (pasteBox).
+  async pasteClipboard() {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.readText) throw new Error('no clipboard');
+      this.paste(await navigator.clipboard.readText());
+      if (this.termEl) this.termEl.focus();
+    } catch {
+      this.pasteBox();
+    }
+  }
+  pasteBox() {
+    const el = this.termEl;
+    if (!el || typeof document === 'undefined') return;
+    const d = document.createElement('dialog');
+    d.className = 'c4-paste-box';
+    d.innerHTML = '<form method="dialog"><h2>Paste</h2>' +
+      '<p class="dim">The browser would not let the page read the clipboard. Paste here (Ctrl+V), then Type.</p>' +
+      '<textarea rows="8" cols="60" spellcheck="false"></textarea>' +
+      '<div class="config-buttons"><span class="grow"></span><button value="cancel">Cancel</button>' +
+      '<button value="ok" class="primary">Type</button></div></form>';
+    document.body.append(d);
+    const ta = d.querySelector('textarea');
+    d.addEventListener('close', () => {
+      if (d.returnValue === 'ok') this.paste(ta.value);
+      d.remove();
+      el.focus();
+    });
+    d.showModal();
+    ta.focus();
+  }
   signal(sig = 2) { this.worker.postMessage({ type: 'signal', sig }); }
   eof() { this.worker.postMessage({ type: 'eof' }); }
   guiEvent(ev) { this.worker.postMessage({ type: 'gui', ...ev }); }
@@ -456,10 +491,48 @@ export class C4M {
   // ---- the terminal ------------------------------------------------
   // c4bb's Terminal (a screen with a cursor, CSI and SGR) fed from 'out',
   // with keydowns sent to the Worker, which decides cooked or raw.
+  //
+  // Copy and paste, as a terminal does them:
+  //   Ctrl+Shift+V, Shift+Insert, and Ctrl+V while no program has the
+  //   keyboard raw (to a shell Ctrl+V is nothing; a full-screen program
+  //   gets it): paste, through the browser's own paste event, which needs
+  //   no permission, or the clipboard if no event comes.
+  //   Ctrl+Shift+C, Ctrl+Insert, and Ctrl+C with text selected in the
+  //   terminal: copy (Ctrl+C with nothing selected is still SIGINT).
+  //   The right button: a menu with Copy and Paste.
   attachTerminal(el) {
     this.term = new Terminal(el, 25, 80);
+    this.termEl = el;
     this.on('out', bytes => { for (const b of bytes) this.term.write(b); });
+    const selected = () => {
+      const sel = typeof getSelection === 'function' ? getSelection() : null;
+      return sel && !sel.isCollapsed && el.contains(sel.anchorNode) ? sel.toString() : '';
+    };
+    const copy = () => {
+      const t = selected();
+      if (t && navigator.clipboard) navigator.clipboard.writeText(t).catch(() => document.execCommand('copy'));
+      else if (t) document.execCommand('copy');
+      return !!t;
+    };
+    let waitPaste = 0;
     el.addEventListener('keydown', e => {
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      const pasteKey = (e.ctrlKey && e.shiftKey && k === 'v') || (e.shiftKey && !e.ctrlKey && k === 'Insert') ||
+        (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'v' && !this.raw);
+      if (pasteKey && !e.metaKey) {
+        // the browser's paste event comes next, with the text; if it
+        // does not (some browsers send none to an element that is not
+        // editable), read the clipboard, the key being the gesture
+        clearTimeout(waitPaste);
+        waitPaste = setTimeout(() => { waitPaste = 0; this.pasteClipboard(); }, 100);
+        return;
+      }
+      if (!e.metaKey && ((e.ctrlKey && e.shiftKey && k === 'c') || (e.ctrlKey && !e.shiftKey && k === 'Insert') ||
+          (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'c' && selected()))) {
+        copy();
+        e.preventDefault();
+        return;
+      }
       // Keys the browser would otherwise act on belong to the machine
       // while the terminal has focus. Meta combinations (copy, paste,
       // reload) are left alone.
@@ -473,10 +546,53 @@ export class C4M {
       }
     });
     el.addEventListener('paste', e => {
-      const text = e.clipboardData.getData('text');
-      if (text) { this.write(text); e.preventDefault(); }
+      clearTimeout(waitPaste);
+      waitPaste = 0;
+      const text = e.clipboardData && e.clipboardData.getData('text');
+      e.preventDefault();
+      if (text) this.paste(text);
+    });
+    el.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      this.termMenu(e.clientX, e.clientY, selected(), copy);
     });
     return this.term;
+  }
+
+  // The terminal's right-click menu: Copy (when text is selected) and Paste.
+  termMenu(x, y, sel, copy) {
+    if (this.menuEl) this.menuEl.remove();
+    const m = document.createElement('div');
+    m.className = 'c4-term-menu';
+    m.setAttribute('role', 'menu');
+    const item = (label, keys, enabled, act) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('role', 'menuitem');
+      b.disabled = !enabled;
+      b.innerHTML = `<span>${label}</span><span class="dim">${keys}</span>`;
+      b.addEventListener('click', () => { close(); act(); });
+      m.append(b);
+    };
+    const close = () => {
+      m.remove();
+      if (this.menuEl === m) this.menuEl = null;
+      removeEventListener('pointerdown', away, true);
+      removeEventListener('keydown', esc, true);
+      removeEventListener('blur', close);
+    };
+    const away = ev => { if (!m.contains(ev.target)) close(); };
+    const esc = ev => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(); this.termEl.focus(); } };
+    item('Copy', 'Ctrl+Shift+C', !!sel, () => { copy(); this.termEl.focus(); });
+    item('Paste', 'Ctrl+Shift+V', true, () => this.pasteClipboard());
+    document.body.append(m);
+    const r = m.getBoundingClientRect();
+    m.style.left = Math.max(0, Math.min(x, innerWidth - r.width - 2)) + 'px';
+    m.style.top = Math.max(0, Math.min(y, innerHeight - r.height - 2)) + 'px';
+    this.menuEl = m;
+    addEventListener('pointerdown', away, true);
+    addEventListener('keydown', esc, true);
+    addEventListener('blur', close);
   }
 
   // ---- the display -------------------------------------------------

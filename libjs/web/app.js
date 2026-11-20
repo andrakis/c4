@@ -541,6 +541,7 @@ try {
 
 $('reset').addEventListener('click', () => { vm.reset(); term.focus(); });
 $('ctrlc').addEventListener('click', () => { vm.signal(2); term.focus(); });
+$('pastebtn').addEventListener('click', () => vm.pasteClipboard());
 // Reset Files: only where the page keeps the system's files (?persist=0
 // has none), and only this system's store
 const filesBtn = $('resetfiles');

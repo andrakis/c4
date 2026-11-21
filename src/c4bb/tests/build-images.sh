@@ -599,6 +599,9 @@ if [ -n "$GAMES_ON_DISK" ]; then
     list=$(echo $GAMES_ON_DISK | sed 's/ /, /g')
     printf '@ECHO OFF\nECHO Welcome to C4DOS\nVER\nECHO These games are on this disk: type %s to play.\n' "$list" > $GAMESDISK/autoexec.bat
     (cd $GAMESDISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+    # with the files the machine makes from a game's package when it opens
+    # them (QUAKE_AS_ZIP=1: pak0.pak from quake106.zip, libjs/unpack.js)
+    python3 -I src/c4bb/tests/unpacked.py listings $GAMESDISK
     (cd $GAMESDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $GAMESDISK/manifest.json
     # and lazy for the web page, as $DISK is below: a file is fetched the
@@ -606,6 +609,7 @@ if [ -n "$GAMES_ON_DISK" ]; then
     (cd $GAMESDISK && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
         > $GAMESDISK/index.json
+    python3 -I src/c4bb/tests/unpacked.py index $GAMESDISK
 else
     rm -rf $GAMESDISK
 fi
@@ -756,6 +760,7 @@ fi
 # Generated here, after every other copy.
 if [ -f $DISK/config.sys ]; then
     (cd $DISK && ls -p | grep -v '/$' | grep -v '^manifest.json$' > c4dos.dir)
+    python3 -I src/c4bb/tests/unpacked.py listings $DISK
 fi
 
 # ---- the page's C4DOS disk: libjs/images/dos -------------------------------
@@ -949,8 +954,13 @@ say "the disk's manifest, sizes and index"
 # the host directories are left out of c4ix.sizes, where vfsload has no
 # use for them (their listings name them), but for each one's own
 # PREFIX.c4ix-dir: vfsload looks there to know a listing is on the disk.
+# The files the machine makes from a game's package when it opens them
+# (libjs/unpack.js: QUAKE_AS_ZIP=1's pak0.pak) are in both, as if on the
+# disk, after its own files and before the games' sources.
+UNPACKED=$(python3 -I src/c4bb/tests/unpacked.py sizes $DISK)
 (cd $DISK && { find . -type f -not -name manifest.json -not -name c4ix.sizes -not -name index.json -not -name c4ix.sizes.tmp \
     -not -path './games/*' -printf '%s %P\n' | sort -k2
+    if [ -n "$UNPACKED" ]; then echo "$UNPACKED"; fi
     if [ -d games ]; then find games -type f -printf '%s %p\n' | sort -k2; fi; }) > $OUT/.disk-sizes
 awk -v pfx="$HOSTDIRS" 'BEGIN { n = split(pfx, p, " ") }
     { name = substr($0, index($0, " ") + 1)
@@ -961,6 +971,7 @@ mv $DISK/c4ix.sizes.tmp $DISK/c4ix.sizes
 # what its index names, and without the table vfsload falls back to
 # copying all. The games' sources have their hashes in it.
 python3 -I src/c4bb/tests/lazy-index.py $DISK $OUT/.disk-sizes games/
+python3 -I src/c4bb/tests/unpacked.py index $DISK
 # and the manifest again, so the eager loader sees c4ix.sizes too
 (cd $DISK && find . -type f -not -name manifest.json -not -path './games/*' | sed 's|^\./||') | \
     awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $DISK/manifest.json

@@ -49,6 +49,7 @@ detail behind it. Each doc is one of three kinds:
 | [c4ix-wolf3d.md](c4ix-wolf3d.md) | design | Wolfenstein 3D on C4IX's whole display (a Terminal window with `--window`): Wolf4SDL by c4lc, the shareware zip unpacked at first run, 8-bit frames through `GUI_BLIT8`, sound through libjs's sound card, and how fast |
 | [c4ix-smp.md](c4ix-smp.md) | tracker (done) | Multiprocessing: libjs running several CPUs (simulated, and on workers sharing memory with `Atomics`), a CPU-local window for shared libraries' data, and C4IX on them under one kernel lock (S1–S4) |
 | [c4ix-mmu.md](c4ix-mmu.md) | reference, results | C4IX's MMU in libjs (`?mmu=1`): paged virtual memory, a space per task, swap, and what it costs |
+| [c4ix-i386-port.md](c4ix-i386-port.md) | investigation | C4IX on a real PC (2026-11-21): a native host that runs C4IX unchanged, a native kernel built by gcc, and translated images compared; milestones, testing in DOSBox and QEMU, x86-64, and a Linux-like layout for the kernel source |
 | [c4-explorer.md](c4-explorer.md) | tracker | Source maps in C4R (S0–S3 built), Code Explorer (C source beside the VM code it became), windowed programs on the C4IX desktop with the IDE as one, and Wolfenstein 3D as an optional repository |
 | [busybox-port.md](busybox-port.md) | tracker | Busybox compiled by c4lc for C4IX: the measured compiler, kernel and libc gaps, and the order of work |
 | [c4dos-design.md](c4dos-design.md) | reference | C4DOS: the trap-free DOS, its API table and floppies |

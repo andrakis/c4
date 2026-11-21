@@ -2,11 +2,13 @@
 
 > **Historical (2026-08-26).** This is the investigation as written that
 > day; its counts ("where c4bb is": 66 names, 319 microsteps, `INS_SIZE`
-> 66) are out of date. Since then, as of 2026-09-30: c4bb implements all
-> ten fused opcodes (F7 in [fused-opcodes.md](fused-opcodes.md),
-> `baaf71d`, the same day), names 89 opcodes, and its opcode-name ROM is
-> 89 x 5 bytes. `-mfuse` is still not the default. `test_realloc` is
-> still not in c4bb's image list, and `_BLT` still has no microcode.
+> 66) are out of date. As of 2026-11-21: c4bb implements all ten fused
+> opcodes (F7 in [fused-opcodes.md](fused-opcodes.md), `baaf71d`, the
+> same day) and LH LHU SH LSR LCU (90-94), names 95 opcodes (`INS_SIZE`
+> 95), and its opcode-name ROM is 95 x 5 bytes, 0x200-0x3DA. `-mfuse` is
+> still not c4lc's default, though build-images.sh uses it for C4IX's
+> libraries and the ladder's c4sp. `test_realloc` is still not in c4bb's
+> image list, and `_BLT` still has no microcode.
 > [c4bb-design.md](c4bb-design.md) and
 > [../src/c4bb/README.md](../src/c4bb/README.md) describe the board as
 > it is now.

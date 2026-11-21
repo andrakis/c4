@@ -18,6 +18,14 @@ API v4 (2026-10-24) made RUN re-entrant and added `HEAP.SYS`, for grin
 (`docs/grin-plan.md` G0). API v7 (2026-10-26) gave the disks directories
 ("Directories", below), and the page's disks are laid out in them.
 
+Since: API v8 (2026-10-27, `image`, slot 35). `DRIVES.SYS HOME=B:`
+(2026-10-25) makes B: the home drive; a plain name is looked for on
+the RAM disk, then the home drive, then the prompt's drive, then
+along APPEND. The page's C4DOS disk (`?system=c4dos`) boots into grin
+with every game in `\GAMES`, and since 2026-11-20 the page lays the
+person's Uploads over B: as `B:\FOLDER\NAME`, with
+`A:\GAMES\README.TXT` saying what each game wants.
+
 ## Why it exists
 
 c4lm ("CALM") attempted a microkernel on plain c4 and is on hold with a
@@ -628,7 +636,10 @@ as typed, so case does not matter there either.
 `DEVICE=DRIVES.SYS HOME=B:` names the drive files are written to (2026-10-25,
 `docs/grin-plan.md` 3.8). The page's DOS disk (`libjs/images/dos`) has
 it, and the page keeps drive B: in the browser, so what C4DOS saves
-there is there at the next visit. A home that is not there or cannot be
+there is there at the next visit. The page also lays the person's
+Uploads over B:, each in its folder (`B:\DOOM\doom.wad`); DIR lists
+them with the person's files, DEL cannot take one off, and none is kept
+in the store (../libjs/README.md, Uploads). A home that is not there or cannot be
 written (`DISK_RO`) is no home, and DOS says so at boot. The build
 floppies name none, and everything they do goes to the RAM disk as
 before.
@@ -830,8 +841,8 @@ grin speaks v7 through `src/grin/disk.c` (`gd_getcwd`, `gd_chdir`):
 
 | disk | directories |
 |---|---|
-| `libjs/images/dos` (`?system=c4dos`) | `GRIN` (grin and its applications), `BIN` (`ASKLINE`, `DOSFILT`, `HELLO`), `GAMES\DOOM`, `GAMES\WOLF3D`, `GAMES\ROTT`, `GAMES\TYRIAN` (each game and its data); at the root only `c4dos32.c4r`, `CONFIG.SYS`, `AUTOEXEC.BAT`. AUTOEXEC says `PATH \GRIN;\BIN` |
-| `libjs/images/ladder` (`?system=c4dos-ladder`) | the same, and `BUILD` (the build kit: `BUILD`, `LADDER`, `IX`, the compilers, the archives, c4lc's Lisp, `b4ke` and what it reads), `C4KE` (C4KE's programs and their sources), `C4IX` (C4IX's userland, `c4ix.vfs.txt`, `c4ix.sizes`, its copy of Tyrian's data); `src\` as it was. AUTOEXEC says `PATH \BUILD;\GRIN;\BIN` and `APPEND \BUILD;\C4KE;\C4IX;\GAMES\...`, so `DOOM` and `BUILD` still work from the root and C4KE and C4IX find everything they did |
+| `libjs/images/dos` (`?system=c4dos`) | `GRIN` (grin and its applications), `BIN` (`ASKLINE`, `DOSFILT`, `HELLO`), and in `GAMES` a directory for each game and its data (ACE, ADVENT, BSDGAMES, DOOM, DUKE3D, FROTZ, PDCURSES, PUZZLES, QUAKE, ROTT, SBK, TYRIAN, WOLF3D) beside `README.TXT`; at the root only `c4dos32.c4r`, `CONFIG.SYS`, `AUTOEXEC.BAT`. AUTOEXEC says `PATH \GRIN;\BIN`, names the games and starts `GRIN` |
+| `libjs/images/ladder` (`?system=c4dos-ladder`) | the same, and `BUILD` (the build kit: `BUILD`, `LADDER`, `IX`, the compilers, the archives, c4lc's Lisp, `b4ke` and what it reads), `C4KE` (C4KE's programs and their sources), `C4IX` (C4IX's userland, `c4ix.vfs.txt`, `c4ix.sizes`, its copy of Tyrian's data); `src\` as it was. AUTOEXEC says `PATH \BUILD;\GRIN;\BIN` and `APPEND \BUILD;\C4KE;\C4IX;\GRIN;\BIN` and every game's directory, so `DOOM` and `BUILD` still work from the root and C4KE and C4IX find everything they did. It does not start grin |
 
 Which game a file belongs to comes from the games disk's assembly
 (`$OUT/.gamefiles/NAME`, what each `c4-images.sh bare` put there). The
@@ -999,9 +1010,9 @@ The games and `c4`/`c4m` are the `u0lite` (or bare) builds, so one image
 runs at the `A>` prompt AND inside the kernel. `docs/dos-rung-fixes.md`
 tracks the whole change.
 
-`EXIT` halts. `DIR`, `TYPE`, `COPY`, `RUN`, `ECHO`, `REM`, `VER`,
-`TIME`, `MEM` are the builtins; `RUN raycast.c4r -d` is the one transient
-with something to look at.
+`EXIT` halts. The builtins are listed under "CONFIG.SYS and
+AUTOEXEC.BAT" above; `RUN raycast.c4r -d` is the one transient with
+something to look at.
 
 ### The tools on the floppies
 
@@ -1066,8 +1077,8 @@ None of these is part of `make test`.
 | `make test-c4dos-build32` | on c4bb: `BUILD`, then boot the kernel just built, to a clean shutdown |
 | `make test-c4dos-ladder32` | on c4bb: `LADDER` rebuilds the compiler to a fixed point, then the kernel; boots it |
 | `make test-c4dos-c4ix32` | on c4bb: `IX` builds C4IX with the compiled compiler and boots it. Minutes |
-| `make test-libjs-ladder` | on libjs, the page's ladder disk: Doom at `A>`, `BUILD`, dosload, Doom under C4KE, b4ke, `kboot` into C4IX, Doom there, and back to `A>` with every rung's memory given back ([c4dos-ladder.md](c4dos-ladder.md)). About seventy seconds |
-| `make test-c4dos-c4fc` | on c4bb: c4fc compiles a C program and C4DOS runs the result. About three minutes |
+| `make test-libjs-ladder` | on libjs, the page's ladder disk: Doom at `A>`, `BUILD`, dosload, Doom under C4KE, b4ke, `kboot` into C4IX, Doom there, and back to `A>` with every rung's memory given back ([c4dos-ladder.md](c4dos-ladder.md)). About a minute and a half (99-103 s on helios, 2026-10-31) |
+| `make test-c4dos-c4fc` | on c4bb: c4fc compiles a C program and C4DOS runs the result. About half a minute |
 
 `make test-c4bb-climb` (in `src/c4bb/tests/test-climb.sh`) is the
 end-to-end one: three power-ons, three systems, each booted from a
@@ -1111,8 +1122,9 @@ has and the one c4cc cannot do.
 
 **The thing that had to be built first: c4fc could not write a file.**
 It emitted its image to stdout, which is what a Makefile wants and what
-C4DOS cannot use -- there is no `>` on this system by decision, and a
-tool is expected to write its own file. The VM has no write syscall
+C4DOS could not use: `>` came later, and only with `DEVICE=REDIR.SYS`,
+which this floppy does not load, and a tool is expected to write its own
+file. The VM has no write syscall
 either, so the only route is C4DOS's own API table.
 
 `src/c4th/forth/dos.f` is that route, and it is small because the pieces

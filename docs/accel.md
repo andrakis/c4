@@ -157,7 +157,7 @@ MMU a page that is not there faults then, before anything is written.
 | 0 | `rott_col` | `R_DrawColumn`, `R_DrawClippedColumn`, `R_DrawWallColumn` (rt_scale.c) | a column, `*dest = shade[src[frac >> sh]]`, the shift signed or not as each has it |
 | 1 | `rott_trans` | `R_TransColumn` | a translucent column, `*dest = shade[*dest]` |
 | 2 | `rott_row` | `DrawRow` (rt_floor.c) | a floor's or ceiling's row out of its 128x128 tile |
-| 3 | `rott_rotrow` | `DrawRotRow`, `DrawMaskedRotRow` (rt_draw.c) | the turned screen's row (the player's death, a level's start), out of its image, at 320, 640 or 800 across, each size's bounds and shift as arguments; the masked one leaves 255 out |
+| 3 | `rott_rotrow` | `DrawRotRow`, `DrawMaskedRotRow` (rt_draw.c) | the turned screen's row (the player's death, a level's start), out of its image, at 320, 640 or 800 across, or a size between them as 640's in its image of 1024 rows of 1024; each size's bounds and shift as arguments; the masked one leaves 255 out |
 | 4 | `rott_sky` | `DrawSkyPost` | the sky's column; above 320 across a column taller than the sky's 400 goes back over it, as the port's does |
 | 5, 6 | `rott_fixmul`, `rott_fixmulshift` | `FixedMul`, `FixedMulShift` (watcom.c) | `(int32_t)(((int64_t)a * b + 0x8000) >> 16)`; `(int32_t)((uint64_t)((int64_t)a * b) >> s)` |
 | 7, 8 | `rott_fixdiv2`, `rott_fixscale` | `FixedDiv2`, `FixedScale` | `(int32_t)((int64_t)a * 65536 / b)`; `(int32_t)((int64_t)a * b / c)`, each through c4's `__int64` library in the C |
@@ -374,10 +374,14 @@ machines on CDP here are not fast ones; a faster machine shows more of it, as th
   (`__c4f_from_ull_s`, `__c4f_to_ull`, long long shifts), some 380 instructions a texel, a fifth of the
   explosions' growth; it now converts through int, which c4's FPU does in one instruction, wherever
   the sum is below 2^31, which a light always is. The same lights, the same frames (games/quake f3ac7ad).
+- Since this profile (2026-11-15 and 16): the translucent walls, sprites and floor sprites are
+  operations 10 to 13, `scale` and `dmulscale` 14 and 15, and with the accelerators `mulscale`,
+  `scale` and `dmulscale` are one instruction where they stand (93f37af). Quake's `(int)ceil` and
+  `TransformVector` are macros, libc's `floor` and `ceil` take `trunc`'s short way, and
+  `AngleVectors`' sines are `qa_sincos` (3d9a7bb): 4 to 6% fewer instructions a frame.
 - Next, if wanted: Quake's edges (`R_ScanEdges` and what it calls) are the game's rasterizer, float
-  geometry and linked lists over the BSP, a much larger thing to carry over than a loop; `ceil` and
-  `trunc` as FPU operations would help every float program. Duke's `inside` and translucent walls are
-  loops of the kind done here.
+  geometry and linked lists over the BSP, a much larger thing to carry over than a loop. Duke's
+  `inside` is a loop of the kind done here.
 
 ### 4.4 Rise of the Triad
 
@@ -567,7 +571,7 @@ set of situations. On node, 400 MHz, 800x600, before:
 | the Terminal's `cat` of 20 KB | 23.4 M, 1,100 a byte | `gui_text2` 27%, the text grid (`tg_feed`, `putc_`, `clear`, `row_text`) 36% |
 | Files, a turn of the wheel | 0.55 M | `gui_text2` 25%, `gui_frame` 9% |
 | the Text Editor, Page Down | 1.03 M | `gui_text2` 20%, `gui_frame` 16%, `gui_commit` 7% |
-| the Start menu, opened and closed | 2.66 M | `gui_text2` 33%, `gui_frame` 13% |
+| the Go menu, opened and closed | 2.66 M | `gui_text2` 33%, `gui_frame` 13% |
 
 The desktop draws through the display's command ring, so its rectangles, images and glyphs are the
 host's already: what it spends is in making the commands, `gui_text2`'s characters packed into words
@@ -575,7 +579,9 @@ a byte at a time and each command's frame and commit, and each of those situatio
 400 MHz machine. `memcpy`, `memset` and `memcmp` are opcodes already (`MCPY`, `MSET`, `MCMP`), and
 `strlen` and `strcmp` never reached 0.3%; the kernel's MMU and scheduler paths are not loops. So the
 accelerators are the boot's two loops, and nothing of the desktop's: what would help it there is C
-(`gui_text2`'s packing as one `memcpy`), not an accelerator.
+(`gui_text2`'s packing as one `memcpy`), not an accelerator. That was done next (c7f8d2a,
+`libjs/guest/gui.c`): `gui_text2`'s characters and an image's pixels go as one `memcpy`, about 690
+instructions a text command to 240, and a boot's 21 M of `gui_imgdef` to almost nothing.
 
 **The operations** (`CX_*`):
 
@@ -595,7 +601,7 @@ is the same run. The gzip trailer's CRC checks every byte of a boot's unpacking.
 
 **What it gained.** A boot to the desktop's prompt, node, 400 MHz: 1,608 M instructions before,
 202 M after (what is left is mostly the desktop's own start: `wall_tiles` 38 M, the inflater's
-`construct` 23 M, `gui_imgdef` 21 M). `bench-desktop` with the modules loaded: 9.98 s to 1.68 s,
+`construct` 23 M, `gui_imgdef` 21 M, before c7f8d2a). `bench-desktop` with the modules loaded: 9.98 s to 1.68 s,
 and with the MMU 13.01 s to 2.31 s. The page in Chrome, `?persist=0`, from loading to the taskbar's
 clock: 24.1 s to 10.0 s (1,612 M to 200 M cycles), and with the MMU 23.4 s to 9.4 s (1,643 M to
 235 M).

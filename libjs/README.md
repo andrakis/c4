@@ -267,7 +267,7 @@ None is in `make test`; `make suite` runs `test-libjs` and `test-libjs-ladder`.
 | Target | What it checks |
 |---|---|
 | `make test-libjs` | Unit tests (printf, heap, display, shared memory, desktop, the explorer's `c4r.js` over every image), then every corpus image byte for byte against native `c4m32` (or 64-bit `c4m` where `c4m32` cannot be trusted), the fused-opcode differential, STRC with symbol names, exit status, the PIT, and C4KE and C4IX booting with grep assertions. Builds `c4bb-images` first. |
-| `make test-libjs-ladder` | The Build Ladder headless (`tests/test-c4dos-ladder.mjs`, docs/c4dos-ladder.md): Doom at each rung, BUILD, dosload, b4ke, kboot, and back to `A:\>`, about seventy seconds. `make c4bb-images`, which it runs first, makes the climb floppy and the ladder disk; `make test-libjs` runs it too when the disk is there. `tests/web-c4dos-ladder.mjs` is its browser check. |
+| `make test-libjs-ladder` | The Build Ladder headless (`tests/test-c4dos-ladder.mjs`, docs/c4dos-ladder.md): Doom at each rung, BUILD, dosload, b4ke, kboot, and back to `A:\>`, about a minute and a half (99-103 s on helios, 2026-10-31). `make c4bb-images`, which it runs first, makes the climb floppy and the ladder disk; `make test-libjs` runs it too when the disk is there. `tests/web-c4dos-ladder.mjs` is its browser check. |
 | `make test-libjs-web` | The page in the user's own Chrome over raw CDP (`LIBJS_CDP`, else ports 9224 then 9222), then the display legs with `--gui`. It never launches a browser; if none answers it says so. |
 | `make test-quick` | The quick tier (`tests/test-quick.sh`): only the parts of `test-libjs` that the paths changed since `c4ix_and_toppings` can reach (`QUICK_BASE=` another branch), `test-c4ix` if C4IX changed, `test-c4ix-rebuild` if b4ke, cc, a `BUILD.B4K` or a compiler did. A desktop-only change runs the desktop part alone; docs alone run nothing. `QUICK_DRY=1` says what it would run. For the edits before a merge: the merge still has the full gate. |
 
@@ -394,7 +394,7 @@ regions by word offset, as `c4ix.h` has them; those say so.
 | `package.json` | Marks the directory as ES modules. |
 
 Reused from c4bb: `src/c4bb/sim/arena.js`, `devices.js`, `loader.js`,
-`mbox.js`, and `src/c4bb/web/panels.js` (`Terminal`). libjs imports these
+`mbox.js`, `fpu.js`, and `src/c4bb/web/panels.js` (`Terminal`). libjs imports these
 and never edits them.
 
 ## Hosts

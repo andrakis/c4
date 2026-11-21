@@ -840,6 +840,12 @@ not a direct cycle measurement: `perf` isn't available in this
 sandbox (`perf_event_paranoid` blocks it), so this is corroborating,
 not conclusive on its own.)
 
+(2026-11-14, 5dede1a: the chain is in two levels now, `i <= PSH` then
+`i <= MOD`, each ordered by how often load-c4r.c and C4KE's boot run
+them. Still ifs, because plain c4 compiles c4m.c and has no switch. A
+c4lc-built c4m went from 164 to 86 instructions per instruction it
+interprets.)
+
 ### Option 1: a decode/dispatch cache in c4or1k (different execution model, no c4m changes)
 
 Given Finding 1, a per-guest-instruction-address cache of already-
@@ -1765,6 +1771,11 @@ reusing the socket primitive. Rough milestone shape:
   * L3 -- reconcile with c4or1k: the two share the ethernet framing and
     the synthetic-peer test harness, so c4or1k's `net.c` becomes the
     offline oracle for C4IX's stack.
+
+(2026-11-21: Busybox is being ported from source instead, compiled by
+c4lc as an ordinary C4IX program: docs/busybox-port.md, where the
+compiler and kernel steps are done. No ELF loader or Linux ABI is in
+it.)
 
 This is a multi-part initiative spanning c4mp and C4IX, not a c4or1k
 change, and is written here as the shared plan of record; the concrete

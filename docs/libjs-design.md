@@ -11,6 +11,18 @@ desktop, tracked in [c4ix-desktop.md](c4ix-desktop.md); since 2026-10-20 the
 page boots C4IX with `--desktop`, straight to the desktop with `top` on the
 console (`libjs/tests/test-boot-desktop.mjs`).
 
+Since, 2026-11-21: the sound card (2026-10-22; "The sound card"),
+processors, simulated and on threads (2026-10-22; "Processors"), the
+Code Explorer (2026-10-23), the MMU (`mmu.js`, 2026-10-29,
+docs/c4ix-mmu.md), disks read on demand (`lazy.js`, 2026-10-30), the
+Uploads, with a folder per game since 2026-11-11, Saved Files and
+downloads (`kept.js`, 2026-11-11), General MIDI (2026-11-12), the
+games' accelerators (`accel.js`, 2026-11-15, docs/accel.md) and
+C4IX's own (2026-11-16), and pasting into the terminal, with a
+blinking cursor (2026-11-20). Under the page's C4DOS the Uploads are
+on B:, the home drive (2026-11-20). ../libjs/README.md has the flags
+and URL parameters.
+
 ## Why
 
 The old `libjs/` ran **plain c4** only, in Node only. It got its programs from
@@ -27,7 +39,8 @@ JavaScript API onto the running machine. The page follows jor1k's layout:
 **a terminal on the left and a display on the right that guest code draws
 into**, so a GUI can run inside the machine.
 
-Out of scope for now: c4mp multiprocessing.
+c4mp's processors were out of scope at first. They came on
+2026-10-22: "Processors", below.
 
 ## Decisions (2026-09-23)
 
@@ -78,6 +91,18 @@ Out of scope for now: c4mp multiprocessing.
 | `libjs/cli.js` | The Node runner, with c4bb's flags. |
 | `libjs/shared.js` | The display's SharedArrayBuffer path: a command ring and a framebuffer triple buffer, used when the page is cross-origin isolated. |
 | `libjs/serve.mjs` | A static server with optional COOP/COEP headers. |
+| `libjs/smp.js` | Several processors, simulated: c4mp's instruction set, each CPU taking turns. |
+| `libjs/par.js`, `ap.js` | Several processors for real: a thread per CPU sharing the arena; `ap.js` is one CPU other than 0. |
+| `libjs/sheap.js` | `heap.js`'s heap with its books in shared memory, for the threads. |
+| `libjs/mmu.js` | Paged virtual memory with protection, for C4IX (docs/c4ix-mmu.md). |
+| `libjs/lazy.js` | A disk read on demand, and the page's cache of what it read. |
+| `libjs/uploads.js`, `uploads-readme.mjs` | The Uploads: their folders, what each game needs, where each system finds them; `GAMES\README.TXT` from `NEEDS`. |
+| `libjs/kept.js` | Saved Files: a store's files, for listing and download. |
+| `libjs/c4r.js` | The Code Explorer's reader of C4R images, objects and libraries. |
+| `libjs/coi.js` | COOP/COEP from a service worker, where the server cannot send them. |
+| `libjs/site.sh`, `pages.sh` | The GitHub Pages site, and `make pages`. |
+| `libjs/hostlock.mjs` | On a host that asks for it, runs only while holding a build slot. |
+| `libjs/images/` | The page's own C4DOS and ladder disks, made by `make c4bb-images`. |
 | `libjs/web/` | The page: terminal left, canvas right. |
 | `libjs/guest/gui.h`, `gui-demo.c` | The guest C API and the standalone demo. |
 | `libjs/guest/fb-demo.c` | The framebuffer demo: 320x240, every pixel computed by the guest, events by interrupt. |
@@ -87,7 +112,8 @@ Out of scope for now: c4mp multiprocessing.
 
 Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
 (`parseC4r`, `loadImage` and `initRom` only), `mbox.js`
-(`HostMailbox`), and `web/panels.js` (`Terminal`).
+(`HostMailbox`) and `fpu.js` (the FPU opcode's arithmetic), and
+`web/panels.js` (`Terminal`).
 
 ## The interpreter
 
@@ -113,7 +139,9 @@ Reused from `src/c4bb/sim/`: `arena.js`, `devices.js`, `loader.js`
   held: C4IX waits for a kernel lock in CWAI inside its trap handler.
 - **The trap frame** is `c4m.c:1445-1516` byte for byte. TLEV is
   `c4m.c:2209-2236`. A trap with no handler is silent and continues.
-- **Opcodes**: all 89 names.
+- **Opcodes**: all 95 names. All run but c4mp's `LXI`, `SXI` and
+  `TRAW` (76-78): the FPU (89, `src/c4bb/sim/fpu.js`) and the 16-bit
+  loads and store, `LSR` and `LCU` (90-94) included.
   - MUL uses `Math.imul`. DIV and MOD by zero give 0.
   - All ten fused opcodes are implemented with c4mp's semantics, because the
     disk's `c4sp.c4r` is built with `-mfuse`.
@@ -210,12 +238,16 @@ When the page is `crossOriginIsolated` (`serve.mjs --isolate`), the display
 uses SharedArrayBuffer instead (`shared.js`, M5); `?shared=0` forces the
 message path.
 
-- **Page to worker**: `boot`, `key`, `input`, `signal`, `eof`, `gui`,
-  `pause`, `resume`, `reset`, `peek`, `poke`.
+- **Page to worker**: `boot`, `key`, `input`, `paste` (text typed a
+  line at a time, `keys.js`'s `Paste`), `signal`, `eof`, `gui`,
+  `pause`, `resume`, `reset`, `reset-files`, `cache` (a lazy disk's
+  files the page kept), `peek`, `poke`.
 - **Worker to page**: `out`, `kbd`, `display`, `gui`, `snd` (the sound
   card's events, when `boot` asked for one with `snd: true`), `persist`
-  (a file closed on drive 1), `status`, `exit`, `error`, `reply` (the
-  answer to a `peek` or `poke`).
+  (a file closed on drive 1), `download` (a file or folder handed over,
+  C4IX's `download`), `cache` (a lazy disk's file to keep, as it is
+  read), `files-reset`, `status`, `exit`, `error`, `reply` (the answer
+  to a `peek` or `poke`).
 - **Drive 1.** `C4M.boot({ persist: NAME })` gives the machine a writable
   host drive 1, whose files the page keeps in IndexedDB under NAME (c4bb's
   `src/c4bb/web/store.js`, as one medium) and passes back at the next
@@ -244,8 +276,8 @@ message path.
   frames. And CPU 0 publishes the time the other CPUs read at every poll, not only when
   one of them asks for something. Doom on 4 CPUs, MMU on, display updates a second: on
   CPU 0 20.3 to 29.0, on CPU 1 27.6 to 28.4; at its smallest view, on CPU 0 35 to 49.5.
-- **The run loop** runs a slice (about 1M instructions, capped near 8 ms),
-  flushes output, then:
+- **The run loop** runs a slice (4 simulated ms paced, which is 1.6M
+  cycles at 400 MHz; 5M cycles unpaced), flushes output, then:
   - on `sleep`, waits the requested time;
   - on `input`, polls every millisecond when a timer is armed, otherwise parks
     until a message arrives;
@@ -282,7 +314,8 @@ commands to the host.
 
 - **Commands** (colours are `0x00RRGGBB`): 1 CLEAR, 2 RECT, 3 RECTO, 4 LINE,
   5 CIRCLE, 6 TEXT, 7 PIXEL, 8 PRESENT, 9 SIZE, 10 IMGDEF, 11 IMG, 12 CLIP,
-  13 NOCLIP, 14 TEXT2, 15 CURSOR (`GUI_PTR_*`, the pointer's shape).
+  13 NOCLIP, 14 TEXT2, 15 CURSOR (`GUI_PTR_*`, the pointer's shape),
+  16 BLIT8 (an 8-bit image and its palette, drawn scaled; `gui_blit8`).
 - **Events**: 1 MOVE, 2 DOWN, 3 UP, 4 KEYDOWN, 5 KEYUP, 6 RESIZE, 7 FOCUS,
   8 WHEEL, 9 REL.
 - **The mouse locked to the display.** The pointer shape `GUI_PTR_LOCK`
@@ -638,7 +671,8 @@ processors: c4mp's instruction set (`src/c4mp/README.md`), simulated
       writes a session's sound to a file; `opl.js` makes dbopl's samples
       bit for bit (`test-libjs`). Wolfenstein 3D plays its music, AdLib
       effects and digitized sounds through it
-- [ ] Media panel (c4bb's `store.js` and `drives.js`). Not done: C4IX's
-      filesystem lives in memory, so nothing yet needs writable drives kept
-      in the browser. The worker already takes c4bb's drive list, so it is a page
-      change when it is wanted.
+- [ ] Media panel (c4bb's `store.js` and `drives.js`). Not done, and
+      not needed as first thought: each system's drive 1 is kept in
+      IndexedDB without one ("Drive 1", above), Saved Files lists
+      and downloads it, and Reset Files forgets it. A panel would
+      only add choosing which medium is in which drive.

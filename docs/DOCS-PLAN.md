@@ -1,5 +1,12 @@
 # DOCS-PLAN — document pm-investigation, then merge it to master
 
+> **Superseded (2026-11-21).** This was the documentation pass of
+> 2026-09-26 to 10-24, for `pm-investigation`. That branch stopped at
+> 11cc5b1 (2026-09-30) and is part of `c4ix_and_toppings` now, some 900
+> commits past `master`. D12's merge is still the user's call, and would
+> now be of `c4ix_and_toppings`. Kept as the record of that pass; it
+> tracks nothing now.
+
 `pm-investigation` is 255 commits ahead of `master` and master has nothing it lacks, so the
 merge is a fast-forward. Before it happens, the documentation has to describe what the branch
 actually built: most of it lives only in commit messages and per-component design docs that

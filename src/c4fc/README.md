@@ -5,8 +5,10 @@ unions, a preprocessor, objects, `-O`), and its output is byte-identical to
 c4lc's, plain and `-O`. It has no `typedef`, `float` or `double` (c4lc has
 all three) and no `long long` on a 32-bit target, and its `-minline` is a
 different inliner whose images differ from c4lc's. It also stops at a name
-used before anything declares it (`c4fc: undeclared NAME`), such as a call
-to a function defined further down with no prototype; c4lc accepts that.
+used before anything declares it (`c4fc: undeclared NAME`), such as a global
+declared further down; c4lc accepts that. A call to a function the unit
+defines further down, with no prototype, works in both: c4fc reads the unit
+once first to find its functions.
 It is written in c4th ([../c4th/README.md](../c4th/README.md)) as a
 small table-driven vocabulary ([`dsl.f`](dsl.f)): each C construct is one
 `NODE:` row plus one method per compiler phase.

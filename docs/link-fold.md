@@ -10,14 +10,15 @@ links the images exactly as before.
 For what the VM has no instruction for, c4lc emits a call to a routine
 and splices the routine into the unit, as code with no symbol:
 
-- the M4 helpers `<udiv>`, `<umod>`, `<ld16s>`, `<ld16u>`, `<st16>` and
-  `<lsr>` (`g:HELPERS`, c4lc-gen.lisp);
+- the M4 helpers `<udiv>` and `<umod>` (`g:HELPERS`, c4lc-gen.lisp), and
+  until 2026-11-13 `<ld16s>`, `<ld16u>`, `<st16>` and `<lsr>`, which are
+  opcodes now (docs/c4-16bit.md);
 - the soft-float `__c4d_*`, `__c4f_*` and `__c4fp_*` routines
   (`p:fpsrc`, made from src/c4fp/softfp.c by src/c4fp/mkfpsrc.py);
 - the `long long` `__c4ll_*` routines (`p:llsrc`).
 
 Each unit that uses one gets its own copy, and the linker kept them all.
-`c4ix-wolf3d6.c4r` had 18 copies of `<ld16s>`, 20 of `<ld16u>`, 19 of
+Before the 16-bit opcodes, `c4ix-wolf3d6.c4r` had 18 copies of `<ld16s>`, 20 of `<ld16u>`, 19 of
 `<st16>`, 10 of `<udiv>` and 5 of each `__c4d_to_*`. In all, 290 helper
 copies past the first came to 35,661 words, a fifth of its code. The
 IDE's Code tab lists each copy with its unit. libjs/c4r.js's
@@ -141,8 +142,9 @@ The `c4ix-*` rows and the kernel are on C4IX's disk; the games/ rows are
 the bare-machine images (src/c4bb/images/games). Over the 91 images on
 C4IX's disk, files drop from 17,030,703 bytes to 16,294,938, 736 KB
 (4.3%). Everything c4cc builds, which splices no helpers, is unchanged:
-c4sc, c4dos32, c4ke32, `c4ix-libc4ix.c4s` and the other tools. The one
-image that grows is `c4rlink.c4r`, by the fold code itself.
+c4dos32, c4ke32, `c4ix-libc4ix.c4s` and the other tools. So is c4sc,
+which c4lc builds but whose units call no helper. The one image that
+grows is `c4rlink.c4r`, by the fold code itself.
 
 What is left is the FPU wrappers. `__c4fp_hw` keeps the FPU's answer in
 two `static` locals, `asked` and `has`, so each unit's copy reaches its

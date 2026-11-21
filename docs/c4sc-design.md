@@ -35,8 +35,8 @@ mid-implementation that changes a later milestone gets written here.
 | the ten fused opcodes on the board | ~31 min | banked (F7) |
 | **compiling the Lisp** | **~4.6 min** (5.8 wall) | **this document**, M8 |
 
-c4sp is a tree-walking interpreter and c4lc is 5,016 lines of Lisp that
-runs on it. `docs/compiler-speed.md` re-profiled it after every cheap win
+c4sp is a tree-walking interpreter, and c4lc was 5,016 lines of Lisp
+running on it when this was written (12,642 by 2026-11-21). `docs/compiler-speed.md` re-profiled it after every cheap win
 was taken and found no hot spot left: ~41% `eval` dispatch, ~25%
 environments, ~12% GC, ~9% builtin dispatch, 4% atom interning. That is
 the shape of "a tree-walking interpreter is simply slow", and the only
@@ -448,9 +448,10 @@ for all of them.
       `c4sc-host.c` includes the generated units for the native binary
       the differential tests use, and `c4sc-main.c` declares them so
       `c4lc -c` makes them extern symbols. The driver goes through
-      `gcc -E` first, for the reason `c4sp.c4r` does — c4lc's own
-      preprocessor refuses a function-like macro named without an
-      argument list, and `c4.h` has one.
+      `gcc -E` first. When this was built, c4lc's own preprocessor
+      refused a function-like macro named without an argument list, and
+      `c4.h` has one. It lets the name stand for itself since 0628331
+      (2026-10-19), but the rule still runs gcc -E.
 
       Bare c4m has no write syscall, the same limit c4lc has, so the
       size line is printed **before** the write is attempted. That makes

@@ -154,9 +154,10 @@ This is the picoJava and ZPU recipe (§2.3), fitted to `LDL`/`STL`.
   argument bytes as an operand. The result comes back in `A`. An
   indirect call is c4lc's sequence: return label, `PSH`, target in `a`,
   `JMPA` (c4lc-design.md, M7b).
-- **Narrow and wide types.** Bytes go through `LC`/`SC`. Shorts, unsigned
-  division and unsigned compares go through small helpers, as c4lc does
-  them (§14.2). `DImode` and floating point go through libcalls: libgcc's
+- **Narrow and wide types.** Bytes go through `LC`/`LCU`/`SC` and shorts
+  through `LH`/`LHU`/`SH` (docs/c4-16bit.md). Unsigned division goes
+  through c4lc's `udiv`/`umod` helpers, and an unsigned compare flips the
+  sign bits first, as c4lc does (§14.2). `DImode` and floating point go through libcalls: libgcc's
   `__divdi3` and friends, and soft-float `__adddf3` and friends, or the
   FPU opcode (c4-float.md F3).
 - **The ABI to match** is c4lc's, so that gcc's objects link with
@@ -303,10 +304,11 @@ that is fast here, and gcc is not one.
 - **cc1.** 3.4's i386 cc1 is a few MB of x86 text (an estimate: no
   binary is here). The ratio busybox-port.md §8 measured, 3.2× from
   x86-32 text to a `.c4r`, puts a small-target cc1 at **8-11 MB**. That
-  is over **C4IX's 4 MB image cap**, which still applies: `C4R_BUF_MAX`,
-  `src/c4ix/loader.c:37`. Today's c4sc is 3.56 MB at 64 bits and 2.1 MB
-  at 32.
-  - Raising the cap is small: the loader already sizes its buffer from
+  was over C4IX's 4 MB image cap when this was written; `C4R_BUF_MAX`
+  (`src/c4ix/loader.c:37`) is 16 MB since 2026-11-10 (d83a7b1, for Duke
+  Nukem 3D), so an 8-11 MB cc1 fits. c4sc was 3.56 MB at 64 bits and
+  2.1 MB at 32.
+  - Raising the cap was small, and it is done: the loader already sizes its buffer from
     the file (c4ix-design.md, "Memory").
   - Its working memory is tens of MB on large units. The one figure
     found is 20-25 MB for `combine.c` at `-O0 -g` on 2007 mainline
@@ -318,19 +320,19 @@ that is fast here, and gcc is not one.
 - **The driver**: either C4IX's `cc` learns to run `cc1` (it already runs
   c4sc and c4rlink), or gcc's `gcc.c`, which needs `execvp` in libc.
 
-So yes, it could run, after the cap is raised and with a bigger arena. It
+So yes, it could run, with a bigger arena (the cap is raised already). It
 would be the largest program C4IX has run, by a factor of five.
 
 ## 5. The alternatives
 
 | compiler | licence | C | backend shape, and a c4 backend | size | in C4IX |
 |---|---|---|---|---|---|
-| **TinyCC** (https://github.com/TinyCC/tinycc) | LGPL 2.1 | C99 bar complex; many GNU extensions; K&R definitions; bit-fields; compiles itself (https://bellard.org/tcc/tcc-doc.html) | one pass over a value stack (`vtop`). A backend is `load`, `store`, `gen_opi`, `gfunc_call`, prologue and epilogue: `i386-gen.c` is 1,327 lines. **`il-gen.c` (657 lines) was a stack-machine backend** for .NET CIL, with three "registers" on the evaluation stack. It has rotted since 2003, but it shows the shape. A c4 backend is soft registers in frame slots as in §2.2, without reload to fight. **M** (1.5-2.5k lines + a `.c4o` writer) | `tccgen.c` 9k lines; the whole compiler is tens of thousands | small and fast. Its home page benchmarks it several times faster than gcc `-O0` (not measured here). Its image should fit under 4 MB |
+| **TinyCC** (https://github.com/TinyCC/tinycc) | LGPL 2.1 | C99 bar complex; many GNU extensions; K&R definitions; bit-fields; compiles itself (https://bellard.org/tcc/tcc-doc.html) | one pass over a value stack (`vtop`). A backend is `load`, `store`, `gen_opi`, `gfunc_call`, prologue and epilogue: `i386-gen.c` is 1,327 lines. **`il-gen.c` (657 lines) was a stack-machine backend** for .NET CIL, with three "registers" on the evaluation stack. It has rotted since 2003, but it shows the shape. A c4 backend is soft registers in frame slots as in §2.2, without reload to fight. **M** (1.5-2.5k lines + a `.c4o` writer) | `tccgen.c` 9k lines; the whole compiler is tens of thousands | small and fast. Its home page benchmarks it several times faster than gcc `-O0` (not measured here). Its image should fit well under the 16 MB cap |
 | **chibicc** (https://github.com/rui314/chibicc) | MIT | most of C11; **no K&R definitions** (Rise of the Triad uses them), no complex, no inline asm | `codegen.c`, 1,595 lines, **is already an accumulator machine**: an expression goes to `%rax`, and operands are `push`ed and `pop`ped. A c4 backend is close to transliteration. **S–M** (~1k lines) | ~9k lines | never frees memory, which hurts in a 64 MB arena; no optimiser. slimcc (MIT, C23) is the maintained fork |
 | **lcc** (https://github.com/drh/lcc) | not free for products: "You may not sell lcc or any product derived from it…" | C89 | **`bytecode.c` (282 lines) emits postfix stack code.** Quake III's QVM was "derived from the bytecode interpreter target of LCC" and maps nearly 1:1 onto c4 (https://icculus.org/~phaethon/q3mc/q3vm_specs.html). **S** | small | C89 only, and the licence |
 | pcc | BSD | C99 since 2007; last release 2014 | register machine, x86 backends | medium | possible; little activity |
 | cproc + QBE | ISC / MIT | C11, some C23; needs an outside preprocessor | QBE is SSA with a register allocator over a fixed register file. A stack VM fights it. **L** | ~13k (QBE) | — |
-| gcc 3.4.6 (§2) | GPLv2+ | C99 + GNU C | RTL; soft registers; reload. **L–XL** | hundreds of thousands | 8-11 MB image; over the cap |
+| gcc 3.4.6 (§2) | GPLv2+ | C99 + GNU C | RTL; soft registers; reload. **L–XL** | hundreds of thousands | 8-11 MB image; under the 16 MB cap |
 | clang → wasm → c4 (host only) | Apache 2.0 | C17/C23, `-O2` | wasm is a stack machine with locals, which map onto `a`/`PSH` and `LDL`/`STL`. But every pointer is an offset into linear memory: each load and store adds a base, and libc4ix's pointers are not wasm's, so a wasm libc comes along too. **M–L** | — | no compiler inside C4IX |
 
 ## 6. Recommendation
@@ -339,7 +341,7 @@ Two different things were hoped for from gcc. They have different
 answers.
 
 - **A faster compiler inside C4IX.** gcc gives 2-4× at `-O0` and nothing
-  at `-O2` (§4.1), in an image over the cap. A one-pass compiler compiled
+  at `-O2` (§4.1), in an image of 8-11 MB. A one-pass compiler compiled
   to native VM code is what gives the order of magnitude: the
   `cpp`+`c4cc` row of §4.1 is that kind, at ~25× c4sc per line.
   **TinyCC** is that kind, and complete.
@@ -366,7 +368,7 @@ to grow for every port, because a port that hits a gap goes through tcc.
 | **T4** | Code quality: run c4opt's peephole and `-mfuse` over tcc's output (it can emit c4lc's instruction-list form), or a `REG_DEAD`-style stackifier in `c4-gen.c` | raycast/Doom fps against c4lc `-O -mfuse` | M |
 | G0 | *Only if T2/T4 show the generated code is the bottleneck:* fetch `gcc-core-3.4.6.tar.bz2` (12.7 MiB, asking first). sloccount cc1. Build a host x86 cc1 to size the image | cc1's lines, x86 text and peak memory on a large unit | S |
 | G1-G4 | `config/c4/` on the pj/ZPU model (§2.2); libgcc glue; the `gcc.c-torture/execute` suite on c4m; the ports at `-O2` | torture pass rate; fps against tcc and c4lc | L–XL (4-6k lines, months) |
-| G5 | Canadian cross: cc1 for C4IX | after raising `C4R_BUF_MAX`; with `?mem=128` | M |
+| G5 | Canadian cross: cc1 for C4IX | with `?mem=128` (`C4R_BUF_MAX` is 16 MB already) | M |
 
 ## 7. Loose ends found on the way
 
@@ -375,6 +377,7 @@ to grow for every port, because a port that hits a gap goes through tcc.
   beside it. Run alone, it passed: 51 s, 1.1 GB. That looks like memory
   pressure on helios (3.4 GB) and not a compiler bug, but it is not
   proven.
-- `c4sc.c4r` (64-bit) is 3.56 MB, 0.44 MB under C4IX's 4 MB image cap.
-  The next large addition to c4lc may push the 64-bit image over. The
-  32-bit one, which C4IX actually runs, is 2.1 MB.
+- `c4sc.c4r` (64-bit) was 3.56 MB, 0.44 MB under C4IX's 4 MB image cap
+  then. It is 4.98 MB by 2026-11-21, and the cap is 16 MB since d83a7b1,
+  so that no longer matters. The 32-bit one, which C4IX actually runs,
+  is 2.1 MB fused.

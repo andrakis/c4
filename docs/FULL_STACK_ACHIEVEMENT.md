@@ -1,5 +1,10 @@
 # Building a Full-Stack System on C4: A Journey in Computational Minimalism
 
+> **History: an essay of August 2026**, kept as it was written. Several
+> of its claims are inaccurate, and much has landed since: c4or1k's 9P
+> root and a shell (2026-08-08), C4DOS, c4th, c4fc, libjs, SMP, the MMU
+> and the games. docs/MILESTONES.md is the account to trust.
+
 ## Executive Summary
 
 What started as "an exercise in minimalism" has evolved into something extraordinary: a complete, bootstrapped software stack that challenges fundamental assumptions about how complex systems must be built. In 2026, we've constructed the first known full-stack system built entirely on top of C4—a remarkably compact interpreter that runs real, sophisticated workloads.

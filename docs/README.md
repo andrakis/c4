@@ -14,7 +14,6 @@ detail behind it. Each doc is one of three kinds:
 |---|---|---|
 | [internals.md](internals.md) | reference | How c4m, C4KE and C4IX work inside: traps, the cycle interrupt, custom opcodes, protected mode, the `.c4r` format, and how c4lm stalled |
 | [MILESTONES.md](MILESTONES.md) | history | What was built, in order, per component |
-| [DOCS-PLAN.md](DOCS-PLAN.md) | tracker | This documentation pass, before `pm-investigation` merges to master |
 | [windows.md](windows.md) | reference | Building and running the whole suite natively on Windows, under MSYS2 |
 
 ## Machines
@@ -22,7 +21,7 @@ detail behind it. Each doc is one of three kinds:
 | Doc | Kind | What it is |
 |---|---|---|
 | [quake-performance.md](quake-performance.md) | results | What each compiler and interpreter change gained Quake, by instructions and by the wall |
-| [duke3d-port.md](duke3d-port.md) | design | Duke Nukem 3D's port: which source and why, and the plan |
+| [duke3d-port.md](duke3d-port.md) | design, results | Duke Nukem 3D's port: which source and why, the plan, what happened, and its speed work (2026-11-10 to 17) |
 | [accel.md](accel.md) | reference, results | Accelerators: a game's heaviest loops run by the host in the game's own JavaScript (`games/NAME/c4/accel.mjs`), loaded by libjs behind INFO's `C4I_ACCEL`; Duke's, Quake's, ROTT's, Doom's, Wolf3D's, Tyrian's and Super Blit Kart's, their menu switches, what they do to the frame rates; and C4IX's own (`src/c4ix/accel.mjs`: libarc's CRC-32 and inflater) |
 | [framebench.md](framebench.md) | reference, results | `tools/framebench.mjs`: the games' frame rates, lows and instructions a frame; where the heavy frames go; hand-written code against a drawing opcode; input lag |
 | [fused-opcodes.md](fused-opcodes.md) | reference | The ten fused opcodes (79–88), which host runs which, and `-mfuse` |
@@ -53,7 +52,7 @@ detail behind it. Each doc is one of three kinds:
 | [c4-explorer.md](c4-explorer.md) | tracker | Source maps in C4R (S0–S3 built), Code Explorer (C source beside the VM code it became), windowed programs on the C4IX desktop with the IDE as one, and Wolfenstein 3D as an optional repository |
 | [busybox-port.md](busybox-port.md) | tracker | Busybox compiled by c4lc for C4IX: the measured compiler, kernel and libc gaps, and the order of work |
 | [c4dos-design.md](c4dos-design.md) | reference | C4DOS: the trap-free DOS, its API table and floppies |
-| [grin.md](grin.md) | reference | grin, C4DOS's graphical shell in the manner of Windows 3.1: how it is built and works, G0–G7 as built, the games' groups since (2026-11-19: five groups, game windows with the game's menu bar, the Uploads on B:), and G8 (a system monitor) and G9 (two games at once) planned |
+| [grin.md](grin.md) | reference | grin, C4DOS's graphical shell in the manner of Windows 3.1: how it is built and works, G0–G7 as built, the games' groups since (2026-11-19 and 20: five groups, game windows with the game's menu bar, the Uploads on B:), and G8 (a system monitor) and G9 (two games at once) planned |
 | [grin-plan.md](grin-plan.md) | history | The plan grin was built from, with each milestone's results and measurements |
 | [c4dos-ladder.md](c4dos-ladder.md) | reference | The Build Ladder on the page (`?system=c4dos-ladder`): C4DOS builds and boots C4KE, C4KE builds C4IX and boots it with `kboot`, games at each rung, in one session; what each step costs |
 | [climbing-the-ladder.md](climbing-the-ladder.md) | reference | The ladder by hand on the breadboard: C4DOS → C4KE → C4IX, each built by the one before |
@@ -83,5 +82,6 @@ detail behind it. Each doc is one of three kinds:
 | Doc | What it is |
 |---|---|
 | [next-session.md](next-session.md) | What was open on 2026-09-06 |
+| [DOCS-PLAN.md](DOCS-PLAN.md) | The documentation pass of 2026-09-26 to 10-24, for `pm-investigation` (superseded) |
 | [ports-feasibility.md](ports-feasibility.md) | What the compilers needed for the ports after Wolfenstein 3D |
 | [FULL_STACK_ACHIEVEMENT.md](FULL_STACK_ACHIEVEMENT.md) | An early essay. Several of its claims are inaccurate; use MILESTONES.md instead |

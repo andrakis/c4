@@ -33,6 +33,9 @@ Status (2026-10-22):
   - the P1 items: `__func__`, `__LINE__` and `__FILE__`, a global's
     address in an initializer, and local aggregate initializers (§7).
 - The source is not vendored into the repository yet; that is M7e.
+- 2026-11-21: nothing done on Busybox since. The games brought `sscanf`,
+  `localtime` and `mktime` to libc (§5); M7d's other items, and M7e on,
+  are as below.
 
 ## 1. The target
 
@@ -338,12 +341,15 @@ configured build imports 156 symbols (§2.1). 99 are not in `libc.h`:
   - `__errno_location` and `__stack_chk_fail`.
 
   Their plain names, however, are real needs:
-  - `vasprintf`, `sscanf`, `mempcpy`, `strtoll`, `strtoull`, which are
-    missing;
+  - `vasprintf`, `mempcpy`, `strtoll`, `strtoull`, which are missing
+    (`sscanf` came with Doom, 2026-10-23);
   - `dprintf`, `memmove`, `vsnprintf`, which are already in libc.
 - **Five `*_unlocked` stdio names and `major`/`minor`** are macros over
   libc's existing functions in the headers.
-- **The rest, about 75, are real.** These are implemented:
+- **The rest, about 75, are real.** These are to be implemented (M7d).
+  Of them, `vfork`, `execv`, `execve`, `wait`, `waitpid`, `fstat`,
+  `lstat` and `link` exist (M7c), and `localtime` and `mktime`
+  (OpenTyrian's, 2026-10-23):
   - **strings:** `stpcpy`, `strchrnul`, `strsep`, `strcasestr`, `putenv`,
     `realpath`, `mkstemp`;
   - **time:** `gettimeofday`, `localtime`, `mktime`, `strftime`;
@@ -356,7 +362,7 @@ configured build imports 156 symbols (§2.1). 99 are not in `libc.h`:
     console, over `SYS_AVAIL`);
   - **patterns:** `fnmatch`, `glob`, `globfree`, `regcomp`, `regexec`,
     `regerror` (below).
-- **Stubs**, which succeed or fail with an honest errno:
+- **Stubs**, to be written, which succeed or fail with an honest errno:
   - **signals:** `signal`, `sigaction`, `sigprocmask`, `sigsuspend` and the
     six `sig*set` functions. They record the handlers and never deliver.
   - **identity:** `geteuid`, `getegid` (0); `setuid`, `setgid`, `seteuid`,

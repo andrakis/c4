@@ -23,8 +23,8 @@ c4cc cannot compile any of it (src/tests/c4lc_l7.c). L8 (DONE) adds
 object mode: `c4lc -c` emits .c4o units whose undefined prototypes
 are extern symbols with SYMBOL-typed patches, resolved by c4rlink —
 interoperable with c4cc objects in the same link. X0 (the first
-C4IX boot) is DONE on this toolchain; the next compiler-side goal
-is L9, a native preprocessor (§10).
+C4IX boot) is DONE on this toolchain; L9, a native preprocessor,
+came next (§10).
 
 Status 2026-09-30: L9 (preprocessor), L10 (`-conforming` escapes) and
 L11 (constant expressions in enums) are DONE too (§10). Since then c4lc
@@ -38,6 +38,18 @@ Busybox needs (M7b, §10), `long long` in two words on a 32-bit target
 (M8, §14.7), `float` and `double` (docs/c4-float.md, which tracks
 that work and its limits), and what Wolfenstein 3D needed: arrays of
 arrays, C's struct layout, a struct by value and the rest (M9, §14.8).
+
+Status 2026-11-21. Since M9: Doom (M10, §14.9), a typedef of an array
+(M11, §14.10), OpenTyrian (M12, §14.11), Rise of the Triad (M13, §14.12)
+and Simon Tatham's Puzzles (§14.13); `-fpic` and `-fno-builtin` for
+C4IX's shared libc (2026-10-19); source maps with `-g` (§15,
+2026-10-24); `-mfpu` (docs/c4-float.md, 2026-11-05); initialised locals
+from a template (§14.14, 2026-11-11); globals defined more than once
+(§13.1, 2026-11-13); and `LH LHU SH LSR LCU` in place of the 16-bit
+helpers (docs/c4-16bit.md, 2026-11-13). Since 2026-11-17 the host's
+builds run c4lc compiled by c4sc (`c4sc-host`, `c4sc-host32`;
+docs/c4sc-design.md), and an error ends that compiler with exit 1
+(2026-11-18). `test-c4lc` still runs the Lisp.
 
 ## 1. Why
 
@@ -83,9 +95,10 @@ Primitive inventory is sufficient: `string:byte`/`string:byte!`/
 `string:word!`/`string:alloc`/`string:substr` for scanning and building
 byte segments, `file:read`/`file:write` (RAM-FS aware under C4KE),
 `bit:*` ops, first-class environments for symbol tables, and the
-c4r.lisp encoder for output. The cell arena defaults to 65,536 cells,
-which c4cc.c's token list alone exhausts — c4cc-sized inputs need
-`c4sp -c 2000000`.
+c4r.lisp encoder for output. The cell arena started at 65,536 cells,
+which c4cc.c's token list alone exhausts, so c4cc-sized inputs needed
+`c4sp -c 2000000`. Since 2026-08-26 the arena grows with the live set
+and needs no `-c` (§12).
 
 ## 3. Language target
 
@@ -138,10 +151,14 @@ All offsets in bytes unless noted, matching c4r.lisp.
   placement (alignment, the empty-string nul byte, adjacent-literal
   concatenation) is codegen's job, not the lexer's.
 
-Keyword kinds: `Char Else Enum If Int Return Sizeof While Switch Case
-Default Break For Continue Static Extern Attribute Constructor
-Destructor`; `void` lexes as `Char` (void IS char in c4, as in c4's own
-symbol seeding). Operator kinds, in c4cc precedence order: `Assign Cond
+Keyword kinds, as L0 had them: `Char Else Enum If Int Return Sizeof
+While Switch Case Default Break For Continue Static Extern Attribute
+Constructor Destructor`. L7 added `Struct Union Typedef Do`, F2 `Float
+Double`, and M4 a second table, `lex:keywords2`: `Const Volatile Signed
+Unsigned Short Long`. `void` has a kind of its own, `Void`, since M7b,
+so that `(void)` can be told from `(char)`; the parser takes it wherever
+it takes `Char`, because void IS char in c4, as in c4's own symbol
+seeding. Operator kinds, in c4cc precedence order: `Assign Cond
 Lor Lan Or Xor And Eq Ne Lt Gt Le Ge Shl Shr Add Sub Mul Div Mod Inc
 Dec Brak`. Punctuation kinds: `Not Tilde Semi Colon Comma Lparen Rparen
 Lbrace Rbrace Rbrak Dot` (c4cc returns these as raw chars; c4lc names
@@ -486,10 +503,12 @@ output as the golden: `src/tests/c4lc_pp.c` for the preprocessor and
     array member is its storage.
   - In constant expressions, `p:const` gains `sizeof(type)`,
     `sizeof("lit")`, the comparisons, `&&`, `||` and `?:`. A struct's
-    size is not available there yet.
+    size came with M9, when the parser began to lay structs out
+    (`p:slayout`, 14.8).
 - **Function pointers** (`c8b1bf0`):
   - `T (*name[N])(params)` declares an `int` (or an array of them), since
-    c4 calls through any word. The parameter list is skipped.
+    c4 calls through any word. The parameter list is skipped, unless it
+    or the return type has a float or a double (14.13).
   - A call through any expression, `(calle TARGET ARGS…)`, compiles to
     what a JSR would leave behind: the arguments, `IMM` of a return
     label, `PSH`, the target in A, then `JMPA`. The return label is a
@@ -633,7 +652,9 @@ The standard way to build a multi-file image in this tree (C4IX,
 c4or1k, c4sc, c4mp) is **separate compilation, then link**:
 
 1. Each module is compiled on its own to an object:
-   `c4sp c4lc.lisp -O -c -I <dir> <dir>/mod.c mod.c4o`. `-c` makes
+   `c4sc-host compile -O -c -I <dir> <dir>/mod.c mod.c4o` (the Makefile's
+   `$(call lc64)`; `./c4sp -R c4lc.lisp` takes the same arguments, and
+   `make C4LC=interp` uses it). `-c` makes
    undefined prototypes extern symbols with SYMBOL-typed patches and
    makes `main` optional. `-P`/`-I`/`-D` use c4lc's own preprocessor,
    so no `gcc -E` is involved. The Makefile's `c4lc_compile_par` macro
@@ -642,8 +663,15 @@ c4or1k, c4sc, c4mp) is **separate compilation, then link**:
    writes a `.c4r` (format version 3). `-s` strips the symbol table for
    a release image; `-r` (library mode) allows unresolved symbols, which is
    how a `.c4l` library such as `libc4ix.c4l` is made.
-3. For 32-bit targets (c4bb, `c4m32`), use `c4sp32` and `c4rlink32`,
-   which are the same sources built with `gcc -m32`.
+   By default it also drops the functions nothing reaches (`--no-gc`
+   keeps them) and keeps one copy of c4lc's helpers (`--no-fold`,
+   docs/link-fold.md). Inputs between `--start-lib` and `--end-lib` are
+   linked only if they define something still undefined. A global
+   several units define is one object (13.1). src/c4cc/README.md has
+   every flag.
+3. For 32-bit targets (c4bb, `c4m32`), use `c4sc-host32` (`$(call
+   lc32)`) and `c4rlink32`. `c4sp32` running c4lc.lisp writes the same
+   bytes (`make test-c4sc32`); `C4LC32=interp` picks it.
 
 Do not build these with c4cc: it has no structs, typedef or
 preprocessor, and its images are 18–27% larger (§11). Single-file
@@ -917,7 +945,8 @@ or drop one later:
 `src/tests/c4lc_m4v.c` pins it in `c4rdump`'s patch listing: eight
 references to a volatile global plain, `-O` and `-minline`, against a
 non-volatile control that `-minline` takes from five to six. A 16-bit
-volatile access is two byte accesses — the VM has no 16-bit operation.
+volatile access is one `LH`, `LHU` or `SH` since 2026-11-13
+(docs/c4-16bit.md); before, it was two byte accesses.
 
 A spliced call also keeps the conversions the call made: an argument
 for an `unsigned char`/`signed char`/`short`/`unsigned short`/`unsigned`
@@ -984,9 +1013,10 @@ output is.
 - `src/tests/c4lc_m4std.c` — unsigned compares, division, shifts,
   wraparound, `unsigned long` and a CRC32 in a file that includes
   stdio.h and stdlib.h; golden `c4lc-m4std.txt` is gcc's and does not
-  depend on the word size. test-c4lc runs it through `$(PREPROC_LC)`
-  (c4lc's own preprocessor refuses stdarg.h's function-like macro named
-  without arguments) at 64 and 32 bits, plain and `-O`, and through
+  depend on the word size. test-c4lc runs it through `$(PREPROC_LC)`,
+  as it has since c4lc's own preprocessor refused stdarg.h's
+  function-like macro named without arguments (it accepts it since
+  M7b), at 64 and 32 bits, plain and `-O`, and through
   `c4lc -P -D STDDEF_ONLY` (stddef.h alone); test-c4fc compiles it with
   c4fc's own `-P` and runs it, and `C4FC_GEN_SWEEP` holds that image to
   c4lc's.
@@ -1519,7 +1549,7 @@ compiler makes maps (S6).
   - A loop's code after its body, a `for`'s step and the jump back, goes
     on the loop's line.
   - The exit at the closing brace goes on the brace's line.
-  - Bodies the compiler makes, such as `<ld16s>` and `<stub>`, have line 0.
+  - Bodies the compiler makes, such as `<udiv>` and `<stub>`, have line 0.
 - **c4opt** steps over the items in every window (`opt:reals`,
   `opt:skip`). A rewrite's items follow what it put in, and `dead` keeps
   them. So the passes make the same decisions, and a row describes the
@@ -1567,7 +1597,8 @@ machine) and all of C4IX: kernel, libraries, libc, userland, desktop.
 - The Makefile's `IMG_G` (`-g`) goes to the games' compilers and to
   build-images.sh. `make IMG_G=-g0` builds the images without maps.
 - `.img_g` holds its value, so a change remakes what it compiled.
-- C4IX's own `cc` writes no map until S3. So the tests that hold a build
+- C4IX's own `cc` writes a map with `-g` since S3 (39bab69, 2026-10-29),
+  but C4IX's own builds do not pass it. So the tests that hold a build
   inside C4IX to the host's image (test-libjs, test-c4ix-smp,
   test-c4ix-rebuild) compare up to the end of S
   (`libjs/tests/c4r-body.py`), which is every byte a loader reads.
@@ -1614,7 +1645,10 @@ before it.
     functions keep their names, and the line-0 row of the object without
     a map stays outside every function.
 
+**Done since**: S3, c4sc and `cc -g` (39bab69, 2026-10-29), for the
+IDE's Code pane; and on 2026-11-12 a function's row at its name, and
+rows for initialised locals and a switch's dispatch (16b3644).
+
 **Still to come**:
-- S3: c4sc and `cc -g`;
 - S4 and S5: c4fc and c4cc;
 - S6: maps on by default.

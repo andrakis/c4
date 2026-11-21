@@ -4,6 +4,10 @@ Status, 2026-09-30: written 2026-08-04 and current except where marked.
 Since then OISC4 has learned the fused opcodes (79-88, see "The fused
 opcodes" in §4): support arrived in 958eeb1 (2026-08-24, the first
 twenty-six) and bbb9ec3 cut the set to the current ten the same day.
+Since, 2026-11-13: the 16-bit loads and store, LSR and LCU (90-94,
+docs/c4-16bit.md) are translated too, through the math device; LSR,
+at 23 instructions, is now the longest expansion. FPU (89) is named
+and not translated; INFO says 0, so no image asks for it.
 The usage summary, host table and out-of-contract tests are also in
 [src/oisc4/README.md](../src/oisc4/README.md).
 
@@ -40,7 +44,7 @@ changes everything else.
 
 Do not touch the compiler. Translate **compiled `.c4r` images** instead:
 load code + data, walk the code segment twice (sizes, then emission), and
-expand every C4/c4m opcode into a fixed 1–11 instruction OISC sequence.
+expand every C4/c4m opcode into a fixed 1–23 instruction OISC sequence.
 The `.c4r` patch table says *exactly* which operand words are code
 addresses, which are data addresses, and which are plain integers, so
 translation needs no guessing and no symbolic assembler. Everything c4cc
@@ -209,7 +213,7 @@ One trap found on the way: the syscall catch-all was `op >= OPEN && op <
 INS_MAX`, so extending the enum would have made every appended opcode
 look like a syscall and mistranslate silently. It is now bounded by
 `DBG`, where that class ends. c4mp's own 66-78 (`CPUI`..`TRAW`,
-including `LXI`/`SXI`) are named but not translated: an image that uses
+including `LXI`/`SXI`) and FPU (89) are named but not translated: an image that uses
 one stops at translation with "unknown opcode". `make test-fuse` runs a
 fused image on OISC4 alongside c4m and c4mp.
 

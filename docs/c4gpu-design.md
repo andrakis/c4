@@ -44,9 +44,13 @@ iteration — 480M instructions total, instruction count taken from `c4m -s`:
 | `./c4mp` | switch (`src/c4mp/vm.c:262`) | 64-bit | 1.290 s | 372M instr/s |
 | `./c4m32` | if-else chain | 32-bit | 1.316 s | 365M instr/s |
 
+Measured before 5dede1a (2026-11-14), which put c4m's opcode chain in two
+levels, commonest first. That made gcc's c4m faster on real workloads, so
+measure again before holding a GPU to these numbers.
+
 Note the 32-bit build costs ~3%, which matters because the GPU port is
 necessarily 32-bit (§4). Note also that this contradicts the "~4.4M
-VM-instr/sec ceiling" quoted in `docs/c4or1k-design.md:603` by two orders of
+VM-instr/sec ceiling" quoted in `docs/c4or1k-design.md` (M9, "The baseline") by two orders of
 magnitude — that figure is a *hosted* c4m, not a native one. The honest
 number for a native c4m on this machine is **~370M instr/s per core, ~2.2G
 across six**, and that is what a GPU has to beat to be worth the trouble.
@@ -74,7 +78,7 @@ mostly a *port of things that have already been written twice*.
 * **Arena addressing.** `src/c4bb/sim/arena.js` is a flat `Int32Array` in which
   every guest address is a byte offset — no host pointers in VM state
   anywhere. `src/oisc4` established the same convention first, and
-  `docs/oisc4-design.md:246` names host pointers as precisely what made the
+  `docs/oisc4-design.md` §6 names host pointers as precisely what made the
   2023 OISC attempt "un-dumpable, un-relocatable, un-SIMDable." That is the
   single hardest requirement for GPU execution and it is already satisfied,
   twice, in two languages.
@@ -162,8 +166,8 @@ find how small an arena can get:
 
 An 8 GB 3060 Ti therefore supports roughly *16K VMs at 256 KB* or *64K at
 64 KB*, and a 16 GB 5080 twice that. Whether a useful image fits in 64 KB is
-an open question — `hello32.c4r` is 230 bytes but `c4ix32.c4r` is 127 KB
-before it allocates anything — and it interacts with the L2 question below in
+an open question — `hello32.c4r` is 230 bytes but `c4ix32.c4r` is 585 KB
+(127 KB when this was written) before it allocates anything — and it interacts with the L2 question below in
 a way that makes small arenas doubly valuable.
 
 ### 5.3 Byte access, and why lanes must not share
@@ -273,7 +277,7 @@ afternoon.
 ## 7. The OISC alternative, which is not obviously worse
 
 `src/oisc4` measured ×5–7 code expansion and **5.8x slower than c4m**
-natively (`docs/oisc4-design.md:224`). On a CPU that settles it. On SIMT it
+natively (`docs/oisc4-design.md` §5). On a CPU that settles it. On SIMT it
 does not, because the two engines pay opposite costs:
 
 | | c4 switch VM | OISC4 |

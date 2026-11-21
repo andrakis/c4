@@ -208,7 +208,8 @@ compiled), and it rebuilds itself from the repo its disk unpacks at `/usr`
 
 **Test:** `make test-c4ix`, `test-c4ix-c4ke`, `test-c4ix-rebuild`.
 
-**Docs:** [docs/c4ix-design.md](../docs/c4ix-design.md),
+**Docs:** [docs/internals.md](../docs/internals.md) Part 10,
+[docs/c4ix-design.md](../docs/c4ix-design.md),
 [docs/c4ix-desktop.md](../docs/c4ix-desktop.md).
 
 ### C4DOS

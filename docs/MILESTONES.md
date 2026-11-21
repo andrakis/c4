@@ -58,10 +58,21 @@ Aug 25-26 c4fc       — a C compiler in that Forth, byte-identical to c4lc
 Aug 28-29 the ladder — C4DOS → C4KE → C4IX climbed on the breadboard
 Sep 6     c4mpg      — a memory-protection guard, as a fork of c4m
 Sep 23-24 libjs      — c4m in JavaScript; C4IX's desktop in a browser
+Oct 19-22 userland   — a shared libc for C4IX; vfork, execve and waitpid
+Oct 21-23 the games  — Wolfenstein 3D, Doom, OpenTyrian, ROTT; a sound card
+Oct 22    SMP        — libjs on several CPUs, C4IX under one kernel lock
+Oct 24-28 grin       — C4DOS's shell in the manner of Windows 3.1, G0-G7
+Oct 29-31 the MMU    — paged memory in libjs, a space per task, swap
+Nov 5-11  more games — Quake, Frotz, Open Adventure, Puzzles, Ace, SBK,
+                       the BSD games, Duke Nukem 3D
+Nov 15-18 accel      — the games' heaviest loops run by the browser
+Nov 17    c4lc       — the host's c4lc compiled: c4sc-host32 and c4sc-host
 ```
 
-Status of this document: brought current 2026-09-30. Earlier sections
-keep their original dates and say where things have since changed.
+Status of this document: brought current 2026-09-30, with "Since" notes
+to 2026-10-21; earlier sections keep their original dates and say where
+things have since changed. What landed after 2026-10-21 is listed briefly
+in "Since 2026-10-21", before "What's still open"; each line names its doc.
 
 ---
 
@@ -197,7 +208,8 @@ write ever touches the host filesystem."
 the C Busybox needs (M7b: `goto`, function pointers, aggregate
 initializers, variadic macros and more), `long long` in two words on a
 32-bit target (M8), and IEEE `float` and `double` in software (F2,
-`docs/c4-float.md`). `docs/c4lc-design.md` has each.
+`docs/c4-float.md`). `docs/c4lc-design.md` has each. What came after
+is in "Since 2026-10-21" below.
 
 ---
 
@@ -277,7 +289,8 @@ rebuild of everything it ships from inside itself (`b4ke -C /usr`),
 `cc`, shared libraries and a `-fpic` libc, CPU accounting with an idle
 task, and c4m as a C4IX program. The plain-c4 backends of X1 and X2
 were removed on 2026-10-21. The "Since X6" list in
-`docs/c4ix-design.md` names each change and its commit.
+`docs/c4ix-design.md` names each change and its commit. What came after
+is in "Since 2026-10-21" below.
 
 ---
 
@@ -585,7 +598,7 @@ raycaster, against about 19M for c4bb's turbo engine on the same images. It shar
 and boots the 32-bit C4KE and C4IX images in Node or a browser Web
 Worker, with a terminal and a display the guest draws into. The same
 two days produced C4IX's desktop on that display: windows, a taskbar,
-terminals over pipes, Explorer, System Monitor, Text Editor, Calculator, and
+terminals over pipes, Files, System Monitor, Text Editor, Calculator, and
 compilers running inside C4IX. M0–M4 are done, and M5 except its
 performance pass and media panel. `make test-libjs`;
 `docs/libjs-design.md`.
@@ -632,11 +645,60 @@ per module; the build scripts now say 400,000, and every object is
 byte-identical to its 8M build. (Since 2026-08-26 the arena grows from a
 small first block, so the Makefile passes no `-c` at all.)
 
+## Since 2026-10-21
+
+In brief, to 2026-11-21. Each doc named has the detail.
+
+- **C4IX's userland** (2026-10-19 to 22): libc as the shared
+  `/lib/libc.c4s`; `vfork`, `execve` with an environment, `waitpid`,
+  `lseek`, `fstat` (`docs/busybox-port.md`, M7c); 64 descriptors a task
+  (2026-10-29).
+- **The games** (2026-10-21 to 11-11): Wolfenstein 3D, Doom, OpenTyrian
+  and Rise of the Triad, then Quake, Frotz with Zork I-III, Open
+  Adventure, Simon Tatham's Puzzles, The Ace of Penguins, Super Blit
+  Kart, 24 BSD games on PDCurses, and Duke Nukem 3D. Each runs on the
+  bare machine, under C4DOS and in C4IX. Since 2026-10-24 each is an
+  optional submodule at `games/NAME` (`games/README.md`). libjs has a
+  sound card (2026-10-22): an OPL, sixteen sample channels, and
+  General MIDI since 2026-11-12.
+- **SMP** (2026-10-22): libjs runs several CPUs, simulated or on
+  workers sharing memory, and C4IX runs on them under one kernel lock
+  (`docs/c4ix-smp.md`, S1-S4).
+- **grin** (2026-10-24 to 28): C4DOS's shell in the manner of Windows
+  3.1, G0-G7; the games in five groups, game windows of any size, and
+  the Uploads on B: (2026-11-19 and 20). `docs/grin.md`.
+- **The MMU** (2026-10-29 to 31): paged memory in libjs (`?mmu=1`), a
+  space per task, swap; the root archive under it (2026-11-13).
+  `docs/c4ix-mmu.md`.
+- **Source maps and the Code Explorer** (2026-10-23,
+  `docs/c4-explorer.md`); **the Build Ladder on the page** (2026-10-27,
+  `docs/c4dos-ladder.md`); **the suite on Windows** under MSYS2
+  (2026-11-14, `docs/windows.md`).
+- **16-bit loads and stores** as opcodes 90-94 (2026-11-13,
+  `docs/c4-16bit.md`).
+- **Browser accelerators** (2026-11-15 to 18): the heaviest loops of
+  Duke Nukem 3D, Quake, ROTT, Doom, Wolfenstein 3D, Tyrian and Super
+  Blit Kart in each game's own JavaScript, the same frames; and C4IX's
+  own for its boot (2026-11-17). `docs/accel.md`.
+- **The compiled c4lc** (2026-11-17): the host's c4lc is `c4sc-host32`
+  and `c4sc-host`; `C4LC=interp` goes back (`docs/c4sc-design.md`).
+- **Since then** (2026-11-16 to 20): Wolfenstein 3D's automap; Tyrian
+  steered by the mouse, and `win_lock` for a game in a desktop window;
+  ROTT's seven resolutions, its menus at 320x200; AdLib music after
+  Doom (the OPL3 mode it left on); the argument-count scan's fixes;
+  Duke's mirrors and masked floors by the accelerators, and cheats at
+  its console; Quake's inline pass.
+
 ## What's still open
 
 Kept here on purpose, not swept into the wins above. These were
 recorded in the first week; the c4or1k and `realloc()` items were
 re-checked on 2026-09-30 and the rest have not been.
+
+Checked again 2026-11-21 against the docs, not by running them: the
+c4bb manifest race and the long `top` run are still open
+(`docs/c4bb-design.md`), and C4KE's `kernel/io` dispatcher still spins
+(`docs/internals.md`). The C4IX stall has not been run again.
 
 - ~~**c4or1k M5** — 9P plumbing is written but an actual successful
   root-fs mount hasn't been confirmed yet.~~ Closed: the kernel mounts

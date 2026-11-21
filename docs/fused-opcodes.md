@@ -4,6 +4,11 @@ Status, 2026-09-30: the ladder below is complete, F0-F7. All ten opcodes
 run on c4mp, oisc4, c4bb and libjs; c4m runs three. Emission (`-mfuse`)
 is still opt-in. See "Who executes which" under "What".
 
+Since then (2026-11-21): c4lc and c4fc emit `STL` and `POPA` themselves
+under `-mfuse` (2026-11-05), and every game in `games/` is built `-O
+-mfuse` by its `c4.mk`, for c4bb, libjs and C4IX. The default is still
+off, and C4IX's own kernel and programs are unfused.
+
 ## Why
 
 `docs/c4th-design.md`'s B5c opcode probe measured, on the instructions two
@@ -236,7 +241,8 @@ keeps its own `OP` table.
 
       `test-c4mp` still fails on `raycast: output differs` — verified
       pre-existing by building HEAD in a clean worktree and reproducing
-      it there.
+      it there. (It was raycast's clock-seeded maze, not the VM: fixed
+      2026-10-22, `e489e05`.)
 - [x] **F4/F5** Emission, as a `fuse` pass in **`c4opt`** rather than in
       either compiler.
 
@@ -391,12 +397,14 @@ run under c4m. As of 2026-09-30 the default is still off: the Makefile
 passes `-mfuse` only to the targets that ask for it (the c4bb disk's
 `c4sp.c4r` and `libarc`, `c4sc32-fused.c4r` -- the compiler on the
 `c4dos-c4ix32` floppy and in C4IX -- and the tests that check fused
-images).
+images). Since October every game's `c4.mk` passes `-O -mfuse` too, so
+the games' images, bare and in C4IX, are fused.
 
 The unreferenced-label pass described above has not been written; the
 remaining ~6% is still on the table.
 
-**Userland is unfused.** The C4IX number above fuses only the kernel;
-the programs it runs are ordinary images (on the board's disk, apart
-from the fused libarc that tar, gunzip and crc32 link). Fusing those too is a Makefile
-change once the default question is settled.
+**C4IX's own userland is unfused.** The C4IX number above fuses only the
+kernel; the programs it runs are ordinary images (on the board's disk,
+apart from the fused libarc that tar, gunzip and crc32 link, and the
+games, which are built fused). Fusing the rest is a Makefile change once
+the default question is settled.

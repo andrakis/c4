@@ -103,16 +103,18 @@ in when the branch is emitted, with a value filled in later. Nothing
 else in the tree emits patches out of order, so nothing else had found
 this; `load-c4r.c` applies them in any order and never noticed.
 
-**`c4l.c`'s pre-flight scan started at word 0.** The `.c4r` code stream
-is 1-based -- c4cc emits through `*++e` -- so `scan_extended` walked
-every image one word out of phase, reading each operand as an opcode. It
+**`c4l.c`'s pre-flight scan started at word 0.** c4cc's code stream is
+1-based -- it emits through `*++e` -- so `scan_extended` walked every
+c4cc image one word out of phase, reading each operand as an opcode. It
 survived years of images because their operands are small and stayed
 inside the opcode table by luck. `self.f` emits an `IMM` of a sign mask,
 and reading that as an opcode indexes the name table a gigabyte past its
 end: a segfault, on the first image this rung produced. Same off-by-one
 the B5d writer made from the other side, and the same lesson -- the
 1-based convention was written down in exactly the two readers that
-depended on it.
+depended on it. (c4lc's images start at word 0, which c4fc found later;
+`scan_extended` now takes a zero first word as the sign of that,
+c4l.c:97-101.)
 
 ## Where it runs (B6)
 

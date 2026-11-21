@@ -14,8 +14,8 @@ way and scope corrections. Say plainly what was *not* done and why.
 Building C4IX costs ~60 s of compiler time for an OS of 3,700 lines: 12 serial
 `c4sp`+`c4lc` invocations at ~43 s for the kernel, plus ~18.5 s for `libc4ix`
 and the 14 userland programs. Under `c4m` the same work carries a ~65-70x
-interpretation penalty, which is why every Makefile rule runs `./c4sp`
-natively.
+interpretation penalty, which is why every Makefile rule ran `./c4sp`
+natively (since 2026-11-17 they run c4lc compiled; see the end).
 
 The cost is structural. c4sp's values are 4-word heap cells under a
 conservative mark & sweep collector; environments are alists, so every variable
@@ -108,7 +108,7 @@ of something we never allocated does exactly what it did before.
       `test-c4ke-ramfs`, `test-oisc4`, `test-c4lc`, `test-c4ix` all PASS.
       **`test-c4mp` FAILS, and did so before this change too** (verified by
       stashing `c4m.c` and rebuilding): `test-c4mp: FAIL raycast: output
-      differs`. Pre-existing, unrelated, and **still open** — see below.
+      differs`. Pre-existing, unrelated, and **still open** then — see below.
 - [ ] **0.6** PM guards for `MSET`/`MCMP`/`MCPY` behind a `CONF_` flag, opt-in
       like `CONF_TRAP_RESTORES_INTERVAL`, with kernel-side emulation in C4IX
       (**separate change** — guarding them unconditionally would trap every
@@ -161,7 +161,9 @@ of something we never allocated does exactly what it did before.
   Latent, not urgent: an allocation crossing a VM boundary is fragile, and
   anything that ever makes the two VMs' allocators differ will break this
   path. Worth tidying when `C4IV`'s semantics are next revisited.
-- **`test-c4mp` / raycast is red on `main` as it stands.** Not investigated.
+- **`test-c4mp` / raycast — ANSWERED 2026-10-22** (`e489e05`): raycast
+  seeded its maze from the clock XOR the cycle counter, so no two runs
+  agreed. With a fixed seed c4m and c4mp agree byte for byte.
 
 Payoff beyond the bug: removes the "never call realloc" constraint, so c4th can
 grow its arenas instead of pre-sizing them.
@@ -532,6 +534,9 @@ C4IX) run what they ran before.
 
 ## Process
 
-`timeout N` on every `c4`/`c4m`/`c4sp` invocation and
-`pkill -f "c4m load-c4r"` afterwards; no background jobs left running; read any
-regenerated golden file for its failure text before committing it.
+Builds, tests and timings run in a build slot (`~/bin/c4-lock`, or
+`flock /tmp/c4-build.lock CMD`), which make and the suite insist on where
+`~/.c4-require-lock` exists (8503b9a). `timeout N` on every
+`c4`/`c4m`/`c4sp` invocation; stop only processes you started, by PID;
+no background jobs left running; read any regenerated golden file for
+its failure text before committing it.

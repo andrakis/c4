@@ -205,7 +205,7 @@ target.
   kernel additions and its tracker. Current.
 - [docs/c4ix-mmu.md](../../docs/c4ix-mmu.md): the MMU.
 - [docs/c4ix-smp.md](../../docs/c4ix-smp.md): several CPUs.
-- [docs/internals.md](../../docs/internals.md) §7.4: what C4IX does with
-  protected mode.
+- [docs/internals.md](../../docs/internals.md) Part 10: how C4IX works
+  inside, from boot to the display (§7.4 has its protected mode's history).
 - [docs/climbing-the-ladder.md](../../docs/climbing-the-ladder.md): C4KE
   building C4IX on the breadboard.

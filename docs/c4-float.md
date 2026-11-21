@@ -95,7 +95,7 @@ above it, and `f == 0.1` stays a double compare because 0.1 is not a float.
 
 - **A pointer to a function returning `float` or `double`** has a type of its own, as above, which is the return type its call has. A double comes back through a hidden pointer on a 32-bit target, as from any function. Added for Simon Tatham's Puzzles (docs/c4lc-design.md, 14.13).
 - **`-minline` leaves a unit with floats alone.** The tree pass converts a spliced argument only by the parameter's type, and does not know an expression's type, so an `int` argument for a `double` parameter would arrive as its integer bits. (T4 also refuses a function returning a double at 32 bits, as it refuses `long long`: the result is a temporary's address.)
-- **No constant folding of float expressions.** A global's initializer is a literal, a negated literal, or an integer constant.
+- **Float constants fold in a global's brace list** (M10, docs/c4lc-design.md 14.9), exactly, rounded as C rounds them. A scalar global's float expression is computed at start-up by `__c4lc_init` (14.8). In code, float expressions are not folded: the tree pass keeps a float literal as its bits (c4lc-tree.lisp).
 - **c4fc refuses floats.** Its lexer reads `1.5` as three tokens and it has no `float` keyword. (Parity with c4lc is a later step.)
 - **On a 64-bit target** c4lc's `long long` is the word `int`. So `unsigned int + long long` follows the `int + unsigned` rule and is cut to 32 bits; gcc widens to 64. This is an existing integer-model limitation, not a float one.
 

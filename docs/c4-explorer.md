@@ -1,8 +1,23 @@
 # Source maps, Code Explorer, and windowed programs on the C4IX desktop
 
-A plan, written 2026-10-22, before any of it was built. Since then
-source maps have been built through S3: c4lc `-g` (S1), c4rlink merging
-the maps (S2, 28fbda2) and c4sc and `cc -g` (S3, 39bab69).
+A plan, written 2026-10-22, before any of it was built. Where it stands
+on 2026-11-21:
+- **Track S** through S3: c4lc `-g` (S1), c4rlink merging the maps (S2,
+  28fbda2) and c4sc and `cc -g` (S3, 39bab69). S4-S7 are not started,
+  and `-g0` is still the default.
+- **Track E**: E4's page came first, `libjs/web/explore.html` (0ffa51b,
+  2026-10-23), which matches source a function at a time and bands rows
+  where an image has a map. Inside C4IX the explorer is the IDE's Code
+  pane and Code tab (2026-10-29/30). E0's `c4rdump -S`, E1 and E2 are
+  not built.
+- **Track G** was done another way: the games left c4 as optional
+  submodules (eab37f2, 2026-10-24). `games/wolf3d` is
+  `andrakis/c4-Wolf3D`, branch `c4`, with `update = none`, and its
+  `c4.mk` is included when it is there. There is no `make wolf3d-fetch`
+  and no `ext/`. `~/git/c4-wolf` is gone.
+- **Track W**: `/etc/desktop.apps` exists for the games, with a FLAGS
+  field (`window`); W1's libdesk and W3's `/bin/ide` are not built.
+
 The plan covers three pieces that depend on each other, and a fourth:
 
 1. **Source maps in C4R** (track S): an optional section that maps each
@@ -471,8 +486,10 @@ file takes seconds at the page's 100 MHz.
 - a heat column from the profiler (S7);
 - a diff of two images of one source.
 
-**E4, outside the VM** (wanted; when is not decided). There are two ways, and the
-first leads to the second:
+**E4, outside the VM.** The Godbolt page has a first version,
+`libjs/web/explore.html` (0ffa51b, 2026-10-23); live mode and the static
+export are not built. There are two ways, and the first leads to the
+second:
 
 - **A static export.** `c4rdump -S --html DIR` writes a page per unit:
   - the source with its colour bands, beside the code;
@@ -670,7 +687,9 @@ inside the desktop.
 
 ## 5. Wolfenstein 3D as a repository of its own (track G)
 
-Today the port lives in `games/wolf3d/`. It arrived in c4's history as a
+When this was written the port lived in `games/wolf3d/`. (Since
+2026-10-24 that path is a submodule of `andrakis/c4-Wolf3D`, eab37f2;
+the plan below is what was weighed first.) It arrived in c4's history as a
 few large commits (`0125961` and the four after it): there is no record
 there of what was changed in Wolf4SDL and why. The user wants it moved
 out:
@@ -827,7 +846,7 @@ targets are marked *new*.
 | **E0** | **The library and c4rdump `-S`.** One opcode table, symbolic operands, lookups both ways. Needs S1. | `test-srcmap`: a golden `c4rdump -S` of the probe; the opcode table checked against c4m.c; `c4rdump -S` of wolf3d (when fetched) gives every function rows, and the share of code words with a line is recorded. |
 | **E1** | **Code Explorer's window.** Needs W1 and S2; wolf3d's sources in `/usr/src` come with G2. | *new* `test-explorer.mjs` (in `test-libjs`): open `/bin/hello`; click a source line, and its instructions are the ones `c4rdump -S` gives; click a `JSR` and it goes to the callee; open wolf3d (when fetched; the desktop otherwise) and find `ScalePost` by the filter in under N machine-seconds. Then a look in the browser. |
 | **E2** | **Live mode.** Needs S3. | `test-explorer.mjs`: type a function, see its code; `-O` on and off changes it, as `cc` does by hand. |
-| **E4** | **Outside the VM** (wanted, not yet scheduled): the static export, then the Godbolt page. | *new* `test-explore-web.mjs`: the export of a probe has the rows `c4rdump -l` gives; the page, driven headless, compiles a typed function in its worker and shows the same code as `cc`. |
+| **E4** | **Outside the VM**: the page is in (0ffa51b), without live mode; the static export is not built. | *new* `test-explore-web.mjs`: the export of a probe has the rows `c4rdump -l` gives; the page, driven headless, compiles a typed function in its worker and shows the same code as `cc`. |
 
 **Order.** Three tracks do not depend on each other and can run side by
 side: S0-S2 (compilers and formats), W0-W1 (the desktop), and G0-G1
@@ -883,7 +902,7 @@ All answered on 2026-10-22, and written into the sections above:
 | Q4 | a CRC per source file? | yes (2.2) |
 | Q5 | protocol on fds 3 and 4? | yes (4.1) |
 | Q6 | IDE processes? | one IDE, many windows (4.2) |
-| Q7 | an explorer outside the VM? | yes, at some point; not scheduled (E4) |
+| Q7 | an explorer outside the VM? | yes; a first page, `libjs/web/explore.html`, since 2026-10-23 (E4) |
 | Q8 | the name? | "Code Explorer", `/bin/explore`, for now |
 | Q9 | the game's repository? | `~/git/c4-wolf3d`, cloned from bitbucket.org/ks-presto/wolf4sdl, its remote `github.com:andrakis/c4-Wolf3D`; `~/git/c4-wolf` removed (5, G0, G1) |
 | Q10 | the shareware zip? | downloaded by `make wolf3d-fetch` and checked by SHA-256 (5, G2) |

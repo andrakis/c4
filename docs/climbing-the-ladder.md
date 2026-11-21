@@ -19,13 +19,13 @@ and is the machine with something in ROM instead.
 |---|---|---|
 | `A>` | `LADDER` | the seed compiler rebuilds itself and the preprocessor, reaches a fixed point, and the tools it just built compile C4KE from its own source |
 | `A>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel the machine compiled. C4DOS hands over its RAM disk on the way out, so everything just built is still there |
-| `c4sh>` | `tar x c4ix-src.tar` | C4KE unpacks C4IX's source into its own RAM filesystem — 43 files |
+| `c4sh>` | `tar x c4ix-src.tar` | C4KE unpacks C4IX's source into its own RAM filesystem — about fifty files |
 | `c4sh>` | `b4ke -t -f c4ix.b4k` | thirteen modules through the compiled compiler, then the link. This is the long one — `-t` runs `top` alongside so there is something to watch |
 | `c4sh>` | `c4ix.c4r c4ix-sh.c4r` | boots C4IX — protected mode, preemption — with a shell |
 | `c4ix:/$` | `ls`, `ps` | C4IX, running, showing its own tasks |
 
 Three systems, each one compiled by the one before it, in a single
-power-on of a machine whose CPU is 89 microcoded opcodes.
+power-on of a machine whose CPU is 80 microcoded opcodes.
 
 ## What it actually does, verified end to end
 
@@ -153,8 +153,10 @@ anything of that name that shipped. It has its own name because the
 C4DOS `install.c4r` is on the same floppy and cannot run here; it talks
 to a DOS that is gone.
 
-`make test-c4bb-climb` runs the whole thing — three power-ons, three
-systems, each booted off the medium the last one wrote.
+`make test-c4bb-climb` runs the whole thing: three systems, each booted
+off a medium the one below wrote. It shares C4IX's thirteen compiles
+over four machines booted from C4DOS's medium and links on a fifth
+(docs/c4bb-storage.md, "Four machines build C4IX").
 
 `save B:` is the blunt tool at this rung, as `bbsave` is one below:
 the whole ramfs onto a drive, no manifest and no boot record (`save`

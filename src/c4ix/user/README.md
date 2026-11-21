@@ -19,7 +19,7 @@ names (`/bin`, `/usr/bin`, `/usr/games/bin`), and then as
 | file | what |
 |---|---|
 | `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs (a background job's input has ended, so a `--window` program run that way gets its own window), wildcards (`*`, `?`) in a word's last component, builtins `exit jobs wait kill cd pwd rm [-r] [-f] mv help` (`wait PID` waits for any task), and `PATH=DIR:DIR...`, where a bare name is looked for. No fork: it points its own fd 0/1 at a stage, spawns, and restores them. `-p` puts the prompt on the input line (the Terminal passes it); `-e CMD` runs a line first, as if typed |
-| `ls.c`, `cat.c`, `echo.c`, `wc.c`, `mkdir.c` | the usual; `cat` and `wc` read fd 0 when given no file |
+| `ls.c`, `cat.c`, `echo.c`, `wc.c`, `mkdir.c` | the usual; `cat` reads fd 0 when given no file, and `wc` reads only fd 0 |
 | `ps.c` | task table, one fixed-shape record per syscall |
 | `top.c` | Linux top's screen and keys over the task table: P M T N sort, V a tree, 1 each CPU, k kill, r renice, d delay, h help, q quit; `-b` prints plain screens, `-d SECS`, `-n N` |
 | `spin.c` | burns cycles with progress output, for Ctrl-C and preemption; takes a tick count (default 20) |

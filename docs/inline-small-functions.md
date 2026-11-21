@@ -53,9 +53,9 @@ obvious one.
 
 `src/c4sc/c4tree_gen.c` is **generated** by c4sc from
 `src/c4sp/lisp/c4lc-tree.lisp` ("do not edit" is the first line), so the
-C-hosted compiler gets T3's code by regeneration, though c4sc's
-`compile` mode has no `-minline` to turn it on yet. Only two hand-written
-copies exist: the Lisp and the Forth.
+C-hosted compiler gets T3's code by regeneration, and its `compile`
+mode takes `-minline` and `-minline-why` since 2026-11-17. Only two
+hand-written copies exist: the Lisp and the Forth.
 
 *(Naming note: `c4sc` is not a port of `c4fc`. c4fc is the C99 compiler
 written in Forth; c4sc is a Lisp→C compiler that turns c4lc's Lisp into
@@ -179,9 +179,9 @@ Inlining keeps its value for every OTHER small function in the tree.
 
 ## The kernels
 
-`-minline` on the two kernels c4lc builds. (C4DOS is out of reach as
-things stand: `Makefile:271` builds it with **c4cc**, not c4lc, so it
-has no `-minline` to give.)
+`-minline` on the two kernels c4lc built then. (C4DOS was out of reach
+at the time: `Makefile:271` built it with **c4cc**, not c4lc, so it had
+no `-minline` to give. It moved to c4lc with T4, below.)
 
 | | inlined | effect |
 |---|---:|---|
@@ -265,7 +265,8 @@ block — **the same shape `break` already has**, lowered through the same
 `JMP`-to-a-label. Two node kinds, `ijmp` and `ilabel`, that only T4
 creates and only `c4lc-gen` reads.
 
-**The C dialect gets no `goto`.** The thing that was missing was never a
+**The C dialect got no `goto` for this.** (M7b added `goto` later, for
+Busybox; T3 and T4 never splice a body that has a label.) The thing that was missing was never a
 source construct — it was a way for the AST to say "jump forward", and
 an optimizer-only node says it without changing a line anyone writes.
 The tree pass cannot name a generator label, so it names its own

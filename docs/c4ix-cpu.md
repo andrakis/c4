@@ -502,3 +502,19 @@ yields alone, under a mask. The mask is each task's own (sched.c), and
 only init held it, so a preemption tick between a print and a yield
 reordered the 64-bit golden whenever cycle counts moved. ping and pong
 now hold their own.
+
+### Since (to 2026-11-21)
+
+- The scheduler looks at queues, not the task table (the run queue,
+  docs/c4ix-design.md, 2026-11-05).
+- The poll of a sleeping desktop walks its pipes only after a write
+  (`sched_evpoll`, `sched_pipesready`; `sched_events` is gone;
+  2026-11-13).
+- A game's frame is drawn at once, not held to the 25 ms limit
+  (2026-11-13).
+- An idle desktop ran flat out once its stdin was an ended pipe
+  (2026-11-17 to 18). Fixed: 4,000 M instructions in 10 s idle, then
+  7.6 M (docs/c4ix-desktop.md).
+- The boot's libarc loops, 85% of a boot to the desktop, run as the
+  host's JavaScript (`src/c4ix/accel.mjs`, docs/accel.md 7,
+  2026-11-16).

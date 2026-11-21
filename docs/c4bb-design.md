@@ -16,6 +16,17 @@ firmware stages, clocks and the climb are in
 the board was built (2026-08-08) and has been brought current since;
 where a section records how things were, it says so.
 
+Since, 2026-11-21: the ROM names 95 opcodes. FPU (89) is named and not
+microcoded (2026-10-21), though INFO announces it: a known issue ("The
+microcode"). LH LHU SH LSR LCU (90-94, [c4-16bit.md](c4-16bit.md)) are
+microcoded, which makes 80 routines (2026-11-13). The device window has
+DISK_UNLINK, the console tap, DISK_DIRS, the boot stack's guard, the
+image bounds and the swap registers (below). `images/games` is the
+bare-machine games' disk (2026-10-24). test-c4bb-climb builds C4IX on
+four machines and links it on a fifth (2026-11-12, c4bb-storage.md).
+The firmware is compiled by c4sc-host32, the compiled c4lc
+(2026-11-17).
+
 The board itself has no display: it has a terminal. The pixel framebuffer,
 the display interrupts and the guest `gui.h` live in libjs, which reuses
 this board's memory map, devices and loader with a direct interpreter in
@@ -76,7 +87,7 @@ unchanged by `make test-c4ix`).
     0x0014         loader sentinel (constructor/main return address)
     0x0020-0x003F  firmware vector latches: MALC FREE RALC PRTF STRC
     0x0100-0x01FF  device registers (below)
-    0x0200-0x03BC  opcode-name ROM (89 x 5 bytes, c4m's layout; OPSL/_OPC)
+    0x0200-0x03DA  opcode-name ROM (95 x 5 bytes, c4m's layout; OPSL/_OPC)
     0x1000         MEM_BASE: firmware image, program image(s), heap
     top - 4K       argv area; stack grows down from just below it
 
@@ -99,7 +110,10 @@ unchanged by `make test-c4ix`).
     0x134 OPNAME       write name ptr, read opcode number (_OPC)
     0x140 POWER        write -> halt with status (EXIT lands here)
     0x144/8 HEAP_BASE/END   set by the loader, read by the firmware
-    0x14C INFO         capability bits, mirrors native c4_info()|TRAPH
+    0x14C INFO         capability bits, mirrors native c4_info()|TRAPH.
+                It also sets C4I_FPU (0x10000), and microcode.uc has no
+                FPU routine, so opcode 89 traps TRAP_ILLOP here: a known
+                issue (see "The microcode")
     0x150-0x174 CPU control latches: TRAPH INTERVAL TRESTORE MODE,
                 and the trap-jam latches TT TP HND JMODE JINTERVAL
     0x1B4/8 MBOX_BASE/LEN  read: the mailbox region (0 = not fitted; INFO bit
@@ -116,11 +130,15 @@ unchanged by `make test-c4ix`).
                 refused); read: bytes the last release freed. C4DOS's
                 DEVICE=HEAP.SYS uses both (docs/c4dos-design.md)
 
-This list is the original set plus the UART block write and the mailbox.
-The registers added for storage and clocks since -- the drive selector,
-the disk write head (`DISK_W*`), `RESET`, `RTC_MS` and `PIT_MS` -- are
-described in [c4bb-storage.md](c4bb-storage.md); `sim/devices.js` is the
-complete list.
+This list is the original set plus the UART block write, the mailbox
+and libjs's heap registers. The drive selector, the disk write head
+(`DISK_W*`), `RESET`, `RTC_MS` and `PIT_MS` are in
+[c4bb-storage.md](c4bb-storage.md). `DISK_UNLINK` (0x1cc), the console
+tap (0x1d0-0x1dc) and `DISK_DIRS` (0x1e0) are in
+[c4dos-design.md](c4dos-design.md). The boot stack's guard (0x1e4-0x1ec)
+is in [libjs-design.md](libjs-design.md), and the swap registers (0x11c,
+0x158) in [c4ix-mmu.md](c4ix-mmu.md). The image bounds are 0x1f0-0x1fc.
+`sim/devices.js` is the complete list.
 
 ### The name ROM is the encoding
 
@@ -132,7 +150,7 @@ are sets rather than numeric ranges because nothing requires a ROM to list
 the names in the stock order.
 
 So a machine is defined by its ROM. Two machines given ROMs that list the
-same 89 names in a different order read different encodings, and an image
+same 95 names in a different order read different encodings, and an image
 built for one is garbage to the other: an opcode is one word and so is its
 operand, while patches and jump tables hold ADDRESSES, so a different
 numbering is a pure relabelling of the code words and nothing moves. The
@@ -253,7 +271,18 @@ A few opcodes (`ITH C4CF SIGH SIGI _TRP DBG C4IV FLT`) run on a
 "system controller" (jsop) — a single black-box microstep with
 semantics lifted verbatim from c4m.c; candidates for real microcode
 later. Unknown opcodes >= 128 raise TRAP_ILLOP, which is the kernels'
-syscall mechanism; a missed trap is silent, the oisc4 convention.
+syscall mechanism, and so does any other opcode without a routine
+(machine.js:432): c4mp's 66-78 and FPU (89). A missed trap is silent,
+the oisc4 convention.
+
+**Known issue: the FPU.** The ROM names FPU (89), and `execJsop()` has
+a case for it (`sim/fpu.js`), but microcode.uc has no `op FPU` routine,
+so the board traps it. INFO announces `C4I_FPU` all the same
+(devices.js:726; only libjs's `--no-fpu` clears it), and a float helper
+that asks (src/c4fp/softfp.c) runs the opcode and gets the trap: with
+no handler, a wrong answer and no word. opscan's top rung permits FPU,
+so `opscan -machine`, which `make test-c4bb-rungs` runs, finds the
+microcode without it.
 
 ### The fused opcodes
 
@@ -267,7 +296,10 @@ concatenations of the same. c4m splits the ten three and seven between
 itself and c4mp; on the board the split is about microsteps, not which
 binary you run, so all ten are here. The ROM also names c4mp's 66-78
 (`CPUI`..`TRAW`) without executing them, as c4m does: those need more than
-one CPU and buy no speed. `test-c4bb` checks the ten with
+one CPU and buy no speed. It names FPU (89) with no routine too ("Known
+issue: the FPU", above). LH LHU SH LSR LCU (90-94) come after it and are
+microcode routines, made from transfers the board already has
+(2026-11-13, [c4-16bit.md](c4-16bit.md)). `test-c4bb` checks the ten with
 `src/c4th/tests/fused.f` (each against the sequence it replaces) and a
 fused image against its unfused twin.
 
@@ -370,9 +402,10 @@ block-scoped `{ int x; ... }` mid-body - which `c4lc` doesn't share
 c4cc-compatible); and both compilers share a lexer quirk where `'\t'`
 and `'\r'` character literals come out as 8 and 10, not 9 and 13 (use
 numeric constants instead of fighting it). Separately, `c4lc`'s own
-preprocessor hangs on `u0.h` specifically (reproduces at 64-bit too,
-so it's not a word-size issue) - preprocess with `gcc -E` first, the
-same workaround the kernel build already used.
+preprocessor used to hang on `u0.h` (at 64 bits too). Its `e()` macro
+names itself, which looped until c4lc's preprocessor learned blue paint
+and bare names (0628331, 2026-10-19). vfsload's build still preprocesses
+with `gcc -E` first, because the rule was not changed.
 
 ## The disks
 
@@ -388,17 +421,19 @@ section is **append-only**: everything above it produces the shared
 disk `test-c4bb.sh` boots, and must not move, so the derivation only
 copies and deletes — it compiles nothing.
 
-- **`images/dos-recovery/`** — the emergency recovery floppy: C4DOS's
-  boot files with a 16 MB RAM disk, `dostar`, `cpp`, `c4cc`, `dosload`,
-  `c4ke-src.tar`, `build.bat`, and `c4sh.c4r`. **No `init.c4r`**, on
-  purpose: `BUILD.BAT` compiles one, and the kernel is supposed to boot
-  *that* one out of memory. Putting a prebuilt init here would hide a
-  broken handover.
+- **`images/dos-recovery/`** — the recovery floppy: C4DOS's boot files,
+  `dostar`, `cpp`, `c4cc`, `dosload`, `c4ke-src.tar`, `build.bat` and
+  `c4sh.c4r`, and, when the climb floppy has been built, its `LADDER`,
+  `IX`, `c4sc`, `c4rlink`, `c4ix-src.tar` and its `config.sys` (a 32 MB
+  RAM disk), so the floppy can build C4IX as well. It was meant to carry
+  no `init.c4r`, so that the kernel boots the one `BUILD.BAT` compiles;
+  the climb floppy's copy now comes with the rest (build-images.sh, the
+  derived disks).
 
       node src/c4bb/sim/cli.js -i -d src/c4bb/images/dos-recovery            src/c4bb/images/c4dos32.c4r
 
 - **`images/c4ke-root/`** — a C4KE root filesystem with its own
-  toolchain: c4sp, c4rlink, c4cc, the 27 `.lisp` files c4lc is written
+  toolchain: c4sp, c4rlink, c4cc, the 28 `.lisp` files c4lc is written
   in, `u0.h`, C4IX's sources under `src/c4ix/`, and the kit that builds
 them: b4ke, c4sc (the compiled c4lc), `c4ix.b4k`, `tar`, `save` and
 `c4ix-src.tar`. Derived by
@@ -439,10 +474,14 @@ unchanged) - a real filesystem, not the flattened-path workaround C4KE
 needed. Manifest at `src/c4bb/fs/c4ix.vfs.txt`; run automatically by
 `init.c` before the shell starts, same as C4KE.
 
-**Known issue, not yet root-caused**: roughly one run in a few, a
-single manifest entry's value comes back empty or corrupted by the
-time `load_entries()` reads it, even though tracing confirms it was
-stored correctly moments earlier. It heals when unrelated debug prints
+**Known issue, 2026-08, not seen since**: roughly one run in a few, a
+single manifest entry's value came back empty or corrupted by the
+time `load_entries()` read it, even though tracing confirmed it was
+stored correctly moments earlier. Every boot the tests make has loaded
+every entry since (test-c4bb, test-desktop), and what looked like it
+coming back on 2026-10-27 was C4KE's (3d9fb7a: its trap handlers
+unmasked the timer before they returned). What was found and tried at
+the time follows. It heals when unrelated debug prints
 are added (which only shift cycle timing) - the signature of a
 preemption race, not a logic bug in vfsload.c itself. Confirmed NOT
 caused by `ualloc` (=`sbrk`=kernel `malloc`, stress-tested directly:

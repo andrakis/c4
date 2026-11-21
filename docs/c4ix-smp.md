@@ -4,6 +4,13 @@ Plan, 2026-10-22. Asked for: "investigate what would be needed to make
 `libjs` and `c4ix` support multiprocessing ... I'd be interested in getting
 it implemented."
 
+STATUS (2026-11-21): S1-S4 done (2026-10-22 and 23), and the shared
+heap and the memory path without the kernel lock after them. Since
+then: pinning (`SYS_AFFINITY`, `pin`), what draws on CPU 0 by default
+(2026-11-05), and smp1 on threads (2026-11-16), below. The run queue
+and the fixes for a sleeper pinned off CPU 0 are in
+docs/c4ix-design.md (2026-11-05 and 2026-11-14).
+
 ## 1. What there is
 
 - **c4mp** (`src/c4mp`, README there) defined the instruction set, and c4lc
@@ -55,8 +62,9 @@ JavaScript has exactly the parts a real multiprocessor needs:
   rechecks the value itself.
 
 The catch is that shared memory needs a **cross-origin isolated** page:
-COOP/COEP headers, which `serve.mjs --isolate` sends. The server on 8472
-runs without it today. A page that is not isolated gets one CPU, as now.
+COOP/COEP headers, which `serve.mjs --isolate` sends, as `make
+serve-libjs` (port 8472) runs it. A page that is not isolated gets one
+CPU.
 
 ## 3. The design
 

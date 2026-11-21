@@ -22,7 +22,7 @@ ported** too (games/tyrian/README.md), the same three ways, with steps
 passed on, so it is on the disks only where its zip was there to copy.
 **Rise of the Triad is ported** (games/rott/README.md), icculus.org's port,
 the same three ways, with steps 11 and 12 done (M13, c4lc-design.md
-14.12). Its sound is still to come.
+14.12). Its sound followed the same day (c0b5590).
 - **c4lc** compiled 50 of linuxdoom's 59 units as they stood. The first
   five steps of §8, small and medium fixes, make it compile all of Doom.
   Twelve steps, none of them large, cover Doom, OpenTyrian and Rise of
@@ -37,6 +37,11 @@ the same three ways, with steps 11 and 12 done (M13, c4lc-design.md
 - **Raptor** is C++ only in name and converts to C in a day or two. Its
   code is reverse-engineered, though, and its data is not ours to ship.
   So OpenTyrian is the recommended second target (§6).
+
+Since (2026-11-21): Quake, Duke Nukem 3D, Super Blit Kart, Frotz, Open
+Adventure, Simon Tatham's Puzzles, The Ace of Penguins and the BSD games
+are ported too (games/README.md). Raptor was not. This file stays the
+record of the 2026-10-23 scan.
 
 ## 1. The sources
 

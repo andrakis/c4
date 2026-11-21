@@ -13,9 +13,10 @@ the reasons and the measurements.
 `grin` is to C4DOS what Windows 3.1 was to MS-DOS: a program started from
 `AUTOEXEC.BAT` that takes over the screen and gives you overlapping
 windows, Program Manager, File Manager, a Task List, Control Panel and a
-few accessories. It runs C4DOS's own programs -- full screen, in a window
-of their own (the four games), or in a DOS Prompt window -- and hands the
-`A>` prompt back when you exit it.
+few accessories. It runs C4DOS's own programs -- full screen (the action
+games), in a window of their own (the card, puzzle and curses games), or
+in a DOS Prompt window (the text games) -- and hands the `A>` prompt back
+when you exit it.
 
 ## 1. Where it runs
 
@@ -79,7 +80,8 @@ a version, grin's generation, the kit's `wk_env` (screen, look, colours),
 `hello`, the game window's four calls, then the kit's functions in
 `kitfns.h`'s order, one line each. Version 3 (G7) added the clipboard's
 keys (`ui_key_copy`, `ui_key_cut`, `ui_key_paste`) at the end, version 4
-the fonts. Version 6 (2026-11-20) put a fourth game call, `fwin_ctl`,
+the fonts, version 5 (2026-11-19) the find bar, splitters and pop-up
+menus. Version 6 (2026-11-20) put a fourth game call, `fwin_ctl`,
 after the other three, moving the kit's functions one word as version 2
 did (every application is built with grin). An application refuses a
 grin whose table is older than it was built for; the games need version
@@ -471,7 +473,7 @@ G8 and G9 below.
   group's box.
 - Asking "full screen or window" the first time a DOS program runs that no
   Program Manager item names (grin-plan.md 3.6's plan; full screen now).
-- An Edit menu in Calculator; Notepad's Undo, Find, word wrap.
+- An Edit menu in Calculator; Notepad's Undo.
 - Marking a region of a DOS Prompt to copy (3.1's Edit > Mark), rather
   than the whole screen.
 - A bitmap font of grin's own, printing, OLE and DDE (out of scope).
@@ -537,8 +539,8 @@ What stands in the way, and how G9 would meet it:
   has the focus gets the OPL and the speaker; samples could be shared by
   giving each game eight channels (`snd.h`'s channel numbers mapped), or
   the background game muted, as an enhanced-mode PIF's "Exclusive" did.
-- **Memory**: Doom and ROTT take about 15 and 17 MB, so two fit in the
-  page's 64 MB; the heap generations already keep each game's apart and
+- **Memory**: Doom and ROTT take about 15 and 17 MB, so two fit easily
+  in the page's 256 MB; the heap generations already keep each game's apart and
   free it when it ends.
 - **The rule "one DOS program at a time"** becomes "one at a time full
   screen, and any that play in a window"; Program Manager's item gains

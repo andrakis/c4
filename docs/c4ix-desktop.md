@@ -6,10 +6,12 @@ the evidence next to it.
 ## What it is
 
 `desktop` is a C4IX user program that takes over the libjs display
-(docs/libjs-design.md) and draws a Windows 95-style desktop on it: a teal
-background, bevelled grey windows with navy title bars that can be
-dragged, focused, minimised, maximised and closed, and a taskbar with a
-Go menu, a button per window and a clock.
+(docs/libjs-design.md) and draws a desktop in the manner of Windows 95 on
+it. By default it has the boot logo as its picture, the Modern colours
+and the Flat look (parts nine and eleven; Classic and Windows 3.1 are in
+Settings). Its windows can be dragged, sized, focused, minimised,
+maximised and closed, and the taskbar has a Go menu, a button per
+window, and a tray with the CPU meter, the volume and a clock.
 
 The first application is a terminal. Each terminal window runs a real
 `c4ix-sh` as its own task, its stdin and stdout pipes that the desktop
@@ -24,9 +26,13 @@ tty in cooked mode does: typed characters are echoed, Backspace erases,
 and a line goes down the pipe when Enter is pressed. Ctrl-C interrupts
 that window's foreground job.
 
-One process owns the display. Separate programs opening their own windows
-(a window-server protocol over pipes) is a later step; the window code is
-shaped so it can be added.
+One process owns the display and draws every window on it. A program
+gets a window by talking to the desktop over its pipes
+(`include/window.h`, part three): its Terminal's, or one of its own (a
+game whose `/etc/desktop.apps` line says `window`, part twenty-four; a
+`--window` program run with `&`, part twenty-seven). A game may take
+the whole display instead, which the desktop gives up to it
+(`SYS_DISPLAY`, part thirteen).
 
 ## Design
 
@@ -63,8 +69,10 @@ which is what a character grid needs; 0 is the font's own spacing.
 - Windows are a z-ordered list (a linked list, as many as memory allows;
   part seven). Title bar drag moves, a click raises and
   focuses, the three caption buttons minimise, maximise/restore and close.
-- The taskbar has a Start button (menu: New Terminal, About, Power Off),
-  a button per window, and a clock.
+- The taskbar has the Go button (its menu: Terminal, Files, Text Editor,
+  IDE, Calculator, System Monitor, Settings, About C4IX, Games, Run...,
+  Power Off...), a button per window, and the tray: the CPU meter, the
+  volume and the clock.
 - A terminal window is 80x25 cells of 8x16 pixels (80x24 until the
   fixes of 2026-09-24), with 300 rows of scrollback. Closing it ends its
   shell (SIGTERM) and the desktop reaps it.
@@ -1422,8 +1430,9 @@ pixels a row, on a screen at most 768 high. So:
       command names, or else by name in `/usr/games/bin`. So is another
       category's, a comment, and anything without three fields; fields
       after the third are for W2 of docs/c4-explorer.md, which this is
-      the first part of, and are ignored. The list holds 128 rows and
-      8 KB of text; beyond that the rest are not listed. A game that
+      the first part of, and are ignored. (Since part twenty-four the
+      fourth field is FLAGS, and the desktop reads `window` there.) The
+      list holds 128 rows and 8 KB of text; beyond that the rest are not listed. A game that
       doesn't use a Terminal starts the same way: `run_command` opens one
       for its program, and a window from `window.h` or the whole display
       is drawn over that.
@@ -1950,3 +1959,22 @@ the desktop's windows now do the same.
       not end the browser's lock; a real one does.)
 
 Duke Nukem 3D's and Quake's windows could use the same op.
+
+## Also landed (to 2026-11-21)
+
+- **The idle desktop sleeps again** (56a46bd, 2026-11-18). Run as
+  `desktop &`, it has an ended pipe for its stdin since part
+  twenty-seven, and `SYS_EVWAIT` found that pipe always ready, so an
+  idle desktop ran the machine flat out. Now the desktop makes its
+  stdin its stdout when its stdin has ended. Idle for 10 s at 400 MHz:
+  4,000 M instructions before, 7.6 M after (try-osprof.mjs).
+- **A game's frame at once** (0f0c3cb, ec0583c, 2026-11-13). A
+  framebuffer present is drawn on the same pass, not held to the 25 ms
+  limit, and redraws only the game's canvas.
+- **Text by `memcpy`** (d475032, 2026-11-17): `gui_text`, `gui_text2`
+  and `gui_imgdef` copy their bytes in one instruction.
+- **Settings > Accelerators** (e4e680c, 2026-11-16): C4IX's own
+  accelerators on or off (docs/accel.md 7).
+- **Uploads in folders, and downloads** (463c096, 2026-11-11): an
+  upload goes in `/home` or a game's `/home/NAME`; Files' File >
+  Download, or `download FILE`, saves a file or a folder as a tar.

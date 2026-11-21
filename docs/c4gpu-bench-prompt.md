@@ -55,9 +55,11 @@ Operand convention: the opcode word is fetched first and `pc` then points at
 the operand word, so "`pc+4`" above means "skip the operand and continue."
 `JSR` therefore pushes `pc+4`, and `BZ` falls through to `pc+4`.
 
-## Baseline to beat (already measured, do not re-measure)
+## Baseline to beat (measured on the CPU, do not re-measure here)
 
-The same VM, natively on a Ryzen 5 3600, `gcc -O2`:
+The same VM, natively on a Ryzen 5 3600, `gcc -O2`, before c4m's
+dispatch was reordered (2026-11-14; re-measure it on the CPU before
+judging against it):
 
 * **370M instructions/sec** on one core.
 * **~2.2G instructions/sec** across all six.

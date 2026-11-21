@@ -66,7 +66,8 @@ way c4sp was (c4sp has been `-O2` too since 2026-08-23).
 
     c4th:        gcc -O2 -fwrapv -fno-omit-frame-pointer -g -idirafter include -I. -o c4th src/c4th/c4th.c
     c4th.c4r:    $(PREPROC) src/c4th/c4th.c | $(C4CC) -o c4th.c4r -
-    c4th32.c4r:  $(PREPROC) -I src/c4th/include src/c4th/c4th.c, then c4lc -O under c4sp32 (for c4bb)
+    c4th32.c4r:  $(PREPROC_LC) -I src/c4th/include src/c4th/c4th.c, then c4lc -O at 32 bits
+                 ($(call lc32): c4sc-host32, or c4sp32 with C4LC32=interp), for c4bb
 
 **Hosts.** One `c4th.c4r` runs under c4m, c4mp, inside C4KE, inside
 **C4IX** (since 2026-09-24, `e427c9c`: it sits in `/bin` beside c4cc,
@@ -162,7 +163,9 @@ docs/internals.md §3.6.)
     core.f    ~600
     coreext.f ~150
 
-Watch c4cc's 512 KB text/data/sym pools (`c4cc.c:1893`) as `prim.h` grows.
+Watch c4cc's pools as `prim.h` grows: 512 KB of data and symbols, and a
+text area of 128 K words (1 MB at 64 bits), which c4cc reports when it
+fills (`c4cc.c:1929-1936`).
 Budget `num.h` generously — `UM/MOD`, `FM/MOD`, `SM/REM` and the
 pictured-numeric words are where small Forths die, and none of it is optional
 in CORE.
@@ -227,7 +230,10 @@ hole in c4m's own table; and each needs mirroring in seven places (`c4m.c` enum
 and name string, `load-c4r.c`, `c4l.c` and its `scan_extended` refusal,
 `src/c4mp/{c4mp.h,vm.c}`, `src/oisc4/oisc4.c`, `c4cc.c`'s table, `c4r:ops` in
 `c4r.lisp`, and the c4bb loader copy) — in exchange for maybe 1.3-1.6x over a
-stack model that already makes `SWAP`/`OVER`/`ROT` free.
+stack model that already makes `SWAP`/`OVER`/`ROT` free. (That was the plan.
+The measurements below led to the ten fused opcodes at 79-88,
+docs/fused-opcodes.md; 89 and 90-94 followed for floating point and
+16-bit access.)
 
 **The c4opt differential.** `src/c4sp/lisp/c4opt.lisp` implements six passes
 (`fold shl adj0 jmpnext thread dead`) over exactly the representation
@@ -835,7 +841,7 @@ commit** if the answer is no.
       nothing: the file exists, looks plausible, and traps on its first
       instruction. It now refuses.
 
-      **The `.c4r` code stream is 1-based.** Word 0 is never an
+      **c4cc's `.c4r` code stream is 1-based.** Word 0 is never an
       instruction, because c4cc emits through `*++e` —
       `src/oisc4/oisc4.c:1108` says so outright and `c4rdump` assumes it
       too. Starting at 0 produced an image **c4m ran perfectly**, since
@@ -844,7 +850,9 @@ commit** if the answer is no.
       `unknown opcode 72` — the `'H'` of a hello program, read as an
       instruction. That is precisely what a third independent writer is
       for: the convention was undocumented anywhere except in the two
-      readers that depend on it.
+      readers that depend on it. (c4lc and c4fc start at word 0,
+      docs/c4fc-design.md; a reader that walks the stream takes a zero
+      first word as the sign of that, since `LEA` is opcode 0.)
       - [x] **B5d.5** The fixed point — see `docs/c4th-selfhost.md` for
             the ladder and the results. **The reason it is not native.f
             compiling itself is worth more than the rung.**
@@ -979,7 +987,8 @@ commit** if the answer is no.
 2. **The threaded core will look slow on its own** (~20 VM instructions per
    `NEXT`). It is a bootstrap and an oracle, not a product; overselling it at B3
    makes the project look failed when it has not started.
-3. **c4cc's 512 KB pools** — watch as `prim.h` grows.
+3. **c4cc's pools** (512 KB of data and symbols, 128 K words of text) —
+   watch as `prim.h` grows.
 4. **`core.fr` is unforgiving about double-cell arithmetic** — budget `num.h`.
 
 ### References

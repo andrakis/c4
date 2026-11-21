@@ -13,6 +13,14 @@ createMachine's default, the browser checks' ?mmu=1) and while
 developing; off by default in cli.js and the page since 2026-10-30, for
 its cost (section 12). What is left is section 13.
 
+STATUS (2026-11-21): all of it is merged into c4ix_and_toppings. Since
+stage 11, section 11 has dated entries for which block a frame comes
+from (2026-11-02), a table for a page coming back (11-03), load
+control, compaction and the kernel at the heap's bottom (11-04), images,
+stacks, arguments and small blocks that move, and the kernel's own
+memory tidied (11-05), and a device's copy that reaches a page that is
+out (`dmaSwapped`, 11-13). The MMU is still off by default for use.
+
 C4IX runs every task in one flat arena. Its protected mode (c4m's `mode`
 register, `sys_pmviolation` in `src/c4ix/sys.c`) stops a user task from
 running the host's IO opcodes, but not from storing anywhere: a wild
@@ -148,7 +156,7 @@ The arrays cover the first 512 MB of virtual space (131,072 pages, 1.5 MB
 a CPU): memory, and the user window above it (section 11); an address
 above that always walks, and C4IX makes none. A fill writes all three arrays from one PTE, so a page that is
 read and written is walked once. Every fill is logged, so a flush puts
-back -1 only where it wrote, not over all 65,536 entries: a context switch
+back -1 only where it wrote, not over all 131,072 entries: a context switch
 costs the pages the outgoing task touched, typically tens.
 
 The accessed bit is set on a fill, and the dirty bit on a fill for
@@ -1066,8 +1074,8 @@ user address through the kernel's map, a walk each time.
 
 In the browser, the same check as before with this build: 10.1 s to the
 desktop without the MMU, 11.3 s with it (Chrome 158 on the Windows
-machine, the better of two each). C4IX's page now fits the MMU unless
-`?mmu=0`.
+machine, the better of two each). C4IX's page then fitted the MMU unless
+`?mmu=0` (until 2026-10-30, below).
 
 **Where the time goes** (after stage 7, Doom's demo3 under the MMU,
 12.7 billion instructions): 8 loads of a space, 8,611 TLB fills, 2.9
@@ -1178,6 +1186,11 @@ memory. Getting there took four fixes (2026-10-31, c4ix-lend-run):
   task being killed where the kernel finds no run to make (in 6 MB the
   loading screen was).
 
+(2026-11-13: with the MMU, 8 MB on a first boot and from the kept copy.
+In 7 the boot pages so hard that the desktop is not up within the test's
+8,000 M cycles. docs/c4ix-design.md, "The root archive, read where it is
+kept".)
+
 Memory on demand is not handed out where the heap has under 1 MB that is
 not the kernel's (`mmu_pageroom`, `MMU_MINROOM`): the block is a heap block
 then, which fails as it did before swap. None of the boots above came near
@@ -1259,15 +1272,18 @@ compare costs depends on the machine and the V8 that runs it.
   clock is putting a page of that same block out is not excluded: the
   first page out makes memory short, which ends the light path, but one
   already in it is not waited for.
-- **Images, stacks and arguments stay in.** The kernel keeps physical
-  handles on them (what the loader wrote through, `mod_is_data`, the
-  stack's measure in C4KE's task table), which a page moved under would
-  make wrong without a word. A program's code and data are a fixed cost
-  of each copy that runs (Doom's about 1.5 MB).
-- **The RAM files are the kernel's, and stay in.** A file the vfs holds
-  -- the root archive's, Doom's WAD once it is read -- is kernel memory,
-  one run of it. `mmu_kalloc` can make that run by putting user pages
-  out; making the files themselves leave memory is the vfs's own work.
+- **Images, stacks and arguments never go out.** Since 2026-11-05 they
+  may move, since the kernel knows them by their user addresses. But
+  the kernel uses them between one trap and the next, and could not
+  bring them back with no room (section 11, "Images, stacks, arguments
+  and small blocks move too"). A program's code and data are a fixed
+  cost of each copy that runs (Doom's about 1.5 MB).
+- **A file changed since the last save stays in.** The root archive's
+  files and saved ones are spans of a tar on drive 1, read when asked
+  for. One of 64 KB or less is kept while memory is not short, and
+  `vfs_trim` drops it when memory is short (docs/c4ix-design.md, "The
+  root archive, read where it is kept"). A file written since the last
+  save is kernel memory, one run of it, until `persist save` keeps it.
 - **C4KE programs** may write their own code, a page at a time.
 - **c4bb's device registers** are for a task that asks (`SYS_IOPERM`),
   and only `persist` asks: nothing else in the tree uses them from user

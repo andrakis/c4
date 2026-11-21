@@ -359,7 +359,7 @@ C4IX:
         task.c4o sched.c4o vfs.c4o sys.c4o c4ke.c4o loader.c4o
         init.c4o -o c4ix.c4r
 
-That is sixteen tokens. **The machine cannot say the sentence that
+That is sixteen tokens (seventeen since mmu.c joined the kernel). **The machine cannot say the sentence that
 links its own operating system.** A build tool that reads a file instead
 of a command line is therefore not a quality-of-life feature; it is the
 only way the sentence gets said. That is B4KE's reason to exist, it is
@@ -476,7 +476,7 @@ Then, at the `A>` prompt:
 |---|---|---|
 | `LADDER` | the seed c4cc rebuilds itself and cpp, reaches a fixed point, and the tools it just built compile C4KE from source | ~40 s |
 | `RUN dosload.c4r c4ke.c4r` | boots the kernel the machine compiled | ~1 s |
-| `IX` | the **compiled** c4lc compiles the twelve C4IX modules and c4rlink joins them | ~3m45s |
+| `IX` | the **compiled** c4lc compiles the C4IX modules (thirteen since mmu.c, 2026-10-29) and c4rlink joins them | ~3m45s (twelve modules, before mmu.c) |
 | `RUN dosload.c4r c4ix.c4r` | boots C4IX, protected mode and preemption on, to `c4ix:/$` | ~1 s |
 
 `LADDER` and `IX` are alternatives, not a sequence — booting C4KE ends
@@ -493,7 +493,7 @@ CLI does. The page's arena went from 32 MB to **128** for it.
 
 C4DOS is the wrong host for this and the walkthrough above is the
 consolation prize. The right shape is the one B4KE was written for:
-C4DOS builds C4KE, C4KE builds C4IX, and B4KE drives the twelve compiles
+C4DOS builds C4KE, C4KE builds C4IX, and B4KE drives the module compiles
 and the link as **tasks** rather than transients.
 `src/c4ke/bin/c4ix.b4k` is that build file, and on the C4KE root disk:
 
@@ -529,20 +529,22 @@ that makes it impossible to happen quietly again, and the work that
 followed from it: C4KE now reclaims a task's own allocations, and c4sp
 and c4sc hand their arenas back.
 
-**B4KE under C4KE now builds all twelve modules and links C4IX**, and
+**B4KE under C4KE now builds every module and links C4IX**, and
 does it in **16 MB** rather than the 128 MB the same build needed before
 (and against 128 MB for the C4DOS route). It is the fastest way to C4IX
 on this machine and the correct one.
 
-**Why 128 MB, and it is not the RAM disk.** C4DOS does not return a
-transient's memory when it exits — `RUN` mallocs the image's code and
+**Why 128 MB, and it is not the RAM disk.** Without HEAP.SYS, C4DOS does
+not return a transient's memory when it exits — `RUN` mallocs the image's code and
 data and never frees them, and whatever the transient itself allocated
 is gone too. One compiler run is comfortable in 48 MB; twelve in one
 session accumulate. The arena c4sc asks for is most of it, which is why
 `IX.BAT` passes `-c 200000` rather than something generous: at 200,000
 cells the whole climb fits in 128 MB, and the largest module still
-compiles. **A C4DOS that reclaimed a transient's heap would remove the
-whole constraint**, and is not written.
+compiles. **Since 2026-10-24 C4DOS can reclaim it**: with
+`DEVICE=HEAP.SYS` each transient's heap is a generation that goes when
+it exits (`make test-c4dos-heap`). The climb disks' CONFIG.SYS does not
+load it yet, so the 128 MB and the `-c 200000` stand there.
 
 **What had to be added for any of this to work.** `c4sp`'s `file:read`,
 `file:write`, `file:exists` and `file:path` now know the C4DOS API —

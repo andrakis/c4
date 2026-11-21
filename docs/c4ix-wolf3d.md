@@ -2,9 +2,11 @@
 
 id Software's Wolfenstein 3D runs on C4IX's whole display. The desktop
 gives way to it until it ends, as Windows did for a DOS game. It is
-Wolf4SDL's C, compiled by c4lc against C4IX's libc. Go > Wolfenstein 3D
-starts it, as does `wolf3d` at a shell prompt; `wolf3d --window` plays
-in the Terminal window instead. All of it works: the
+Wolf4SDL's C, compiled by c4lc against C4IX's libc. Go > Games >
+Wolfenstein 3D starts it, as does `wolf3d` at a shell prompt; `wolf3d
+--window` plays in the Terminal window instead. Go > Games > Wolfenstein
+3D (your files) starts the registered game, `wolf3d6`, on the person's
+own uploads (`/home/wolf3d`). All of it works: the
 display, the keyboard, the music and sounds, and the game. The source,
 and what was changed in it, is [games/wolf3d](../games/wolf3d/README.md).
 
@@ -52,25 +54,26 @@ visit unpacks the zip.
 
 ## Without the desktop
 
-The web page's system list has three more ways to play it:
+The web page's system list has four more ways to play it:
 
 | `?system=` | what boots | the game |
 |---|---|---|
 | `wolf3d-c4ix` | C4IX's console, which runs `wolf3d` (init's `-e`) | on the whole display, as `raycast -G` draws; the first run unpacks the zip, as above, and it is kept |
-| `c4dos` | C4DOS, on the page's own disk (`libjs/images/dos`), which starts grin (docs/grin-plan.md) | File > Exit grin in Program Manager, then type `WOLF3D` at the `A>` prompt; Quit comes back to it |
+| `c4dos` | C4DOS, on the page's own disk (`libjs/images/dos`), which starts grin (docs/grin-plan.md) | grin's Action Games group, Wolfenstein 3D (`\GAMES\WOLF3D\WOLF3D`), or `WOLF3D` at the `A>` prompt after File > Exit grin, where Quit comes back to the prompt; Full Games (Uploads) has the registered game |
 | `wolf3d` | the game itself, with no operating system | at once; Quit halts the machine |
+| `wolf3d6` | the registered game, with no operating system | the person's own `*.WL6` files, from the page's Uploads; Quit halts the machine |
 
 The C4DOS and bare builds are the same game objects linked whole with
 libc and with libc's `bare.c`, which puts the C library's file calls on
 the machine's own opcodes. Under C4DOS it asks DOS for the files DOS has
 (the API table, docs/c4dos-design.md), and its `exit` is DOS's
 `dos_exit`, which returns to the prompt from however deep the game is.
-Neither can write a drive, so the game's data comes unpacked on their
-disk, beside Apogee's zip. Under C4DOS the config and saved games go to
-DOS's RAM disk; on the bare machine nowhere. Neither keeps them between
-visits.
+The game's data comes unpacked on their disk, beside Apogee's zip. On
+the bare machine the config and saved games go to drive 1, which the
+page keeps between visits (libc's `bare.c`, 2026-10-25). Under C4DOS
+they go where DOS writes.
 
-These three entries run at 400 MHz, paced. The game times itself against
+These four entries run at 400 MHz, paced. The game times itself against
 the machine's clock, so a faster clock than the page's 100 only gives it
 room; `?mhz=` changes it.
 
@@ -215,11 +218,12 @@ Wolf4SDL had a bug of its own, fixed:
 
 ## Building it
 
-`make wolf3d-objs` compiles each of the 28 units with c4lc into
-`.wolf3d/`, and only those that changed. That takes about two minutes
-with `-j2`, and `c4bb-images` depends on it. `build-images.sh` then
-links the objects against C4IX's libc and puts the game and the zip on
-the disk.
+`make wolf3d-objs` (games/wolf3d/c4.mk) compiles each of the 29 units
+with c4lc into `.wolf3d/`, and only those that changed. That takes
+about two minutes with `-j2`, and `c4bb-images` depends on it.
+`build-images.sh`, through games/wolf3d/c4-images.sh, then links the
+objects against C4IX's libc and puts the game, the registered game
+`wolf3d6` and the zip on the disk.
 
 `make wolf3d-bare-objs` builds what the bare machine and C4DOS link
 instead of C4IX's libc: `plat-bare.c`, and libc's units without `-fpic`,
@@ -231,7 +235,9 @@ and the indexes the page and C4DOS read.
 
 The sources stay out of C4IX's root archive, which every boot unpacks.
 Rebuilding the game inside the machine would take hours, and they would
-make that unpacking longer for nothing.
+make that unpacking longer for nothing. They are on the disk as lazy
+files instead, under `/usr/games/wolf3d`, read only when something opens
+one (docs/c4ix-desktop.md part twenty-one).
 
 ## Testing it
 
@@ -243,7 +249,8 @@ plays demo 0 twice:
 - built by gcc on the host (`make wolf3d-host`);
 - built by c4lc, inside C4IX on libjs, after unpacking the zip.
 
-Then it plays it on the bare machine and under C4DOS, from the
+First it runs `acceltest`: each accelerator must draw what its loop in
+C draws. Then it plays it on the bare machine and under C4DOS, from the
 `images/games` disk, the two at once; C4DOS must then be back at its
 prompt. All four must print the same 1,214 frames and checksum. The
 host prints:
@@ -264,7 +271,7 @@ machine's time, not the demo's virtual time, so the two drift apart.
 The timedemo's machine time inside C4IX, at the page's 100 MHz. The
 level load and the checksum of every frame are included.
 
-| demo | frames | first c4lc build | now | fps now |
+| demo | frames | first c4lc build | C only | fps, C only |
 |---|---|---|---|---|
 | 0 | 1214 | 104.3 s (11.6 fps) | 36.9 s | 32.9 |
 | 1 | 1346 | 115.0 s | 41.1 s | 32.7 |
@@ -274,6 +281,13 @@ level load and the checksum of every frame are included.
 That is about 3M VM instructions a frame. The page runs libjs at about
 110M a second unpaced, so the game is held to its machine's 100 MHz, not
 to the host.
+
+These are the game's C alone. Since 2026-11-18 its accelerators
+(games/wolf3d/c4/accel.mjs, docs/accel.md 4.6) run the scalers,
+`FixedMul`, the status bar's blits and the timedemo's checksum as the
+host's JavaScript. The four demos' median frame is then 0.35 M
+instructions, not about 3 M. Options > Control > Accelerated turns
+them off.
 
 Five changes made it 2.8 times faster. The profile came from
 `libjs/tests/prof-c4ix.mjs`, with `PROG="wolf3d --timedemo 1"` and
@@ -296,7 +310,7 @@ Five changes made it 2.8 times faster. The profile came from
 
 The same checksum on every demo shows that none of this changed a pixel.
 
-Next, from the same profile:
+Left from that profile, before the accelerators:
 - the wall caster's `short` globals (`xtile`, `xtilestep`, …) on every
   step of every ray;
 - `FixedDiv`'s 64-bit divide, once a sprite;

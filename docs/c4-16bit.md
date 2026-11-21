@@ -71,7 +71,7 @@ machine's part is a few lines next to its `LC` and `SC`.
 
 The name tables follow, appended as every opcode since 66 has been:
 `load-c4r.c`, `c4l.c`, `src/c4cc/c4cc.c` (c4cc's token count is one more,
-15148), `src/c4sp/lisp/c4r.lisp`, `src/c4fc/emit.f`, `src/c4bb/sim/devices.js`
+15148; 15198 since its text-area check the same day), `src/c4sp/lisp/c4r.lisp`, `src/c4fc/emit.f`, `src/c4bb/sim/devices.js`
 (the opcode-name ROM, now to 0x3DA), `src/c4ix/user/desktop/explore.c`,
 `libjs/web/opdoc.js`, and `src/c4bb/tools/opscan.mjs`, where the four are
 c4m's own. Plain c4 does not have them: `c4l.c` names them in its refusal,

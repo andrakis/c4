@@ -5,8 +5,9 @@
 > with `LADDER`/`IX`, drives, `install`/`kinstall`, three power-ons (`make test-c4bb-climb`)
 > — is in `docs/climbing-the-ladder.md` and `docs/c4dos-design.md`. Line numbers quoted
 > below (`c4ke.c:3653` and so on) are as of 2026-08-23 and have since moved. Networking,
-> the rung after, has not been started (checked 2026-09-30). This file was renamed on
-> 2026-09-30; `git log --follow` reaches its history.
+> the rung after, has not been started (checked 2026-11-21). Busybox, the stretch below
+> it, is being ported from source instead: `docs/busybox-port.md`. This file was renamed
+> on 2026-09-30; `git log --follow` reaches its history.
 
 **Status: M0–M8 complete, 2026-08-23.** Every suite green in one sweep afterwards —
 `test-c4dos` `test-cpp` `test-c4l` `test-link` `test` `test-c4ke-ramfs` `test-c4lc`

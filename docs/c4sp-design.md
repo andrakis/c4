@@ -26,6 +26,17 @@ Since then (status 2026-09-30):
   `-c` sets the first block rather than the ceiling (§4.10).
 * **`c4sp.c4r` is built by c4lc** (`c4lc -O`), not c4cc (§8).
 
+Since then (2026-11-21):
+
+* **The collector's mark state is a bit a cell**, with a worklist of a
+  fixed size (2026-10-30, `9361fdd`, §4.8). It was five bytes a cell,
+  which ran out in C4IX's 64 MB machine. On 2026-10-20 the collector
+  also learned to free the mark state before growing, and to take a
+  smaller block when memory will not give the one wanted.
+* **The host's builds run c4lc compiled**, not on c4sp (2026-11-17,
+  docs/c4sc-design.md). c4sp still runs c4lc for `test-c4lc`, for
+  `make C4LC=interp`, and on the machines that have no c4sc.
+
 ---
 
 ## 1. Why
@@ -283,9 +294,10 @@ Special forms as in alisp: `quote if define set! lambda macro begin`, plus
 reassigns `x`/`env` and loops. Non-tail positions (evaluating arguments) still
 recurse in C4.
 
-**Recursion depth is the real constraint.** A C4KE task stack is 0xFFFF bytes
-= 8191 words; an eval frame is perhaps 12 words, so roughly 600 nested
-evaluations. That is fine for ordinary programs and not fine for `seval.lisp`
+**Recursion depth is the real constraint.** A C4KE task stack was 0xFFFF bytes
+= 8191 words when this was written (256 KB now, since the overrun in
+docs/task-memory.md); an eval frame is perhaps 12 words, so roughly 600
+nested evaluations. That is fine for ordinary programs and not fine for `seval.lisp`
 evaluating itself. §6.1–6.3 work out what to do about it.
 
 Errors: no exceptions in C4, so a global error flag plus an error cell,
@@ -440,6 +452,10 @@ c4sp.c4r: c4sp $(C4LC_LISP) $(C4SP_SRCS)
 	$(PREPROC) -DC4SP_DOS=1 src/c4sp/c4sp.c > .c4sp_lcpp.c
 	$(C4SPLC) src/c4sp/lisp/c4lc.lisp -O .c4sp_lcpp.c c4sp.c4r > /dev/null
 ```
+
+Since 2026-11-17 the rule's compile is `$(call lc64,) -O .c4sp_lcpp.c
+c4sp.c4r`: c4lc compiled, `c4sc-host`, unless `make C4LC=interp`. The
+image is the same bytes either way.
 
 The c4lc image executes about 18% fewer instructions
 ([c4lc-design.md](c4lc-design.md)), and it is the one every hosted run uses:
@@ -602,7 +618,7 @@ it could be built first, independently of the Lisp work.
   evaluators should be benchmarked against each other before the recursive
   one is deleted — if it ever is; keeping it as an oracle has value.
 * **Arena sizing under C4KE.** 2 MB of cells inside a kernel whose tasks
-  normally use 64 KB stacks is a large tenant. It may want to be a service
+  then had 64 KB stacks (256 KB now) is a large tenant. It may want to be a service
   rather than an ordinary task. (Partly answered 2026-08-26: the arena now
   starts small and grows with the live set, §4.10.)
 * **Is binary32 enough?** The optimizer needs no floats at all; sample programs

@@ -223,6 +223,10 @@ five words of arguments where `sin` has three, and the caller clears them.
 `test-quake` would notice. `ceil` and `floor` as FPU operations would save up to 1.9% and are exact
 everywhere, so they would come first.
 
+(2026-11-16: with the accelerators they are the browser's `Math.sin` and `Math.cos` after all,
+`qa_sincos` in docs/accel.md: within a double's last bit of libc's, which a float hardly ever keeps,
+and test-quake's frames are still gcc's.)
+
 ## What is left
 
 The FPU opcode is now 2.2% of instructions, so math is no longer where the time goes. By
@@ -242,7 +246,8 @@ instructions, in round 2's image, before round 3 took most of the last row and t
 
 Not tried yet: writing a double operation straight to its target; double literals as data, not
 temporaries; float arithmetic where a double literal is exact; `x * 0.1` as a float by a flag,
-which would change results; `ceil` and `floor` as FPU operations; an opcode for a 16-bit load (done in round 4).
+which would change results. (An opcode for a 16-bit load was done in round 4, and `ceil` and
+`floor` proved not to need FPU operations.)
 
 ## Round 4: 16-bit loads and stores (2026-11-13)
 
@@ -278,7 +283,8 @@ pixels in the same order. On a stack machine a loop's counting is a large part o
   without `pix` kept in memory between its load and its use: 21 instructions a pixel, from 40.
 - `D_DrawSpans8` moves `pdest` past the run of up to eight pixels it draws between two divisions
   and jumps into the run written out, through a dense `switch`, which c4lc makes a jump table; each
-  pixel is written back from past the run: 27 instructions a pixel, from 36.- `D_DrawZSpans` writes two z values a word. Each word is now one expression,
+  pixel is written back from past the run: 27 instructions a pixel, from 36.
+- `D_DrawZSpans` writes two z values a word. Each word is now one expression,
   `(izi >> 16) | ((izi + izistep) & 0xFFFF0000)`, `izi` stepping by the two steps' sum, four words a
   turn of the loop and a jump into the last few: 17 to 20 instructions a word, from 34.
 
@@ -290,4 +296,15 @@ glibc's for every edge value. `ceil` drops out of the profile and `trunc` is 0.6
 an FPU operation of its own after all.
 
 Each build's demo1 still ends on gcc's checksum, `ea3fefe7`, and demo3 on `1f87d635`.
+
+## Since round 4 (2026-11-15 and 16)
+
+- **The accelerators** (docs/accel.md): the span lists, the z spans, the surface blocks, water,
+  sprites, models, particles and light maps run by the browser, in the game's own JavaScript, with
+  the same frames. On node's bare machine a median frame went from 7.1-8.4 M instructions to
+  2.9-3.2 M; in the page with the MMU, 12-14 fps to 26-28.
+- **Inline** (3d9a7bb): `(int)ceil` and `TransformVector` as macros, libc's `floor` and `ceil` by
+  `trunc`'s short way, `AngleVectors`' sines by the accelerators. Mean M instructions a frame: demo1
+  3.007 to 2.832, demo2 3.159 to 3.025, demo3 3.153 to 2.989 (4 to 6%).
+- What is left is the edges, `R_ScanEdges` and what it calls (docs/accel.md 4.3).
 

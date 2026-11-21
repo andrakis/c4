@@ -7,11 +7,25 @@ Status 2026-09-30: the ladder below (F0–F11) is complete, built
 floppy whose compiler is c4fc (2026-08-26, see "Inside C4DOS and C4IX"
 below). The options c4fc takes are listed under "The compiler".
 
+Status 2026-11-21. Since then c4fc has followed c4lc, byte for byte,
+through the integer types and qualifiers (M4), what the C Busybox needs
+(M7b: variadic macros, `goto`, static locals, aggregate initializers,
+function-pointer declarators, `sizeof` of any expression), Wolfenstein
+3D (M9) and Doom (M10), as far as its grammar reaches; initialised
+locals from a template (2026-11-11), common globals (2026-11-13), the
+16-bit opcodes (2026-11-13) and initializers set at start-up
+(2026-11-14). It still has no `typedef`, `float` or `double`, no `long
+long` on a 32-bit target, and it stops at a name used before anything
+declares it, such as a global declared further down (`c4fc: undeclared
+NAME`). It also takes `-fno-builtin`.
+
 ## What this is, and what it is not
 
-`c4fc` is a C99 compiler with c4lc's coverage, written in c4th, emitting
-`.c4r`. (One deliberate gap: c4lc has `float` and `double`, and c4fc
-refuses them for now; docs/c4-float.md.) The interesting half is not the compiler but the **vocabulary it
+`c4fc` is a C99 compiler with most of c4lc's coverage, written in c4th,
+emitting `.c4r`. It has no `typedef`, `float` or `double`
+(docs/c4-float.md), and no `long long` on a 32-bit target, and it stops
+at a name used before anything declares it, such as a global declared
+further down, which c4lc accepts. The interesting half is not the compiler but the **vocabulary it
 is written in**: a compiler is the hardest thing to write in stock Forth
 and the easiest thing to write in a Forth shaped for it, and the
 difference between those two is about four hundred lines.
@@ -214,6 +228,7 @@ the named file. Options are words run before it, inside a definition
 | `-mfuse` | the fused opcodes (F11); implies optimization |
 | `-minline` | inline small functions; implies optimization |
 | `1 CONFORMING !` | real C escape sequences, as c4lc's `-conforming` |
+| `-fno-builtin` | the library names (`open`, `read`, `printf`, `malloc` and the rest) are ordinary identifiers, so a C library can define them, as c4lc's `-fno-builtin` |
 
 ## Integer types (M4, 2026-10)
 
@@ -224,7 +239,7 @@ makes it two words (c4lc-design.md 14.7); c4fc stops with "long long on a
 
 `signed`, `unsigned`, `short`, `long`, `const` and `volatile` arrived in
 both compilers at once, and c4fc emits c4lc's bytes for them. The
-language side — the types, what each operation compiles to, the six
+language side — the types, what each operation compiles to, the
 helpers, the qualifier rules and the exact diagnostics — is
 [c4lc-design.md](c4lc-design.md) §14; this is where each piece lives
 here.
@@ -261,10 +276,11 @@ here.
   (`>mq`), and a new generic `CQ` is an expression's mask, as `CT` is
   its type.
 - **`gen.f`**: `LOAD,`, `STORE,`, `CONVERT,` and `SCONV,` by type; `UBIN`
-  for an operator with an unsigned operand; the six helpers (`H-LD16`,
-  `H-ST16`, `H-UDIV`, `H-UMOD`, `H-LSR`), called by `HCALL` as a branch
-  mark and laid down by `EMIT-HELPERS` after the last function, where
-  c4lc puts them; and the const checks. `CT n_bin` and `CT n_cond` now
+  for an operator with an unsigned operand; the helpers `H-UDIV` and
+  `H-UMOD`, called by `HCALL` as a branch mark and laid down by
+  `EMIT-HELPERS` after the last function, where c4lc puts them (the
+  16-bit loads and stores and `LSR` were helpers too until they became
+  opcodes, 2026-11-13, docs/c4-16bit.md); and the const checks. `CT n_bin` and `CT n_cond` now
   follow c4lc's typing exactly (left operand's type for `+`/`-`, the
   else arm's for `?:`), because a conversion is decided by it.
 - **`inline.f`**: a spliced body returns with its callee's type, so
@@ -295,8 +311,8 @@ either kind compiles to c4lc's bytes.
 ## What Wolfenstein 3D needed (M9, 2026-10-22)
 
 c4lc-design.md 14.8 has the language side; c4fc follows c4lc in all of
-it but a typedef inside a function and a float, and emits the same
-bytes. An initializer computed at start-up came later (see "Initializers
+it but what needs a typedef (c4fc has none, at file scope or in a
+function) and a float, and emits the same bytes. An initializer computed at start-up came later (see "Initializers
 set at start-up" below).
 
 - **`parse.f`**: a prototype that ends at a comma leaves it to DECL
@@ -397,9 +413,11 @@ the common objects that test-c4fc compares, and so do `common_e.c` and
 The bar rises rung by rung and c4lc supplies it at every one.
 
 - **Tokens.** Dump matches `expected/c4lc-tokens.txt`; `-count` on
-  `c4cc.c` is 15,023.
-- **Preprocessed text.** Byte-identical to `gcc -E` for all twelve C4IX
-  modules — the bar `c4lc` already meets.
+  `c4cc.c` is what c4lc says (15,198 at 2026-11-21, pinned in
+  test-c4fc).
+- **Preprocessed text.** Byte-identical to `gcc -E` for the C4IX
+  modules (twelve when this was written, thirteen since mmu.c) — the bar
+  `c4lc` already meets.
 - **AST.** Dump matches c4lc's for the `src/tests` sweep. The node
   schema gives the printer away for free, which is why the schema
   carries names at all.
@@ -886,7 +904,11 @@ The bar rises rung by rung and c4lc supplies it at every one.
         c4fc resolves names as it parses. The discovery pass supplies
         the same list, so `PREREGISTER` puts them in before the second
         pass reads a line. The discovery pass itself has to tolerate the
-        unknown name -- it is the thing being discovered.
+        unknown name -- it is the thing being discovered. It runs for
+        every compile now, a plain one too (`C4FC`, c4fc.f). What c4fc
+        still refuses is any other name used before its declaration, a
+        global declared further down for instance: `c4fc: undeclared
+        NAME`, where c4lc takes it (probed 2026-11-21).
       - **`extern int x;` allocates nothing**, whether or not it becomes
         an extern symbol: if the unit defines `x` further down, that
         definition allocates it, at its own position. Allocating at the
@@ -1024,8 +1046,9 @@ compiler runs on the breadboard, and on 2026-08-26 it did:
     a real C4IX module, -O -c, on the board:   5m29s
     the object c4lc -O -c writes at 32 bits:   byte-identical
 
-`make c4th32.c4r` builds the 32-bit c4th (c4lc under c4sp32, the route
-`c4ke32.c4r` takes); `make test-c4th-bb` is the cheap half of the check.
+`make c4th32.c4r` builds the 32-bit c4th with c4lc at 32 bits
+(`c4sc-host32`, or c4lc.lisp under `c4sp32` with `C4LC32=interp`), the
+route `c4ke32.c4r` takes; `make test-c4th-bb` is the cheap half of the check.
 The five minutes are not a routine test.
 
 **Two 64-bit assumptions had to come out first, and only a 32-bit
@@ -1068,7 +1091,7 @@ the RAM disk through `dos.f`'s `SAVE-BLOCK`, which calls the C4DOS API
 table (C4DOS has no redirection and the VM no write syscall, so this is
 the only route). With `-c` and `c4rlink` the machine compiles units to
 objects and links them, which c4cc cannot. `make test-c4dos-c4fc` runs
-the loop on the simulated c4bb in about three minutes; `make
+the loop on the simulated c4bb in about half a minute; `make
 run-c4dos-c4fc` is the interactive version, where `CC` (the floppy's
 `cc.bat`) runs the same `RUN` line.
 
@@ -1078,8 +1101,9 @@ of writing the image to stdout works there in principle. The C4IX disk
 carries the whole repo at `/usr` now, so c4fc's sources are at
 `/usr/src/c4fc` and c4th's Forth at `/usr/src/c4th/forth`, but no test
 runs c4fc inside C4IX (whose scratch directory is `/tmp`). What is pinned instead is
-that c4fc, on a native c4th, compiles all twelve C4IX modules to objects
-that link to a `c4ix.c4r` byte-identical to c4lc's (`make test-c4fc`).
+that c4fc, on a native c4th, compiles every C4IX module (thirteen,
+`C4IX_MODS`) to objects that link to a `c4ix.c4r` byte-identical to
+c4lc's (`make test-c4fc`).
 
 ## Risks, and one thing deliberately left out
 
@@ -1099,8 +1123,9 @@ that link to a `c4ix.c4r` byte-identical to c4lc's (`make test-c4fc`).
    first is multi-word compilation with real calls, which B5d.5 sketched
    as the two-stacks-and-a-bridge and did not build.
 4. **Scope creep into real C99.** The target is c4lc's coverage, not the
-   standard's. Anything c4lc declines, c4fc declines identically (the
-   one gap the other way is floating point, which c4fc refuses), and
+   standard's. Anything c4lc declines, c4fc declines too. The other
+   way, c4fc refuses typedefs, floating point, a 32-bit `long long` and
+   a name used before its declaration, all of which c4lc takes; and
    `docs/c4lc-design.md §5.1`'s deliberate-divergences section is the
    model for saying so.
 

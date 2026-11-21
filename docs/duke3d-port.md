@@ -68,6 +68,11 @@ uploaded on the page:
 
 Without the file it says so and stops, as `wolf3d6` does.
 
+(As built, 2026-11-20: `-home` looks in Duke's own folder first. On C4IX
+that is `/home/duke3d/duke3d.grp`, then `/home/DUKE3D.GRP`; under the
+page's C4DOS the uploads are on B:, the home drive, `B:\DUKE3D\DUKE3D.GRP`;
+on the bare machine, drive 0. games/duke3d/README.c4.md has it.)
+
 ## 3. The shape of the port
 
 As Quake's (`games/quake`), whose layout this follows:
@@ -109,8 +114,9 @@ so every size fills the screen.
   Chocolate has it. Kept in `duke3d.cfg` beside the game (or in `/home` for the
   full game), with the other settings: keys, mouse, sound, detail.
 - On the command line too: `duke3d -res 640x480` for that run.
-- The full-screen toggle (Alt-Enter) does nothing here: it is always the whole
-  display.
+- The full-screen toggle (Alt-Enter) does nothing here: the game has the
+  whole display unless `-window` gave it a window on C4IX, or grin's
+  Program Manager runs it in one.
 
 ## 5. Memory and speed
 
@@ -311,7 +317,8 @@ Not done, with the reason:
   or a constant, and Duke has no such call: built with `-minline`, the image
   is the one built without it, byte for byte. A `-minline` that bound such an
   argument to a temporary first would take them. They are 900 calls a frame,
-  about 0.2%.
+  about 0.2%. (Done 2026-11-15, games/duke3d 9f3bfb1: `klabs(a)` is a
+  macro that works its argument out once, into a static `klabs_v`.)
 - `mulscale`'s 32-bit path takes operands within 46,340, and 70% of the
   demo's calls are outside it (`c4_mulscale`, `c4_umul64`: about 6%).
 
@@ -395,4 +402,23 @@ high 16-bit digits signed (`a >> 16`) and the low ones not (`a & 0xffff`),
 the cross products stay within 2^31 and the sum needs two carries; no call,
 no signs, `INT32_MIN` too, about 100. Checked against the int64 product on
 four million pairs.
+
+## 11. Since (to 2026-11-21)
+
+- **Accelerators** (2026-11-15, docs/accel.md): the walls, floors,
+  slopes, tilted screen, translucent walls and sprites, and the 64-bit
+  helpers run by the browser; Video Setup's Accelerated. The Atomic
+  demos average 52 to 53 fps in the page with the MMU, from 27 to 29.
+- **Inline** (93f37af): `readpixel`, `drawpixel`, `getpalookup` and
+  `klabs` as macros, and `mulscale`, `scale` and `dmulscale` one
+  instruction where they stand: 10 to 14% fewer instructions a frame.
+- **Mirrors and masked floors** by the accelerators (2026-11-17,
+  `DA_COPYR`, `DA_MHLINE`): facing a mirror on t2.map at 800x600,
+  6.81 to 3.57 M instructions a frame. `-map` takes a path from the
+  root, and a console line that is no command is a cheat ("dnkroz",
+  "clip").
+- **Music**: the card's OPL is put in OPL2 mode before the music
+  starts, since Doom left OPL3 on (2026-11-19).
+- **grin and the uploads** (2026-11-19, 20): Duke is in Action Games
+  and Full Games (Uploads); `-home` keeps its settings beside the GRP.
 

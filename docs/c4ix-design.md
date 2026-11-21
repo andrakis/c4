@@ -17,6 +17,16 @@ libc, and CPU accounting; "Since X6" at the end of section 6 lists
 them. Sections 1–5 are the original design and keep its dates.
 `src/c4ix/README.md` has the current build, run and test targets.
 
+STATUS (2026-11-21): since that line, C4IX has persistence on drive 1,
+a kernel log, the root archive read where it is kept, an MMU with swap
+(docs/c4ix-mmu.md), several CPUs (docs/c4ix-smp.md), nice, the run
+queue, pipe-poll wakes, the kernel's memory given back and moved once
+tasks have gone, and a loader that reads a program's code where it
+goes. Each has a dated entry below. C4IX's own accelerators run
+libarc's CRC-32 and inflater on libjs (`src/c4ix/accel.mjs`,
+docs/accel.md 7, 2026-11-16). The desktop's kernel calls, `SYS_FDGIVE`
+(247) the newest, are in docs/c4ix-desktop.md.
+
 Everything here builds on docs/c4lc-design.md (the compiler) and
 docs/internals.md §6.5 (the c4l loading system).
 
@@ -182,8 +192,10 @@ libc4ix) sets and reads it. `nice` is the command:
   `nice -5`/`nice --5` spellings work too;
 - `nice -p PID [N]` reads or changes a running task's.
 
-Wolf3D, Doom and Tyrian ask for -5 themselves on C4IX. On one CPU, a
-spinner at -3 beside one at 0 gets 4.6 times the cycles
+Doom, Duke Nukem 3D, Quake, Rise of the Triad and Tyrian ask for -5
+themselves on C4IX, and Wolf3D does when it draws (not in a timedemo
+with nothing shown). On one CPU, a spinner at -3 beside one at 0 gets
+4.6 times the cycles
 (test-c4ix-smp.sh checks for more than three).
 
 ## 5. Testing
@@ -507,7 +519,7 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
       The shell gained `kill [-SIG] %JOB|PID` at the same time, since
       `jobs` could list a background task and nothing could stop it.
 
-### Since X6 (recorded 2026-09-30; details in the commits named)
+### Since X6 (from 2026-08-09; each entry dated)
 
 - **c4r v3** (78c3601, 2026-08-09): the loader reads BSS and data of
   any size (no 256 KB cap).
@@ -952,9 +964,9 @@ spinner at -3 beside one at 0 gets 4.6 times the cycles
   are all in dmesg's ring, which never needs memory).
 
 - **An MMU** (branch ix-mmu, 2026-10-29): docs/c4ix-mmu.md. When the host
-  fits one (cli.js and the tests do unless `--no-mmu` or `mmu: false`;
-  C4IX's page does unless `?mmu=0`, but for the GitHub Pages build, whose
-  `libjs/web/site.js` turns it off), user tasks
+  fits one (`cli.js --mmu`, the page's `?mmu=1` or its Configuration
+  dialog, and the tests: `createMachine` fits one unless `mmu: false`; off
+  by default for use since 2026-10-30, docs/c4ix-mmu.md 12), user tasks
   run translated, each in an address space of its own, at user addresses
   from 0x10000000 that are not physical ones. A store into the kernel or
   into another task, or a null pointer's read, is a page fault that kills
@@ -1279,13 +1291,16 @@ log was `/log/kernel`. `pin` and `nice` look where the shell does.
 | `/usr/games/NAME` | each game, its data, and its settings and saved games (Doom, ROTT and Wolf3D change to it; Tyrian names it, `tyr-c4ix.c`) |
 | `/usr/games/bin` | each game's programs by name, ilinks into those directories, so `doom` runs from anywhere |
 | `/build` | what `b4ke -C /usr` makes, already made |
-| `/etc` | the desktop's settings, `desktop.cfg` |
+| `/etc` | the desktop's settings, `desktop.cfg`, `ide.cfg` and `notepad.cfg`; `desktop.apps`, the games' lines for Go > Games |
 | `/var/log/kernel` | the console, logged (`console.c`) |
 | `/var/persist` | persist's list of the tree as it booted |
-| `/tmp`, `/proc` | scratch files; `/proc/uptime`, `/proc/kmsg`, `/proc/cache` (files on the host and in RAM) |
+| `/tmp`, `/proc` | scratch files; `/proc/uptime`, `/proc/kmsg`, `/proc/cache` (files on the host and in RAM), `/proc/meminfo` |
 
 `/home` is for the person's own files: the page's uploads are listed
-there (`libjs/uploads.js`, docs/c4ix-desktop.md part sixteen).
+there, in `/home` or in a game's folder (`/home/doom`, `/home/duke3d`,
+`/home/quake`, `/home/rott`, `/home/wolf3d`), where that game looks
+first (`libjs/uploads.js`, 2026-11-11; docs/c4ix-desktop.md part
+sixteen).
 
 ### Memory given back when tasks have gone (2026-11-05)
 
@@ -1787,11 +1802,14 @@ What the profiles found that is not cheap, or not low in risk:
       PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down
       --demo IMAGE...    run the built-in demonstrations
       -h, --help         print the usage and shut down
-      -q                 accepted and ignored
+      -q                 the boot's lines go to the kernel log only
+                         (without it, libjs shows them on the console too)
       -v                 the kernel log on the console as well (dmesg reads it either way)
       --desktop          the web page's boot: the root archive unpacks first,
                          with a loading screen, then the shell runs
                          "desktop &" and "top", as if they were typed
+      -e CMD             the shell runs CMD first, as if it were typed
+                         (up to four, after --desktop's own if both are given)
 
 `init_usage()` in init.c is the authority; keep this section in step
 with it. **No arguments boots to a shell**, because that is what
@@ -1814,12 +1832,13 @@ be spawned with its stdout redirected into a RAM file, prompt and
 all, and the terminal goes quiet while it waits to be typed at. Init
 announces that before it happens for exactly this reason.
 
-`-q` used to mean "skip the demonstrations". They are opt-in now, so
-it does nothing; it is still accepted so older command lines work.
+`-q` once meant "skip the demonstrations". Since the kernel log
+(2026-10-29) it keeps the boot's lines off the console.
 
-In the shell, anything in the tree named `c4ix-NAME.c4r` is a
-command: echo, cat, wc, ls, mkdir, ps, top, bench, spin, hello, cycles,
-fmt, gui, desktop (the last two need the libjs display). The
+In the shell, a bare name is looked for in the directories `PATH`
+names (`/bin:/usr/bin:/usr/games/bin`), then as `c4ix-NAME.c4r` or
+`NAME.c4r`. `/bin` has the userland (src/c4ix/user/README.md) and the
+toolchain; `gui` and `desktop` need the libjs display. The
 prompt carries the working directory, `help` lists the builtins, and
 `exit` or end-of-file leaves, which shuts the kernel down. Ctrl-C
 cancels the foreground job and does nothing at an idle prompt;

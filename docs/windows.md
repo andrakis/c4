@@ -3,7 +3,7 @@ Building and testing on Windows
 
 c4 builds and runs its whole suite natively on Windows, under MSYS2. That
 was done for Cyron, the Windows machine that hosts helios: helios is
-deliberately small (4 GB) so that the rest of Cyron's memory stays free,
+deliberately small (5 GB on 2026-11-21) so that the rest of Cyron's memory stays free,
 and the suite, which takes about 5 hours there one test at a time, can
 run on Cyron itself and use its memory only while it runs.
 
@@ -172,7 +172,7 @@ How it went on Cyron
 --------------------
 
 Cyron is a Ryzen 5 3600 (12 threads) with 32 GB, which hosts helios
-(4 GB, 6 processors). The runs were at Idle priority, `--cpus 8 -j 8
+(then 4 GB and 6 processors; 5 GB and 10 on 2026-11-21). The runs were at Idle priority, `--cpus 8 -j 8
 --build-jobs 8`, two thirds of its processors, beside its other work.
 All 39 of `make suite`'s tests pass on Windows, as on helios
 (2026-11-14, c4ix_and_toppings merged in).

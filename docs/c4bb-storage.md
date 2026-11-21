@@ -10,6 +10,15 @@ as it was when Part 1 began (2026-08-28), before any of it. The
 current test targets are listed in
 [../src/c4bb/README.md](../src/c4bb/README.md).
 
+Since, 2026-11-21: a drive opens part of a file, `NAME@OFF+LEN`
+(2026-10-30, "The design" below), deletes one (`DISK_UNLINK`, 0x1cc,
+2026-10-25), and keeps a search list for relative names (`DISK_DIRS`,
+0x1e0, 2026-10-26); those two are C4DOS's and are described in
+[c4dos-design.md](c4dos-design.md). The swap registers (0x11c, 0x158)
+are C4IX's MMU's, in [c4ix-mmu.md](c4ix-mmu.md). test-c4bb-climb builds
+C4IX on four machines and links it on a fifth (2026-11-12, "Four
+machines build C4IX").
+
 ## Why
 
 c4bb has **one disk**, it is **read-only**, and everything a session

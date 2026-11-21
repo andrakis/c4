@@ -10,12 +10,12 @@ than c4lc's, and how long a key takes to show.
 - In the page, with the MMU, Duke's Atomic demo1 averages 15.7 fps and its slowest 1% of frames 8.5;
   Quake's demos average 12 to 14 and their slowest 1% about 6. Without the MMU, 20% faster.
 - The heaviest frames are two and a half times the median ones, and they are drawing of a kind the
-  median frame hardly does: Duke's tilted screen when the player dies (`rhlineasm4`, the one inner loop
-  not yet written for c4) and close sloped floors; Quake's surfaces lit again under dynamic lights,
+  median frame hardly does: Duke's tilted screen when the player dies (`rhlineasm4`, written for c4
+  since, and an accelerator now) and close sloped floors; Quake's surfaces lit again under dynamic lights,
   and explosions. Game logic does not grow.
 - By hand, Duke's column loop is 13% shorter than c4lc's and a frame 2%. As one host instruction
-  (`TCOL`, a prototype on `tcol-proto`) the loop is 16 to 22 times faster a pixel and the frame up to
-  57% faster in the page, the same frames.
+  (`TCOL`, a prototype on `tcol-proto`, not merged: docs/accel.md's accelerators took its place) the
+  loop is 16 to 22 times faster a pixel and the frame up to 57% faster in the page, the same frames.
 - Input lag is 1.5 to 2 frame times at every frame rate, with nothing buffered between: it is the
   frame rate.
 
@@ -37,7 +37,7 @@ frame ending at its hash).
 **On node's bare machine** (the default). The game runs on its virtual clock (`-sum 0` for Duke and
 Quake; a timedemo for the others), so every run of an image makes the same frames and counts the
 same instructions. A frame ends where the game calls its frame function (`duke_sum_frame`,
-`qg_sum_frame`, `dg_frame`, `c4sdl_present`, `rott_frame`). The tool catches the call itself: as
+`qg_sum_frame`, `dg_frame`, `c4sdl_present`, `rott_frame`, `tyr_frame`, Super Blit Kart's `frame_hash`). The tool catches the call itself: as
 `libjs/c4m.js` loads, a module hook adds a look at the target of every `JSR`, `JSRI` and `JSRS`
 (and of a `JMPA` that lands on a function's start, c4lc's call through a pointer), so a frame's count
 is exact, to the instruction. Nothing in the tree changes, and if c4m.js's call
@@ -51,10 +51,12 @@ one demo ends and the next begins), Quake's first nine (its console, then the ma
 second and ROTT's second and third. The table names what it left out, with their counts. `--skip N`
 leaves out others.
 
-**What a run counts besides drawing.** Duke and Quake with `-sum 0` checksum nothing. Doom, Wolf3D
-and ROTT checksum every frame of a timedemo, and nothing turns it off: 0.84, 0.42 and 0.89 M
-instructions a frame (`dg_frame`, `c4sdl_present`, `rott_frame`, by `--profile`), about a fifth of
-each frame. It is in their counts and in their page runs, so they understate those games' speed.
+**What a run counts besides drawing.** Duke and Quake with `-sum 0` checksum nothing. Doom, Wolf3D,
+ROTT and Tyrian checksum every frame of a timedemo, and Super Blit Kart's `-demo` hashes every frame;
+nothing turns it off: 0.84, 0.42, 0.89, 0.88 and 1.38 M instructions a frame with the games' C
+(`dg_frame`, `c4sdl_present`, `rott_frame`, `tyr_frame`, `frame_hash`, by `--profile`), about a fifth
+of each frame. It is in their counts and in their page runs, so they understate those games' speed.
+With the accelerators each is one instruction (docs/accel.md).
 
 **The numbers.** Frame times in ms. The *low* is the slowest frame's rate, the *high* the
 fastest's, the *average* the frames over their time. A *1% low* is the rate of the slowest 1% of
@@ -301,6 +303,10 @@ It was measured, not committed: section 6 says why.
 
 ### B: the loop as one host instruction
 
+> 2026-11-21: `tcol-proto` was not merged. Its idea is docs/accel.md's: numbers 0x1000 up, outside
+> the instruction set, a game's own module, and `C4I_ACCEL`, INFO's 0x100000, the bit `TCOL` had
+> here. This section and "What `TCOL` would cost to keep" are the prototype as it was measured.
+
 `TCOL` (95), a prototype on branch `tcol-proto`: `__c4_opcode(count, v, inc, sh, tex, pal, dest,
 stride, 95)` draws the column, and `a` is `v` after. `TCOLM` (96) leaves a pixel whose texel is 255
 alone (`mvlineasm4`'s masked walls). The machine runs it in JavaScript (`c4m.js` `texcol`): plain
@@ -430,20 +436,20 @@ takes 67.
 
 1. **Drawing opcodes, behind a probe, in libjs.** Done for Duke, Quake, ROTT, Doom, Wolf3D, Tyrian and Super Blit Kart, as the games' own modules: `docs/accel.md`. The one change that moves the frame rate a person
    sees: `TCOL` alone took the shareware level from 28 to 43 fps with the MMU and the Atomic demos'
-   averages up 17 to 29%, with the same frames. The rest of the drawing loops in the same shape --
-   Duke's floors (`hlineasm4`), slopes (`slopevlin`) and tilted screen (`rhlineasm4`), Quake's spans
-   (`D_DrawSpans8`'s runs), z spans and surface blocks -- are where both games' heavy frames go
-   (section 3). Give such accelerators a number range of their own, outside the instruction set, so
-   no other machine or compiler has to learn them.
+   averages up 17 to 29%, with the same frames. Duke's floors,
+   slopes and tilted screen and Quake's spans, z spans and surface blocks are among them, and they
+   have numbers of their own, 0x1000 up, outside the instruction set, so no other machine or compiler
+   has had to learn them.
 2. **`rhlineasm4` written for c4: done** (games/duke3d 622cfa9). The one inner loop left as
    Chocolate Duke3D had it, the whole tilted screen when the player dies, is knocked about or looks
    aside. Atomic demo1's 1% low went up by a fifth (19.1 to 23.0 fps at 250 M instructions a second),
    on every machine (section 3).
-3. **Quake's dynamic lights.** `blocklights[...] += (rad - dist)*256` makes an unsigned a float and back
-   through the library for every lit texel, 7% of the heavy frames' growth; float to and from
-   `unsigned` as `-mfpu` operations (or an `int` there, if its frames stay gcc's) would take it.
-4. **The MMU off for games**, or cheaper: it costs the page about 20% of its frame rate in every game
-   here (`docs/c4ix-mmu.md` 12).
+3. **Quake's dynamic lights: done** (games/quake f3ac7ad). The sum goes through `int`, which c4's
+   FPU converts in one instruction, where it is below 2^31, as a light's always is; the same frames
+   (docs/accel.md 4.3).
+4. **A cheaper MMU.** The page fits none unless asked (`?mmu=1`, since 2026-10-30), so a person's
+   games run without it; framebench's page runs ask for one by default. Where it is on, it costs about
+   20% of the frame rate in every game here (`docs/c4ix-mmu.md` 12).
 5. **Not**: hand-written loops (13% of a loop, 2% of a frame), or more compiler work on these loops
    for their own sake. A loop tested at its bottom and induction variables split in unrolled loops are
    worth having in c4lc for every program, but they will not change what a player sees.

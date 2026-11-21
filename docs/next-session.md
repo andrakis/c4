@@ -5,7 +5,8 @@
 > restores its own address is now detected and named by c4bb (9e73d4b,
 > `src/c4bb/tests/test-tlev-wedge.mjs`); `innerbench` compiles C4KE again and
 > `make test` fails if it cannot (3f3bd65); the c4mpg status in section 2 is
-> kept current in `docs/c4mpg-design.md`.
+> kept current in `docs/c4mpg-design.md`; and innerbench's source names
+> `ONLY_DIRECT` its default again (section 3's last item).
 
 Written 2026-09-06 at the end of a long session, for whoever picks this up.
 `docs/dos-rung-fixes.md` is the tracker for what shipped; this file is only what

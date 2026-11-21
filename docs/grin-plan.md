@@ -16,7 +16,8 @@ same day with the user's answers (section 8). **G0 and G1 are built**
 Sections 3.2 and 3.3 say what G0 built where it differs from the first
 draft, 3.4 shows the window kit's API as G1 built it and G3's mechanism,
 3.6 and 3.7 say what G5 and G6 built, 3.8 and 3.9 what G2 and G4 built,
-and so do the milestones. The rest is plan.
+and so do the milestones. The rest is plan. **G7** (branch `grin-g7`,
+2026-10-28) is in section 5 too; grin.md has what came after it.
 
 `grin` is to C4DOS what Windows 3.x was to MS-DOS: a program started
 from `AUTOEXEC.BAT` that takes over the screen and gives you windows, a
@@ -445,8 +446,8 @@ beside the draw command it issues.
   setgen(grin); call; setgen(old)` through slot 27, so the plan's
   "every kit entry point reached from an application brackets setgen"
   lives here, once, rather than in a wrapper per function in grin. Its
-  constructor finds the table (version 5 or more, slot 25, the magic and
-  version) and calls `hello`: that is how grin tells an application from
+  constructor finds the table (slot 25, the magic, and the version it
+  was built for or later: 6 since 2026-11-20) and calls `hello`: that is how grin tells an application from
   a DOS program it was asked to start.
 - **`apps.c`**, grin's side:
   - the table is published in slot 25 by `apps_init` (after `wk_init`)
@@ -869,7 +870,9 @@ icon and run mode) are ordinary files on the home drive.
   is about what systems write; Reset Files leaves them alone, and one
   upload serves `wolf3d6` bare and under C4DOS. worker.js adds them to
   drive 0's `c4dos.dir`, so C4DOS lists them on A: and finds them in any
-  case. Forget deletes the one file.
+  case. Forget deletes the one file. (Since 2026-11-20 the page's C4DOS
+  has them on B:, the home drive, laid over drive 1; the Build Ladder
+  keeps them on A:. grin.md, "The Uploads on B:".)
 
 ### 3.9 The disk the page boots
 

@@ -18,7 +18,7 @@ at `A:\>`, and `cat ladder.txt` at `c4sh>`, the same file):
 
 | at | type | what happens |
 |---|---|---|
-| `A:\>` | `DOOM`, `WOLF3D`, `TYRIAN`, `ROTT`, `GRIN` | play; HEAP.SYS gives a game's memory back when it quits |
+| `A:\>` | `DOOM`, `WOLF3D`, `QUAKE`, `DUKE3D`, `TETRIS`, ... (AUTOEXEC names them all), `GRIN` | play; HEAP.SYS gives a game's memory back when it quits |
 | `A:\>` | `BUILD` | C4KE and its init compiled onto the RAM disk (`LADDER` rebuilds the compiler first) |
 | `A:\>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel just compiled, its RAM filesystem seeded from the RAM disk |
 | `c4sh>` | `cat ladder.txt` | these instructions again |
@@ -32,13 +32,13 @@ at `A:\>`, and `cat ladder.txt` at `c4sh>`, the same file):
 | `c4sh>` | `exit` | C4KE shuts down, back to `A:\>` |
 
 The disk is in directories (C4DOS's API v7, [c4dos-design.md](c4dos-design.md)
-"Directories"): `\GAMES\DOOM`, `\GAMES\WOLF3D`, `\GAMES\TYRIAN` and
-`\GAMES\ROTT` (each game and its data), `\BUILD` (the build kit),
+"Directories"): `\GAMES` (a directory for each game and its data, and
+`README.TXT`), `\BUILD` (the build kit),
 `\C4KE` and `\C4IX` (each system's programs; C4IX's tree,
 `c4ix.vfs.txt`, is in its), `\GRIN` and `\BIN`; at the root only C4DOS,
 its two files and `LADDER.TXT`. `AUTOEXEC.BAT` puts `\BUILD`, `\GRIN` and
-`\BIN` on the `PATH`, and the build kit, C4KE's, C4IX's and the games'
-directories on `APPEND`: that is how every command above still works
+`\BIN` on the `PATH`, and those, the build kit's, C4KE's, C4IX's and
+every game's directory on `APPEND`: that is how every command above still works
 from the root, and how C4KE and C4IX, which know nothing of directories,
 find what they open (DOS tells the machine, `DISK_DIRS`). `BUILD`,
 `LADDER` and `IX` begin with `CD \`, so what they compile is at the root
@@ -217,7 +217,7 @@ C4IX needs nothing for this: it boots as it does from dosload
 
 | target | what |
 |---|---|
-| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 36 checks (`cat ladder.txt` and `ls` at `c4sh>` among them), about 90 s; also in `make test-libjs` (which skips it without the disk). Under C4KE it also runs grin, opens a C4KE Prompt, starts `spin x &` in it, checks with `ps` that the spinning task ran on while grin waited (more than 1,000 of 2,000 ms), and kills it. Under C4IX it checks `/lib` has the shared libraries and starts the desktop (which loads `/lib/libgui.c4s`) |
+| `make test-libjs-ladder` | `test-c4dos-ladder.mjs`, the whole climb above with 36 checks (`cat ladder.txt` and `ls` at `c4sh>` among them), about a minute and a half (99-103 s on helios, 2026-10-31); also in `make test-libjs` (which skips it without the disk). Under C4KE it also runs grin, opens a C4KE Prompt, starts `spin x &` in it, checks with `ps` that the spinning task ran on while grin waited (more than 1,000 of 2,000 ms), and kills it. Under C4IX it checks `/lib` has the shared libraries and starts the desktop (which loads `/lib/libgui.c4s`) |
 | `node libjs/tests/test-c4dos-ladder.mjs --quick` | the same to C4KE and back, without b4ke |
 | `node libjs/tests/web-c4dos-ladder.mjs` | the page in the user's Chrome over CDP: the same climb typed into the terminal, with screenshots; two lines pasted at `A:\>`, and `cat ladder.txt` with a second line pasted at `c4sh>`; the cursor at each rung's prompt |
 

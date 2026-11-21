@@ -8,10 +8,13 @@ STATUS: **M1, M2, M5 and M3's trap half built and green, 2026-09-06.** `make tes
 the contract; deviations get written back here, and two have been — see
 "Deviations, and what M1 measured" below.
 
-Checked 2026-09-30: unchanged since. M3's four opcodes and narrowing rule,
-M4 (`c4ke_mpg.c` does not exist) and M6 are not started. The only commits to
-`c4mpg.c` since are fork syncs that carry `c4m.c` fixes across (25498f0,
-e6ec92d), which is the job `src/tests/mpg/check-fork.sh` exists to enforce.
+Checked 2026-11-21: M3's four opcodes and narrowing rule, M4 (`c4ke_mpg.c`
+does not exist) and M6 are not started. The commits to `c4mpg.c` since
+2026-09-06 are fork syncs that carry `c4m.c` changes across (25498f0,
+e6ec92d, the FPU, LH..LCU, the two-level dispatch and others), which is the
+job `src/tests/mpg/check-fork.sh` exists to enforce. One drift got through:
+8bc482f (2026-10-26) changed `c4m.c` alone, and `check-fork.sh` failed until
+350d7a8 (2026-11-10).
 The board-side ownership guard beside it (`--whowrote`, cc45d0e) is written up
 in `docs/dos-rung-fixes.md` F20, not here.
 
@@ -98,9 +101,13 @@ existing `innerbench` and boot-cycle numbers are the baseline.
 
     C4I_C4MPG = 0x100
 
-`0x100` is the free bit between `C4I_PROT` (`0x80`) and `C4I_C4KE` (`0x200`) —
-confirmed unused across `include/u0.h`, `c4m.c` and `load-c4r.c`. `c4mpg`'s
-`c4_info()` ORs it in; `c4m` never does. A program asks once and adapts:
+`0x100` was the free bit between `C4I_PROT` (`0x80`) and `C4I_C4KE` (`0x200`)
+in `include/u0.h`, `c4m.c` and `load-c4r.c`. It is not free in the family:
+c4mp (`src/c4mp/c4mp.h`) and libjs report it as `C4I_SMP`, and c4mp uses
+`0x200` for `C4I_CISC`. Until one of them moves, a program must not take 0x100
+alone to mean the guard: check that the host is not c4mp or libjs with CPUs,
+or pick another bit. `c4mpg`'s `c4_info()` ORs it in; `c4m` never does. A
+program asks once and adapts:
 
     if (__c4_info() & C4I_C4MPG) { ...register regions... }
 

@@ -5,7 +5,7 @@ it exists, how to build and test it, how it behaves on a lesser host, and
 where its own README and design doc are. The top-level
 [README](../README.md) has the overview. Each linked README has the detail.
 
-- [Machines](#machines): [c4m](#c4m-and-its-loaders), [c4mpg](#c4mpg), [c4mp](#c4mp), [oisc4](#oisc4), [c4bb](#c4bb), [libjs](#libjs), [c4or1k](#c4or1k)
+- [Machines](#machines): [c4m](#c4m-and-its-loaders), [c4mpg](#c4mpg), [c4mp](#c4mp), [oisc4](#oisc4), [c4bb](#c4bb), [libjs](#libjs), [c4pc](#c4pc), [c4or1k](#c4or1k)
 - [Operating systems](#operating-systems): [C4KE](#c4ke), [C4IX](#c4ix), [C4DOS](#c4dos)
 - [Toolchain](#toolchain): [c4cc and `.c4r`](#c4cc-and-the-c4r-format), [cpp](#cpp), [c4sp and c4lc](#c4sp-and-c4lc), [c4sc](#c4sc), [c4fp](#c4fp), [c4th](#c4th), [c4fc](#c4fc)
 - [Libraries and programs](#libraries-and-programs): [c4sh](#c4sh), [c4tui](#c4tui), [grin and winkit](#grin-and-winkit), [games](#games), [include/](#include), [tests and benchmarks](#tests-and-benchmarks)
@@ -143,6 +143,27 @@ that display. It reuses c4bb's memory, devices and loader.
 CDP.
 
 **Docs:** [docs/libjs-design.md](../docs/libjs-design.md).
+
+### c4pc
+
+**Folder:** [c4pc/](c4pc/).
+
+libjs's engine in C, for a PC with no operating system under it: the
+interpreter, the devices at 0x100, the heap, the formatter and the FPU,
+followed function by function. `c4pc.elf` is a multiboot kernel for QEMU,
+GRUB and Bochs; `C4PC.COM` boots it from DOS, for DOSBox and DOSBox-X;
+`c4pc-host` is the same engine as a Linux program with libjs/cli.js's
+flags, at about twice libjs's speed. C4IX's images run on it unchanged,
+for now with one CPU, no MMU, and a text console.
+
+**Build:** `make c4pc-host c4pc.elf C4PC.COM .c4pc/disk.tar`.
+
+**Test:** `make test-c4pc`: C4IX's boot test and test-libjs's
+native-oracle programs, byte for byte against libjs, then C4IX again in
+QEMU when it is installed.
+
+**Docs:** [docs/c4pc.md](../docs/c4pc.md), and the study behind it,
+[docs/c4ix-i386-port.md](../docs/c4ix-i386-port.md).
 
 ### c4or1k
 

@@ -3187,6 +3187,73 @@ c4mp-deadlock.c4r: $(LC64_BIN) $(C4LC_LISP) $(C4MP_SRC)/guest/deadlock.c
 test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TESTS_C4R)
 	bash $(C4MP_SRC)/test-c4mp.sh
 
+# c4pc (docs/c4pc.md): libjs's engine in C, for a PC with nothing under
+# it. One source, two front ends: c4pc-host runs on Linux with cli.js's
+# flags, so that it can be held against libjs; c4pc.elf is a multiboot
+# kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
+C4PC_SRC  := src/c4pc
+C4PC_MODS := engine dev heap fmt fpu drive util
+C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h
+# The images it runs, and what makes them. To build from another tree
+# whose images are made: C4PC_IMAGES=~/git/c4/src/c4bb/images C4PC_IMAGES_DEP=
+C4PC_IMAGES ?= src/c4bb/images
+C4PC_IMAGES_DEP ?= c4bb-images
+C4PC_CFLAGS := -O2 -g -Wall -Wno-unused-parameter -fwrapv -fno-strict-aliasing -fno-math-errno
+# i486: what DOSBox's cores and every emulator here run; the x87 for floats
+C4PC_BARE_CFLAGS := -m32 -march=i486 -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
+c4pc-host: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) $(C4PC_HDRS)
+	$(NATIVE_CC) $(C4PC_CFLAGS) $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) -o $@ -lm
+c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/libc.c \
+		$(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS)
+	gcc $(C4PC_BARE_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
+		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/libc.c \
+		$(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS))
+# The DOS loader (src/c4pc/dos): boots c4pc.elf from DOS, for DOSBox.
+# gcc -m16 is 32-bit C run in real mode, in one 64 KB segment.
+C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com.ld
+	gcc -m16 -march=i386 -Os -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
+		-fno-delete-null-pointer-checks -fno-asynchronous-unwind-tables -fno-builtin -Wall -Wa,--no-warn \
+		-nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/dos/com.ld -Wl,--build-id=none \
+		-o $@ $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c
+# The boot disk as one archive, for a loader to hand c4pc as a module
+.c4pc/disk.tar: $(C4PC_IMAGES_DEP)
+	mkdir -p .c4pc
+	tar --format=ustar -C $(C4PC_IMAGES)/disk -cf $@ .
+# The boot disk less the games, for machines with little memory: plain
+# DOSBox has 63 MB at most. Every file under 300 KB outside the games'
+# folders, and the root archive.
+.c4pc/small.tar: $(C4PC_IMAGES_DEP)
+	mkdir -p .c4pc
+	cd $(C4PC_IMAGES)/disk && { find . -type f -size -300k ! -path './games/*' ! -path './tyrian/*' \
+		! -path './bsdgames/*' ! -path './frotz/*'; echo ./c4ix-root.tgz; } | sort > $(CURDIR)/.c4pc/small.lst
+	tar --format=ustar -C $(C4PC_IMAGES)/disk -cf $@ -T .c4pc/small.lst
+# A GRUB ISO of C4IX on c4pc, the whole disk: for VirtualBox, VMware,
+# Hyper-V (generation 1) and real PCs with a BIOS. GRUB_MKRESCUE: one
+# with the i386-pc modules (~/opt/pctools/bin/grub-mkrescue-pc on helios).
+GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue-pc || echo grub-mkrescue)
+c4pc.iso: c4pc.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg
+	rm -rf .c4pc/iso && mkdir -p .c4pc/iso/boot/grub
+	cp c4pc.elf $(C4PC_IMAGES)/c4ix32.c4r .c4pc/disk.tar .c4pc/iso/boot/
+	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
+	$(GRUB_MKRESCUE) -o $@ .c4pc/iso
+# The DOS package: copy the folder to a DOSBox drive and run C4PC.
+c4pc-dos: C4PC.COM c4pc.elf .c4pc/small.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/dos/C4PC.CFG $(C4PC_SRC)/dos/dosbox.conf
+	rm -rf .c4pc/dos && mkdir -p .c4pc/dos
+	cp C4PC.COM .c4pc/dos/C4PC.COM
+	cp c4pc.elf .c4pc/dos/C4PC.ELF
+	cp $(C4PC_IMAGES)/c4ix32.c4r .c4pc/dos/C4IX32.C4R
+	cp .c4pc/small.tar .c4pc/dos/DISK.TAR
+	sed 's/$$/\r/' $(C4PC_SRC)/dos/C4PC.CFG > .c4pc/dos/C4PC.CFG
+	cp $(C4PC_SRC)/dos/dosbox.conf .c4pc/dos/DOSBOX.CONF
+	@echo "c4pc-dos: .c4pc/dos/ is ready: DOSBox with DOSBOX.CONF, then C4PC"
+PHONY += c4pc-dos
+# C4IX's boot test from test-libjs (ps, then exit) on three machines:
+# libjs, c4pc-host, and c4pc.elf in QEMU when there is a qemu-system-i386,
+# each output byte for byte the others'. Not in the gate yet.
+test-c4pc: c4pc-host c4pc.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP)
+	IMAGES=$(C4PC_IMAGES) bash $(C4PC_SRC)/test-c4pc.sh
+PHONY += test-c4pc
+
 # C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.

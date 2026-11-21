@@ -11,6 +11,9 @@ listings () {           # listings DIR: a c4dos.dir in every directory under DIR
     (cd $1 && find . -type d | while read -r d; do
         (cd "$d" && { ls -p | grep '/$' || true; ls -p | grep -v '/$' | grep -v '^manifest.json$\|^index.json$' || true; } > c4dos.dir)
     done)
+    # and the files the machine makes from a game's package when it opens
+    # them (QUAKE_AS_ZIP=1: pak0.pak from quake106.zip, libjs/unpack.js)
+    python3 -I src/c4bb/tests/unpacked.py listings $1
 }
 #
 # These run once per file, thousands of times, so they start no process
@@ -65,4 +68,5 @@ disk_indexes () {       # disk_indexes DISK: manifest.json and index.json, every
     (cd $1 && find . -type f -not -name manifest.json -not -name index.json -printf '%s %P\n' | sort -k2) | \
         awk 'BEGIN{printf "["} NR>1{printf ","} {n=$0; sub(/^[0-9]+ /,"",n); printf "[\"%s\",%s]", n, $1} END{print "]"}' \
         > $1/index.json
+    python3 -I src/c4bb/tests/unpacked.py index $1
 }

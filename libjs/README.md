@@ -376,6 +376,8 @@ regions by word offset, as `c4ix.h` has them; those say so.
 | `worker.js` | The Web Worker: arena, devices, machine, run loop, messages. |
 | `page.js` | The main-thread API, `C4M.boot(...)`. |
 | `lazy.js` | A disk read on demand, and the page's cache of what it read. |
+| `unpack.js` | A file a disk carries as the package it came in (`NAME.unpack` beside it), made when the machine first opens it: Quake's `pak0.pak` from `quake106.zip` (`QUAKE_AS_ZIP=1`, games/quake/data/README.md). |
+| `lh5.js`, `sha256.js` | For it: an LHA `-lh5-` member decoded, and SHA-256, both synchronous. |
 | `uploads.js` | The Uploads: their folders, what each game needs, and where each system finds them (`layUploads`, `HomeFiles`). |
 | `uploads-readme.mjs` | Writes `GAMES\README.TXT` on the C4DOS disks from `NEEDS`. |
 | `kept.js` | Saved Files: a store's files as the person sees them, for listing and download. |

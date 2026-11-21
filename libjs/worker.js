@@ -196,6 +196,7 @@ function start(msg) {
     };
   }
   vm = createMachine({
+    unpackLog: m => console.log(m),
     arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu, accel: msg.accel, osAccel: msg.osAccel,
     cpus: msg.cpus | 0, quantum: msg.quantum | 0, mmu: !!msg.mmu,
     parallel: !!msg.parallel, spawn: url => new Worker(url, { type: 'module' }),
@@ -418,7 +419,9 @@ function cpuIps(now) {
 
 function lazyStats() {
   const f = vm && vm.dev.drives[0] && vm.dev.drives[0].files;
-  return f instanceof LazyFiles ? { lazy: true, files: f.sizes.size, fetched: f.fetched, bytes: f.fetchedBytes, cached: f.cached } : { lazy: false };
+  // and the files made from their packages (unpack.js), each with how long it took
+  const made = f && f.unpacked ? f.unpacked.map(u => ({ name: u.name, ms: u.ms })) : [];
+  return f instanceof LazyFiles ? { lazy: true, files: f.sizes.size, fetched: f.fetched, bytes: f.fetchedBytes, cached: f.cached, made } : { lazy: false, made };
 }
 
 function echo(bytes) { for (const b of bytes) out.push(b); flush(); }

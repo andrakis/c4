@@ -109,6 +109,7 @@ node libjs/tests/test-gui.mjs    || fail=1
 node libjs/tests/test-snd.mjs    || fail=1   # the sound card: a sample in one write (PCM_START), whoever else is playing; the OPL3 mode a program leaves on
 node libjs/tests/test-shared.mjs || fail=1
 node libjs/tests/test-rom.mjs    || fail=1
+node libjs/tests/test-unpack.mjs || fail=1   # a file made from its package when opened: pak0.pak from quake106.zip (QUAKE_AS_ZIP=1)
 node libjs/tests/test-kept.mjs   || fail=1   # the Uploads' folders, and Saved Files' lists and tars
 node libjs/tests/test-paste.mjs  || fail=1   # a paste typed a line at a time into C4DOS and C4KE; the terminal's cursor
 }

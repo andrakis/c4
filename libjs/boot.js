@@ -32,11 +32,15 @@ import { Heap } from './heap.js';
 import { SharedHeap } from './sheap.js';
 import { Mmu } from './mmu.js';
 import { accel, setOsAccel } from './accel.js';
+import { fitUnpack } from './unpack.js';
 
 // The whole machine, empty. Both hosts (cli.js, worker.js) build it
 // here so they cannot drift apart.
 //   arenaMb   memory in megabytes (default 32)
-//   drives    [{ files: Map<name, Uint8Array>, writable, sink }] (c4bb's drives)
+//   drives    [{ files: Map<name, Uint8Array>, writable, sink }] (c4bb's drives),
+//             each fitted with the files its recipes make from the packages
+//             they came in (unpack.js: Quake's pak0.pak from quake106.zip)
+//   unpackLog(message)  told of each such file made, and how long it took
 //   onByte    console sink, one byte at a time
 //   onDownload(name, bytes)  a file the machine hands the person (C4IX's
 //             download: devices.js "download:NAME"); without it, none is taken
@@ -61,6 +65,7 @@ export function createMachine(opts = {}) {
   const bytes = (opts.arenaMb || 32) * 1024 * 1024;
   const par = opts.cpus > 1 && opts.parallel && opts.spawn && typeof SharedArrayBuffer !== 'undefined';
   const arena = new Arena(par ? new SharedArrayBuffer(bytes) : bytes);
+  for (const d of opts.drives || []) fitUnpack(d.files, { log: opts.unpackLog });
   const dev = new Devices(arena, {
     drives: opts.drives,
     onByte: opts.onByte,

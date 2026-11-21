@@ -96,6 +96,7 @@ c4mp's processors were out of scope at first. They came on
 | `libjs/sheap.js` | `heap.js`'s heap with its books in shared memory, for the threads. |
 | `libjs/mmu.js` | Paged virtual memory with protection, for C4IX (docs/c4ix-mmu.md). |
 | `libjs/lazy.js` | A disk read on demand, and the page's cache of what it read. |
+| `libjs/unpack.js`, `lh5.js`, `sha256.js` | Files made from a package the first time they are opened: Quake's `pak0.pak` from the shareware `quake106.zip` (inflate by the vendored fflate, then LH5), checked by SHA-256. `createMachine` (`boot.js`) fits each drive with it. |
 | `libjs/uploads.js`, `uploads-readme.mjs` | The Uploads: their folders, what each game needs, where each system finds them; `GAMES\README.TXT` from `NEEDS`. |
 | `libjs/kept.js` | Saved Files: a store's files, for listing and download. |
 | `libjs/c4r.js` | The Code Explorer's reader of C4R images, objects and libraries. |

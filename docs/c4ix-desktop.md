@@ -1166,7 +1166,11 @@ opens one; the page keeps what it has read, so it is read once.
   name and a size, filled from the host on first use (`vfs_fill`), so
   `ls` and stat cost nothing. In the page, `index.json` is the same table,
   and the worker fetches a file with one synchronous request when the
-  machine first opens it.
+  machine first opens it. A file made from a package is the exception
+  (2026-11-21, `libjs/unpack.js`): Quake's `pak0.pak`, on a disk built
+  with `QUAKE_AS_ZIP=1`, is unpacked from the `quake106.zip` beside it
+  the first time it is opened, checked against its SHA-256, and kept in
+  the same cache as a fetched file.
 - **`hostdir(PREFIX)`**, vfsload's directory of every file the table lists
   under a prefix: Tyrian's data (which the manifest cannot name, as it is
   on the disk only where it was there to copy) and the uploads in /home.
@@ -1190,9 +1194,11 @@ opens one; the page keeps what it has read, so it is read once.
       `COPYING`), OpenTyrian (`COPYING`), and Wolf4SDL, used under the GPL
       (`license-gpl.txt`; id's original licence is `license-id.txt`). No
       game's data is in its repository, so no data comes this way.
-      Tyrian's code may be passed on; its data may not, and libjs/site.sh
-      refuses a tree with games/tyrian at all, so the site has none of
-      Tyrian (its sources included) as before.
+      Tyrian's code may be passed on; its data may not. Since
+      2026-11-21 (page-games) the site has OpenTyrian, its sources
+      included, and libjs/site.sh refuses any of Tyrian 2.1's files by
+      their SHA-256s (libjs/tyrian21.sha256) rather than games/tyrian as
+      a whole.
 - [x] **Which files.** The game repository's tracked text files
       (`git -C games/NAME ls-files`, as the root archive takes c4's), but
       not `data/` (data, and /usr/games/tyrian/data is Tyrian's hostdir)
@@ -1301,10 +1307,10 @@ Tyrian, lists 457 of the 582):
   products are copied in and touched; otherwise every game object is
   older than its source and is compiled again.
 
-Left for later: Tyrian's sources on the site, which needs site.sh's
-rule (no tree with games/tyrian) to tell its code from its data; and a
-kernel directory lookup better than linear, which would take the rest
-of the boot cost away.
+Left for later: a kernel directory lookup better than linear, which
+would take the rest of the boot cost away. (Tyrian's sources on the
+site came with page-games, 2026-11-21: site.sh now tells Tyrian's data
+from its code by the data's SHA-256s.)
 
 ## Part twenty-two: Word Wrap in Text Editor, and a choice of fonts (asked for 2026-10-30)
 

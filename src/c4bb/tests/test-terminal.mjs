@@ -73,10 +73,16 @@ const text = t => t.lines.map(r => r.map(c => c.ch).join('').replace(/\s+$/, '')
   const t = new Terminal(null, 4, 80);
   feed(t, 'abcdef\x1b[1;4H\x1b[K');
   eq('ESC[K erases to end of line', text(t), 'abc');
+  // with the cursor hidden, so only the colour is in the HTML
   const t2 = new Terminal(null, 4, 80);
-  feed(t2, '\x1b[48;5;196mR\x1b[0m.');
+  feed(t2, '\x1b[?25l\x1b[48;5;196mR\x1b[0m.');
   eq('SGR still colours a cell', t2.toHtml(),
      '<span style="background:rgb(255,0,0)">R</span>.');
+  // a shown cursor past the row's end is an empty cell of its own
+  const t3 = new Terminal(null, 4, 80);
+  feed(t3, 'ab');
+  eq('the cursor stands after the text', t3.toHtml(),
+     'ab<span class="c4-term-cursor c4-term-cursor-pad"></span>');
 }
 
 // ---- an escape split across writes must not be printed literally ----

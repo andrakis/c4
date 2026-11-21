@@ -190,7 +190,7 @@ then the games the page's C4DOS disk has, each in its directory in
 | group | mode | games |
 |---|---|---|
 | Action Games | full | Doom, Duke Nukem 3D, Quake, Rise of the Triad, Super Blit Kart, Tyrian, Wolfenstein 3D |
-| Full Games (Uploads) | full | README.TXT (how to add the files, written from libjs/uploads.js's NEEDS), then the same games with the person's own files, which the page's Uploads put on B:, the home drive: The Ultimate Doom, Doom II, TNT, Plutonia (`DOOM -home -iwad`), Duke Nukem 3D (`DUKE3D -home`), Quake (`QUAKE -home`), Rise of the Triad (`ROTTREG`), Wolfenstein 3D (`WOLF3D6`); each says what it wants when its files are not there |
+| Full Games (Uploads) | full | README.TXT (how to add the files, written from libjs/uploads.js's NEEDS), then the same games with the person's own files, which the page's Uploads put on B:, the home drive: The Ultimate Doom, Doom II, TNT, Plutonia (`DOOM -home -iwad`), Duke Nukem 3D (`DUKE3D -home`), Quake (`QUAKE -home`), Rise of the Triad (`ROTTREG`), Tyrian (`TYRIAN --home`, from the person's `tyrian21.zip`), Wolfenstein 3D (`WOLF3D6`); each says what it wants when its files are not there |
 | Cards & Puzzles | window | the Ace of Penguins' eleven, and Puzzles' Fifteen, Mines and Net |
 | Classic Games | window | the BSD games on curses: Air Traffic Control, Battlestar, Boggle, Canfield, Cribbage, Gomoku, Hangman, Mille Bornes, Rain, Robots, Sail, Snake, Tetris, Worm |
 | Text Games | prompt | Zork I to III (Frotz), Open Adventure, and the BSD games of lines: Adventure, Backgammon, Go Fish, Hunt the Wumpus, Monopoly, Pig, Quiz, Star Trek |
@@ -200,8 +200,22 @@ time: a game in a window gains nothing from the desktop beside it, and
 loses half its speed to the copy. They can still be set to a window by
 Properties.
 
-PROGMAN.INI has a `Version=2` line before its groups (a grin before it
-skips any line there). One without it, or older, is upgraded when it is
+A game's item is shown only where the game is on the disk (`pm_hide`): an
+item whose program is in `\GAMES` is looked for in its directory's
+`c4dos.dir`, and `needs` adds the data an item needs besides its
+program -- the Action Games' Tyrian needs `\GAMES\TYRIAN\TYRIAN\DATA\TYRIAN1.LVL`,
+which only a disk built with the person's `tyrian21.zip` has (the site has
+none). Each listing is a small file read once when PROGMAN.INI is; the
+programs themselves are not opened, since the page's lazy disk would
+fetch them whole. A hidden item stays in PROGMAN.INI as it was and shows
+again once its game is there. The person's own items, and every item
+where the disk's root has no listing (grin under C4KE), are always shown.
+So the site, built without Super Blit Kart and without Tyrian's data, has
+no Super Blit Kart and Tyrian only in Full Games (Uploads).
+
+PROGMAN.INI has a `Version=` line before its groups (a grin before it
+skips any line there): 2 the games' groups, 3 README.TXT in Full Games
+(Uploads), 4 Tyrian there. One without it, or older, is upgraded when it is
 read (`pm_upgrade`): the Games group is renamed Action Games, the default
 groups it lacks are added (as icons), every default item whose command
 line it has takes the default's mode (the old Games group's four, which
@@ -260,6 +274,7 @@ out; Sound's Test plays it.
 | G7 | finishing | `grin-g7`, 2026-10-28 | MDI groups with Cascade and Tile; the clipboard in Notepad, the fields, Calculator and the DOS Prompt; the startup chime and Control Panel's Sound; the screen saver checked; this document |
 | | the games' groups | `grin-games`, 2026-11-19 | every game on the disk in five groups, the action games full screen, the Uploads' games; `prompt` items; PROGMAN.INI upgraded; full screen from a DOS Prompt; frames scaled in a game's window; C4DOS at 256 MB |
 | | the Uploads on B:, and README.TXT | `grin-uploads`, 2026-11-20 | C4DOS has the page's Uploads on B: (`B:\DUKE3D\DUKE3D.GRP`), A: only the system; Full Games (Uploads) has README.TXT, from uploads.js's NEEDS; PROGMAN.INI version 3 |
+| | the games that are there | `page-games`, 2026-11-21 | a game's items shown only where its program (and data) is on the disk; Tyrian in Full Games (Uploads) (`--home`); PROGMAN.INI version 4 |
 | | game windows of any size, with menus | `grin-windows`, 2026-11-20 | table version 6 (`fwin_ctl`, flag 4): the cards and puzzles lay out to their window and to it maximised, with their C4IX menu bars; Minesweeper's whole board; long menus in columns |
 
 ### The Uploads on B:, as built (2026-11-20)
@@ -428,6 +443,12 @@ as worker.js makes it), PROGMAN.INI version 3 with README.TXT, which opens
 in Notepad saying how to upload each game's files; at A>, DIR B:\DUKE3D
 lists the upload, A:\DUKE3D is no directory, TYPE reads it, DEL refuses
 it, and nothing of it is in what the page keeps of B:.
+
+The games that are there (2026-11-21): Action Games shows the games whose
+programs are on the disk, Tyrian only with its data, PROGMAN.INI keeping
+them all; Full Games (Uploads) has Tyrian wherever the game is; an old
+PROGMAN.INI with an item of a game the disk lacks (`\GAMES\GHOST`) keeps
+it through the upgrade and the saves after, and it is not shown.
 
 The game windows' (2026-11-20): Net (Puzzles) with Game, Type and Help
 on its bar, its frames the window's inside, maximised and laid out to the

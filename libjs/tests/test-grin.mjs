@@ -566,7 +566,7 @@ check(text().includes('files are written to B:'), "the disk's CONFIG.SYS has DRI
 const pmIni = storeText('PROGMAN.INI');
 const GAME_GROUPS = ['Action Games', 'Full Games (Uploads)', 'Cards & Puzzles', 'Classic Games', 'Text Games'];
 const groupLine = g => new RegExp('^\\[' + g.replace(/[()]/g, '\\$&') + '\\]( |$)', 'm');
-check(pmIni && /^Version=3$/m.test(pmIni) && groupLine('Main').test(pmIni) && groupLine('Accessories').test(pmIni) &&
+check(pmIni && /^Version=4$/m.test(pmIni) && groupLine('Main').test(pmIni) && groupLine('Accessories').test(pmIni) &&
       GAME_GROUPS.every(g => groupLine(g).test(pmIni)) &&
       /^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(pmIni) && /^Quake=\\GAMES\\QUAKE\\QUAKE -home,game,full$/m.test(pmIni) &&
       /^Net=\\GAMES\\PUZZLES\\NET,game,window$/m.test(pmIni) && /^Zork I=\\GAMES\\FROTZ\\FROTZ ZORK1\.Z3,game,prompt$/m.test(pmIni) &&
@@ -574,9 +574,33 @@ check(pmIni && /^Version=3$/m.test(pmIni) && groupLine('Main').test(pmIni) && gr
   'PROGMAN.INI, written with the default groups (the games in five, the action games full screen), is on B:', pmIni);
 showGroup('Main');
 check(['File Manager', 'DOS Prompt', 'Control Panel', 'Notepad'].every(s => inPm(find(s))), 'Main: File Manager, DOS Prompt, Control Panel, Notepad');
+// A game's items are shown only where the game is on the disk, with its
+// data (progman.c, pm_hide): a tree may be built without a game, and the
+// site has no Tyrian data (libjs/pages.sh). PROGMAN.INI keeps them all.
+const onDisk = f => existsSync(join(DISK, 'GAMES', f));
+const haveTyrData = onDisk('TYRIAN/tyrian/data/tyrian1.lvl');
+const ACTION = [[['Doom'], 'DOOM/doom.c4r'], [['Duke Nukem 3D'], 'DUKE3D/duke3d.c4r'], [['Quake'], 'QUAKE/quake.c4r'],
+  [['Rise of the', 'Triad'], 'ROTT/rott.c4r'], [['Super Blit', 'Kart'], 'SBK/sbk.c4r'],
+  [['Tyrian'], 'TYRIAN/tyrian.c4r', 'TYRIAN/tyrian/data/tyrian1.lvl'], [['Wolfenstein 3D'], 'WOLF3D/wolf3d.c4r']];
+const actionThere = ACTION.filter(([, prog, data]) => onDisk(prog) && (!data || onDisk(data)));
+// a group window by its title (groupWin, below, is the same, for G7)
+const groupRect = name => {
+  const p = pmWin();
+  const t = p && find(name).filter(t => within(p, t.x, t.y) && t.y > p.y + 40).pop();
+  const r = t && rects.filter(r => r.y === t.y - 6 && r.x < t.x && r.x + r.w > t.x && r.w >= 140 && r.h >= 60 && within(p, r.x, r.y)).pop();
+  return r ? { x: r.x, y: r.y, w: r.w, h: r.h } : null;
+};
 showGroup('Action Games');
-check(['Doom', 'Duke Nukem 3D', 'Quake', 'Rise of the', 'Triad', 'Super Blit', 'Kart', 'Tyrian', 'Wolfenstein 3D'].every(s => inPm(find(s))),
-  'Action Games: the seven, two of them with their labels on two lines', JSON.stringify(frame.map(t => t.s.trimEnd())));
+{
+  const aw = groupRect('Action Games');
+  const shown = labels => !!aw && labels.every(l => find(l).some(t => within(aw, t.x, t.y)));
+  const wrong = ACTION.filter(a => shown(a[0]) !== actionThere.includes(a));
+  check(!!aw && wrong.length === 0,
+    `Action Games: the ${actionThere.length} on the disk (${actionThere.map(a => a[0].join(' ')).join(', ')}), and only those`,
+    wrong.map(a => a[0].join(' ')).join(', ') + ' ' + JSON.stringify(frame.map(t => t.s.trimEnd())));
+  check(/^Super Blit Kart=\\GAMES\\SBK\\SBK,game,full$/m.test(pmIni) && /^Tyrian=\\GAMES\\TYRIAN\\TYRIAN,game,full$/m.test(pmIni),
+    '... PROGMAN.INI has them all, those not shown too', pmIni);
+}
 
 // each item launches what it should (DOS Prompt and Doom: G5's, below)
 startItem('Control Panel');
@@ -803,10 +827,11 @@ const setMode = (title, label, group = 'Action Games') => {
   key(13);
   return until(() => !has('Program Item Properties'));
 };
-for (const t of ['Doom', 'Wolfenstein 3D', 'Tyrian', 'Rise of the']) setMode(t, 'DOS program, in a window');
-check(['Doom=\\\\GAMES\\\\DOOM\\\\DOOM', 'Wolfenstein 3D=\\\\GAMES\\\\WOLF3D\\\\WOLF3D', 'Tyrian=\\\\GAMES\\\\TYRIAN\\\\TYRIAN',
+// (Tyrian's item is there only with its data: else Tyrian is left as it is)
+for (const t of ['Doom', 'Wolfenstein 3D', ...(haveTyrData ? ['Tyrian'] : []), 'Rise of the']) setMode(t, 'DOS program, in a window');
+check(['Doom=\\\\GAMES\\\\DOOM\\\\DOOM', 'Wolfenstein 3D=\\\\GAMES\\\\WOLF3D\\\\WOLF3D', ...(haveTyrData ? ['Tyrian=\\\\GAMES\\\\TYRIAN\\\\TYRIAN'] : []),
        'Rise of the Triad=\\\\GAMES\\\\ROTT\\\\ROTT'].every(l => new RegExp(`^${l},game,window$`, 'm').test(storeText('PROGMAN.INI') || '')),
-  'Properties, with its fourth mode: Doom, Wolfenstein 3D, Tyrian and Rise of the Triad set to run in a window', storeText('PROGMAN.INI'));
+  `Properties, with its fourth mode: Doom, Wolfenstein 3D, ${haveTyrData ? 'Tyrian ' : ''}and Rise of the Triad set to run in a window`, storeText('PROGMAN.INI'));
 if (haveDoom) {
   startItem('Clock');
   digital();
@@ -1278,20 +1303,31 @@ until(() => !gui.stats().attached, 3000);
 const OLD_INI = ['[Main]', 'File Manager=FILEMAN,files,app', 'DOS Prompt=DOSPRMPT,dos,app', 'Control Panel=CONTROL,control,app',
   'Notepad=NOTEPAD,notepad,app', '[Accessories]', 'Clock=CLOCK,clock,app', '[Games]',
   'Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,window', 'Doom=\\GAMES\\DOOM\\DOOM,game,window',
-  'Doom, level 2=\\GAMES\\DOOM\\DOOM -warp 2,game,window', '[Mine]', 'Hello=HELLO,app,full', ''].join('\n');
+  'Doom, level 2=\\GAMES\\DOOM\\DOOM -warp 2,game,window', 'Ghost Game=\\GAMES\\GHOST\\GHOST,game,full',
+  '[Mine]', 'Hello=HELLO,app,full', ''].join('\n');
 store.set('PROGMAN.INI', new Uint8Array(Buffer.from(OLD_INI, 'latin1')));
 bootG7();
 settle();
 const upIni = storeText('PROGMAN.INI') || '';
-check(/^Version=3$/m.test(upIni) && groupLine('Action Games').test(upIni) && !groupLine('Games').test(upIni) &&
+check(/^Version=4$/m.test(upIni) && groupLine('Action Games').test(upIni) && !groupLine('Games').test(upIni) &&
       GAME_GROUPS.every(g => groupLine(g).test(upIni)),
-  'an old PROGMAN.INI is upgraded: Version=3, Games renamed Action Games, the new groups added', upIni);
+  'an old PROGMAN.INI is upgraded: Version=4, Games renamed Action Games, the new groups added', upIni);
 check(/^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(upIni) && /^Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,full$/m.test(upIni) &&
       /^Calculator=CALC,calc,app$/m.test(upIni) && /^Quake=\\GAMES\\QUAKE\\QUAKE,game,full$/m.test(upIni),
   '... its games full screen, and the default items it lacked added (Calculator, Quake)', upIni);
 check(/^Doom, level 2=\\GAMES\\DOOM\\DOOM -warp 2,game,window$/m.test(upIni) && /^\[Mine\]\nHello=HELLO,app,full$/m.test(upIni),
   "... the person's own item and group as they were", upIni);
 check(upIni.split('\n').filter(l => /^Doom=/.test(l)).length === 1, '... and nothing twice', upIni);
+// an item of a game the disk does not have (\GAMES\GHOST): not shown, but
+// kept in PROGMAN.INI, as the person's own
+check(/^Ghost Game=\\GAMES\\GHOST\\GHOST,game,full$/m.test(upIni) && /^Tyrian=\\GAMES\\TYRIAN\\TYRIAN --home,game,full$/m.test(upIni),
+  '... Tyrian (--home) added to Full Games (Uploads), and Ghost Game, whose game is not on the disk, kept', upIni);
+showGroup('Action Games');
+{
+  const aw = groupWin('Action Games');
+  check(!!aw && find('Doom').some(t => within(aw, t.x, t.y)) && !find('Ghost Game').length,
+    '... but not shown: Action Games has Doom and no Ghost Game', JSON.stringify(frame.map(t => t.s.trimEnd())));
+}
 
 // The Uploads under C4DOS (libjs/uploads.js HomeFiles), on B:, the home
 // drive, as worker.js lays them: B:\DUKE3D\DUKE3D.GRP, and no A:\DUKE3D.
@@ -1309,13 +1345,27 @@ until(() => !gui.stats().attached, 3000);
 }
 check(until(() => has('Program Manager'), 3000), 'a boot with an upload, duke3d/duke3d.grp: grin comes up');
 // (PROGMAN.INI version 3: README.TXT added to the group the person has)
-check(/^Version=3$/m.test(storeText('PROGMAN.INI') || '') && /^README\.TXT=NOTEPAD \\GAMES\\README\.TXT,notepad,app$/m.test(storeText('PROGMAN.INI') || ''),
-  'PROGMAN.INI is version 3, with README.TXT in Full Games (Uploads)', storeText('PROGMAN.INI'));
+check(/^Version=4$/m.test(storeText('PROGMAN.INI') || '') && /^README\.TXT=NOTEPAD \\GAMES\\README\.TXT,notepad,app$/m.test(storeText('PROGMAN.INI') || ''),
+  'PROGMAN.INI is version 4, with README.TXT in Full Games (Uploads)', storeText('PROGMAN.INI'));
+check(/^Ghost Game=\\GAMES\\GHOST\\GHOST,game,full$/m.test(storeText('PROGMAN.INI') || ''),
+  '... and Ghost Game still, through the saves since', storeText('PROGMAN.INI'));
 if (existsSync(join(DISK, 'GAMES/README.TXT'))) {
   startItem('README.TXT', 'Full Games \\(Uploads\\)');
   check(until(() => find(/README\.TXT - Notepad$/).length > 0 && find(/^FULL GAMES \(UPLOADS\)/).length > 0 && find(/^Duke Nukem 3D/).length > 0),
     "Full Games (Uploads) > README.TXT opens it in Notepad: how to upload each game's files", JSON.stringify(frame.map(t => t.s.trimEnd())));
   endTask2(/README\.TXT - Notepad$/);
+}
+// (shown here, not with Action Games above: its window open there, its
+// Ultimate Doom's "Doom" would be taken for Doom's)
+// Full Games (Uploads): Tyrian plays the person's own tyrian21.zip
+// (tyrian --home, uploads.js), so it is there wherever the game is
+showGroup('Full Games \\(Uploads\\)');
+{
+  const uw = groupRect('Full Games (Uploads)');
+  const tyr = !!uw && find('Tyrian').some(t => within(uw, t.x, t.y));
+  check(!!uw && tyr === onDisk('TYRIAN/tyrian.c4r') && /^Tyrian=\\GAMES\\TYRIAN\\TYRIAN --home,game,full$/m.test(pmIni),
+    `Full Games (Uploads): Tyrian (--home) ${onDisk('TYRIAN/tyrian.c4r') ? 'there, the game being on the disk' : 'not there: no game on the disk'}`,
+    JSON.stringify(frame.map(t => t.s.trimEnd())));
 }
 endSession(); clickText('OK');
 check(until(() => !gui.stats().attached && /A:\\>$/.test(text().trimEnd()), 3000), '... and Exit grin, to A>');

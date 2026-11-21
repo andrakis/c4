@@ -1517,8 +1517,13 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
 // (games/README.md: optional submodules; C4IX's manifest lists the ones there)
 {
   const vfs = readFileSync(join(ROOT, 'disk/c4ix.vfs.txt'), 'utf8');
-  const games = [['wolf3d', 'Wolfenstein 3D'], ['doom', 'Doom'], ['tyrian', 'Tyrian'], ['rott', 'Rise of the Triad']];
-  const there = games.filter(([g]) => new RegExp(`^\\s*${g}: ilink`, 'm').test(vfs));
+  // Tyrian only where its data was there to put on the disk (the site has
+  // none: games/tyrian/c4ix.vfs.txt's #@app-if), Tyrian (your files),
+  // tyrian --home, wherever the game is
+  const tyrData = existsSync(join(ROOT, 'disk/tyrian/tyrian1.lvl'));
+  const games = [['wolf3d', 'Wolfenstein 3D'], ['doom', 'Doom'], ['tyrian', 'Tyrian', tyrData],
+                 ['tyrian', 'Tyrian (your files)'], ['rott', 'Rise of the Triad']];
+  const there = games.filter(([g, , data = true]) => data && new RegExp(`^\\s*${g}: ilink`, 'm').test(vfs));
   const hover = (x, y) => ev({ kind: 'move', x, y, buttons: 0 });
   click(20, SH - TASK_H + 12);
   until(() => has('Power Off...'));
@@ -1533,6 +1538,9 @@ check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done afte
       wrong.map(([n]) => n).join(' ') || 'all as the manifest says');
     const rows = there.map(([, label]) => find(label)[0]).sort((a, b) => a.y - b.y).map(t => t.s.trimEnd());
     check(rows.join() === there.map(t => t[1]).sort().join(), 'by name', rows.join());
+    if (there.some(([g]) => g === 'tyrian'))
+      check(has('Tyrian (your files)') && has('Tyrian') === tyrData,
+        tyrData ? 'Tyrian, and Tyrian (your files) for the Uploads' : "Tyrian's data not on the disk: Tyrian (your files) only");
     // the way across: right and down, over Run..., and the games stay
     // (the menu's, drawn last: System Monitor has a Run... button too)
     const r = find('Run...').pop(), one = there[0][1];

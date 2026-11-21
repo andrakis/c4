@@ -32,6 +32,11 @@
 // lacks, the default items it lacks, and the default items it has given
 // their default mode, its own items left as they are.
 //
+// A game's item is shown only where the game is on the disk, with the data
+// it needs (pm_hide, below): a tree may be built without a game, and the
+// page's site has no Tyrian data, which may not be passed on. The item is
+// kept in PROGMAN.INI all the same, and shows again once the game is there.
+//
 // Each group is a window inside Program Manager's (MDI, below), with its
 // place kept on its [name] line. File > New and Properties edit an item in
 // the active group, Delete removes it; each change is written to
@@ -49,23 +54,25 @@ enum { GROUPS = 12, ITEMS = 128, G_NAME = 24, I_TITLE = 32, I_CMD = 96, I_ICON =
 enum { N_MODES = 4 };                 // RUN_APP, RUN_FULL, RUN_WINDOW, RUN_PROMPT (shell.h)
 // PROGMAN.INI's version, on a line of its own before the groups (a grin
 // before it reads no line there): 2 has the games' groups and modes, 3
-// README.TXT in Full Games (Uploads)
-enum { PM_VERSION = 3 };
+// README.TXT in Full Games (Uploads), 4 Tyrian there
+enum { PM_VERSION = 4 };
 
 enum { GS_NORMAL = 0, GS_MIN = 1, GS_MAX = 2 };
 // a group, and its window inside Program Manager's (below): placed once it
 // has a place, its state, its place in the order (the highest in front),
 // its icon's slot when minimised, and the item selected in it (1 up)
 struct group { char name[G_NAME]; int placed, x, y, w, h, state, z, islot, sel; };
-struct item { int used, group, mode; char title[I_TITLE]; char cmd[I_CMD]; char icon[I_ICON]; };
+// (hidden: a game's item whose game is not on the disk, pm_hide)
+struct item { int used, group, mode, hidden; char title[I_TITLE]; char cmd[I_CMD]; char icon[I_ICON]; };
 static struct group groups[GROUPS];
 static struct item items[ITEMS];
 static int ngroups, loaded;
 
 // The games are those the page's C4DOS disk has, each in its directory in
 // \GAMES (build-images.sh; C4IX's Go > Games has the same, desktop.apps).
-// A game not built is not on the disk: its item says so when started.
-static char *defaults[72] = {
+// A game not built is not on the disk, and its items are not shown
+// (pm_hide).
+static char *defaults[80] = {
     "[Main]",
     "File Manager=FILEMAN,files,app",
     "DOS Prompt=DOSPRMPT,dos,app",
@@ -95,6 +102,7 @@ static char *defaults[72] = {
     "Duke Nukem 3D=\\GAMES\\DUKE3D\\DUKE3D -home,game,full",
     "Quake=\\GAMES\\QUAKE\\QUAKE -home,game,full",
     "Rise of the Triad=\\GAMES\\ROTT\\ROTTREG,game,full",
+    "Tyrian=\\GAMES\\TYRIAN\\TYRIAN --home,game,full",
     "Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D6,game,full",
     "[Cards & Puzzles]",
     "Solitaire=\\GAMES\\ACE\\SOLITAIRE,game,window",
@@ -155,6 +163,11 @@ static char *moved[9] = {
     "ROTT", "\\GAMES\\ROTT\\ROTT",
     0
 };
+// The data an item needs besides its program, where the disk may not have
+// it: the item's command line, and the file. Tyrian's data may not be passed
+// on, so only a disk built where its zip was has it (games/tyrian/data);
+// its Full Games item plays the person's own (--home), from B:.
+static char *needs[3] = { "\\GAMES\\TYRIAN\\TYRIAN", "\\GAMES\\TYRIAN\\TYRIAN\\DATA\\TYRIAN1.LVL", 0 };
 static int ini_moved;
 static int ini_version;               // PROGMAN.INI's Version= line, 0 without
 static char *mode_names[N_MODES] = { "app", "full", "window", "prompt" };
@@ -368,6 +381,110 @@ static void pm_save() {
     close(fd);
 }
 
+// ---- the games that are there ------------------------------------------------------------
+//
+// An item whose program is in \GAMES is shown only where that program is on
+// the disk, and what needs[] says it needs with it. Each is looked for in
+// its directory's listing, the c4dos.dir DOS keeps in every directory
+// (page-disks.sh writes them): a few small files, each read once when
+// PROGMAN.INI is, where opening the program would read it whole --
+// megabytes, from the page's lazy disk. Hidden items stay in PROGMAN.INI as
+// they were. Any other item, the person's own among them, is always shown,
+// and so is every item where the disk's root has no listing to go by (grin
+// under C4KE).
+
+enum { LS_DIRS = 32, LS_PATH = 64, LS_POOL = 12288 };
+static char ls_pool[LS_POOL];              // the listings read, one after another
+static char ls_name[LS_DIRS * LS_PATH];    // each one's directory ("/GAMES/DOOM"; "" the root)
+static int ls_at[LS_DIRS], ls_len[LS_DIRS], ls_n, ls_used;
+static char ls_path[LS_PATH + 16];
+
+// directory dir's listing, read once: its index, -1 if the directory has
+// none (it is not there), -2 if that cannot be told (no room to keep it)
+static int ls_get(char *dir) {
+    int k, fd, n, got;
+    k = 0;
+    while (k < ls_n) { if (ieq(ls_name + k * LS_PATH, dir)) return ls_len[k] < 0 ? ls_len[k] : k; ++k; }
+    if (ls_n == LS_DIRS || ui_len(dir) >= LS_PATH || ls_used >= LS_POOL - 1) return 0 - 2;
+    ui_ncpy(ls_name + ls_n * LS_PATH, dir, LS_PATH);
+    ls_at[ls_n] = ls_used;
+    ls_len[ls_n] = 0 - 1;
+    ui_ncpy(ls_path, dir, LS_PATH + 16);
+    ui_ncat(ls_path, "/c4dos.dir", LS_PATH + 16);
+    if ((fd = open(ls_path, O_RDONLY)) >= 0) {
+        got = 0;
+        while (ls_used + got < LS_POOL - 1 && (n = read(fd, ls_pool + ls_used + got, LS_POOL - 1 - ls_used - got)) > 0) got = got + n;
+        close(fd);
+        ls_pool[ls_used + got] = 0;
+        // (a listing the pool had no room for all of says nothing)
+        ls_len[ls_n] = ls_used + got < LS_POOL - 1 ? got : 0 - 2;
+        ls_used = ls_used + got + 1;
+    }
+    ++ls_n;
+    return ls_len[ls_n - 1] < 0 ? ls_len[ls_n - 1] : ls_n - 1;
+}
+
+// is the file at path ("\GAMES\DOOM\DOOM.C4R") in its directory's listing,
+// in any case? 1 also when that cannot be told
+static char od_path[I_CMD];
+static int on_disk(char *path) {
+    int k, b, n, i;
+    char *p, *name;
+    k = 0; b = 0 - 1;
+    while (path[k] && k < I_CMD - 1) { od_path[k] = path[k] == '\\' ? '/' : path[k]; if (od_path[k] == '/') b = k; ++k; }
+    od_path[k] = 0;
+    if (b < 0) return 1;
+    od_path[b] = 0;
+    name = od_path + b + 1;
+    if ((i = ls_get(od_path)) == 0 - 2) return 1;
+    if (i < 0) return 0;
+    n = ui_len(name);
+    p = ls_pool + ls_at[i];
+    while (*p) {
+        k = 0;
+        while (p[k] && p[k] != '\n' && p[k] != '\r') ++k;
+        if (k == n) { i = 0; while (i < n && up(p[i]) == up(name[i])) ++i; if (i == n) return 1; }
+        p = p + k;
+        while (*p == '\n' || *p == '\r') ++p;
+    }
+    return 0;
+}
+
+// is the item's game there: its program (".C4R" where it names none), and
+// what needs[] says its command line needs? Items outside \GAMES always are
+static char it_prog[I_CMD + 8];
+static int item_there(struct item *it) {
+    char *c, *w;
+    int k, dot;
+    c = it->cmd;
+    while (*c == ' ') ++c;
+    w = "\\GAMES\\";
+    k = 0;
+    while (w[k] && up(c[k]) == w[k]) ++k;
+    if (w[k]) return 1;
+    k = 0; dot = 0;
+    while (c[k] && c[k] != ' ' && k < I_CMD - 1) {
+        it_prog[k] = c[k];
+        if (c[k] == '.') dot = 1; else if (c[k] == '\\' || c[k] == '/') dot = 0;
+        ++k;
+    }
+    it_prog[k] = 0;
+    if (!dot) ui_ncat(it_prog, ".C4R", I_CMD + 8);
+    if (!on_disk(it_prog)) return 0;
+    k = 0;
+    while (needs[k]) { if (ieq(it->cmd, needs[k]) && !on_disk(needs[k + 1])) return 0; k = k + 2; }
+    return 1;
+}
+
+// each item hidden or not, from the listings read afresh
+static void pm_hide() {
+    int i;
+    ls_n = 0; ls_used = 0;
+    if (ls_get("") < 0) return;
+    i = 0;
+    while (i < ITEMS) { if (items[i].used) items[i].hidden = !item_there(&items[i]); ++i; }
+}
+
 // PROGMAN.INI, or the defaults (written out, so the next start finds them)
 static void pm_load() {
     int fd, n, i, k;
@@ -394,11 +511,13 @@ static void pm_load() {
     if (ngroups) {
         if (ini_version < PM_VERSION) { pm_upgrade(ini_version); ini_moved = 1; }
         if (ini_moved) pm_save();
+        pm_hide();
         return;
     }
     k = 0;
     while (defaults[k]) { ui_ncpy(line, defaults[k], 200); ini_take(); ++k; }
     pm_save();
+    pm_hide();
 }
 
 // ---- starting things ---------------------------------------------------------------------
@@ -528,12 +647,13 @@ static int gy(int g) { return groups[g].state == GS_MAX ? 0 : groups[g].y; }
 static int gw(int g, int cw) { return groups[g].state == GS_MAX ? cw : groups[g].w; }
 static int gh(int g, int ch) { return groups[g].state == GS_MAX ? ch : groups[g].h; }
 
-// the items of group g in order: the index of the k-th (0 up), or -1
+// the items of group g in order, those hidden left out (pm_hide): the
+// index of the k-th (0 up), or -1
 static int nth(int g, int k) {
     int i;
     i = 0;
     while (i < ITEMS) {
-        if (items[i].used && items[i].group == g) { if (!k) return i; --k; }
+        if (items[i].used && !items[i].hidden && items[i].group == g) { if (!k) return i; --k; }
         ++i;
     }
     return 0 - 1;

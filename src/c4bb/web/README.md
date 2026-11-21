@@ -18,7 +18,7 @@ serves the repo root.
 | `style.css` | Styles. |
 | `app.js` | Wires the simulator to the page. Program and firmware pickers, and the four execution modes: µStep (one microstep), Step (one instruction), Run (animated), Turbo (the compiled engine, board shown as "heat"). |
 | `board.js` | Canvas renderer. Lights chips, bus segments and control stubs from the current microstep's signals; in Turbo, lights whatever changed since the last frame. |
-| `panels.js` | The registers panel, the microcode listing, and the terminal (with cursor addressing for full-screen programs). libjs imports its `Terminal`. |
+| `panels.js` | The registers panel, the microcode listing, and the terminal (with cursor addressing for full-screen programs, and a cursor that blinks while it has the focus). libjs imports its `Terminal`. |
 | `drives.js` | `DriveSet`, the drive logic with no DOM (which medium is in which drive, eject, soft reset), and `DrivePanel`, its view. Split so the logic can be tested in Node. |
 | `store.js` | Media that survive a reload: a medium is a named set of files in IndexedDB. The backend is injectable; tests use a memory one. |
 

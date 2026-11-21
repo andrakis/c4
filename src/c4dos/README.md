@@ -34,7 +34,8 @@ kernel and write media.
 | `make install32.c4r` | `install <drive>: [manifest]`: write a bootable medium from a manifest (default `install.lst`) |
 
 The C4DOS images are preprocessed by `./cpp` and compiled by c4lc `-O`
-(c4sp for 64-bit, c4sp32 for 32-bit). The transients are compiled by
+(`c4sc-host` for 64-bit, `c4sc-host32` for 32-bit; `make C4LC=interp`
+runs c4lc.lisp under c4sp and c4sp32 instead). The transients are compiled by
 c4cc with `include/c4dos.h` passed as a source file.
 
 Floppies (directories; C4DOS's "disk" is its working directory, and
@@ -64,7 +65,7 @@ C4DOS takes no command-line options; it is configured by `CONFIG.SYS`:
 | line | effect |
 |---|---|
 | `DEVICE=CLOCK.SYS` | enables `TIME` and the API's clock slot (clock builds only) |
-| `DEVICE=RAMDISK.SYS SIZE=n` | a RAM disk of `n` bytes (default 1 MB); without it nothing can be written |
+| `DEVICE=RAMDISK.SYS SIZE=n` | a RAM disk of `n` bytes (default 1 MB); without it, or a `DRIVES.SYS HOME=` drive, nothing can be written |
 | `DEVICE=CONSOLE.SYS FLUSH` | print the prompt (`A:\>`) without a newline (for consoles that show a partial line, like c4bb's UART) |
 | `DEVICE=DRIVES.SYS [HOME=B:]` | use c4bb's drives; enables `B:`, `C:` …; `HOME=` is where files are written |
 | `DEVICE=HEAP.SYS` | each program gets a heap generation of its own, released when it is unloaded (libjs's heap) |
@@ -76,8 +77,9 @@ Commands at the prompt: `DIR [/P]`, `TYPE`, `COPY`, `DEL`/`ERASE`,
 `CD`/`CHDIR`, `MD`/`MKDIR`, `RD`/`RMDIR`, `PATH`, `APPEND`, `RUN
 prog[.c4r] [args]`, `ECHO [ON|OFF|text]`, `REM`, `VER`, `TIME`, `MEM`,
 `EXIT`, a drive letter such as `B:`, a bare program name, or a `.BAT`
-file name. Names resolve on the RAM disk before the disk; `ram:name` opens
-only the RAM copy.
+file name. Names resolve on the RAM disk first, then on the home drive
+(`HOME=`), then on the prompt's drive, then along `APPEND`. `B:name`
+opens that drive's file and `ram:name` only the RAM copy.
 
 ## Test
 
@@ -134,7 +136,8 @@ against `include/u0lite.h` instead of `u0.h`.
 - `>`, `>>`, `<` and `|` only with `DEVICE=REDIR.SYS`; without it, tools
   write files through the API.
 - The RAM disk has 64 slots and 8 open handles, and dies with the session
-  unless saved with `bbsave` or `install`.
+  unless saved with `bbsave` or `install`. With `DRIVES.SYS HOME=`,
+  files are written to that drive instead and last.
 - Without `DEVICE=HEAP.SYS` (libjs's heap only), DOS never gets back
   memory a transient allocated, and many compiler runs in one session
   accumulate. `IX` builds C4IX in one session all the same

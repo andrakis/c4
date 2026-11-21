@@ -27,7 +27,7 @@ boots C4KE as a C4IX task (docs/c4-float.md).
 | `make libarc.c4l` | gzip (inflate, CRC-32) and tar, for `c4ix-tar.c4r` and `c4ix-gunzip.c4r`, which link it as well |
 | `make c4ix-NAME.c4r` | `user/NAME.c` compiled with c4lc and linked with `libc4ix.c4l` (e.g. `c4ix-sh.c4r`, `c4ix-ls.c4r`) |
 | `make c4ix-hello.c4r` | `user/hello.c` alone, no library: it calls `printf` directly |
-| `make c4ix-desktop.c4r` | the desktop's eleven modules linked with `libc4ix.c4l` |
+| `make c4ix-desktop.c4r` | the desktop's eleven modules and the window kit's (`src/winkit`), linked with `libarc.c4l` and `libc4ix.c4l` |
 | `make c4ix-src.tar` | the kernel sources as a C4TAR1 archive, for building C4IX inside C4KE |
 
 The 32-bit images the breadboard and libjs boot (`c4ix32.c4r` and the
@@ -50,13 +50,21 @@ The kernel's command line, from `c4ix.c4r --help`:
       PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down
       --demo IMAGE...    run the built-in demonstrations, below
       -h, --help         print this and shut down
-      -q                 accepted and ignored, so older command
-                         lines keep working
+      -q                 the boot's lines in the kernel log only;
+                         on libjs they are on the console too
+      -v                 the kernel log on the console as well,
+                         as the kernel writes it (dmesg reads it
+                         either way)
       ...
-      c4ix.c4r --desktop   the web page's boot: the shell runs "desktop &",
-                           then "top", as if they were typed
-      c4ix.c4r -e CMD      the shell runs CMD first, as if it were typed
-                           (up to four; the page's wolf3d-c4ix uses it)
+      c4ix.c4r --desktop   the web page's boot: the root archive
+                           unpacks first, with a loading screen,
+                           then the shell runs "desktop &" and
+                           "top", as if they were typed
+      c4ix.c4r -e CMD      the shell runs CMD first, as if it were
+                           typed (up to four, after --desktop's own
+                           if both are given)
+
+The page's wolf3d-c4ix uses `-e`.
 
 `PROGRAM` is a host path and is not expanded; the shell expands a bare
 name to `c4ix-NAME.c4r` or `NAME.c4r`. `--demo` takes six images in fixed
@@ -94,7 +102,9 @@ nowhere that runs. The whole tree is about 29G instructions (nine minutes
 under node). `make test-c4ix-rebuild` checks all of it.
 
 The shell's builtins are `exit jobs wait kill cd pwd rm mv help`; it has `<`,
-`>`, pipelines and `&`. `exit` or Ctrl-D shuts the kernel down.
+`>`, pipelines, `&` and wildcards (`*`, `?`) in a word's last component.
+A job run with `&` gets an input that has ended, as in POSIX. `exit` or
+Ctrl-D shuts the kernel down.
 
 The desktop needs the libjs display, so it runs in the browser or headless
 under libjs, not on a terminal:
@@ -136,9 +146,13 @@ target.
 | `sys.c` | the syscall dispatcher: libc4ix's calls and trapped host opcodes both end here |
 | `c4ke.c` | the C4KE compatibility layer: answers `u0.h`'s custom opcodes, including the RAM-filesystem ones |
 | `loader.c` | the `.c4r` loader; prefers a RAM file to the host file of the same name |
+| `mmu.c` | the MMU, where libjs fits one (`cli.js --mmu`, the page's `?mmu=1`): user mode translated, page tables in the i386's shape ([docs/c4ix-mmu.md](../../docs/c4ix-mmu.md)) |
 | `init.c` | the first task and the kernel command line (`--demo`, `--help`) |
 | `include/c4ix_user.h` | the userland API (syscalls, `uprintf`, …) |
-| `include/window.h` | lets a program in a desktop Terminal use that window as a canvas |
+| `include/window.h`, `include/window.c` | lets a program in a desktop Terminal use that window as a canvas |
+| `include/display.h` | the whole display, taken from the desktop and given back (the games) |
+| `include/cpustat.h` | the CPU accounting top and System Monitor read |
+| `accel.mjs`, `include/c4ix_accel.h` | C4IX's own accelerators for libjs: libarc's CRC-32 and inflater loops (docs/accel.md 7) |
 | `lib/libc4ix.c` | the userland library |
 | `libc/` | [C4IX's C library](libc/README.md), the shared library `/lib/libc.c4s` |
 | `lib/archive.c`, `include/archive.h` | libarc: an RFC 1951 inflater (puff-style, with a 9-bit lookup table), gzip with its CRC, and a ustar/C4TAR1 reader that makes directories as it goes |
@@ -189,6 +203,8 @@ target.
   and the eleven steps that made its accounting and scheduling cheaper.
 - [docs/c4ix-desktop.md](../../docs/c4ix-desktop.md): the desktop, its
   kernel additions and its tracker. Current.
+- [docs/c4ix-mmu.md](../../docs/c4ix-mmu.md): the MMU.
+- [docs/c4ix-smp.md](../../docs/c4ix-smp.md): several CPUs.
 - [docs/internals.md](../../docs/internals.md) §7.4: what C4IX does with
   protected mode.
 - [docs/climbing-the-ladder.md](../../docs/climbing-the-ladder.md): C4KE

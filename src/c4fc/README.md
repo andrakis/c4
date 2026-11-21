@@ -4,7 +4,10 @@ c4fc compiles C to `.c4r` images, with most of c4lc's coverage (structs,
 unions, a preprocessor, objects, `-O`), and its output is byte-identical to
 c4lc's, plain and `-O`. It has no `typedef`, `float` or `double` (c4lc has
 all three) and no `long long` on a 32-bit target, and its `-minline` is a
-different inliner whose images differ from c4lc's. It is written in c4th ([../c4th/README.md](../c4th/README.md)) as a
+different inliner whose images differ from c4lc's. It also stops at a name
+used before anything declares it (`c4fc: undeclared NAME`), such as a call
+to a function defined further down with no prototype; c4lc accepts that.
+It is written in c4th ([../c4th/README.md](../c4th/README.md)) as a
 small table-driven vocabulary ([`dsl.f`](dsl.f)): each C construct is one
 `NODE:` row plus one method per compiler phase.
 
@@ -50,6 +53,7 @@ file and writes the image to stdout. Options are words executed before it:
 | `-mfuse` | fused opcodes; not runnable on plain c4. Implies optimization |
 | `-minline` | inline small functions. Implies optimization |
 | `1 CONFORMING !` | real C escape sequences, as c4lc's `-conforming` |
+| `-fno-builtin` | `open`, `read`, `printf`, `malloc` and the rest of the library names are ordinary identifiers, so a C library can define them (c4lc's `-fno-builtin`) |
 
 Examples, as the Makefile runs them:
 
@@ -118,8 +122,9 @@ Neither target is part of `make test`.
 
 ## Docs
 
-- [c4fc-design.md](../../docs/c4fc-design.md): the design and milestones.
-  It predates the inliner (`inline.f`, `-minline`), which it does not mention;
-  see [inline-small-functions.md](../../docs/inline-small-functions.md).
+- [c4fc-design.md](../../docs/c4fc-design.md): the design and milestones;
+  the inliner (`inline.f`, `-minline`) came later, and
+  [inline-small-functions.md](../../docs/inline-small-functions.md) has its
+  design.
 - [c4lc-design.md](../../docs/c4lc-design.md): the compiler c4fc matches byte
   for byte.

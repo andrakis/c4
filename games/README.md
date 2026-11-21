@@ -45,6 +45,11 @@ Its repository's branch `c4` carries, beside the game:
   sources it twice. The first time it links the game for C4IX and puts its
   data on the disk; the second, for the bare machine and C4DOS, on the
   games disk.
+- `c4/accel.mjs`, if it has one (Doom, Duke Nukem 3D, Quake, Rise of the
+  Triad, Super Blit Kart, Tyrian and Wolfenstein 3D have): its accelerators,
+  its heaviest loops run by the page in JavaScript. `build-images.sh` lists
+  the games that have one in `accel.json`, and libjs loads them
+  (docs/accel.md).
 - `c4ix.vfs.txt`: its block of C4IX's manifest, its own directory,
   `/usr/games/NAME`. `src/c4bb/tests/vfs-games.py` puts it in the disk's
   manifest at `#@games`, and its programs' names in `/usr/games/bin`, on
@@ -69,6 +74,10 @@ Its repository's branch `c4` carries, beside the game:
   the whole display from a Terminal; and Text Adventures and BSD Games in a
   Terminal. Phantasia and hack are left out, since they need a current
   directory they can write.
+
+  Under C4DOS, grin's Program Manager has them in five groups: Action Games
+  and Full Games (Uploads) full screen, Cards & Puzzles and Classic Games in
+  windows, and Text Games at a prompt (docs/grin.md).
 
 Its tracked text files, but not `data/`, go on the disk too, at their
 paths in c4 (`games/NAME/...`), so C4IX has them in `/usr/games/NAME`,
@@ -126,8 +135,10 @@ Phantasia and hack write files as they play: phantasia its characters, its
 scoreboard and the rest of its world, and hack every level the player has left, a
 lock and its scores. On their first run they make what their install would have
 in the current directory, which must be one they can write, as C4IX's `/tmp` is.
-The bare machine's disk and C4DOS's can't be written, so these two are only in
-C4IX, and their test (`c4/tests/writes`) only runs there. Phantasia makes its
+The bare machine and C4DOS write only to drive 1 (B:, the page's store), with
+no directories but the one, and the games disk itself can't be written, so
+`c4-images.sh` leaves these two out there (`BSD_WRITES_GAMES`). They are only
+in C4IX, and their test (`c4/tests/writes`) only runs there. Phantasia makes its
 monsters' file from their text on that first run, so the file is laid out as
 the build that reads it lays out its structs. Hack drew on a terminal with
 termcap; here what it writes to stdout goes onto curses's screen as a terminal

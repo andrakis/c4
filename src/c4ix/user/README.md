@@ -18,7 +18,7 @@ names (`/bin`, `/usr/bin`, `/usr/games/bin`), and then as
 
 | file | what |
 |---|---|
-| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs, builtins `exit jobs wait kill cd pwd rm mv help` (`wait PID` waits for any task), and `PATH=DIR:DIR...`, where a bare name is looked for. No fork: it points its own fd 0/1 at a stage, spawns, and restores them. `-p` puts the prompt on the input line (the Terminal passes it); `-e CMD` runs a line first, as if typed |
+| `sh.c` | `c4ix-sh`, the shell: pipelines of any length, `<` and `>`, `&` jobs (a background job's input has ended, so a `--window` program run that way gets its own window), wildcards (`*`, `?`) in a word's last component, builtins `exit jobs wait kill cd pwd rm [-r] [-f] mv help` (`wait PID` waits for any task), and `PATH=DIR:DIR...`, where a bare name is looked for. No fork: it points its own fd 0/1 at a stage, spawns, and restores them. `-p` puts the prompt on the input line (the Terminal passes it); `-e CMD` runs a line first, as if typed |
 | `ls.c`, `cat.c`, `echo.c`, `wc.c`, `mkdir.c` | the usual; `cat` and `wc` read fd 0 when given no file |
 | `ps.c` | task table, one fixed-shape record per syscall |
 | `top.c` | Linux top's screen and keys over the task table: P M T N sort, V a tree, 1 each CPU, k kill, r renice, d delay, h help, q quit; `-b` prints plain screens, `-d SECS`, `-n N` |
@@ -32,9 +32,15 @@ names (`/bin`, `/usr/bin`, `/usr/games/bin`), and then as
 | `vfsload.c` | `c4ix-vfsload`: fills the hierarchical VFS from `c4ix.vfs.txt` at boot (same manifest format as `src/c4ke/bin/vfsload.c`), then starts `c4ix-tar` in the background on each archive the manifest's `ARCHIVES` names and prints its task id |
 | `tar.c` | `tar t[v] FILE`, `tar x[v] [-C DIR] FILE`: ustar or C4TAR1, gzipped or not (recognised by its magic). Links `libarc.c4l` too |
 | `b4ke.c` | the build tool, native to C4IX: C4KE's B4KE1 files, plus B4KE2's `SET`/`$(NAME)`, `CD`, `MKDIR`, `DEPS` (rebuild only what is older than its sources), `COPY`, `RUN ... > FILE` and sub-builds (`B4KE DIR`). `b4ke -C /usr` rebuilds everything C4IX ships |
-| `cc.c` | `cc [-O] [-c] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v] [-stack BYTES] [-I DIR] [-D NAME] [-l LIB] [-o OUT] FILE.c ...`: compiles with c4sc (c4lc, compiled) and c4lc's preprocessor, on a task's default stack (`-stack` for more), searching `/usr/include` (C4IX's headers and the repo's) with `C4CC` and `__c4cc__` defined; with more than one source or a `-l` (`c4ix`, `arc`, or a shared `/lib/NAME.c4s`) it links with c4rlink |
+| `cc.c` | `cc [-O] [-c] [-g] [-conforming] [-fno-builtin] [-fpic] [-mfuse] [-v] [-stack BYTES] [-I DIR] [-D NAME] [-l LIB] [-o OUT] FILE.c ...`: compiles with c4sc (c4lc, compiled) and c4lc's preprocessor, on a task's default stack (`-stack` for more), searching `/usr/include` (C4IX's headers and the repo's) with `C4CC` and `__c4cc__` defined; with more than one source or a `-l` (`c4ix`, `arc`, or a shared `/lib/NAME.c4s`) it links with c4rlink |
 | `crc32.c` | `crc32 FILE ...`: gzip's CRC-32 and the size, to check a build made inside the machine against the host's. Links `libarc.c4l` too |
 | `gunzip.c` | `gunzip FILE.gz` writes `FILE`; `-c` writes to fd 1. The gzip CRC is checked before anything is written. Links `libarc.c4l` too |
+| `dmesg.c` | the kernel's log (`/proc/kmsg`); `-t` without times, `-w` follows |
+| `free.c` | where the memory is, from `/proc/meminfo`: size, use, the biggest free block, unsaved RAM files, the cache |
+| `nice.c` | `nice [-n N] COMMAND`, `nice -p PID [N]`: a task's priority, -10 to 10 (`SYS_NICE`) |
+| `pin.c` | `pin CPUS COMMAND`, `pin -p PID [CPUS]`: which CPUs a task may run on (`SYS_AFFINITY`) |
+| `persist.c` | `persist boot\|save\|status\|forget\|-d SECS`, and `/bin/sync`: the filesystem's changes kept on drive 1 |
+| `splash.c` | the boot's loading screen (`splash -p PID`, run by `vfsload -w`) |
 
 ## Shell scripts
 
@@ -62,15 +68,15 @@ page and type `desktop`.
 | `tools.c` | the desktop's own window kinds as window kit classes, and the calls the tools were written against |
 | `host.c` | what the window kit asks of its host: memory and files |
 | `wall.c` | the desktop's picture: the boot logo stretched over the screen, as tiles the display keeps |
-| `term.c` | Terminal: a real `c4ix-sh -p` task on pipes, drawn through a VT100 subset, line-edited locally (Left/Right, Home/End, a 16-line history on Up/Down) with 300 rows of scrollback; Ctrl-C interrupts its foreground job |
-| `files.c` | Explorer: folder tree and file list over the VFS; double-click runs a program in a new Terminal |
+| `term.c` | Terminal: a real `c4ix-sh -p` task on pipes, drawn through a VT100 subset, line-edited locally (Left/Right, Home/End, a 16-line history on Up/Down) with 300 rows of scrollback; Ctrl-C interrupts its foreground job. A program may draw on it instead (`include/window.h`), take the keys raw (top), or get a window of its own with a menu bar: a game whose `/etc/desktop.apps` line says `window`, or a `--window` program run with `&` (`SYS_FDGIVE`). Its Edit menu copies and pastes |
+| `files.c` | Files: folder tree and file list over the VFS. Double-click runs a program in a new Terminal and opens a source file in the IDE. A right click gives Open, Open in IDE, Rename, Delete, Download and New Folder. Ctrl/Shift-click selects several, and the bar between tree and list is a splitter |
 | `taskmgr.c` | System Monitor: Applications, Processes (CPU share over the last second, with System and idle rows, and an Interval column), Performance |
 | `apps.c` | About and Settings |
-| `edit.c` | Editor, the IDE: a VIM-mode editor (`:set novim` for a plain one; arrow keys in every mode) that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file that names it, or has `cc -O -l c4ix` build a `.c` none names into `/tmp/NAME.c4r`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Explorer opens source files here |
+| `edit.c` | Editor, the IDE: Traditional typing by default, or VIM's modes (`:set vim`; View > Settings), with Find (Ctrl+F, F3) and a Files pane (Ctrl+B) sized by a splitter, that builds what it edits. `:make`/F5 runs b4ke on the nearest `BUILD.B4K` above the file that names it, or has `cc -O -l c4ix` build a `.c` none names into `/tmp/NAME.c4r`; errors are listed under the text and F8 goes to the next. `:run`/F6 runs the result. Files opens source files here |
 | `hl.c` | the IDE's syntax colouring: C, JavaScript, Lisp, Forth, shell and B4KE, a line at a time |
 | `explore.c` | the IDE's Code tab (View > Code, F7): the functions, and the C4 code of one with its source lines between the instructions, for a `.c` file (by `cc -g`, following the cursor) or any compiled file opened as it is, with the shared libraries it loads |
 
-Kernel calls the desktop added (`SYS_AVAIL`, `SYS_CLOEXEC`, `SYS_INTR`)
+Kernel calls the desktop added (`SYS_AVAIL`, `SYS_CLOEXEC`, `SYS_INTR`, `SYS_FDGIVE`)
 and the display registers it uses are described in
 [docs/c4ix-desktop.md](../../../docs/c4ix-desktop.md). It is tested
 headless by `libjs/tests/test-desktop.mjs` (part of `make test-libjs`).

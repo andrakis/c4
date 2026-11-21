@@ -61,7 +61,7 @@ c4rlink prog.c4o string.c4o stdlib.c4o stdio.c4o unix.c4o fp.c4o math.c4o \
         opcodes.c4o bare.c4o bareu.c4o -o prog.c4r
 ```
 
-(`make wolf3d-bare-objs` builds them, in `.wolf3d-bare/libc-*.c4o`.)
+(`make libc-bare-objs` builds them, in `.libc-bare/libc-*.c4o`.)
 Files are the machine's drives: read from drive 1, then drive 0, and
 written to drive 1 when the machine has a write head (otherwise only the
 console takes output). A file opened for reading is read whole into

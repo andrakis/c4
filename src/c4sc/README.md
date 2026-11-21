@@ -11,7 +11,7 @@ The generated C runs on c4sp's own cells, allocator and collector (the runtime
 in [`scrt.h`](scrt.h) is the builtins without the call protocol). The seven
 generated units are compiled by c4lc into objects and linked with a driver
 into `c4sc.c4r`: c4lc, compiled. On the simulated c4bb this brought the
-in-machine build of the twelve C4IX modules from about 30 minutes to 4.6
+in-machine build of the then twelve C4IX modules from about 30 minutes to 4.6
 minutes of cycles (5.8 minutes wall), measured in
 [c4sc-design.md](../../docs/c4sc-design.md) M8.
 
@@ -20,7 +20,7 @@ minutes of cycles (5.8 minutes wall), measured in
 | target | produces |
 |---|---|
 | `src/c4sc/c4<unit>_gen.c` | generated C for one c4lc file (`opt lex pp parse c4r tree gen`); made on demand by the targets below, and gitignored |
-| `make c4sc-host` | native binary with all seven units compiled in; the differential harness |
+| `make c4sc-host` | native binary with all seven units compiled in: the host's 64-bit c4lc (`$(call lc64)`; `make C4LC64=interp` for c4lc.lisp under c4sp), and the differential harness |
 | `make c4sc-host32` | the same built `-m32`: the host's 32-bit c4lc, which compiles every 32-bit image the host builds (`$(call lc32)` in the Makefile; `make C4LC32=interp` for c4lc.lisp under `c4sp32`) |
 | `make c4sc.c4r` | 64-bit image: the driver and seven units, each `c4lc -O -c`, linked by `c4rlink` |
 | `make c4sc32.c4r` | the same at 32 bits, via `$(call lc32)` and `c4rlink32` |
@@ -64,9 +64,9 @@ None of these is part of `make test`; `test-c4sc`, `test-c4sc32`, `test-c4sc-sel
 | `make test-c4sc` | every generated unit compiles with `c4lc -O -c`; prints the expansion per file |
 | `make test-c4sc-run` | compiled c4opt produces byte-identical images to the interpreted one |
 | `make test-c4sc-lex` | compiled lexer's token dump matches the interpreted one over the c4fc lexer corpus |
-| `make test-c4sc-front` | preprocessor agrees with gcc -E on the twelve C4IX modules; parser matches the committed AST dump |
+| `make test-c4sc-front` | preprocessor agrees with gcc -E on the thirteen C4IX modules; parser matches the committed AST dump |
 | `make test-c4sc32` | at 32 bits, where the build uses it: `c4sc-host32` against c4lc.lisp under `c4sp32` -- the corpus plain, `-O`, `-minline` and `-O -mfuse -mfpu -g`, five C4IX objects with the image flags, and `-minline-why`'s report (in the suite) |
-| `make test-c4sc-back` | every image and object is byte-identical to the interpreted c4lc's; the twelve C4IX objects link to the same `c4ix.c4r` that `make c4ix.c4r` builds, and it boots |
+| `make test-c4sc-back` | every image and object is byte-identical to the interpreted c4lc's; the thirteen C4IX objects link to the same `c4ix.c4r` that `make c4ix.c4r` builds, and it boots |
 | `make test-c4sc-chain` | a 2000-term `a + a + ... + a`, 1000 products and 200 right-nested levels compile in seconds (they took time exponential in the length), byte-identical to the interpreted c4lc, and print the right sums |
 | `make test-c4sc-image` | `c4sc.c4r` under c4m produces the same object sizes as the native host |
 | `make test-c4sc-self` | fixed point: generations 1, 2 and 3 of c4sc are byte-identical, and it emits the same seven units (in the suite) |

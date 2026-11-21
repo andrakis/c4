@@ -84,11 +84,14 @@ says plainly what it can't do. It does not crash.
 ### Time on Windows
 
 Under unmodified c4, c4m reads the time from `/proc/uptime`, because plain c4
-has no clock of its own. **Windows has no `/proc/uptime`.** There c4m prints
-`c4m: unable to open uptime file` once, and `__time()` returns 0 from then on.
-Anything that measures or waits on time stops working. C4KE, for instance,
-hangs at boot while measuring instructions per second unless it is started
-with `-m` (skip the measurement) or `-c N` (a fixed cycle interval).
+has no clock of its own. **A Windows build made with MSVC or MinGW has no
+`/proc/uptime`.** There c4m prints `c4m: unable to open uptime file` once,
+and `__time()` returns 0 from then on. Anything that measures or waits on
+time stops working. C4KE, for instance, hangs at boot while measuring
+instructions per second unless it is started with `-m` (skip the
+measurement) or `-c N` (a fixed cycle interval). MSYS2's own gcc
+([docs/windows.md](docs/windows.md)) builds on the Cygwin runtime, which
+has the file.
 
 A natively compiled c4m from this fork has a real clock: `clock_gettime`, or
 `timespec_get` under MSVC. **On Windows, build c4m natively to get working
@@ -151,7 +154,7 @@ Components
 - [c4cc](src/c4cc/): a C compiler to the relocatable [`.c4r`](src/c4cc/README.md) format, plus `c4rlink`, `c4rstrip` and `c4rdump`.
 - [cpp](src/c4dos/): a C preprocessor in c4, byte-for-byte with `gcc -E` on this tree.
 - [c4sp and c4lc](src/c4sp/): a Lisp written in c4, and an optimizing C compiler written in that Lisp. c4lc compiles most of the tree's images.
-- [c4sc](src/c4sc/): c4lc's Lisp compiled to C, so the compiler runs fast inside the machine. C4IX's `cc` runs it.
+- [c4sc](src/c4sc/): c4lc's Lisp compiled to C, so the compiler runs fast. The host's builds run it (`c4sc-host`, `c4sc-host32`; `C4LC=interp` goes back to the Lisp), and so does C4IX's `cc`.
 - [c4fp](src/c4fp/): IEEE `float` and `double` in software, which c4lc's floating point compiles to ([docs/c4-float.md](docs/c4-float.md)).
 - [c4th](src/c4th/): Forth-2012 CORE, with a self-hosting metacompiler.
 - [c4fc](src/c4fc/): a C99 compiler written in Forth. Its output is byte-identical to c4lc's.
@@ -160,7 +163,8 @@ Components
 
 - [c4sh](src/c4sh/): C4KE's shell.
 - [c4tui](src/c4tui/): a character-cell UI library.
-- [wolf3d](games/wolf3d/): Wolfenstein 3D on C4IX, compiled by c4lc, with sound, in a desktop window.
+- [grin](src/grin/): C4DOS's graphical shell in the manner of Windows 3.1, on the window kit ([src/winkit](src/winkit/)) it shares with C4IX's desktop.
+- [games/](games/README.md): the ports, each an optional submodule: Wolfenstein 3D, Doom, Rise of the Triad, Quake, Duke Nukem 3D, OpenTyrian, Super Blit Kart, Frotz with Zork, Open Adventure, Simon Tatham's Puzzles, the Ace of Penguins and the BSD games. c4lc compiles them. They run in C4IX's desktop and under C4DOS's grin.
 - [include/](include/): the headers every build shares, including `u0.h`, the C4KE user runtime.
 - [src/tests](src/tests/) and [src/bench](src/bench/): the test corpus and benchmarks.
 
@@ -173,7 +177,7 @@ Components
 Quick start
 -----------
 
-	make                  # c4, c4m, c4cc, c4rlink and every .c4r image
+	make                  # c4, c4m, c4cc, c4rlink, C4KE and its programs, the test corpus
 	make run              # C4KE under native c4m; type `help` or `ls`, try `bench`
 	make run-c4           # the same kernel under unmodified c4 (slow)
 	make test             # the core suite

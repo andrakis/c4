@@ -8,6 +8,9 @@ the manifests live here and are copied onto each disk.
 
 The grammar is indentation-driven: `NAME = words` definitions, `/: root`,
 `dir/:` lines, `name: diskfile` entries, and `each($LIST):` loops.
+C4IX's also takes `dir/: hostdir(PREFIX)`, a directory of every host file
+under PREFIX, listed the first time something looks in it, and
+`ARCHIVES = NAME...`, archives unpacked over `/` after the rest.
 The prototype `c4ke.vfs.txt` at the repo root documents the full grammar;
 `src/c4ke/bin/vfsload.c` and `src/c4ix/user/vfsload.c` implement the parts
 each system uses.

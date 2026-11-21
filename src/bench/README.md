@@ -48,10 +48,11 @@ From a C4KE shell (`make run`), or as the kernel's init:
 its own nested kernel: `c4m load-c4r.c src/c4ke/c4ke.c -- -v 0 bench.c4r`,
 that is, c4m compiling C4KE from source and running `bench` under it. It
 names the image, not `bench`: on a C4IX disk `/bench` is C4IX's own bench,
-which a C4KE cannot run. It also starts `top -b` unless given `-T`. From its
-help text:
+which a C4KE cannot run. It also starts `top` unless given `-T`: C4KE's as
+`top -b`, which does not take the terminal, and on C4IX, C4IX's own
+`/bin/top`. From its help text:
 
-    innerbench [-n x] [-aTBDqcmlvVt] [-b args]
+    innerbench [-n x] [-aTBDqcmldvt] [-b args]
           -n x    Start x (number) inner benchmarks
           -a      Pass `-a` to `c4m`, to use alternate time mode
           -T      Disable running `top` during execution
@@ -100,4 +101,5 @@ those names, relative to the working directory: run it from the repo root
 only when the nested c4m reads its clock from `/proc/uptime`, which is
 when plain c4 runs it (`-c`, or a C4DOS floppy's `c4m.c4r`). C4IX and
 C4KE have that file, and so do c4bb and libjs, so `innerbench -c` runs
-inside both kernels on every host but Windows (C4IX's on Windows too).
+inside both kernels on every host but an MSVC or MinGW build on Windows
+(C4IX's there too; MSYS2's build has `/proc/uptime`).

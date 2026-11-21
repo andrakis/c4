@@ -63,6 +63,12 @@ computer and c4mp, and compare against native c4m.
 | `c4_jailbreak.c`, `global.c`, `puts.c`, `reverse.c`, `test_gcscan.c`, `test_globals.c`, `test-oisc.c`, `vararg2.c` | extra inputs to the compiler differential sweeps (`C4LC_DIFF*` for `test-c4sp-opt`, `C4SC_BACK_DIFF` for `test-c4sc-back`, `C4FC_GEN_SWEEP` for `test-c4fc`) |
 | `test_crash2.c` | used by `mpg/test-mpg.sh` |
 | `dosenum.c` | enumerates the C4DOS RAM disk through the v2 API; built with `include/c4dos.h` by `src/c4dos/tests/test-c4dos.sh` |
+| `c4lc_m4*.c` … `c4lc_m13lc.c`, `c4lc_ll.c`, `c4lc_lldiv.c`, `c4lc_float.c`, `c4lc_h16.c`, `c4lc_u8.c`, `c4lc_linit*.c`, `c4lc_puz.c` | c4lc's milestone and type probes at 64 and 32 bits (`make test-c4lc`; several also `test-c4sc-front` and `test-c4th-os`) |
+| `common_a.c` … `common_f.c`, `c4lc_redef.c`, `c4lc_tentative.c`, `c4lc_dynredef.c`, `c4fc_dyninit.c` | tentative and common definitions across units (`src/c4sp/tests/common-link.sh` in `make test-c4lc`; `test-c4fc`) |
+| `fold_a.c`, `fold_b.c`, `srcmap_lines.c` | c4rlink's helper folding and line maps (`make test-srcmap`) |
+| `test_link_member.c` | an archive member (`make test-link`) |
+| `dosexec.c`, `dosres.c` | `make test-c4dos-heap` |
+| `dosfilt.c`, `clock.c` | C4DOS programs on the page's disks, driven by test-grin |
 
 ## raycast.c
 
@@ -96,6 +102,7 @@ Usage, from the program:
 |---|---|
 | `expected/` | goldens for `test-c4m-mem` and `test-c4cc-for` |
 | `mpg/` | the c4mpg memory guard's tests: one known-bad program per mistake (`mpg_*.c`), `test-mpg.sh`, and `check-fork.sh`, which checks `c4mpg.c` is `c4m.c` plus marked blocks. `make test-mpg` |
+| `bbport/` | the Busybox port's compiler probes, gcc as the oracle: `bash src/tests/bbport/run.sh`, a tracker with no make target (docs/busybox-port.md) |
 | `genfloat.c` | native tool that regenerates `float_cases.h`: `gcc -O2 -o genfloat src/tests/genfloat.c && ./genfloat > src/tests/float_cases.h` |
 | `test_illins.c`, `test_trap.c` | marked OBSOLETE in their headers; not built |
 | `oldtest_vararg.c`, `oldtest_vararg2.c`, `oldvararg3.c`, `vararg.c` | older varargs tests; only parsed by `test-c4lc` |

@@ -11,7 +11,7 @@ In a Terminal:
   c4cc -o /tmp/hello.c4r /usr/src/c4ix/examples/hello.c
   /tmp/hello.c4r one two
 
-  c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c
+  c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/include/window.c /usr/src/c4ix/examples/bounce.c
   /tmp/bounce.c4r
 
 bounce makes its Terminal into a window of its own: see
@@ -49,7 +49,7 @@ so the userland's programs build the same way:
   cc -O -conforming -I /usr/src/c4tui -o /tmp/demo.c4r /usr/src/c4tui/demo.c
   /tmp/demo.c4r
 
-The repos own programs build as they are: cc also searches the repos
+The repo's own programs build as they are: cc also searches the repo's
 headers (/usr/include: u0.h, and C versions of stdio.h and the
 rest), so
 

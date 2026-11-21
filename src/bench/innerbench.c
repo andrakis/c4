@@ -249,7 +249,8 @@ int main (int argc, char **argv) {
 	pid_counter = 0;
 
 	// C4KE's top in its background mode (it does not take the
-	// terminal's focus); C4IX's takes no options, nor the terminal
+	// terminal's focus); C4IX's is started with none, although it
+	// has -b too (src/c4ix/user/top.c)
 	_argv[0] = bin_or("/bin/top", "top");
 	_argc = 1;
 	if (_argv[0][0] != '/') {

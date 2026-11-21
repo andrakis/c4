@@ -21,6 +21,8 @@
 [submodule "quake"]
 	path = games/quake
 	url = git@github.com:andrakis/c4-Quake.git
+	branch = c4
+	update = none
 [submodule "frotz"]
 	path = games/frotz
 	url = git@github.com:andrakis/c4-Frotz.git
@@ -29,15 +31,23 @@
 [submodule "advent"]
 	path = games/advent
 	url = git@github.com:andrakis/c4-Advent.git
+	branch = c4
+	update = none
 [submodule "puzzles"]
 	path = games/puzzles
 	url = git@github.com:andrakis/c4-Puzzles.git
+	branch = c4
+	update = none
 [submodule "ace"]
 	path = games/ace
 	url = git@github.com:andrakis/c4-Ace.git
+	branch = c4
+	update = none
 [submodule "sbk"]
 	path = games/sbk
 	url = git@github.com:andrakis/c4-SBK.git
+	branch = c4
+	update = none
 [submodule "bsdgames"]
 	path = games/bsdgames
 	url = git@github.com:andrakis/c4-BSD-Games.git

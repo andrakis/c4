@@ -119,11 +119,14 @@ Those three nested commands are the ones `test-oisc4-nested` runs.
 
 ## Opcodes
 
-OISC4 translates c4m's opcodes and all ten fused opcodes (79–88, `LDL`..`POPA`,
-[docs/fused-opcodes.md](../../docs/fused-opcodes.md)). Fused support arrived
-in 958eeb1 and was cut down to the current ten in bbb9ec3. c4mp's opcodes
-66–78 (`CPUI`..`TRAW`, including `LXI`/`SXI`) are named but not translated;
-an image that uses one fails at translation with "unknown opcode".
+OISC4 translates c4m's opcodes, including the 16-bit `LH LHU SH LSR LCU`
+(90–94, through the math device), and all ten fused opcodes (79–88,
+`LDL`..`POPA`, [docs/fused-opcodes.md](../../docs/fused-opcodes.md)). Fused
+support arrived in 958eeb1 and was cut down to the current ten in bbb9ec3.
+`FPU` (89) and c4mp's opcodes 66–78 (`CPUI`..`TRAW`, including `LXI`/`SXI`)
+are named but not translated; an image that uses one fails at translation
+with "unknown opcode". `INFO` reports no FPU, so c4lc's float helpers take
+their software path; only a `-mfpu` image hits this.
 
 ## Limits and known issues
 

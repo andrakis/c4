@@ -21,11 +21,13 @@ rather than placed, since `PUTS` appends a newline.
 | target | produces |
 |---|---|
 | `make c4tui-demo.c4r` | the demo, 64-bit: `c4lc -O -conforming -P -I src/c4tui src/c4tui/demo.c` |
-| `make c4tui-demo32.c4r` | the same built by `c4sp32`, for c4bb |
+| `make c4tui-demo32.c4r` | the same at 32 bits (`c4sc-host32`, the compiled c4lc), for c4bb |
 
 To use it in your own program:
 
     # c4lc (has a preprocessor): put #include "c4tui.c" in yourprog.c
+    ./c4sc-host compile -O -conforming -P -I src/c4tui yourprog.c yourprog.c4r
+    # or the same compiler interpreted:
     ./c4sp src/c4sp/lisp/c4lc.lisp -O -conforming -P -I src/c4tui yourprog.c yourprog.c4r
     # c4cc (no preprocessor): pass the library first
     ./c4cc -o yourprog.c4r src/c4tui/c4tui.c yourprog.c

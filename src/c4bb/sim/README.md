@@ -16,6 +16,7 @@ run under Node, in the page ([../web/](../web/README.md)), and inside
 | `devices.js` | The device registers at 0x100–0x1FF: UART (and its block write), the deterministic clock, `USLP`, the disk read and write heads and drive selection, power, heap bounds, `INFO`, the trap latches, soft reset, the real-time clock and PIT, the mailbox registers, the `whowrote` port. Also `OPNAMES`, the opcode-name ROM, which is the opcode encoding. |
 | `loader.js` | A port of `c4l.c` for 32-bit images: places the firmware, then the program, runs constructors, and enters `main`. |
 | `mbox.js` | The host side of the mailbox: two rings of i32 frames in guest RAM. The guest side is `include/c4bb_mbox.h`; the two must agree word for word. |
+| `fpu.js` | The FPU opcode's arithmetic (89, docs/c4-float.md), shared with libjs. `execJsop()` has a case for it, but `hw/microcode.uc` gives `FPU` no routine, so the board does not run it. |
 | `netlist.js` | Parser for [../hw/board.hwd](../hw/board.hwd). Layout only. |
 | `cli.js` | The Node runner. Flags are listed in [../README.md](../README.md#run). |
 

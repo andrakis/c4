@@ -18,7 +18,7 @@ a Forth compiler written in Forth that reproduces itself. c4fc, a C compiler
 |---|---|
 | `make c4th` | native binary (`gcc -O2`) |
 | `make c4th.c4r` | image: `gcc -E` then c4cc |
-| `make c4th32.c4r` | 32-bit image for c4bb: `gcc -E` then c4lc under `c4sp32` |
+| `make c4th32.c4r` | 32-bit image for c4bb: `gcc -E` then the host's 32-bit c4lc (`c4sc-host32`; `c4sp32` with `C4LC=interp`) |
 | `make c4dos-c4th` | a C4DOS disk directory with `c4th.c4r`, `core.f` and a test program |
 
 ## Run

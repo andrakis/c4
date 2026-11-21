@@ -28,9 +28,11 @@ Run from the repo root.
 | `make c4bb-web` | Everything the browser loads: builds the `c4dos-c4ix32` climb disk first (the slow half; it builds c4sc), then `c4bb-images`. |
 | `make c4dos-c4ix32` | The C4DOS disk that climbs to C4IX. `make c4bb-images` remakes it after the images (it carries their C4IX userland) and copies it into `images/climb` and `libjs/images/ladder` again (`tests/climb-disks.sh`). `build-images.sh` run by hand only copies it, and warns when the copy is older than its sources. |
 
-`c4bb-images` makes four disks: `images/disk` (the shared disk: C4DOS, C4KE
-and C4IX side by side, which `test-c4bb` boots), `images/dos-recovery`,
-`images/c4ke-root`, and `images/climb` (a copy of `c4dos-c4ix32`).
+`c4bb-images` makes `images/disk` (the shared disk: C4DOS, C4KE and C4IX
+side by side, which `test-c4bb` boots), `images/dos-recovery`,
+`images/c4ke-root`, `images/climb` (a copy of `c4dos-c4ix32`),
+`images/games` (the games on the bare machine), and the page's C4DOS and
+ladder disks in `libjs/images/`.
 
 There is nothing to install. No `node_modules`, no bundler; Node and a
 browser are enough.
@@ -79,14 +81,14 @@ writable medium that survives a reload.
 
 ## Test
 
-None of these are in `make test`.
+None of these are in `make test`; `make suite` runs `test-c4bb`, `test-c4bb-climb` and `test-c4dos-c4ix32`.
 
 | Target | What it checks | Cost |
 |---|---|---|
 | `make test-c4bb` | The main suite: every corpus image against native `c4m32`, the fused opcodes, the trap tests, both kernels booting, step-vs-turbo lockstep, the mailbox, the terminal and drive logic, the `arena-whowrote.js` fork check. | Builds `c4bb-images` first. |
 | `make test-c4bb-storage` | Drives and media: what one session writes, a later one reads. | Needs the climb disk. |
 | `make test-c4bb-firmware` | The four firmware stages each do their job and refuse the next one's. | |
-| `make test-c4bb-climb` | Three power-ons, three systems, each booted from a medium the previous one wrote. `test-c4bb-install` is the same target. | |
+| `make test-c4bb-climb` | Three systems, each booted from a medium the one below it wrote; C4IX's build is shared over four machines and linked on a fifth. `test-c4bb-install` is the same target. | |
 | `make test-c4bb-rungs` | Which opcodes each image uses, against the rung it belongs to, and that `hw/microcode.uc` implements exactly the top rung. `test-c4bb-baseops` is the old name. | |
 | `make test-c4bb-web` | The page in a real browser over CDP. Skips and passes when no browser answers. | |
 | `make test-c4dos-build32` | C4DOS on the board builds C4KE from source and boots it. | Under fifteen seconds, per the Makefile. |

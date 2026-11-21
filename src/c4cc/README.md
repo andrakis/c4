@@ -108,7 +108,7 @@ Header (W = one machine word, so 8 bytes in a 64-bit image, 4 in a 32-bit one):
 | `"C4R"` | 3 bytes | signature |
 | Version | 1 byte | 2 or 3 |
 | WordBits | 1 byte | 64 or 32 |
-| MEMSZ / padding | 8 bytes | v3: the first word is the total in-memory data size, the part past DataLen being zero-filled BSS. v2: `p` filler |
+| MEMSZ / padding | 8 bytes | v3: the first word is the total in-memory data size, the part past DataLen being zero-filled BSS. At 32 bits the next four bytes say how much of that, at its end, is uninitialized globals (0 for unknown); c4rlink lays them out after all the data. v2: `p` filler |
 | Entry | W | code offset of `main`, or -1 for an object with none |
 | CodeLen | W | code segment length in words |
 | DataLen | W | data segment length in bytes |
@@ -126,7 +126,10 @@ Then the segments in this order, each preceded by a one-word marker
   that points into code, -4 a data word that points into data. Addresses are
   word offsets into code for -1/-2 and byte offsets into data for -3/-4
   (pointer initializers of globals, switch jump tables). A positive type is a
-  symbol reference, resolved by the linker. A loader overwrites the patched
+  symbol reference, resolved by the linker. Type -5 exists only in objects:
+  a data word holding a symbol's address (address a byte offset into data,
+  value the symbol id); c4rlink turns it into -3 or -4, so no image a
+  loader runs has one. A loader overwrites the patched
   word with the segment's load address plus value, so what the word holds in
   the file is never read; c4cc writes the value there (0 for a symbol),
   never one of its own addresses, so building an unchanged source twice
@@ -136,33 +139,51 @@ Then the segments in this order, each preceded by a one-word marker
   after `exit()`.
 - **symbols** (`S`): id, type, class and attributes (one word each), a name
   length byte, the name, and a value word. Attribute bits: `0x1` constructor,
-  `0x2` destructor, `0x8` static, `0x20` variadic, `0x40` array or struct
-  variable.
+  `0x2` destructor, `0x8` static, `0x10` extern (an object's unresolved
+  name), `0x20` variadic, `0x40` array or struct variable, `0x80` common (a
+  global with no initializer, which c4rlink merges with other units' copies).
+- **trailer** (`X`, optional): chunks, each a tag, a length and a payload
+  padded to a word. SMAP is the source map `c4lc -g` writes; c4rlink merges
+  the objects' maps, and `-s` or `-g0` drops it. Every loader stops at S, so
+  an image runs the same with or without one
+  ([docs/c4-explorer.md](../../docs/c4-explorer.md) 2.1).
 
-c4cc writes version 2. c4lc and `c4rlink` write version 3, which puts
+c4cc writes version 2. c4lc, c4fc and `c4rlink` write version 3, which puts
 uninitialized globals in BSS. The loader accepts both.
 
 ### c4rlink
 
 ```
-c4rlink [-dvrs] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]
+c4rlink [-dvrs] [-g0] [-l lib.c4s] [-o outfile] [--] file1.c4r [...fileN.c4r]
+        [--no-gc] [--no-fold] [--warn-common] [--start-lib member.c4o ... [--end-lib]]
 ```
 
 | flag | effect |
 |---|---|
 | `-o outfile` | output (default `a.c4r`) |
 | `-r` | library mode: unresolved symbols are allowed (writes a `.c4l`) |
-| `-s` | strip: write no symbol table |
+| `-s` | strip: write no symbol table and no source map |
+| `-g0` | write no source map, but keep the symbols |
 | `-l lib.c4s` | link against a shared library: references to what it defines stay for C4IX's loader to resolve at spawn, and the image records that it needs `/lib/` + the library's base name |
+| `--start-lib` | the inputs after it are library members: each is linked only if it defines a symbol still undefined |
+| `--end-lib` | the inputs after it are linked whole again |
+| `--no-gc` | keep the functions nothing reaches (dropped by default) |
+| `--no-fold` | keep every object's copy of c4lc's helpers (one by default) |
+| `--warn-common` | name each global defined in several inputs, made one |
 | `-v` / `-d` | verbose / debug |
 | `@file` | response file, as for c4cc |
 
 It concatenates the inputs, rebasing each module's code, data, patches and
-constructor lists. Static symbols stay per module. Non-static symbols are
-merged by name: an extern resolves to the module that defines it, and if two
-modules define the same name the first wins and a warning is printed. Anything
-still unresolved is an error unless `-r` is given. The entry point is taken
-from the first module that has one.
+constructor lists. Of the code it keeps only the functions something reaches
+(the entry, the constructors and destructors, code addresses in data, and
+with `-r` everything exported), and one copy of c4lc's helpers. Static
+symbols stay per module. Non-static symbols are merged by name: an extern
+resolves to the module that defines it. A global defined in several modules
+is one object, as with gcc `-fcommon`: an uninitialized definition gives way
+to an initialized one, and two initialized ones stop the link ("multiple
+definition"). Two definitions of a function keep the first and warn.
+Anything still unresolved is an error unless `-r` is given. The entry point
+is taken from the first module that has one.
 
 A shared library is an ordinary `-r` library (named `.c4s` by convention).
 What `-l` records is a static global named `__c4_needed` whose value is the
@@ -171,10 +192,11 @@ section because every reader of `.c4r` already skips symbols it has no use
 for. So a program linked with `-l` keeps its symbol table, and `-s` is
 ignored for one. `c4rdump` lists what an image needs.
 
-Objects come from `c4lc -c`, or from plain c4cc (a prototype with no body
-becomes a symbol reference). The multi-module images (C4IX, c4or1k, c4mp,
-c4sc) are all built as `c4lc -c` per module and then `c4rlink`, which is what
-the Makefile's `c4lc_compile_par` does.
+Objects come from `c4lc -c`, c4fc's `-c`, or plain c4cc (a prototype with
+no body becomes a symbol reference). The multi-module images (C4IX, c4or1k,
+c4mp, c4sc) are all built as `c4lc -c` per module and then `c4rlink`; for
+C4IX and c4or1k the Makefile's `c4lc_compile_par` runs the compiles in
+parallel.
 
 Builds: `make c4rlink` (native), `make c4rlink32` (native, `-m32`),
 `make c4rlink.c4r`, `make c4rlink32.c4r`. As an image it runs inside C4KE and
@@ -195,11 +217,12 @@ Builds: `make c4rstrip`, `make c4rstrip32`, `make c4rstrip.c4r` (a copy of
 ### c4rdump
 
 ```
-c4rdump [-aicdps] [--] file1.c4r [...fileN.c4r]
+c4rdump [-aicdpsl] [--] file1.c4r [...fileN.c4r]
 ```
 
 `-i` header info (the default), `-c` disassembly, `-d` data, `-p` patches,
-`-s` symbols, `-a` all of them. `make c4rdump` builds it natively; it includes
+`-s` symbols, `-l` the source map (files, functions, rows), `-a` all of them.
+`make c4rdump` builds it natively; it includes
 `c4cc.c` for the instruction-name table.
 
 ## Hosts
@@ -209,7 +232,8 @@ c4rdump [-aicdps] [--] file1.c4r [...fileN.c4r]
   has no way to write a file, so only the listing is useful there.
 - **Inside C4KE and C4DOS**: writes to the RAM filesystem or RAM disk, as
   above. The C4DOS build disks carry `c4cc.c4r`, `cpp.c4r` and `c4rlink.c4r`
-  and build C4KE and C4IX with them.
+  and build C4KE with them; the C4IX disk builds C4IX with `c4sc.c4r`, the
+  compiled c4lc (`IX.BAT`).
 - **Plain c4** (`./c4 c4l.c x.c4r`): runs c4cc's *output* as long as it uses
   nothing above c4's `EXIT` opcode. A `switch` needs `JMPA`, so `c4l.c`
   refuses such an image and names the missing opcode; run it under c4m instead.

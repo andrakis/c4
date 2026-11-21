@@ -13,6 +13,12 @@ It is what c4lc's `float` and `double` compile to (docs/c4-float.md):
 - conversions to and from `int`, `unsigned`, `long long` and `unsigned long long`;
 - conversions between the two widths.
 
+c4lc does not link this file: `mkfpsrc.py` copies it into `c4lc-parse.lisp`'s
+`p:fpsrc`, callers first, each function static, and a unit that uses `float`
+or `double` gets the helpers it calls. After editing `softfp.c`, run
+`python3 src/c4fp/mkfpsrc.py`; `make test-c4fp` fails while the copy is out
+of date.
+
 Each helper runs the machine's `FPU` opcode (89) instead when the machine
 has one (`__c4fp_hw`). With `-mfpu`, c4lc emits the opcode itself for most
 operations and calls a helper only for the rest.
@@ -34,4 +40,9 @@ operations and calls a helper only for the rest.
 |---|---|
 | `tests/fphost.c` | gcc builds softfp.c and checks every operation bit for bit against the host's SSE. The inputs are edge values crossed with each other, then millions of random operands biased toward cancellation, subnormals, halfway cases and integers. It finds a deliberately broken tie-to-even at once. |
 | `tests/fpgen.c` | writes about 6,500 test vectors from the host's own results: one line per case, `OP A B RESULT` in hex. |
-| `tests/fpvm.c` | softfp.c compiled by c4lc, run over those vectors at 32 and 64 bits, plain and `-O`. It must get all of them. |
+| `tests/fpvm.c` | softfp.c compiled by c4lc, run over those vectors at 32 and 64 bits, plain and `-O`, each with the FPU opcode and without it (c4m `-F`, libjs `--no-fpu`). It must get all of them. |
+
+The target also checks C4IX libc's conversions (`fp.c`, against glibc
+exactly) and `math.c` (within each function's ulps). `tests/fpbench.c` is a
+timing program, not a test: Mandelbrot, a Whetstone-like mix and n-body, run
+with and without the FPU.

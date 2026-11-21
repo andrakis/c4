@@ -59,19 +59,26 @@ Arguments after the file are read as Lisp values and bound to `argv`.
 | `-conforming` | real C escape sequences (`\t`, `\xHH`, `\NNN`) instead of c4cc's table |
 | `-mcisc` | emit c4mp's fused array-element opcodes (`LXI`/`SXI`); the image runs only under c4mp |
 | `-mfuse` | run c4opt's fuse pass ([fused-opcodes.md](../../docs/fused-opcodes.md)); the image does not run on plain c4. Implies `-O` |
+| `-mfpu` | a float's operations as the FPU opcode (89) where they stand, not helper calls; the image needs an FPU ([c4-float.md](../../docs/c4-float.md)) |
 | `-minline` | inline small leaf functions ([inline-small-functions.md](../../docs/inline-small-functions.md)). Implies `-O` |
 | `-minline-why` | `-minline`, and report the decision for every function |
 | `-fno-builtin` | `open`, `read`, `printf`, `malloc` and the rest of c4cc's library names are ordinary functions, not opcodes, so a C library can define them ([C4IX's libc](../c4ix/libc/README.md)). c4fc has it too |
 | `-fpic` | reach all data through `__c4_dbase`, a base C4IX's loader keeps per task, so one copy of a shared library's code serves every task. With `-c`. c4lc only |
+| `-g` / `-g0` | write a source map after the symbols, or none (the default); the code is the same either way |
 
-`-R` is how the Makefile runs c4lc (`C4SPLC := ./c4sp -R`): c4lc uses no
-`call/cc`, and the recursive evaluator is 1.63x faster on the C4IX build. The
-output is the same either way.
+By default the Makefile does not run c4lc.lisp: `$(call lc64)` and
+`$(call lc32)` run c4lc compiled to C by c4sc, `c4sc-host` and `c4sc-host32`
+([../c4sc/README.md](../c4sc/README.md)). It writes the same bytes and is
+25-30x faster. Test scripts pick it the same way through `tools/c4lc.sh`.
+`make C4LC=interp` goes back to the Lisp at both word sizes (`C4LC32` or
+`C4LC64` picks one); then 64-bit builds run `C4SPLC := ./c4sp -R`, since
+c4lc uses no `call/cc` and the recursive evaluator is 1.63x faster on the
+C4IX build. The tests that hold c4lc to its goldens still run the Lisp.
 
 Multi-module programs are compiled one unit at a time with `-c` and then
 linked with `c4rlink` (see [../c4cc/README.md](../c4cc/README.md)); this is
-what the Makefile's `c4lc_compile_par` does for C4IX, c4or1k and c4mp. For
-example, the C4IX kernel:
+what the Makefile does for C4IX, c4or1k and c4mp (`c4lc_compile_par` runs
+C4IX's and c4or1k's compiles in parallel). For example, the C4IX kernel:
 
 ```
 ./c4sp -R src/c4sp/lisp/c4lc.lisp -O -c -I src/c4ix src/c4ix/boot.c .c4ix_boot.c4o
@@ -124,9 +131,10 @@ the default `make` copies there.
   board is c4sc's compiled c4lc ([../c4sc/README.md](../c4sc/README.md)).
 - **Word size**: c4lc emits images of the word size of the interpreter running
   it, so c4lc under `c4sp32` writes 32-bit images and under `c4sp` 64-bit ones.
-  The host's 32-bit builds run it compiled instead, `c4sc-host32`
-  ([../c4sc/README.md](../c4sc/README.md)); `make C4LC32=interp` brings this
-  route back, and writes the same bytes.
+  The host's builds run it compiled instead, `c4sc-host` at 64 bits and
+  `c4sc-host32` at 32 ([../c4sc/README.md](../c4sc/README.md));
+  `make C4LC=interp` (or `C4LC32=`/`C4LC64=interp` for one size) brings the
+  interpreter back, and writes the same bytes.
 
 ## Limits and known issues
 

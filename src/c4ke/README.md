@@ -33,8 +33,8 @@ source inside nested c4m instances, and c4m skips `#` lines. Anything the
 kernel needs from a header is therefore spelled out in `c4ke.c`.
 
 The 32-bit `c4ke32.c4r` that the breadboard (c4bb) and libjs boot is built by
-`src/c4bb/tests/build-images.sh` (`make c4bb-images`), with c4lc under
-`c4sp32`.
+`src/c4bb/tests/build-images.sh` (`make c4bb-images`), with c4lc compiled
+(`c4sc-host32`; `C4LC32=interp` for c4lc.lisp under `c4sp32`).
 
 ## Run
 

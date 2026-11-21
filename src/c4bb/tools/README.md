@@ -4,6 +4,7 @@
 |---|---|
 | `lockstep.js` | Boots one image on both engines (the microstep interpreter and the compiled turbo engine) and compares every register, including MAR/MDR/B/T/U, and the cycle counter at each instruction boundary, then the output. `test-c4bb` runs it on several images. |
 | `opscan.mjs` | Which opcodes an image uses, and whether that fits a rung of the ladder. The rungs (`base`, `dos`, `c4m`, `fused`) are defined in its `RUNGS` table and nowhere else. `-machine` checks that `hw/microcode.uc` implements exactly the top rung. Used by `make test-c4bb-rungs`. |
+| `proxy-domain.mjs` | The domain of a reverse proxy mapping `https://PORT.<domain>` to localhost:PORT, from `C4_PROXY_DOMAIN` or `.proxy-domain` (gitignored). The browser gates try it before the LAN address. |
 | `memcensus.mjs` | How much memory an image needs, from a real run under the full firmware: the highest address written (image, globals, heap) and the deepest machine stack. For choosing `-m` values. |
 | `reboot.c` | A guest program that writes c4bb's reset register: the arena is cleared and the BIOS boots from the drives again, media intact. With a drive argument it ejects that drive first, so the BIOS does not boot the system you are leaving. It uses no OS API, so one image (`reboot32.c4r`, built by the Makefile) runs under C4DOS, C4KE and C4IX. |
 

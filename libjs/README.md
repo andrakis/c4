@@ -2,9 +2,10 @@
 
 A direct interpreter for the c4m virtual machine, written the way `c4m.c`'s
 dispatch loop is: one `switch` over an `Int32Array`. It boots the 32-bit
-C4KE and C4IX images in Node or in a browser Web Worker, with a terminal, a
-display device that a guest program draws into, and a sound card (an AdLib
-OPL, sixteen channels of 8-bit samples and the PC speaker).
+C4DOS, C4KE and C4IX images, and games on the bare machine, in Node or in a
+browser Web Worker, with a terminal, a display device that a guest program
+draws into, and a sound card (an AdLib OPL2/OPL3, sixteen channels of 8-bit
+samples, the PC speaker and a MIDI port).
 
 It shares its memory map, device registers, `.c4r` loader, disk controller,
 keyboard, clocks and mailbox with the c4bb breadboard computer
@@ -41,9 +42,15 @@ From the repo root:
 | `--midi FILE` | Give the sound card a General MIDI synth on its MIDI port, so a game plays its music there, and write each message with its time (microseconds, then the bytes in hex) to FILE. |
 | `--sf2 FILE` | ... and have `--wav` play the messages with this SoundFont (`snd-gm.js`). |
 | `--mmu` | Fit an MMU (docs/c4ix-mmu.md): C4IX turns it on and gives each task an address space of its own. Off by default, for its cost; the tests fit one. |
+| `--cpus N` | N processors, simulated (`smp.js`): each runs `-q` instructions in turn (default 1000). |
+| `-q N` | Instructions a CPU runs before the next one's turn. |
+| `--parallel` | ... each CPU on a thread of its own (`par.js`). |
+| `--no-accel` | No accelerators (`accel.js`): a game draws with its own loops. |
+| `--no-osaccel` | Nor C4IX's own (`src/c4ix/accel.mjs`): its gunzip, tar and boot unpack the root archive in its own C. |
+| `--no-fpu` | No FPU opcode: floats in software. |
 
-The flags are c4bb's `cli.js` flags, so a test can swap one runner for the
-other. Examples:
+The flags both runners have mean the same in each, so a test can swap one
+runner for the other. Examples:
 
     node libjs/cli.js src/c4bb/images/hello32.c4r
     node libjs/cli.js -i -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r
@@ -58,8 +65,8 @@ because the Worker imports `src/c4bb/sim/` and the page loads images from
 `src/c4bb/images/`. `--isolate` adds the COOP/COEP headers, which make the
 page cross-origin isolated so the display can use shared memory
 (`shared.js`); without them it falls back to posting messages. The page
-always has the sound card; a browser lets it play only after the first key
-or click.
+has the sound card unless `?snd=0`; a browser lets it play only after the
+first key or click.
 `LIBJS_PORT=NNNN` moves it.
 
 On GitHub Pages, at https://andrakis.github.io/c4/libjs/web/: `make pages`
@@ -74,19 +81,27 @@ for `libjs/` that adds them to every response, and the page registers it
 and reloads once on the first visit. A server that sends them, such as
 `serve.mjs --isolate`, leaves it nothing to do.
 
-URL parameters (from `web/app.js`). The page's Configuration button shows them as a form, and OK reloads the page with the ones changed. Its Machine tab has the system, speed, processors and memory, with presets: Single Core, and Dual, Quad and Octo CPU (2, 4 and 8 processors, a thread each). The Other tab has the rest:
+URL parameters (from `web/app.js`). The page's Configuration button shows them as a form, and OK reloads the page with the ones changed. Its Machine tab has the system, speed, processors (and a thread each), the MMU, the accelerators, C4IX's own accelerators and memory, with presets: Single Core, and Dual, Quad and Octo CPU (2, 4 and 8 processors, a thread each). The Other tab has the rest:
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|doom-full\|tyrian\|rott\|rottreg\|quake\|quake-full\|duke3d\|duke3d-full\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on a disk of its own with every game, booting into grin, its graphical shell (docs/grin.md; 256 MB, for the games that read their files whole, and the full games from the Uploads); `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian` and `rott` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), `doom-full` (or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` for one IWAD of several), `quake-full`, `duke3d-full` and `rottreg` the others that play the person's own files (the Uploads' folders, below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
+| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|doom-full\|tyrian\|rott\|rottreg\|quake\|quake-full\|duke3d\|duke3d-full\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on a disk of its own with every game, booting into grin, its graphical shell (docs/grin.md; 256 MB, for the games that read their files whole, and the full games from the Uploads); `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian`, `rott`, `quake` and `duke3d` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), `doom-full` (or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` for one IWAD of several), `quake-full`, `duke3d-full` and `rottreg` the others that play the person's own files (the Uploads' folders, below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md, games/quake/README.c4.md, games/duke3d/README.c4.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?args=A+B` | More arguments for the system's program, after its own: `?system=wolf3d&args=--secrets+--nodeath` (games/wolf3d/README.md). |
 | `?uploads=0` | The Uploads are not put on the disk. |
+| `?persist=0\|reset` | The system's saved files are not kept between visits / are forgotten first. |
 | `?music=gm\|midi` | The games' music in General MIDI instead of on the AdLib (the default), as DOSBox's General MIDI is: Doom, Duke Nukem 3D and Rise of the Triad. `gm` plays it with a SoundFont from the Uploads, `?soundfont=NAME` naming which (else the first in `/home/soundfonts`, else the first `.sf2`, `.sf3` or `.dls`); `midi` sends it to the computer's own synth by Web MIDI (on Windows the Microsoft GS Wavetable Synth; `?midiout=NAME` picks the output), and the browser asks first. Configuration's Music and SoundFont set them. Without a SoundFont, or without Web MIDI, it is the AdLib, and the page says why beside the status. |
-| `?mhz=N` | Paced speed (default 100). |
+| `?mhz=N` | Paced speed (default the system's own: 100, or 400 for C4DOS, the ladder and the games). |
 | `?fast` | Unpaced. |
 | `?realtime=0` | When the host cannot keep up with `?mhz`, the machine's clock slows with it. By default it keeps the wall's time (`worker.js`), so a game drops frames rather than playing in slow motion. |
-| `?mem=MB` | Arena size (default 64; the ladder's 128). |
+| `?mem=MB` | Arena size (default the system's own: 64, or C4DOS's 256, the ladder's 128, `quake` and `doom-full` 128, `duke3d-full` 192, `quake-full` 256). |
+| `?snd=0` | No sound card. |
+| `?cpus=N` | N processors, simulated (`smp.js`, docs/c4ix-smp.md). |
+| `?parallel` | ... each on a worker of its own (`par.js`), when the page is cross-origin isolated. |
+| `?mmu=1\|0` | Fit an MMU or not (`mmu.js`, docs/c4ix-mmu.md): C4IX turns it on. Off unless `?mmu=1`, for its cost (`web/site.js` can make it the default). |
+| `?fpu=0` | No FPU opcode: floats in software. |
+| `?accel=0` | No accelerators (docs/accel.md). |
+| `?osaccel=0` | Not C4IX's own (its gzip and CRC-32). |
 | `?shared=0` | Use the message path even when isolated. |
 | `?coi=0` | No service worker isolating the page (`coi.js`): unregisters it. |
 
@@ -247,7 +262,7 @@ with `-g`. c4rlink merges the objects' maps into the program's (S2), and
 
 ## Test
 
-Neither is in `make test`.
+None is in `make test`; `make suite` runs `test-libjs` and `test-libjs-ladder`.
 
 | Target | What it checks |
 |---|---|
@@ -330,6 +345,9 @@ regions by word offset, as `c4ix.h` has them; those say so.
 | `try-fault.mjs` | the build until a task is killed; then the kernel's books on that address |
 | `try-heapwho.mjs` | which kernel call chain allocated each heap block left after `innerbench` |
 | `try-par.mjs`, `try-parw.mjs` | `innerbench -Tln N` on real threads (`NS` for several N), or with the swap and scheduler counters as it goes |
+| `try-osprof.mjs` | where C4IX and its desktop spend their instructions, by scenario (docs/accel.md); `MMU=1` gives totals only |
+| `try-quake3.mjs` | three windowed Quakes at once in the desktop's Terminal, with a sound card |
+| `try-scroll.mjs` | what a turn of the wheel costs in the IDE and Text Editor, and whether it reaches both ends |
 | `repro-save.mjs` | `persist save` while other tasks read big files, `ROUNDS` times |
 | `heapdump.mjs` | `heapDump(vm)`, the heap's map, for the others |
 
@@ -340,8 +358,12 @@ regions by word offset, as `c4ix.h` has them; those say so.
 | `c4m.js` | `Machine`, the interpreter: registers, the dispatch loop, traps, syscalls. No DOM, no Node. |
 | `bus.js` | Addresses below 0x1000: 0x100–0x1FF go to c4bb's `Devices`, 0x400–0x47F to the display, 0x480–0x4FF to the sound card. |
 | `heap.js` | The host-side allocator behind MALC/FREE/RALC, with a size side table as native c4m keeps. |
+| `smp.js` | Several processors, simulated: c4mp's instruction set, each CPU taking turns. |
+| `par.js`, `ap.js` | Several processors for real: a thread per CPU sharing the arena; `ap.js` is one CPU other than 0. |
+| `sheap.js` | `heap.js`'s heap with its books in shared memory, for the parallel engine. |
+| `mmu.js` | Paged virtual memory with protection, for C4IX (docs/c4ix-mmu.md). |
 | `printf.js` | PRTF: glibc's format rules over 32-bit words. |
-| `accel.js` | The accelerators' loader and kit: each game that ships `games/NAME/c4/accel.mjs` (the build lists them in `src/c4bb/images/accel.json`) has its loops run by the host, opcodes 0x1000-0x1fff a program finds by name through OPCD once INFO says `C4I_ACCEL` (0x100000) (docs/accel.md). `--no-accel` turns them off. |
+| `accel.js` | The accelerators' loader and kit: each game that ships `games/NAME/c4/accel.mjs` (the build lists them in `src/c4bb/images/accel.json`) has its loops run by the host, opcodes 0x1000-0x1fff a program finds by name through OPCD once INFO says `C4I_ACCEL` (0x100000) (docs/accel.md). `--no-accel` turns them off. C4IX's own (`src/c4ix/accel.mjs`: libarc's CRC-32 and inflater) load the same way; `--no-osaccel` turns those off alone. |
 | `boot.js` | Builds the machine, loads an image with c4bb's loader, and starts `main` through a c4mp-style trampoline. |
 | `gui-device.js` | The display registers and its two rings (c4bb's mailbox format), host side. |
 | `shared.js` | The display's SharedArrayBuffer path, used when the page is cross-origin isolated. |
@@ -353,6 +375,10 @@ regions by word offset, as `c4ix.h` has them; those say so.
 | `keys.js` | What a keypress means to the machine, cooked or raw. Copied from `src/c4bb/web/app.js`, which cannot be imported. |
 | `worker.js` | The Web Worker: arena, devices, machine, run loop, messages. |
 | `page.js` | The main-thread API, `C4M.boot(...)`. |
+| `lazy.js` | A disk read on demand, and the page's cache of what it read. |
+| `uploads.js` | The Uploads: their folders, what each game needs, and where each system finds them (`layUploads`, `HomeFiles`). |
+| `uploads-readme.mjs` | Writes `GAMES\README.TXT` on the C4DOS disks from `NEEDS`. |
+| `kept.js` | Saved Files: a store's files as the person sees them, for listing and download. |
 | `display.js` | Replays command frames onto the canvas; turns DOM events into event frames. |
 | `cli.js` | The Node runner. |
 | `c4r.js` | The Code Explorer's reader: a C4R image, object or library at either word size, every segment and symbol, decoded with the machine's own opcode table, operands resolved, cross-references both ways. |
@@ -360,7 +386,9 @@ regions by word offset, as `c4ix.h` has them; those say so.
 | `coi.js` | The COOP/COEP headers from a service worker, where the server cannot send them (GitHub Pages). |
 | `site.sh` | The page, the sources and the images as a static site, for GitHub Pages. |
 | `pages.sh` | `make pages`: builds the site and commits it to the GitHub Pages repository. |
+| `hostlock.mjs` | On a host that asks for it, runs only while holding a build slot. |
 | `web/` | The page: terminal on the left, display on the right. `explore.html`, the Code Explorer. |
+| `images/` | The page's own C4DOS and ladder disks, made by `make c4bb-images`. |
 | [guest/](guest/README.md) | `gui.h` and `snd.h`, the display and sound card APIs for guest C, and their demos. |
 | `tests/` | `test-libjs.sh`, the unit tests, the CDP gate (`cdp.mjs`, `test-web.mjs`, `test-web-gui.mjs`), `src/strc.c`, and the `try-*.mjs` harnesses (Test, above). |
 | `package.json` | Marks the directory as ES modules. |

@@ -51,6 +51,7 @@ where the kernel's loader finds them by bare name.
 |---|---|---|
 | `badop.c` | raises an uninstalled custom opcode; the kernel must kill the task and survive | `test-c4bb` |
 | `badmem.c` | writes one word past a buffer, for the c4mpg guard | `make test-mpg` |
+| `overrun.c` | breaks its own stack guard, by recursing (`overrun`) or by one stray write (`overrun stray`); the kernel's report must tell the two apart | `test-c4bb` |
 | `mbecho.c` | binds the host mailbox and echoes frames | `test-c4bb` (`test-c4ke-mbox.mjs`) |
 | `mbpair.c` | two tasks messaging through their inboxes | `test-c4bb` (`test-c4ke-mbox.mjs`) |
 | `dbg.c` | a design note for a debugger; comments only, not built | — |

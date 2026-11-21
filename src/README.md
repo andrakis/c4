@@ -8,7 +8,7 @@ where its own README and design doc are. The top-level
 - [Machines](#machines): [c4m](#c4m-and-its-loaders), [c4mpg](#c4mpg), [c4mp](#c4mp), [oisc4](#oisc4), [c4bb](#c4bb), [libjs](#libjs), [c4or1k](#c4or1k)
 - [Operating systems](#operating-systems): [C4KE](#c4ke), [C4IX](#c4ix), [C4DOS](#c4dos)
 - [Toolchain](#toolchain): [c4cc and `.c4r`](#c4cc-and-the-c4r-format), [cpp](#cpp), [c4sp and c4lc](#c4sp-and-c4lc), [c4sc](#c4sc), [c4fp](#c4fp), [c4th](#c4th), [c4fc](#c4fc)
-- [Libraries and programs](#libraries-and-programs): [c4sh](#c4sh), [c4tui](#c4tui), [wolf3d](#wolf3d), [include/](#include), [tests and benchmarks](#tests-and-benchmarks)
+- [Libraries and programs](#libraries-and-programs): [c4sh](#c4sh), [c4tui](#c4tui), [grin and winkit](#grin-and-winkit), [games](#games), [include/](#include), [tests and benchmarks](#tests-and-benchmarks)
 - [Shelved](#shelved): [c4lm](#c4lm), [c4gpu](#c4gpu)
 - [Who compiles whom](#who-compiles-whom)
 
@@ -43,7 +43,7 @@ and `make test-c4l` (where plain c4's ability stops). Both are part of
 
 - A native build has a real clock, signals and `FLT`.
 - Under plain c4, the clock is `/proc/uptime`. C4IX and C4KE have one, and
-  so do c4bb and libjs. Where that file is missing (Windows), time reads as 0; see
+  so do c4bb and libjs. Where that file is missing (Windows, built with MSVC or MinGW), time reads as 0; see
   [Time on Windows](../README.md#time-on-windows). There are no signals, and
   `memcpy` is written in C.
 
@@ -198,8 +198,9 @@ protected-mode traps, which gives file descriptors, pipes, redirection and a
 real shell.
 
 A compatibility layer runs C4KE's binaries unmodified. On the libjs display it
-has an NT-style desktop: windows, a taskbar, terminals, Explorer, System Monitor,
-Text Editor, Calculator, Run and an IDE. Compilers run inside it (`cc` is c4lc,
+has an NT-style desktop: windows, a taskbar with a Go menu, Terminals, Files,
+Text Editor, an IDE, Calculator, System Monitor, Settings, Run... and the
+games. Compilers run inside it (`cc` is c4lc,
 compiled), and it rebuilds itself from the repo its disk unpacks at `/usr`
 (`b4ke -C /usr`, into `/build`).
 
@@ -287,7 +288,8 @@ software or, with `-mfpu`, as the FPU opcode
 ([docs/c4-float.md](../docs/c4-float.md)). Its images are 18–27%
 smaller than c4cc's.
 
-c4lc compiles C4IX, C4DOS, c4mp, c4or1k, c4tui and the 32-bit c4th. The
+c4lc compiles C4IX, C4DOS, grin, the games, c4mp, c4or1k, c4tui and the
+32-bit c4th. The
 standard way to build an image is per-module `c4lc -c` into `.c4o` units,
 then `c4rlink` (`-s` to strip).
 
@@ -304,8 +306,19 @@ then `c4rlink` (`-s` to strip).
 
 Transliterates c4lc's Lisp into C over c4sp's runtime, giving "c4lc,
 compiled". This cut the in-machine C4IX build on the breadboard from about
-31 minutes to about 4.5. Inside C4IX it is `/bin/c4sc`, which the
+30 minutes to about 4.6. Inside C4IX it is `/bin/c4sc`, which the
 BUILD.B4K files and `cc` run.
+
+On the host it is `c4sc-host` and `c4sc-host32`, the c4lc the Makefile's
+builds run (`$(call lc64)`, `$(call lc32)`, `tools/c4lc.sh`). `C4LC=interp`
+runs the Lisp instead. Tests that hold c4lc to its goldens still run the
+Lisp.
+
+**Build:** `make c4sc-host c4sc-host32 c4sc.c4r`.
+
+**Test:** `make test-c4sc`.
+
+**Docs:** [docs/c4sc-design.md](../docs/c4sc-design.md).
 
 ### c4fp
 
@@ -319,12 +332,6 @@ splices the helpers a unit calls into that unit (`p:fpsrc`, generated from
 **Test:** `make test-c4fp`.
 
 **Docs:** [docs/c4-float.md](../docs/c4-float.md).
-
-**Build:** `make c4sc.c4r`.
-
-**Test:** `make test-c4sc`.
-
-**Docs:** [docs/c4sc-design.md](../docs/c4sc-design.md).
 
 ### c4th
 
@@ -374,21 +381,42 @@ per frame.
 
 **Docs:** [docs/c4tui-design.md](../docs/c4tui-design.md).
 
-### wolf3d
+### grin and winkit
 
-**Folder:** [wolf3d/](wolf3d/).
+**Folders:** [grin/](grin/), [winkit/](winkit/).
 
-Wolfenstein 3D (Wolf4SDL) compiled by c4lc for C4IX's libc, played in a
-desktop window with its music and sounds through libjs's sound card. The
-shareware zip ships unmodified on the disk and is unpacked on the first
-run. Keyboard only, for now.
+grin is C4DOS's graphical shell in the manner of Windows 3.1. It has
+Program Manager with its groups (the games among them), File Manager, a DOS
+Prompt, Control Panel, Notepad, Calculator and Clock. It is a C4DOS program
+built by c4lc at 32 bits with the bare libc, and the page's C4DOS disk boots
+into it. winkit is the window kit it shares with C4IX's desktop.
 
-**Build:** `make wolf3d-objs` (`build-images.sh` links it onto the disk),
-`make wolf3d-host` (gcc).
+**Build:** `make grin-objs grin-apps` (part of `make c4bb-images`).
 
-**Test:** `make test-wolf3d`.
+**Test:** `make test-grin`.
 
-**Docs:** [docs/c4ix-wolf3d.md](../docs/c4ix-wolf3d.md).
+**Docs:** [docs/grin.md](../docs/grin.md).
+
+### games
+
+**Folder:** [../games/](../games/README.md).
+
+Twelve games and PDCurses, each an optional submodule: its own repository
+with c4's port on top. They are Wolfenstein 3D, Doom, OpenTyrian, Rise of
+the Triad, Quake, Duke Nukem 3D, Super Blit Kart, Frotz with Zork, Open
+Adventure, Simon Tatham's Puzzles, the Ace of Penguins and the BSD games.
+c4lc compiles them at 32 bits. They run in C4IX (the Go menu's Games, or a
+shell), under C4DOS (grin's game groups) and on the bare machine. The
+action games take the whole display. Seven ship browser accelerators
+(`c4/accel.mjs`, docs/accel.md).
+
+**Build:** `git submodule update --init --checkout games/NAME`,
+`make NAME-data`, then `make c4bb-images`.
+
+**Test:** `make test-NAME`.
+
+**Docs:** [games/README.md](../games/README.md),
+[docs/c4ix-wolf3d.md](../docs/c4ix-wolf3d.md), [docs/accel.md](../docs/accel.md).
 
 ### include
 
@@ -433,10 +461,12 @@ running many VMs as GPU lanes. There is no code.
 - **c4** (unmodified) interprets **c4m.c**, which runs everything below.
 - **c4cc** builds C4KE (after `gcc -E`), its userland, c4sh, `c4th.c4r`,
   `cpp.c4r`, and `c4cc.c4r`. `c4cc32` builds the 32-bit userland.
-- **c4sp** runs **c4lc**, which builds C4IX, C4DOS, `c4sp.c4r`, c4th32,
-  c4tui, c4mp, c4or1k and oisc4's self-hosted image.
-- **c4sp + c4sc** turn c4lc into C, which builds `c4sc.c4r` for the fast
-  in-machine C4IX build.
+- **c4lc** builds C4IX, C4DOS, grin, the games, `c4sp.c4r`, c4th32, c4tui,
+  c4mp, c4or1k and oisc4's self-hosted image. On the host it runs compiled
+  (`c4sc-host`, `c4sc-host32`), or on **c4sp** with `C4LC=interp`.
+- **c4sp + c4sc** turn c4lc into C, which builds `c4sc-host` and
+  `c4sc-host32` for the host and `c4sc.c4r` for the fast in-machine C4IX
+  build.
 - **c4rlink** links C4IX, `libc4ix.c4l`, c4sc, c4mp, c4or1k and the desktop.
 - **c4th** hosts **c4fc**, which can compile c4th itself, C4KE, C4DOS and
   C4IX modules.

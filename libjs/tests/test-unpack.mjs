@@ -3,7 +3,7 @@
 // and on a lazy one (lazy.js, the page's), by its name in any case, once;
 // refused when it is not what its recipe says. Then, where id's package is
 // here (games/quake/data/quake106.zip, or $QUAKE_ZIP), Quake's pak0.pak
-// made from it by its recipe (games/quake/c4/pak0.pak.unpack), and how long
+// made from it by its recipe (games/quake/c4/pak0-unpack.json), and how long
 // that takes. Run from the repo root.
 import { readFileSync, existsSync } from 'node:fs';
 import { zipSync, unzipSync } from '../vendor/fflate.js';
@@ -90,7 +90,7 @@ const quiet = f => { const e = console.error; console.error = m => errors.push(S
 
 // Quake's pak0.pak, from id's package
 const zipPath = process.env.QUAKE_ZIP || 'games/quake/data/quake106.zip';
-const recipePath = 'games/quake/c4/pak0.pak.unpack';
+const recipePath = 'games/quake/c4/pak0-unpack.json';
 if (!existsSync(zipPath) || !existsSync(recipePath)) {
   console.log(`test-unpack: Quake's pak0.pak: skipped, no ${existsSync(recipePath) ? zipPath : recipePath}`);
 } else {

@@ -57,6 +57,7 @@ arena: only a wild program can tell.
 | c4pc-host (gcc -O2, x86-64) | 303–307M |
 | c4pc.elf in QEMU 10.2, TCG (helios has no KVM) | 15.1–15.5M |
 | c4pc.elf in DOSBox-X 2026.01, dynamic core, `cycles=max`, through C4PC.COM | 13.5M |
+| c4pc.elf in Bochs 2.8 from a GRUB ISO, the disk less the games, `clock: sync=none` | 5.3M (output byte for byte c4pc-host's on the same disk) |
 
 The study guessed 15–40M in DOSBox: the low end. On helios, then, a
 C4IX shell, `ps` and `top` are usable under both emulators; the desktop
@@ -88,13 +89,27 @@ isa-debug-exit, so QEMU exits `(status << 1) | 1`.
 Without `-display none` the VGA screen shows the same console, and the
 keyboard types at it.
 
-**GRUB** (VirtualBox, VMware, Hyper-V Gen 1, real PCs): an ISO from
-`grub-mkrescue-pc` (the wrapper that points the system's grub-mkrescue at
-the unpacked i386-pc modules) with
+**At the keyboard**, with no `stdin` module, c4pc paces the machine to
+its own clock as cli.js `-i` does (16 simulated milliseconds at a time,
+then a wait for the real clock to catch up), so that `top` redraws once a
+second; `--fast` turns that off. Keys come from the PS/2 keyboard and
+from COM1, cooked as a terminal cooks them until a program opens the raw
+keyboard. *Measured* in QEMU with `-serial stdio`: typed commands echo,
+run, and `exit` shuts C4IX down.
 
-    menuentry c4pc { multiboot /boot/c4pc.elf -m 64
-                     module /boot/c4ix32.c4r c4ix32.c4r
-                     module /boot/disk.tar disk.tar drive }
+**GRUB** (VirtualBox, VMware, Hyper-V Gen 1, real PCs with a BIOS):
+`make c4pc.iso` makes a 169 MB ISO with the whole disk and a menu of two
+(src/c4pc/pc/grub.cfg), by `grub-mkrescue-pc`, the wrapper that points
+the system's grub-mkrescue at the unpacked i386-pc modules. GRUB passes a
+module's arguments, not its path, so each `module` line names its file
+again:
+
+    multiboot /boot/c4pc.elf -m 64
+    module /boot/c4ix32.c4r c4ix32.c4r
+    module /boot/disk.tar disk.tar drive
+
+GRUB reads COM1 too, so keys typed there while it loads (a minute in
+QEMU, for 160 MB from the CD) can be its own: wait for C4IX's prompt.
 
 **Bochs** boots the same ISO. Its build here has the debugger, so it
 needs `-rc` with a `c` in it, and its display wants `rfb` or `sdl2` (there
@@ -115,6 +130,21 @@ It reads with INT 21h, copies above 1 MB with the BIOS's block move
 mode (no EMM386). DOSBox's own XMS and EMS keep the memory from the BIOS:
 `xms=false`, `ems=false`, `umb=false`. Plain DOSBox has at most 63 MB
 (`memsize=63`): enough for a 32 MB arena and a disk without the games.
+
+`make c4pc-dos` makes that folder, `.c4pc/dos/`: C4PC.COM, C4PC.ELF,
+C4IX32.C4R, DISK.TAR (the disk less the games, 18 MB: `.c4pc/small.tar`),
+C4PC.CFG and DOSBOX.CONF. Run DOSBox in it with `-conf DOSBOX.CONF`.
+
+*Measured:* DOSBox-X runs the whole disk this way (`memsize=512`,
+`core=dynamic`, COM1 to a file), byte for byte as libjs. Plain DOSBox 0.74
+runs C4PC.COM, which starts the kernel; what C4IX printed there could not
+be seen headless (DOSBox 0.74 has no serial-to-file, and its null-modem
+link delivered nothing on helios, even for a trivial program), so plain
+DOSBox wants a look at its screen.
+
+DOSBox has no isa-debug-exit: c4pc halts when C4IX ends, and a headless
+run watches COM1 for c4pc's last line and stops the emulator (DOSBox-X
+then needs SIGKILL, ignoring SIGTERM while halted).
 
 ## Next
 

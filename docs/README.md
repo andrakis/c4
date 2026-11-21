@@ -33,7 +33,7 @@ detail behind it. Each doc is one of three kinds:
 | [c4bb-uart-block.md](c4bb-uart-block.md) | reference | The UART block write |
 | [c4bb-port.md](c4bb-port.md) | history | 2026-08-26: porting the c4m and c4mp opcode changes to the breadboard |
 | [libjs-design.md](libjs-design.md) | tracker | libjs, c4m in JavaScript (a performance pass and a media panel open) |
-| [c4pc.md](c4pc.md) | reference | c4pc: libjs's engine in C on a bare PC (2026-11-22). C4IX boots in QEMU and DOSBox-X, byte for byte as on libjs; the DOS loader, the tools, the speeds, what is next |
+| [c4pc.md](c4pc.md) | reference | c4pc: libjs's engine in C on a bare PC (2026-11-22). C4IX boots in QEMU, DOSBox-X and Bochs, byte for byte as on libjs; the DOS loader, the tools, the speeds, what is next |
 | [c4or1k-design.md](c4or1k-design.md) | reference | c4or1k, jor1k ported to C, M0–M18 |
 | [c4gpu-design.md](c4gpu-design.md) | investigation | A GPU-hosted VM: design and predictions only, no code |
 | [c4gpu-bench-prompt.md](c4gpu-bench-prompt.md) | investigation | The benchmark brief that goes with it |

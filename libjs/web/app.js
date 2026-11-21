@@ -3,7 +3,7 @@
 // URL parameters:
 //   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
 //                                c4dos, c4dos-ladder, wolf3d, wolf3d6, wolf3d-c4ix, doom, doom-full,
-//                                doom1-full, doom2-full, tnt-full, plutonia-full, tyrian, rott,
+//                                doom1-full, doom2-full, tnt-full, plutonia-full, tyrian, tyrian-full, rott,
 //                                rottreg, quake, quake-full, duke3d, duke3d-full, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
@@ -45,7 +45,7 @@
 import { C4M } from '../page.js';
 import { SITE } from './site.js';
 import { MediaStore, indexedDbBackend } from '../../src/c4bb/web/store.js';
-import { FOLDERS, uploadName, uploadParts, needsStatus } from '../uploads.js';
+import { FOLDERS, uploadParts, needsStatus, unpackUpload } from '../uploads.js';
 import { keptFiles, keptFolders, folderTar } from '../kept.js';
 
 // On a host that cannot isolate the page, coi.js reloads it once with a
@@ -114,9 +114,15 @@ const SYSTEMS = {
     .map(([k, what, wad]) => [`${k}-full`, { label: `Doom, your files: ${what} (bare machine)`, image: `${IMAGES}/games/doom.c4r`,
       disk: `${IMAGES}/games`, argv: ['doom.c4r', '-home', '-iwad', wad], mhz: 400, mem: 128, persist: 'doom' }])),
   // OpenTyrian (games/tyrian), where Tyrian's data was there to put on
-  // the disk (games/tyrian/data/README.md)
+  // the disk (games/tyrian/data/README.md; left off the menu below where
+  // it was not)
   tyrian: { label: 'Tyrian (bare machine)', image: `${IMAGES}/games/tyrian.c4r`, disk: `${IMAGES}/games`,
             argv: ['tyrian.c4r'], mhz: 400, persist: 'tyrian' },
+  // ... and from the person's own tyrian21.zip, which the Uploads take
+  // apart into tyrian/ (tyrian --home, uploads.js): the page never has
+  // Tyrian's data, whose licence lets nobody pass it on
+  'tyrian-full': { label: 'Tyrian, your files (bare machine)', image: `${IMAGES}/games/tyrian.c4r`, disk: `${IMAGES}/games`,
+                   argv: ['tyrian.c4r', '--home'], mhz: 400, persist: 'tyrian' },
   // Rise of the Triad (games/rott), the shareware episode
   rott: { label: 'Rise of the Triad (bare machine)', image: `${IMAGES}/games/rott.c4r`, disk: `${IMAGES}/games`,
           argv: ['rott.c4r'], mhz: 400, persist: 'rott' },
@@ -167,6 +173,9 @@ const onDisk = async d => {
 const GAMES = await onDisk(`${IMAGES}/games`);
 for (const [k, s] of Object.entries(SYSTEMS))
   if (s.disk === `${IMAGES}/games` && !GAMES.has(s.image.split('/').pop())) delete SYSTEMS[k];
+// ... nor is Tyrian, where its data was not there to put on the disk (the
+// site's): tyrian-full plays the person's own
+if (!GAMES.has('tyrian/data/tyrian1.lvl')) delete SYSTEMS.tyrian;
 
 const $ = id => document.getElementById(id);
 const UPLOADS = 'uploads';   // the IndexedDB medium the Uploads are kept in (page.js)
@@ -646,7 +655,18 @@ function upNeeds(names) {
       const got = have.includes(f);
       files.append(span(got ? 'got' : how === 'opt' ? 'dim' : 'want', (got ? '✓ ' : '') + f + (how === 'opt' ? ' (if you have it)' : '')), ' ');
     };
-    for (const f of need.all || []) file(f, 'all');
+    // a game whose zip the Uploads take apart (Tyrian's): the zip, and how
+    // many of its files are here, rather than every one of them
+    if (need.zip) {
+      const n = (need.all || []).length;
+      files.append(span(ready ? 'got' : 'want', (ready ? '✓ ' : '') + need.zip), ' ',
+                   span('dim', ready ? `its ${n} files` : have.length ? `${have.length} of its ${n} files are here` : 'as you downloaded it'));
+      if (need.url && !ready) {
+        const a = document.createElement('a');
+        a.href = need.url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = need.url;
+        files.append(' ', span('dim', 'from '), a);
+      }
+    } else for (const f of need.all || []) file(f, 'all');
     if (need.any) { files.append(span('dim', need.all ? 'and one of: ' : 'one of: ')); for (const f of need.any) file(f, 'any'); }
     for (const f of need.opt || []) file(f, 'opt');
     const left = missing.length ? `${missing.length} to add` : anyMissing.length ? 'one of them to add' : 'ready';
@@ -658,7 +678,10 @@ function upNeeds(names) {
 }
 async function upAdd(list) {
   try {
-    for (const f of list) await upStore().backend.putFile(UPLOADS, uploadName(upFolder.value, f.name), new Uint8Array(await f.arrayBuffer()));
+    // (a game's zip, tyrian21.zip, is kept as the files of it the game reads: unpackUpload)
+    for (const f of list)
+      for (const [name, b] of await unpackUpload(upFolder.value, f.name, new Uint8Array(await f.arrayBuffer())))
+        await upStore().backend.putFile(UPLOADS, name, b);
   } catch (e) { alert(`Could not keep the files in this browser: ${e.message || e}`); }
   await upShow();
 }

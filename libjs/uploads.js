@@ -38,6 +38,7 @@ export const FOLDERS = [
   ['quake', '/home/quake', 'Quake: quake -home plays pak0.pak and pak1.pak'],
   ['doom', '/home/doom', 'Doom: doom -home plays doom.wad, doom2.wad, plutonia.wad, tnt.wad'],
   ['rott', '/home/rott', 'Rise of the Triad: rottreg plays the registered DARKWAR.WAD, .RTL and .RTC (and REMOTE1.RTS, if you have it: else the shareware\'s)'],
+  ['tyrian', '/home/tyrian', 'Tyrian 2.1: tyrian --home plays it. Add tyrian21.zip as you downloaded it: its files are taken out of it, into /home/tyrian'],
 ];
 
 // What each of those games wants of the person's files, for the Uploads'
@@ -63,6 +64,23 @@ export const NEEDS = [
   { folder: 'rott', game: 'Rise of the Triad (registered)',
     all: ['darkwar.wad', 'darkwar.rtl', 'darkwar.rtc'], opt: ['remote1.rts'],
     c4ix: 'rottreg', dos: 'B:\\ROTT', c4dos: 'Full Games > Rise of the Triad, or \\GAMES\\ROTT\\ROTTREG', bare: 'rottreg' },
+  // Tyrian 2.1 is freeware, but its license.doc lets nobody pass it on, so
+  // the page has only the engine (OpenTyrian, games/tyrian) and the person
+  // brings the data: `zip`, as downloaded from `url` (where OpenTyrian's
+  // README points), whose files unpackUpload takes out of it. `all` is
+  // what of it the game reads (games/tyrian/tools/tyrdata.py's choice).
+  { folder: 'tyrian', game: 'Tyrian 2.1', zip: 'tyrian21.zip', url: 'https://camanis.net/tyrian/tyrian21.zip',
+    all: ['cubetxt1.dat', 'cubetxt2.dat', 'cubetxt3.dat', 'cubetxt4.dat', 'demo.1', 'demo.2', 'demo.3', 'demo.4', 'demo.5',
+          'estsc.shp', 'levels1.dat', 'levels2.dat', 'levels3.dat', 'levels4.dat', 'music.mus',
+          'newsh#.shp', 'newsh0.shp', 'newsh1.shp', 'newsh2.shp', 'newsh3.shp', 'newsh4.shp', 'newsh5.shp', 'newsh6.shp',
+          'newsh7.shp', 'newsh8.shp', 'newsh9.shp', 'newsh^.shp', 'newsha.shp', 'newshb.shp', 'newshc.shp', 'newshd.shp',
+          'newshe.shp', 'newshf.shp', 'newshg.shp', 'newshh.shp', 'newshi.shp', 'newshj.shp', 'newshk.shp', 'newshl.shp',
+          'newshm.shp', 'newshn.shp', 'newsho.shp', 'newshp.shp', 'newshr.shp', 'newshs.shp', 'newsht.shp', 'newshu.shp',
+          'newshv.shp', 'newsh~.shp', 'palette.dat', 'shapes).dat', 'shapesw.dat', 'shapesx.dat', 'shapesy.dat', 'shapesz.dat',
+          'shipedit.pcx', 'tshp2.pcx', 'tyrend.anm', 'tyrian.cdt', 'tyrian.hdt', 'tyrian.pic', 'tyrian.shp', 'tyrian.snd',
+          'tyrian1.lvl', 'tyrian2.lvl', 'tyrian3.lvl', 'tyrian4.lvl', 'tyrianc.shp', 'tyrset.pcx', 'user1.shp', 'user2.shp',
+          'voices.snd', 'voicesc.snd'],
+    c4ix: 'tyrian --home', dos: 'B:\\TYRIAN', c4dos: 'Full Games > Tyrian, or \\GAMES\\TYRIAN\\TYRIAN --home', bare: 'tyrian-full' },
 ];
 
 // How far the uploads (their names, as kept) go towards each game of NEEDS:
@@ -84,6 +102,59 @@ export function needsStatus(names) {
 export const uploadName = (folder, file) => (FOLDERS.some(([f]) => f === folder) && folder ? folder + '/' : '') + file.toLowerCase();
 // ... and back: [folder, file]
 export const uploadParts = name => { const i = name.indexOf('/'); return i < 0 ? ['', name] : [name.slice(0, i), name.slice(i + 1)]; };
+
+// What the Uploads keep of a file added in FOLDER: [[name, bytes]]. Most
+// are kept as they are, under uploadName. A game's zip of NEEDS (its
+// `zip`: tyrian21.zip) is taken apart instead, whatever folder was picked:
+// the files of it the game reads, in the game's folder, flat and lower
+// case ("tyrian21/TYRIAN1.LVL" is tyrian/tyrian1.lvl), the rest (its DOS
+// programs, its documents) left out. A zip of that name with none of them
+// in it is kept as it is.
+export async function unpackUpload(folder, file, bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const need = NEEDS.find(n => n.zip && n.zip === file.toLowerCase());
+  if (!need) return [[uploadName(folder, file), b]];
+  const want = new Set([...(need.all || []), ...(need.any || []), ...(need.opt || [])]);
+  const out = [];
+  for (const [n, data] of await unzip(b)) {
+    const f = n.split('/').pop().toLowerCase();
+    if (want.has(f)) out.push([uploadName(need.folder, f), data]);
+  }
+  return out.length ? out : [[uploadName(folder, file), b]];
+}
+
+// A zip's files, [[name, bytes]], directories left out: stored or
+// deflated, as zips mostly are, found by its central directory. Deflate is
+// the platform's (DecompressionStream, in the page and in node).
+export async function unzip(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let end = -1;
+  for (let i = b.length - 22; i >= 0 && i >= b.length - 22 - 65535; i--) if (v.getUint32(i, true) === 0x06054b50) { end = i; break; }
+  if (end < 0) throw new Error('not a zip (no end of central directory)');
+  const count = v.getUint16(end + 10, true);
+  let p = v.getUint32(end + 16, true);
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    if (v.getUint32(p, true) !== 0x02014b50) throw new Error('a broken zip (its central directory)');
+    const method = v.getUint16(p + 10, true), csize = v.getUint32(p + 20, true), size = v.getUint32(p + 24, true);
+    const nlen = v.getUint16(p + 28, true), xlen = v.getUint16(p + 30, true), clen = v.getUint16(p + 32, true);
+    const local = v.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nlen));
+    p += 46 + nlen + xlen + clen;
+    if (name.endsWith('/')) continue;
+    if (v.getUint32(local, true) !== 0x04034b50) throw new Error(`a broken zip (${name})`);
+    const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+    const raw = b.subarray(start, start + csize);
+    let data;
+    if (method === 0) data = raw.slice();
+    else if (method === 8) data = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+    else throw new Error(`${name} is packed in a way this does not unpack (method ${method})`);
+    if (data.length !== size) throw new Error(`a broken zip (${name}: ${data.length} bytes, not ${size})`);
+    out.push([name, data]);
+  }
+  return out;
+}
 
 const text = b => new TextDecoder().decode(b);
 const bytes = s => new TextEncoder().encode(s);
@@ -269,7 +340,12 @@ export function uploadsReadme(drive = 'B') {
   L.push('', 'WHAT EACH GAME NEEDS', '');
   for (const n of NEEDS) {
     L.push(n.game);
-    if (n.all && n.all.length) wrap(`Needs: ${n.all.map(f => f.toUpperCase()).join(', ')}`, '    ');
+    // a game whose zip the Uploads take apart: the zip, and where it is
+    if (n.zip) {
+      wrap(`Needs: ${n.zip.toUpperCase()}, as you downloaded it${n.url ? ', from' : ''}`, '    ');
+      if (n.url) L.push(`    ${n.url}`);
+      wrap('Add the zip itself: the Uploads take its files out of it.', '    ');
+    } else if (n.all && n.all.length) wrap(`Needs: ${n.all.map(f => f.toUpperCase()).join(', ')}`, '    ');
     if (n.any && n.any.length) wrap(`Needs one of: ${n.any.map(f => f.toUpperCase()).join(', ')}`, '    ');
     if (n.opt && n.opt.length) wrap(`Also, if you have it: ${n.opt.map(f => f.toUpperCase()).join(', ')}`, '    ');
     wrap(`In: ${d}${n.dos.slice(2)} (the Uploads folder /home/${n.folder})`, '    ');

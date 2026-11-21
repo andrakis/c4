@@ -10,13 +10,24 @@
 # line of /etc/desktop.apps (games/README.md). They are written to
 # c4ix-desktop.apps beside OUT, on the disk, and #@desktop-apps becomes its
 # entry. With none, that goes too.
+# "#@app-if PATH LINE" is such a line only where the disk (OUT's directory)
+# has PATH: a game whose data may not be passed on is listed where its
+# data was there to put on the disk (games/tyrian).
 import os, sys
 
 src, out, games = sys.argv[1], sys.argv[2], sys.argv[3:]
 def block(g):
     return open(os.path.join(g, 'c4ix.vfs.txt')).read().rstrip('\n').split('\n')
-apps = [l[len('#@app '):] for g in games for l in block(g) if l.startswith('#@app ')]
-apps_file = os.path.join(os.path.dirname(out), 'c4ix-desktop.apps')
+disk = os.path.dirname(out)
+def app(l):
+    if l.startswith('#@app '):
+        return l[len('#@app '):]
+    if l.startswith('#@app-if '):
+        path, _, line = l[len('#@app-if '):].partition(' ')
+        return line if os.path.exists(os.path.join(disk, path)) else None
+    return None
+apps = [a for g in games for a in map(app, block(g)) if a]
+apps_file = os.path.join(disk, 'c4ix-desktop.apps')
 if apps:
     open(apps_file, 'w').write(''.join(a + '\n' for a in apps))
 elif os.path.exists(apps_file):

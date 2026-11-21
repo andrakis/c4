@@ -71,8 +71,17 @@ first key or click.
 
 On GitHub Pages, at https://andrakis.github.io/c4/libjs/web/: `make pages`
 (`pages.sh`) builds the images in a tree of its own (`~/git/c4-pages`)
-with Wolfenstein 3D, Doom and Rise of the Triad, never Tyrian, whose
-data may not be passed on. `site.sh` lays the site out as the repo is,
+with every game that may be published: all but Super Blit Kart (the
+licence on its art is not settled), Quake's shareware as its zip
+(`QUAKE_AS_ZIP=1`). Tyrian is there as OpenTyrian, the engine, without
+Tyrian 2.1's data, which may not be passed on: a visitor adds their own
+`tyrian21.zip` with the page's Uploads, which takes it apart into
+`/home/tyrian` (`uploads.js`), and plays it as Tyrian (your files) in
+C4IX's Go > Games, Full Games (Uploads) > Tyrian in grin, or
+`?system=tyrian-full`. `pages.sh` refuses to run with `TYRIAN_ZIP` set
+or with anything in the tree's `games/tyrian/data` but its README, and
+`site.sh` refuses a site with any of Tyrian 2.1's files in it, or in a
+zip, by the SHA-256s in `tyrian21.sha256`. `site.sh` lays the site out as the repo is,
 with the images in it, in the site repository's `c4/`
 (`~/git/andrakis.github.io`), and `pages.sh` commits it there. Pushing
 that repository publishes it. Pages

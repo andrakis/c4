@@ -542,6 +542,12 @@ fi
 # (games/NAME/c4-images.sh).
 GAMES=$(for g in games/*/c4-images.sh; do if [ -f "$g" ]; then dirname "$g"; fi; done)
 for g in $GAMES; do . $g/c4-images.sh c4ix; done
+# ... and none of a game that is not checked out (any more): its programs
+# would stay on the disk from an earlier build, in no manifest but on the
+# site all the same (libjs/pages.sh leaves Super Blit Kart out)
+for g in $(sed -n "s|^[[:space:]]*path = games/||p" .gitmodules); do
+    [ -f games/$g/c4-images.sh ] || rm -f $DISK/c4ix-$g.c4r $DISK/c4ix-$g-*.c4r
+done
 
 # ... and with no C4IX under them: the bare machine, and C4DOS (c4's bare
 # libc, make libc-bare-objs). The same game objects, but for the C4IX

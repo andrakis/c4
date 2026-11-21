@@ -68,6 +68,10 @@ Its repository's branch `c4` carries, beside the game:
   `#@app Games/Puzzles|Net|net|window`. Files and Run... do the same for
   that program, named alone or by its path under `/usr/games`
   (docs/c4ix-desktop.md, part twenty-four).
+  `#@app-if PATH LINE` is such a line only where the disk has PATH: Tyrian,
+  whose data may not be passed on, is in the menu where its data was there
+  to put on the disk (`#@app-if tyrian/tyrian1.lvl Games|Tyrian|tyrian`),
+  and Tyrian (your files), `tyrian --home`, wherever the game is.
 
   The menu has Cards and Puzzles in windows of their own; Doom, Duke Nukem 3D,
   Quake, Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, which take
@@ -178,7 +182,7 @@ not the one the game's `c4.mk` gives:
 | Doom | `doom1.wad`, id's shareware WAD (1.9) | `DOOM_WAD` |
 | Rise of the Triad | `1rott13.zip`, Apogee's shareware package | `ROTT_ZIP` |
 | Super Blit Kart | its PNGs, maps and font, from a fixed commit of upstream's; the licence on them is not settled (`games/sbk/data/README.md`) | none |
-| OpenTyrian | `tyrian21.zip`, Tyrian 2.1, the user's own copy: it may not be passed on | `TYRIAN_ZIP` |
+| OpenTyrian | `tyrian21.zip`, Tyrian 2.1, the user's own copy: it may not be passed on (the site's visitors add theirs with the page's Uploads: `tyrian --home`) | `TYRIAN_ZIP` |
 | Duke Nukem 3D | `3dduke13.zip`, 3D Realms' shareware package (1.3D) | `DUKE3D_ZIP` |
 | Quake | `quake106.zip`, id's shareware package (`pak0.pak` is taken out of it; with `QUAKE_AS_ZIP=1`, as the site is built, the disks carry the zip itself and libjs makes `pak0.pak` from it: `games/quake/data/README.md`) | `QUAKE_ZIP` |
 | Frotz | `zork1.z3`, `zork2.z3`, `zork3.z3`, Microsoft's MIT release of Zork, fetched from a fixed commit | `ZORK1_Z3`, `ZORK2_Z3`, `ZORK3_Z3` |

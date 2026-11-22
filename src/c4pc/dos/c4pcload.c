@@ -9,6 +9,8 @@
  *   module C4IX32.C4R             the program
  *   module DISK.TAR drive         a drive (a ustar archive)
  *   module IN.TXT stdin           keyboard input, then end of input
+ *   video 1024x768                a VESA graphics mode for c4pc's display:
+ *                                 the largest that fits (vbe_choose)
  * A module's string is the whole rest of its line, as QEMU and GRUB pass
  * them. Everything is read with DOS and copied above 1 MB with the
  * BIOS's block move (INT 15h AH=87h); then the loader leaves DOS for
@@ -101,6 +103,49 @@ static void a20_on(void) {
   if (!(v & 2)) { v = (u8)((v | 2) & ~1); __asm__ volatile("outb %0, $0x92" : : "a"(v)); }
 }
 
+/* ---- a VESA mode (video WxH): the largest of the BIOS's modes with a
+ * linear framebuffer, direct colour, that fits in W x H, 32 bits a pixel
+ * before 24 before 16; set just before the kernel starts, and described
+ * to it in the multiboot information's framebuffer fields, as GRUB's
+ * gfxpayload is. DOSBox's S3 has 2 MB of video memory (800 x 600 x 32,
+ * or 1024 x 768 x 16), DOSBox-X's as much as vmemsize says ---- */
+static u32 vid_w, vid_h;
+static u8 vbeinfo[512], modeinfo[256], bestinfo[256];
+static u16 best_mode;
+static int vbe(u16 ax, u16 cx, u16 bx, void *di) {
+  u32 r;
+  __asm__ volatile("int $0x10" : "=a"(r) : "a"(ax), "b"(bx), "c"(cx), "D"(di) : "cc", "memory", "edx", "esi");
+  return (r & 0xffff) == 0x004f;
+}
+static u16 peek16(u16 seg, u16 off) {
+  u16 v;
+  __asm__ volatile("push %%es; mov %w1, %%es; mov %%es:(%%bx), %w0; pop %%es" : "=a"(v) : "r"(seg), "b"(off));
+  return v;
+}
+static u16 rd16(const u8 *p) { return (u16)(p[0] | p[1] << 8); }
+static u32 rd32(const u8 *p) { return p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24; }
+static int vbe_choose(void) {
+  memset(vbeinfo, 0, sizeof vbeinfo);
+  memcpy(vbeinfo, "VBE2", 4);
+  if (!vbe(0x4f00, 0, 0, vbeinfo) || vbeinfo[0] != 'V' || vbeinfo[1] != 'E') return 0;
+  u16 off = rd16(vbeinfo + 14), seg = rd16(vbeinfo + 16);
+  u32 best = 0;
+  for (int i = 0; i < 512; i++) {
+    u16 mode = peek16(seg, (u16)(off + 2 * i));
+    if (mode == 0xffff) break;
+    memset(modeinfo, 0, sizeof modeinfo);
+    if (!vbe(0x4f01, mode, 0, modeinfo)) continue;
+    if ((rd16(modeinfo) & 0x99) != 0x99) continue;      /* supported, colour, graphics, linear */
+    u8 bpp = modeinfo[25];
+    if (modeinfo[27] != 6 || (bpp != 32 && bpp != 24 && bpp != 16)) continue;
+    u32 w = rd16(modeinfo + 18), h = rd16(modeinfo + 20);
+    if (w > vid_w || h > vid_h || !rd32(modeinfo + 40)) continue;
+    u32 score = w * h * 4 + (bpp == 32 ? 3 : bpp == 24 ? 2 : 1);
+    if (score > best) { best = score; best_mode = mode; memcpy(bestinfo, modeinfo, sizeof bestinfo); }
+  }
+  return best != 0;
+}
+
 /* ---- the configuration ---- */
 static char cfg[4096];
 static char kernel[80] = "C4PC.ELF";
@@ -108,7 +153,14 @@ static char *cmdline = "";
 #define MAXMOD 16
 static char *modname[MAXMOD], *modstr[MAXMOD]; static int nmod;
 
-struct mb_info { u32 flags, mem_lower, mem_upper, boot_device, cmdline, mods_count, mods_addr; };
+struct mb_info {
+  u32 flags, mem_lower, mem_upper, boot_device, cmdline, mods_count, mods_addr;
+  u32 syms[4], mmap_length, mmap_addr, drives_length, drives_addr, config_table, boot_loader_name, apm_table;
+  u32 vbe_control_info, vbe_mode_info; u16 vbe_mode, vbe_seg, vbe_off, vbe_len;
+  u32 fb_lo, fb_hi, fb_pitch, fb_width, fb_height; u8 fb_bpp, fb_type;
+  u8 pad[2];           /* where GRUB puts the colour info (pc/screen.c reads it there) */
+  u8 rp, rs, gp, gs, bp, bs;
+};
 struct mb_mod { u32 start, end, string, reserved; };
 static struct mb_info mbi;
 static struct mb_mod mods[MAXMOD];
@@ -177,6 +229,12 @@ int main(void) {
     char *p = skip_ws(s);
     if (word_is(&p, "kernel")) { int k = 0; while (p[k] && p[k] != ' ' && k < 79) kernel[k] = p[k], k++; kernel[k] = 0; }
     else if (word_is(&p, "cmdline")) cmdline = p;
+    else if (word_is(&p, "video")) {
+      vid_w = vid_h = 0;
+      while (*p >= '0' && *p <= '9') vid_w = vid_w * 10 + (u32)(*p++ - '0');
+      if (*p == 'x' || *p == 'X') p++;
+      while (*p >= '0' && *p <= '9') vid_h = vid_h * 10 + (u32)(*p++ - '0');
+    }
     else if (word_is(&p, "module") && nmod < MAXMOD) {
       modstr[nmod] = p;
       static char names[MAXMOD][80];
@@ -243,6 +301,24 @@ int main(void) {
   gdt[2] = 0x0000ffff; gdt[3] = 0x00cf9a00;
   gdt[4] = 0x0000ffff; gdt[5] = 0x00cf9200;
   gdtr.lim = sizeof gdt - 1; gdtr.base = linear(gdt);
+  /* the screen, last: after it, DOS's text is not seen */
+  if (vid_w && vid_h) {
+    if (!vbe_choose()) puts_("C4PC: no VESA mode with a linear framebuffer fits: text\n");
+    else {
+      u8 *mi = bestinfo;
+      u32 pitch = rd16(vbeinfo + 4) >= 0x300 ? rd16(mi + 50) : rd16(mi + 16);
+      puts_("C4PC: VESA mode "); puthex(best_mode); puts_(", "); putu(rd16(mi + 18)); puts_(" x "); putu(rd16(mi + 20));
+      puts_(" x "); putu(mi[25]); puts_(" at "); puthex(rd32(mi + 40)); puts_("\n");
+      mbi.flags |= 1u << 12;
+      mbi.fb_lo = rd32(mi + 40); mbi.fb_hi = 0; mbi.fb_pitch = pitch;
+      mbi.fb_width = rd16(mi + 18); mbi.fb_height = rd16(mi + 20); mbi.fb_bpp = mi[25]; mbi.fb_type = 1;
+      mbi.rs = mi[31]; mbi.rp = mi[32]; mbi.gs = mi[33]; mbi.gp = mi[34]; mbi.bs = mi[35]; mbi.bp = mi[36];
+      mbi.vbe_mode = best_mode;
+      puts_("C4PC: starting the kernel\n");
+      if (!vbe(0x4f02, 0, (u16)(best_mode | 0x4000), 0)) die("the BIOS would not set the mode");
+      go_pm(entry, linear(&mbi), linear(pm32), (u32)(unsigned)&gdtr);
+    }
+  }
   puts_("C4PC: starting the kernel\n");
   go_pm(entry, linear(&mbi), linear(pm32), (u32)(unsigned)&gdtr);
   return 1;

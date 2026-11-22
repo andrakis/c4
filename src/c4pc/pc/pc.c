@@ -48,7 +48,11 @@ static void com1_put(int c) {
   outb(0x3F8, (u8)c);
 }
 
+/* the text screen, kept here (vtext) and shown on the VGA's while it is
+ * in text mode; on a framebuffer, screen.c draws it (screen_console) */
 static volatile uint16_t *const VGA = (volatile uint16_t *)0xB8000;
+static uint16_t vtext[2000]; static int vga_real = 1;
+#define VSET(i, v) do { int i_ = (i); vtext[i_] = (uint16_t)(v); if (vga_real) VGA[i_] = vtext[i_]; } while (0)
 static int vx, vy; static uint16_t vattr = 0x0700;
 static int esc_state; static int esc_args[8], esc_n;
 static void vga_cursor(void) {
@@ -56,11 +60,12 @@ static void vga_cursor(void) {
   outb(0x3D4, 0x0F); outb(0x3D5, (u8)pos); outb(0x3D4, 0x0E); outb(0x3D5, (u8)(pos >> 8));
 }
 static void vga_scroll(void) {
-  for (int i = 0; i < 80 * 24; i++) VGA[i] = VGA[i + 80];
-  for (int i = 80 * 24; i < 80 * 25; i++) VGA[i] = vattr | ' ';
+  memmove(vtext, vtext + 80, 80 * 24 * 2);
+  for (int i = 80 * 24; i < 80 * 25; i++) vtext[i] = vattr | ' ';
+  if (vga_real) for (int i = 0; i < 80 * 25; i++) VGA[i] = vtext[i];
   vy = 24;
 }
-static void vga_clear(int from, int to) { for (int i = from; i < to; i++) VGA[i] = vattr | ' '; }
+static void vga_clear(int from, int to) { for (int i = from; i < to; i++) VSET(i, vattr | ' '); }
 static const u8 ansi_vga[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
 static void vga_csi(int c) {
   int a0 = esc_n > 0 ? esc_args[0] : 0, a1 = esc_n > 1 ? esc_args[1] : 0;
@@ -118,14 +123,15 @@ static void vga_put(int c) {
   else if (c == '\b') { if (vx) vx--; }
   else if (c == '\t') { vx = (vx + 8) & ~7; if (vx > 79) { vx = 0; if (++vy > 24) vga_scroll(); } }
   else if (c >= 32 || c < 0) {
-    VGA[vy * 80 + vx] = vattr | (u8)c;
+    VSET(vy * 80 + vx, vattr | (u8)c);
     if (++vx > 79) { vx = 0; if (++vy > 24) vga_scroll(); }
   }
 }
-static int vga_dirty;
+static int vga_dirty, com1_only;
 static void con_put(int c) {
   if (c == '\n') com1_put('\r');
   com1_put(c);
+  if (com1_only) return;
   vga_put(c);
   vga_dirty = 1;
 }
@@ -245,6 +251,9 @@ int screen_from_multiboot(const void *info);
 int screen_bga(int w, int h);
 void screen_size(int *w, int *h);
 void screen_show(gui *g);
+void screen_console(const uint16_t *cells, int cur);
+int gui_ring(gui *g);
+u32 gui_flips(gui *g);
 /* set 1 to keyCode: plain, and after E0 */
 static const u8 kc[0x59] = {
   0, 27, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48, 189, 187, 8, 9,
@@ -278,14 +287,22 @@ static void key_event(gui *g, u8 sc) {
   else if (e0 && sc == 0x35) ch = '/';
   gui_key(g, !up, code, ch, (g_shift ? 1 : 0) | (g_ctrl ? 2 : 0) | (g_alt ? 4 : 0));
 }
-/* after a slice: the keys and the mouse to the display, what it drew to the screen */
+/* after a slice: the keys and the mouse to the display, and what it drew
+ * to the screen -- or, while no program has it (no ring, no frame flipped
+ * this last second), the console's text screen */
+static i64 display_ms;                  /* the time this takes, for -s */
 static void display_tick(machine *m) {
   gui *g = m->gui;
+  i64 t = plat_now_ms();
   kbd_to_gui = gui_attached(g);
   while (scq_head != scq_tail) { u8 sc = scq[scq_head % sizeof scq]; scq_head++; key_event(g, sc); }
   mouse_poll(g);
   gui_tick(g);
-  screen_show(g);
+  static u32 flips; static i64 flip_at = -100000;
+  if (gui_flips(g) != flips) { flips = gui_flips(g); flip_at = t; }
+  if (gui_ring(g) || t - flip_at < 1000) screen_show(g);
+  else screen_console(vtext, vy * 80 + vx);
+  display_ms += plat_now_ms() - t;
 }
 
 /* ---- the CPU: GDT, IDT, PIC, PIT ---- */
@@ -406,7 +423,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -427,6 +444,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--no-accel")) noaccel = 1;
     else if (!strcmp(args[a], "--no-osaccel")) noosaccel = 1;
     else if (!strcmp(args[a], "--fast")) fast = 1;
+    else if (!strcmp(args[a], "--no-realtime")) realtime = 0;
+    else if (!strcmp(args[a], "--no-wc")) wc = 0;
     else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
     else if (!strcmp(args[a], "--no-mmu")) mmu_on = 0;
     else if (!strcmp(args[a], "--")) { a++; break; }
@@ -501,19 +520,22 @@ void pc_main(u32 magic, struct mb_info *mb) {
   if (screen_from_multiboot(mb) || (gui_w > 0 && gui_h > 0 && screen_bga(gui_w, gui_h))) {
     int w, h; screen_size(&w, &h);
     { extern void screen_describe(void); screen_describe(); }
+    if (wc) { extern const char *screen_wc(void); con_puts("c4pc: the framebuffer: "); con_puts(screen_wc()); con_puts("\n"); }
     m->gui = gui_new(m, w, h);
     dbg_m = m;
     int mouse = mouse_init();
     if (mouse) outb(0xA1, 0xEF);           /* IRQ 12 */
     con_puts("c4pc: a display of "); con_dec(w); con_puts(" x "); con_dec(h);
     con_puts(mouse ? ", and a mouse\n" : ", and no mouse\n");
+    vga_real = 0;                       /* graphics: the VGA's text is not shown */
+    screen_console(vtext, vy * 80 + vx);
   }
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU, running " : " MB arena, running ");
   con_puts(img_name); con_puts("\n");
   if (machine_boot(m, img, img_len, pargc, pargv)) power_off(75);
 
-  i64 t0 = plat_now_ms(), parked = 0;
+  i64 t0 = plat_now_ms(), parked = 0, behind_ms = 0;
   i64 limit = maxc < 0 ? INT64_MAX : maxc;
   int status;
   for (;;) {
@@ -535,13 +557,28 @@ void pc_main(u32 magic, struct mb_info *mb) {
     con_flush();
     i64 left = limit - m->cycle;
     if (left <= 0) { con_puts("c4pc: stopped at cycle budget\n"); status = 9; break; }
-    /* someone at the keyboard: slices of 16 simulated milliseconds, paced
-     * to the machine's own clock (cli.js -i), so that a simulated second
-     * takes a real one and top redraws once a second; scripted, or with
-     * --fast, as fast as it goes */
-    i64 slice = paced ? (i64)m->cycles_per_ms * 16 : 20000000;
+    /* someone at the keyboard: slices of 4 simulated milliseconds (as
+     * libjs/worker.js's), paced to the machine's own clock (cli.js -i), so
+     * that a simulated second takes a real one and top redraws once a
+     * second; scripted, or with --fast, as fast as it goes */
+    i64 slice = paced ? (i64)m->cycles_per_ms * 4 : 20000000;
     int r = machine_run(m, left < slice ? left : slice);
     if (m->gui) display_tick(m);
+    /* -s at the keyboard: every 10 s, on COM1 alone, how the PC kept up */
+    if (stats && paced) {
+      static i64 rep_at, rep_cyc, rep_disp, rep_behind;
+      i64 now = plat_now_ms();
+      if (!rep_at) { rep_at = now; rep_cyc = m->cycle - m->skipped; }
+      else if (now - rep_at >= 10000) {
+        i64 dt = now - rep_at, ran = m->cycle - m->skipped;
+        com1_only = 1;
+        con_puts("c4pc: "); con_dec((ran - rep_cyc) / dt); con_puts("k inst/s, ");
+        con_dec((display_ms - rep_disp) * 100 / dt); con_puts("% drawing to the screen, ");
+        con_dec((behind_ms - rep_behind) * 100 / dt); con_puts("% of the clock skipped\n");
+        com1_only = 0;
+        rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_behind = behind_ms;
+      }
+    }
     if (r == STOP_HALT) { status = m->status; break; }
     if (r == STOP_INPUT) {
       if (have_in) { con_puts("c4pc: blocked on input with nothing left to read\n"); status = 8; break; }
@@ -566,6 +603,15 @@ void pc_main(u32 magic, struct mb_info *mb) {
           if (a2 > 0) { i64 cut = a2 < m->nap_ms ? a2 : m->nap_ms; m->sleep_ms -= cut; m->nap_ms -= cut; }
         }
       }
+      /* Behind: the machine's clock is the wall's (libjs's realtime, the
+       * page's default). TIME moves on by what the CPU could not get done,
+       * so a PC slower than the clock asked for gives the guest fewer
+       * cycles a second, not a slower second: a game drops frames rather
+       * than playing in slow motion. What falls behind: the games' own
+       * work, dearer than -hz auto's loop, and the drawing and the screen.
+       * --no-realtime: the machine's second stretches instead */
+      else if (realtime && ahead < -20) { m->sleep_ms += -ahead; behind_ms += -ahead; }
+      else if (!realtime && ahead < -1000) parked += -ahead - 1000;
     }
   }
   con_flush();
@@ -574,6 +620,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
     i64 ran = m->cycle - m->skipped;
     con_puts("c4pc: "); con_dec(ran); con_puts(" cycles in "); con_dec(dt); con_puts(" ms (");
     con_dec(dt > 0 ? ran / dt : 0); con_puts("k inst/s), status "); con_dec(status); con_puts("\n");
+    if (m->gui) { con_puts("c4pc: "); con_dec(display_ms); con_puts(" ms drawing to the screen\n"); }
+    if (behind_ms) { con_puts("c4pc: the clock moved on "); con_dec(behind_ms); con_puts(" ms the machine could not keep up with\n"); }
     con_puts("c4pc: heap "); con_dec(heap_used(m->heap) / 1024); con_puts(" KB in use at exit, ");
     con_dec(heap_peak(m->heap) / 1024); con_puts(" KB at most; host memory free "); con_dec(pc_heap_free_bytes >> 10); con_puts(" KB\n");
   }

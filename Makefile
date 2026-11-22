@@ -3247,16 +3247,19 @@ c4pc.iso: c4pc.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg
 	cp c4pc.elf $(C4PC_IMAGES)/c4ix32.c4r .c4pc/disk.tar .c4pc/iso/boot/
 	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
 	$(GRUB_MKRESCUE) -o $@ .c4pc/iso
-# The DOS package: copy the folder to a DOSBox drive and run C4PC.
-c4pc-dos: C4PC.COM c4pc.elf .c4pc/small.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/dos/C4PC.CFG $(C4PC_SRC)/dos/dosbox.conf
+# The DOS package, for DOSBox-X: the whole disk (the desktop's files are
+# among the big ones small.tar leaves out); copy the folder to a DOSBox
+# drive and run C4PC, or C4PC DESKTOP.CFG.
+c4pc-dos: C4PC.COM c4pc.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/dos/C4PC.CFG $(C4PC_SRC)/dos/DESKTOP.CFG $(C4PC_SRC)/dos/dosbox.conf
 	rm -rf .c4pc/dos && mkdir -p .c4pc/dos
 	cp C4PC.COM .c4pc/dos/C4PC.COM
 	cp c4pc.elf .c4pc/dos/C4PC.ELF
 	cp $(C4PC_IMAGES)/c4ix32.c4r .c4pc/dos/C4IX32.C4R
-	cp .c4pc/small.tar .c4pc/dos/DISK.TAR
+	cp .c4pc/disk.tar .c4pc/dos/DISK.TAR
 	sed 's/$$/\r/' $(C4PC_SRC)/dos/C4PC.CFG > .c4pc/dos/C4PC.CFG
+	sed 's/$$/\r/' $(C4PC_SRC)/dos/DESKTOP.CFG > .c4pc/dos/DESKTOP.CFG
 	cp $(C4PC_SRC)/dos/dosbox.conf .c4pc/dos/DOSBOX.CONF
-	@echo "c4pc-dos: .c4pc/dos/ is ready: DOSBox with DOSBOX.CONF, then C4PC"
+	@echo "c4pc-dos: .c4pc/dos/ is ready: DOSBox-X with DOSBOX.CONF, then C4PC (or C4PC DESKTOP.CFG)"
 PHONY += c4pc-dos
 # C4IX's boot test from test-libjs (ps, then exit) on three machines:
 # libjs, c4pc-host, and c4pc.elf in QEMU when there is a qemu-system-i386,

@@ -19,6 +19,7 @@
  * 100, 80, then ID 3). */
 #include "../c4pc.h"
 #include "../clib.h"
+#include "../font.h"
 
 static inline void outb(u32 p, u8 v) { __asm__ volatile("outb %0,%w1" : : "a"(v), "Nd"(p)); }
 static inline u8 inb(u32 p) { u8 v; __asm__ volatile("inb %w1,%0" : "=a"(v) : "Nd"(p)); return v; }
@@ -77,9 +78,91 @@ void screen_size(int *w, int *h) { *w = sw; *h = sh; }
 void pc_log(const char *s);
 void pc_logn(i64 v);
 void screen_describe(void) {
-  pc_log("c4pc: screen "); pc_logn(sw); pc_log(" x "); pc_logn(sh); pc_log(" x "); pc_logn(bpp);
+  pc_log("c4pc: screen at "); pc_logn((i64)(uintptr_t)fb); pc_log(", "); pc_logn(sw); pc_log(" x "); pc_logn(sh); pc_log(" x "); pc_logn(bpp);
   pc_log(", pitch "); pc_logn(fb_pitch); pc_log(", red "); pc_logn(rpos); pc_log("/"); pc_logn(rsz);
   pc_log(" green "); pc_logn(gpos); pc_log("/"); pc_logn(gsz); pc_log(" blue "); pc_logn(bpos); pc_log("/"); pc_logn(bsz); pc_log("\n");
+}
+
+/* ---- write-combining: a BIOS leaves the framebuffer uncached (the
+ * MTRRs' default type, or a range of its own over the PCI hole, as
+ * SeaBIOS's), where every store is a bus cycle of its own; write-combined,
+ * the CPU gathers a row's stores into bursts. Two ways, as Linux's:
+ *  - the PAT: paging on, every 4 GB mapped to itself in 4 MB pages, and
+ *    the framebuffer's pages given the PAT's entry 1, set to WC. A page's
+ *    WC wins over an MTRR's UC (Intel SDM vol. 3, 11.5.2.2);
+ *  - without a PAT, a variable MTRR saying WC, where no range covers the
+ *    framebuffer already (11.11.8: caches off and flushed, MTRRs off, the
+ *    pair written, all back on).
+ * Under KVM the guest's memory types mean nothing; VMware and real PCs
+ * heed them. --no-wc leaves all of it be ---- */
+static inline void cpuid(u32 l, u32 *a, u32 *b, u32 *c, u32 *d) { __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(l), "c"(0)); }
+static inline uint64_t rdmsr(u32 r) { u32 lo, hi; __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(r)); return (uint64_t)hi << 32 | lo; }
+static inline void wrmsr(u32 r, uint64_t v) { __asm__ volatile("wrmsr" : : "c"(r), "a"((u32)v), "d"((u32)(v >> 32))); }
+static u32 pdir[1024] __attribute__((aligned(4096)));
+static const char *pat_wc(void) {
+  u32 base = (u32)(uintptr_t)fb, end = base + fb_pitch * (u32)sh;
+  for (u32 i = 0; i < 1024; i++) {
+    u32 at = i << 22;
+    pdir[i] = at | 0x83;                              /* 4 MB, writable, present */
+    if (at + (1u << 22) > base && at < end) pdir[i] |= 0x08;   /* PWT: the PAT's entry 1 */
+  }
+  u32 eflags; __asm__ volatile("pushf; pop %0; cli" : "=r"(eflags));
+  uint64_t pat = rdmsr(0x277);
+  pat = (pat & ~((uint64_t)0xff << 8)) | ((uint64_t)0x01 << 8);   /* entry 1: WC */
+  __asm__ volatile("wbinvd" : : : "memory");
+  wrmsr(0x277, pat);
+  u32 cr4; __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+  __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 | 0x10));          /* PSE */
+  __asm__ volatile("mov %0, %%cr3" : : "r"((u32)(uintptr_t)pdir) : "memory");
+  u32 cr0; __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+  __asm__ volatile("mov %0, %%cr0; jmp 1f; 1:" : : "r"(cr0 | 0x80000000u) : "memory");
+  __asm__ volatile("wbinvd" : : : "memory");
+  if (eflags & 0x200) __asm__ volatile("sti");
+  return "write-combining (PAT)";
+}
+/* what happened, for the console */
+const char *screen_wc(void) {
+  if (!fb) return "no framebuffer";
+  u32 a, b, c, d;
+  cpuid(0, &a, &b, &c, &d);
+  if (a < 1) return "no CPUID 1";
+  cpuid(1, &a, &b, &c, &d);
+  if ((d & (1u << 16)) && (d & (1u << 3))) return pat_wc();     /* PAT, PSE */
+  if (!(d & (1u << 12))) return "no MTRRs";
+  uint64_t cap = rdmsr(0xFE);
+  int vcnt = (int)(cap & 255);
+  if (!(cap & (1u << 10))) return "no write-combining type";
+  u32 phys = 36;
+  cpuid(0x80000000u, &a, &b, &c, &d);
+  if (a >= 0x80000008u) { cpuid(0x80000008u, &a, &b, &c, &d); phys = a & 255; }
+  uint64_t pmask = ((uint64_t)1 << phys) - 1;
+  u32 base = (u32)(uintptr_t)fb, need = fb_pitch * (u32)sh, size = 1u << 12;
+  while (size < need && size < (1u << 30)) size <<= 1;
+  base &= ~(size - 1);                    /* the range, aligned to its size */
+  if ((u32)(uintptr_t)fb + need > base + size) { size <<= 1; base &= ~(size - 1); }
+  int free_ = -1;
+  for (int i = 0; i < vcnt; i++) {
+    uint64_t pb = rdmsr(0x200 + 2 * i), pm = rdmsr(0x201 + 2 * i);
+    if (!(pm & 0x800)) { if (free_ < 0) free_ = i; continue; }
+    uint64_t m = pm & pmask & ~(uint64_t)0xfff;
+    if (((uint64_t)base & m) == (pb & m)) {          /* a range over the framebuffer already */
+      int t = (int)(pb & 0xff);
+      return t == 1 ? "already write-combining" : t == 0 ? "uncached by the BIOS's own range" : "already cached";
+    }
+  }
+  if (free_ < 0) return "no free MTRR";
+  u32 eflags; __asm__ volatile("pushf; pop %0; cli" : "=r"(eflags));
+  u32 cr0; __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+  __asm__ volatile("mov %0, %%cr0; wbinvd" : : "r"((cr0 | 0x40000000u) & ~0x20000000u) : "memory");
+  uint64_t def = rdmsr(0x2FF);
+  wrmsr(0x2FF, def & ~(uint64_t)0x800);
+  wrmsr(0x200 + 2 * free_, (uint64_t)base | 1);
+  wrmsr(0x201 + 2 * free_, (~(uint64_t)(size - 1) & pmask & ~(uint64_t)0xfff) | 0x800);
+  __asm__ volatile("wbinvd" : : : "memory");
+  wrmsr(0x2FF, def);
+  __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+  if (eflags & 0x200) __asm__ volatile("sti");
+  return "write-combining";
 }
 
 /* ---- the display on it ---- */
@@ -95,6 +178,25 @@ static inline void put(int x, int y, u32 v) {
   else ((u16 *)p)[x] = (u16)v;
 }
 
+/* A row at a time: made in memory, then written to the framebuffer in
+ * one run of stores. The framebuffer may be uncached (a BIOS's MTRRs
+ * leave it so, and a VM's screen is then slow to write), and either way
+ * a run is the fast way in; a pixel at a time, with a 64-bit division for
+ * each, a 1024 x 768 frame cost more than the frame did */
+static u32 *rowbuf; static int *xmap;
+static inline int native(void) { return bpp == 32 && rpos == 16 && gpos == 8 && bpos == 0; }
+static void row_out(int y, int x0, int x1) {
+  u8 *p = fb + (size_t)y * fb_pitch;
+  if (bpp == 32) memcpy(p + (size_t)x0 * 4, rowbuf + x0, (size_t)(x1 - x0) * 4);
+  else if (bpp == 16) { u16 *q = (u16 *)p; for (int x = x0; x < x1; x++) q[x] = (u16)rowbuf[x]; }
+  else { p += x0 * 3; for (int x = x0; x < x1; x++) { u32 v = rowbuf[x]; *p++ = (u8)v; *p++ = (u8)(v >> 8); *p++ = (u8)(v >> 16); } }
+}
+static void blank(void) {
+  if (!rowbuf) rowbuf = malloc((size_t)sw * 4);
+  memset(rowbuf, 0, (size_t)sw * 4);
+  for (int y = 0; y < sh; y++) row_out(y, 0, sw);
+}
+
 /* the display's place on the screen: scaled by n/d, at ox, oy */
 static int cw, ch, ox, oy, num = 1, den = 1;
 static void place(int w, int h) {
@@ -104,7 +206,9 @@ static void place(int w, int h) {
   if ((i64)sw * h <= (i64)sh * w) { num = sw; den = w; } else { num = sh; den = h; }
   if (w == sw && h == sh) { num = den = 1; }
   ox = (sw - w * num / den) / 2; oy = (sh - h * num / den) / 2;
-  for (int y = 0; y < sh; y++) for (int x = 0; x < sw; x++) put(x, y, 0);
+  if (!xmap) xmap = malloc((size_t)sw * sizeof *xmap);
+  for (int x = 0; x < sw; x++) { int sx = x < ox ? 0 : (x - ox) * den / num; xmap[x] = sx < w ? sx : w - 1; }
+  blank();
 }
 /* screen pixels [x0, x1) x [y0, y1) from the display's front */
 static void copy(const u32 *px, int x0, int y0, int x1, int y1) {
@@ -114,15 +218,95 @@ static void copy(const u32 *px, int x0, int y0, int x1, int y1) {
   if (x1 > ex) x1 = ex;
   if (y1 > ey) y1 = ey;
   if (x1 <= x0 || y1 <= y0) return;
+  int nat = native(), made = -1;
   for (int y = y0; y < y1; y++) {
-    int sy = (int)((i64)(y - oy) * den / num);
+    int sy = (y - oy) * den / num;
     const u32 *row = px + (size_t)sy * cw;
-    if (num == den && bpp == 32 && rpos == 16 && gpos == 8 && bpos == 0) {
+    if (num == den && nat) {
       memcpy(fb + (size_t)y * fb_pitch + (size_t)x0 * 4, row + (x0 - ox), (size_t)(x1 - x0) * 4);
       continue;
     }
-    for (int x = x0; x < x1; x++) put(x, y, pix(row[(int)((i64)(x - ox) * den / num)]));
+    if (sy != made) {        /* a row scaled up is the same row again */
+      if (nat) for (int x = x0; x < x1; x++) rowbuf[x] = row[xmap[x]];
+      else for (int x = x0; x < x1; x++) rowbuf[x] = pix(row[xmap[x]]);
+      made = sy;
+    }
+    row_out(y, x0, x1);
   }
+}
+
+/* ---- the console on it: pc.c's 80 x 25 text screen, drawn in DejaVu
+ * Sans Mono while no program has the display. A GRUB may set a graphics
+ * mode though the entry says "gfxpayload=text" (VMware's did), and a PC
+ * may have no text mode at all; the VGA's text then is not on the screen,
+ * and without this the screen showed nothing but the pointer ---- */
+static const u32 VGA16[16] = {
+  0x000000, 0x0000aa, 0x00aa00, 0x00aaaa, 0xaa0000, 0xaa00aa, 0xaa5500, 0xaaaaaa,
+  0x555555, 0x5555ff, 0x55ff55, 0x55ffff, 0xff5555, 0xff55ff, 0xffff55, 0xffffff };
+static u16 con_seen[2000]; static int con_on, con_cur = -1;
+static int tw, th, tx0, ty0, tsize16, tbase;
+static u32 *strip;
+static void con_layout(void) {
+  tw = sw / 80; if (tw < 5) tw = 5;
+  th = sh / 25; if (th > tw * 2) th = tw * 2;
+  tsize16 = tw * 16 * 2048 / 1233;                 /* the face's advance is 1233/2048 em */
+  while (tsize16 > 64 && font_advance(0, tsize16, 'M') > tw * 64) tsize16 -= 4;
+  int em = tsize16 / 16;
+  tbase = (th - em) / 2 + font_top(0, tsize16);
+  tx0 = (sw - 80 * tw) / 2; ty0 = (sh - 25 * th) / 2;
+  if (tx0 < 0) tx0 = 0;
+  if (ty0 < 0) ty0 = 0;
+  if (!strip) strip = malloc((size_t)80 * tw * th * 4);
+  if (!rowbuf) rowbuf = malloc((size_t)sw * 4);
+}
+static void con_row(const u16 *cells, int r, int cur) {
+  int W = 80 * tw;
+  for (int c = 0; c < 80; c++) {
+    u16 v = cells[r * 80 + c];
+    u32 fg = VGA16[(v >> 8) & 15], bg = VGA16[(v >> 12) & 15];
+    u32 *cell = strip + c * tw;
+    for (int y = 0; y < th; y++) for (int x = 0; x < tw; x++) cell[y * W + x] = bg;
+    const glyph *gl = (v & 255) > 32 ? font_glyph(0, tsize16, v & 255) : 0;
+    if (gl) for (int j = 0; j < gl->h; j++) {
+      int y = tbase + gl->y0 + j;
+      if (y < 0 || y >= th) continue;
+      for (int i = 0; i < gl->w; i++) {
+        int x = gl->x0 + i, a = gl->a[j * gl->w + i];
+        if (x < 0 || x >= tw || !a) continue;
+        u32 o = 0;
+        for (int sh8 = 0; sh8 < 24; sh8 += 8) {
+          u32 f = (fg >> sh8) & 255, b = (bg >> sh8) & 255;
+          o |= ((b * (255 - (u32)a) + f * (u32)a + 127) / 255) << sh8;
+        }
+        cell[y * W + x] = o;
+      }
+    }
+    if (r * 80 + c == cur) for (int y = th - 2 - th / 12; y < th - th / 12; y++) for (int x = 0; x < tw; x++) cell[y * W + x] = fg;
+  }
+  int nat = native();
+  for (int y = 0; y < th && ty0 + r * th + y < sh; y++) {
+    const u32 *s = strip + y * W;
+    for (int x = 0; x < W && tx0 + x < sw; x++) rowbuf[tx0 + x] = nat ? s[x] : pix(s[x]);
+    row_out(ty0 + r * th + y, tx0, tx0 + W < sw ? tx0 + W : sw);
+  }
+}
+/* the text screen's cells (VGA's: character, then attribute), and the
+ * cursor's cell (-1 for none): the rows that changed */
+void screen_console(const u16 *cells, int cur) {
+  if (!fb) return;
+  if (!con_on) {
+    con_layout(); blank();
+    memset(con_seen, 0xff, sizeof con_seen); con_cur = -1;
+    con_on = 1;
+    cw = ch = 0;                       /* the display, when it comes back, all of it */
+  }
+  for (int r = 0; r < 25; r++) {
+    int moved = cur != con_cur && (cur / 80 == r || con_cur / 80 == r);
+    if (!moved && !memcmp(cells + r * 80, con_seen + r * 80, 160)) continue;
+    con_row(cells, r, cur);
+    memcpy(con_seen + r * 80, cells + r * 80, 160);
+  }
+  con_cur = cur;
 }
 
 /* the pointer: an arrow, 1 black and 2 white */
@@ -144,6 +328,7 @@ static void pointer_draw(int x, int y) {
 /* what changed since the last look, and the pointer */
 void screen_show(gui *g) {
   if (!fb) return;
+  con_on = 0;
   int w, h, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
   const u32 *px = gui_front(g, &w, &h);
   int full = 0;

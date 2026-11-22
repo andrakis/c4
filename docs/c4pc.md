@@ -13,7 +13,8 @@ run there unchanged. It is in `src/c4pc/`.
 | done | C4IX's own accelerators (accel.c, src/c4ix/accel.mjs in C): libarc's inflater and CRC-32, behind libjs's loader numbers (INFO's C4I_ACCEL, ACC_FIND, ACC_OS); `--no-accel`, `--no-osaccel` as cli.js |
 | *measured* | with them and the MMU: the session byte for byte libjs's (its build listing os/c4ix), in its 111,571,007 cycles, on c4pc-host and in QEMU: 13 times fewer than C4IX's own C |
 | done (M4) | the display (gui.c): libjs's device at 0x400, its rings and IRQ, the page's drawing done in C with c4pc's own faces (font.c); on a PC a VBE framebuffer from GRUB or the BGA, the PS/2 mouse, the keyboard to the display |
-| *measured* | C4IX's desktop from the ISO under KVM, mouse and keyboard; on c4pc-host, scripted, in `make test-c4pc` |
+| *measured* | C4IX's desktop from the ISO under KVM, mouse and keyboard; on c4pc-host, scripted, in `make test-c4pc`; in DOSBox-X through C4PC.COM's VESA mode; Doom from the desktop at the clock's whole rate under KVM, 1% of the time drawing |
+| done | the clock the wall's when the PC falls behind (libjs's realtime): games drop frames rather than play in slow motion; the screen written a row at a time, write-combined through the PAT; the console drawn on a framebuffer while no program has the display |
 | not yet | sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), games' accelerators |
 
 ## One engine, two front ends
@@ -133,9 +134,23 @@ that QEMU finds the unpacked ui-curses module), and `-vnc :1` serves it
 to a VNC viewer on port 5901.
 
 **At the keyboard**, with no `stdin` module, c4pc paces the machine to
-its own clock as cli.js `-i` does (16 simulated milliseconds at a time,
-then a wait for the real clock to catch up), so that `top` redraws once a
-second; `--fast` turns that off.
+its own clock as libjs/worker.js does (4 simulated milliseconds at a
+time, then a wait for the real clock to catch up), so that `top` redraws
+once a second; `--fast` turns that off.
+
+When the PC cannot keep up with the clock, the clock is the wall's, as
+libjs's page has it by default (worker.js, `realtime`): more than 20 ms
+behind, TIME moves on by what the CPU could not do, so a game gets fewer
+cycles a second, drops frames and keeps its speed, instead of playing in
+slow motion. `--no-realtime` lets the machine's second stretch instead
+(libjs's `?realtime=0`). What falls behind is the games' own work, dearer
+than the calibration's loop, and the drawing: before the screen was
+written a row at a time (below), Doom from the desktop under KVM spent
+20% of the time drawing to the screen and the clock fell 20% behind,
+which is how Duke Nukem 3D came to say 50 to 250 frames a second and
+move in slow motion in VMware. `-s` at the keyboard says every 10
+seconds on COM1 (not on the screen) how the PC kept up: `c4pc: 128262k inst/s, 1% drawing to
+the screen, 2% of the clock skipped`; at the end, the totals.
 
 The clock is then one the PC keeps up with: before the boot, c4pc times
 the interpreter for 100 ms on a loop of a scratch machine (engine.c
@@ -219,6 +234,31 @@ c4pc-host fits one with `--gui WxH`; `--events FILE` plays mouse and key
 events at the machine's own milliseconds, and `--shot FILE.png` (or a
 `shot` event) writes what the display shows.
 
+*The screen's cost.* What changed goes to the framebuffer a row at a time,
+made in memory and written in one run (`pc/screen.c`), a row scaled up
+from the same row of the display made once. A pixel at a time, each with
+a 64-bit division for its place, a 1024 x 768 frame cost more than the
+frame: Doom from the desktop, *measured* under KVM, 20% of the time
+drawing, now 1%. And the framebuffer is write-combined where the CPU
+can say so: a BIOS leaves it uncached (SeaBIOS by an MTRR range over the
+whole PCI hole), every store a bus cycle of its own. With a PAT, c4pc
+turns paging on, every 4 GB mapped to itself in 4 MB pages, and gives the
+framebuffer's pages the PAT's WC, which wins over an MTRR's UC; without
+one, a free variable MTRR saying WC where no range covers it. c4pc says
+which (`c4pc: the framebuffer: write-combining (PAT)`); `--no-wc` leaves
+the memory types alone. KVM ignores the guest's types, so the gain is
+VMware's and real PCs'; it is not measured yet.
+
+*The console on the framebuffer.* While no program has the display (no
+ring attached, no frame flipped in the last second), c4pc draws the
+console's 80 x 25 text screen on the framebuffer in DejaVu Sans Mono,
+the changed rows each time; the VGA's text is kept in memory and is not
+on the screen in a graphics mode. A GRUB may set a graphics mode though
+the entry says `gfxpayload=text`, as VMware's did: the text entries then
+showed nothing but the pointer. A program that takes the display (Doom
+from the shell takes it as it would the page's) has the screen until it
+lets go, and the console comes back.
+
 **GRUB** (VirtualBox, VMware, Hyper-V Gen 1, real PCs with a BIOS):
 `make c4pc.iso` makes a 169 MB ISO with the whole disk and a menu of four
 (src/c4pc/pc/grub.cfg: C4IX's desktop, then the text screen with the
@@ -231,7 +271,8 @@ again:
     module /boot/c4ix32.c4r c4ix32.c4r
     module /boot/disk.tar disk.tar drive
 
-GRUB reads COM1 too, so keys typed there while it loads (a minute in
+In VMware GRUB sets the graphics mode for the text entries too; c4pc
+then draws the console there (above). GRUB reads COM1 too, so keys typed there while it loads (a minute in
 QEMU, for 160 MB from the CD) can be its own: wait for C4IX's prompt.
 *Measured* 2026-11-22 under KVM: the first entry boots with the MMU in
 36 seconds, most of it GRUB reading the CD, and `c4ix-ps.c4r` then
@@ -253,22 +294,52 @@ good. Its `C4PC.CFG`:
     module C4IX32.C4R
     module DISK.TAR drive
 
+and `DESKTOP.CFG`, C4IX's desktop:
+
+    kernel C4PC.ELF
+    video 800x600
+    cmdline --mmu -m 96 -- --desktop
+    module C4IX32.C4R
+    module DISK.TAR drive
+
+`video WxH` asks for a VESA mode, as GRUB's gfxpayload does: the loader
+asks VBE (INT 10h AX=4F00h, 4F01h) for its modes and takes the largest
+with a linear framebuffer and direct colour that fits in W x H, 32 bits
+a pixel before 24 before 16; it sets it (4F02h, the linear bit) as the
+last thing before the kernel, and describes it in the multiboot
+information's framebuffer fields as GRUB does, so that c4pc finds it the
+same way. 800 x 600 is the desktop's own size: no scaling, and the
+display's buffers half what 1024 x 768's are. DOSBox-X's S3 with
+`vmemsize=8` has modes to 1024 x 768 x 32; plain DOSBox's 2 MB, 800 x 600
+x 32.
+
 It reads with INT 21h, copies above 1 MB with the BIOS's block move
 (INT 15h AH=87h), asks INT 15h E801/88h for the memory, and needs real
 mode (no EMM386). DOSBox's own XMS and EMS keep the memory from the BIOS:
 `xms=false`, `ems=false`, `umb=false`. Plain DOSBox has at most 63 MB
 (`memsize=63`): enough for a 32 MB arena and a disk without the games.
 
-`make c4pc-dos` makes that folder, `.c4pc/dos/`: C4PC.COM, C4PC.ELF,
-C4IX32.C4R, DISK.TAR (the disk less the games, 18 MB: `.c4pc/small.tar`),
-C4PC.CFG and DOSBOX.CONF. Run DOSBox in it with `-conf DOSBOX.CONF`.
+`make c4pc-dos` makes that folder, `.c4pc/dos/`, for DOSBox-X: C4PC.COM,
+C4PC.ELF, C4IX32.C4R, DISK.TAR (the whole disk, 160 MB: the desktop's
+files are among the big ones `.c4pc/small.tar` leaves out), C4PC.CFG,
+DESKTOP.CFG and DOSBOX.CONF (`memsize=512`: the disk, and the desktop's
+machine, whose swap lives in c4pc's memory; with less, `c4pc: out of
+host memory`). Run DOSBox-X in it with `-conf DOSBOX.CONF`, then `C4PC`
+or `C4PC DESKTOP.CFG`. Build it with main's images
+(`make C4PC_IMAGES=... C4PC_IMAGES_DEP= c4pc-dos`): a worktree's own
+`src/c4bb/images` may be a small one.
 
 *Measured:* DOSBox-X runs the whole disk this way (`memsize=512`,
-`core=dynamic`, COM1 to a file), byte for byte as libjs. Plain DOSBox 0.74
-runs C4PC.COM, which starts the kernel; what C4IX printed there could not
-be seen headless (DOSBox 0.74 has no serial-to-file, and its null-modem
-link delivered nothing on helios, even for a trivial program), so plain
-DOSBox wants a look at its screen.
+`core=dynamic`, COM1 to a file), byte for byte as libjs. And the desktop,
+2026-11-22, DOSBox-X 2026.01 in a window on helios's VNC desktop: the
+package as made boots it at 800 x 600 x 32 in about four minutes (the
+clock 3 MHz, DOSBox-X giving 4-5M c4 instructions a second there; it
+renders its window over VNC), keys typed at the Terminal run, and the
+PS/2 mouse moves the pointer and clicks (DOSBox-X's `autolock`: the mouse
+is the machine's once clicked into the window). Plain DOSBox 0.74, seen in
+a window: C4PC.COM stops while it copies the disk (`DISK.TAR drive, 17720
+KB` its last line, no progress past the first megabyte), the build before
+the VESA mode too: not yet understood.
 
 DOSBox has no isa-debug-exit: c4pc halts when C4IX ends, and a headless
 run watches COM1 for c4pc's last line and stops the emulator (DOSBox-X
@@ -278,9 +349,10 @@ then needs SIGKILL, ignoring SIGTERM while halted).
 
 - **M3, the console**: `-i`-style pacing to the machine's clock, a
   scrollback, and the keyboard's raw mode as keys.js has it.
-- **The display, further**: the desktop on DOSBox (C4PC.COM setting a
-  VESA mode with INT 10h and handing it over as GRUB does); the page's
-  pointer shapes; a resize to the screen's own size rather than scaling;
-  the display's command stream held against libjs's in a test.
+- **The display, further**: the page's pointer shapes; a resize to the
+  screen's own size rather than scaling; the display's command stream
+  held against libjs's in a test; write-combining measured in VMware and
+  on a real PC.
+- **Plain DOSBox 0.74**: why C4PC.COM stops copying the disk there.
 - A test in the gate: `test-c4pc` takes about ten minutes, most of it
   QEMU's three runs (`NO_MMU=1`: three minutes; `NO_QEMU=1`: two).

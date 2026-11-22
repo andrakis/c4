@@ -161,12 +161,64 @@ static void power_off(int status) {
 }
 void plat_fatal(const char *msg) { con_puts(msg); con_puts("\n"); power_off(70); for (;;) ; }
 
-/* ---- the clock: the PIT's channel 0 at 1 kHz ---- */
+/* ---- the clock: the TSC where it keeps time, else the PIT's ticks ----
+ * The PIT's channel 0 interrupts at 1 kHz (cpu_init), and counting them
+ * was the clock. Under a hypervisor that is the guest's "apparent" time:
+ * VMware delivers timer interrupts late while the VM is not running and
+ * then in a burst to catch up, so a clock that counts them runs slow and
+ * then fast -- games sped up and slowed down (Quake, Duke Nukem 3D) though
+ * the machine's TIME was the real clock. A VM's TSC runs at a steady
+ * rate with the host's time, as does an invariant TSC on a real CPU:
+ * measured once against the PIT's channel 2 (polled, no interrupts, as
+ * Linux's pit_calibrate_tsc), it is the clock. Without a hypervisor or an
+ * invariant TSC (DOSBox, whose TSC follows its emulated cycles; old PCs)
+ * the ticks stay. --clock tsc or --clock pit chooses. */
 static volatile i64 ticks;
-i64 plat_now_ms(void) {
+static u32 tsc_per_ms; static uint64_t tsc_at; static i64 tsc_ms;
+static inline uint64_t rdtsc(void) { u32 lo, hi; __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi)); return (uint64_t)hi << 32 | lo; }
+static i64 ticks_now(void) {
   i64 t;
   do { t = ticks; } while (t != ticks);       /* two words: read until they agree */
   return t;
+}
+i64 plat_now_ms(void) {
+  if (!tsc_per_ms) return ticks_now();
+  uint64_t d = rdtsc() - tsc_at;
+  /* kept under 2^31 cycles since tsc_at, so that a 32-bit divide does */
+  uint64_t step = (uint64_t)tsc_per_ms * 256;
+  while (d >= 0x80000000u) { tsc_at += step; tsc_ms += 256; d -= step; }
+  return tsc_ms + (u32)d / tsc_per_ms;
+}
+static inline void cpuid_(u32 l, u32 *a, u32 *b, u32 *c, u32 *d) { __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(l), "c"(0)); }
+/* the TSC's cycles in 30 ms of the PIT's channel 2 (1193182 Hz) */
+static uint64_t tsc_30ms(void) {
+  u32 latch = 1193182 * 30 / 1000;
+  outb(0x61, (u8)((inb(0x61) & ~0x02) | 0x01));   /* the gate on, the speaker off */
+  outb(0x43, 0xB0);                               /* channel 2, both bytes, mode 0 */
+  outb(0x42, (u8)latch); outb(0x42, (u8)(latch >> 8));
+  uint64_t t0 = rdtsc();
+  for (u32 n = 0; !(inb(0x61) & 0x20); n++) if (n > 100000000u) return 0;   /* OUT2 at the count's end */
+  return rdtsc() - t0;
+}
+/* want: 1 the TSC, 0 the ticks, -1 as the CPU suggests. What it chose, for the console */
+static const char *clock_init(int want) {
+  u32 a, b, c, d, inv = 0, hyp;
+  cpuid_(0, &a, &b, &c, &d);
+  if (a < 1) return "the PIT's ticks (no CPUID)";
+  cpuid_(1, &a, &b, &c, &d);
+  if (!(d & 0x10)) return "the PIT's ticks (no TSC)";
+  hyp = c >> 31;
+  cpuid_(0x80000000u, &a, &b, &c, &d);
+  if (a >= 0x80000007u) { cpuid_(0x80000007u, &a, &b, &c, &d); inv = (d >> 8) & 1; }
+  if (want == 0 || (want < 0 && !hyp && !inv)) return "the PIT's ticks";
+  uint64_t s[3];
+  for (int i = 0; i < 3; i++) s[i] = tsc_30ms();
+  /* the middle one of three */
+  uint64_t m = s[0] > s[1] ? (s[1] > s[2] ? s[1] : (s[0] > s[2] ? s[2] : s[0])) : (s[0] > s[2] ? s[0] : (s[1] > s[2] ? s[2] : s[1]));
+  if (m < 30 * 1000) return "the PIT's ticks (the TSC would not time)";
+  u32 per = (u32)(m / 30);
+  tsc_at = rdtsc(); tsc_ms = ticks_now(); tsc_per_ms = per;
+  return hyp ? "the TSC (a hypervisor's)" : "the TSC (invariant)";
 }
 
 /* the local time of day from the RTC (CMOS: BCD unless status B says
@@ -423,7 +475,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -446,11 +498,17 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--fast")) fast = 1;
     else if (!strcmp(args[a], "--no-realtime")) realtime = 0;
     else if (!strcmp(args[a], "--no-wc")) wc = 0;
+    else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : -1; }
     else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
     else if (!strcmp(args[a], "--no-mmu")) mmu_on = 0;
     else if (!strcmp(args[a], "--")) { a++; break; }
     else break;
   }
+
+  { const char *how = clock_init(clock_want);
+    con_puts("c4pc: the clock: "); con_puts(how);
+    if (tsc_per_ms) { con_puts(", "); con_dec(tsc_per_ms / 1000); con_puts(" MHz"); }
+    con_puts("\n"); }
 
   /* the modules: the program, the drives, the input */
   drive *drives[16]; int nd = 0;

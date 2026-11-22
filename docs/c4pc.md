@@ -142,6 +142,17 @@ next tick, or a key or the mouse, which end it early as an interrupt
 would. A game sees each frame's real length, whatever the PC keeps up
 with: a slower PC gives it fewer frames, never slower ones.
 
+The real clock is the TSC where it keeps time: under a hypervisor (CPUID's
+hypervisor bit: VMware, KVM, Hyper-V give a steady TSC) or with an
+invariant TSC, measured at the boot against the PIT's channel 2, polled
+(`c4pc: the clock: the TSC (a hypervisor's), 3603 MHz` under KVM on
+helios, whose CPU is 3600 MHz). Elsewhere (DOSBox, whose TSC follows its
+emulated cycles) it is the PIT's interrupts at 1 kHz, counted, as it was
+at first. Counted, they are a VM's "apparent" time: VMware holds timer
+interrupts back while the VM is not running and then delivers them in a
+burst, so Quake and Duke Nukem 3D sped up and slowed down in VMware with
+TIME already the real clock. `--clock tsc` or `--clock pit` chooses.
+
 First (ea38e68) TIME was the cycles' clock, cycles / MHz plus what was
 slept, pulled up to the real one between slices when more than 20 ms
 behind, as libjs's page does (worker.js, `realtime`). That cured the slow
@@ -238,6 +249,14 @@ looks for its strings among those drawn (`--texts`).
     qemu-system-i386 -accel kvm -cpu host -m 512 -vga std -vnc :1 -serial stdio \
         -kernel c4pc.elf -append "--mmu -m 128 --gui 1024x768 -- --desktop" \
         -initrd "c4ix32.c4r,.c4pc/disk.tar drive"
+
+A PS/2 packet carries motion and the buttons at once, where the page's
+mousemove never changes the buttons: a packet that moves and presses or
+lets go gives a MOVE with the buttons as they were, then the DOWN or UP.
+Taken as the new buttons with the move, a press or a release that came
+with motion sent no DOWN or UP at all, and Duke Nukem 3D went on firing
+after the button let go; test-c4pc's double-click on the Calculator is
+made of such packets (`packet DX DY BUTTONS` events).
 
 c4pc-host fits one with `--gui WxH`; `--events FILE` plays mouse and key
 events at the machine's own milliseconds, and `--shot FILE.png` (or a

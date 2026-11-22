@@ -540,9 +540,13 @@ void gui_mouse(gui *g, int dx256, int dy256, int buttons, int wheel) {
     { if (g->px >= g->cw) g->px = g->cw - 1; }
     { if (g->py < 0) g->py = 0; }
     { if (g->py >= g->ch) g->py = g->ch - 1; }
-    if (locked && (g->evmask & MASK[EV_REL])) { i32 pl[3] = {dx, dy, buttons}; pointer_event(g, EV_REL, pl, 3); }
-    else { i32 pl[3] = {g->px, g->py, buttons}; pointer_event(g, EV_MOVE, pl, 3); }
-    g->buttons = buttons;
+    /* the move with the buttons as they were: a PS/2 packet carries the
+     * motion and the buttons together, where the page's mousemove never
+     * changes them; taken as the new buttons here, a press or a release
+     * in a packet that also moved sent no DOWN or UP, and Duke Nukem 3D
+     * kept firing after the button let go */
+    if (locked && (g->evmask & MASK[EV_REL])) { i32 pl[3] = {dx, dy, g->buttons}; pointer_event(g, EV_REL, pl, 3); }
+    else { i32 pl[3] = {g->px, g->py, g->buttons}; pointer_event(g, EV_MOVE, pl, 3); }
   }
   for (int b = 0; b < 3; b++) {
     int was = (g->buttons >> b) & 1, now = (buttons >> b) & 1;

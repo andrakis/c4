@@ -146,7 +146,9 @@ static void write_png(const char *path, const u32 *px, int w, int h) {
 /* --events FILE: a line each, "MS what ...", MS the machine's own
  * milliseconds (machine_sim_ms), so a run is the same every time:
  *   move X Y | down X Y B | up X Y B | click X Y | key CODE CHAR MODS |
- *   type TEXT | shot FILE.png | quit */
+ *   type TEXT | shot FILE.png | quit |
+ *   packet DX DY BUTTONS: a PS/2 packet's worth, motion and buttons at
+ *   once (pc/screen.c mouse_poll), BUTTONS a mask */
 typedef struct { i64 ms; char what[16]; int a, b, c; char s[256]; } gev;
 static gev *gevs; static int ngev, gev_at;
 static void load_events(const char *path) {
@@ -181,6 +183,7 @@ static int run_events(machine *m) {
     else if (!strcmp(e->what, "down")) { gui_mouse_at(g, e->a, e->b, 0); gui_mouse(g, 0, 0, 1 << e->c, 0); }
     else if (!strcmp(e->what, "up")) { gui_mouse_at(g, e->a, e->b, 1 << e->c); gui_mouse(g, 0, 0, 0, 0); }
     else if (!strcmp(e->what, "click")) { gui_mouse_at(g, e->a, e->b, 0); gui_mouse(g, 0, 0, 1, 0); gui_mouse(g, 0, 0, 0, 0); }
+    else if (!strcmp(e->what, "packet")) gui_mouse(g, e->a * 256, e->b * 256, e->c, 0);
     else if (!strcmp(e->what, "key")) { gui_key(g, 1, e->a, e->b, e->c); gui_key(g, 0, e->a, e->b, e->c); }
     else if (!strcmp(e->what, "type")) { for (char *p = e->s; *p; p++) type_char(g, *p == '|' ? '\n' : *p); }
     else if (!strcmp(e->what, "shot")) { int w, h; u32 *px = gui_front(g, &w, &h); write_png(e->s, px, w, h); fprintf(stderr, "c4pc: %s at %lld ms\n", e->s, (long long)now); }

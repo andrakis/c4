@@ -90,8 +90,10 @@ fi
 echo "  ---   the desktop, on a display"
 cat > $W/gui-events.txt <<EV
 9000 move 40 330
-9100 click 40 330
-9250 click 40 330
+9100 packet 1 0 1
+9150 packet 0 1 0
+9250 packet 1 0 1
+9300 packet 0 -1 0
 13000 shot $W/desktop.png
 13100 quit
 EV

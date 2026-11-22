@@ -10,7 +10,9 @@ run there unchanged. It is in `src/c4pc/`.
 | done (M2) | the MMU, libjs/mmu.js as it is (`--mmu`): its registers, the TLB arrays and the stack and code windows, the user loop, faults, the user window, devices checked against the task's space, swap through the window |
 | *measured* | C4IX boots, runs `ps` and shuts down with output byte for byte libjs's, in the same 1,474,118,389 cycles, on c4pc-host, on c4pc.elf in QEMU (`make test-c4pc`), and in DOSBox-X through C4PC.COM; test-libjs's 27 native-oracle programs print what they print on libjs, with the same status |
 | *measured* | with the MMU: the same session byte for byte libjs `--mmu`'s, in its 1,500,630,450 cycles, on c4pc-host and on c4pc.elf in QEMU; test-c4ix-mmu.mjs's cases but the display's (test-c4pc-mmu.sh) are killed by the page faults that test names, byte for byte and cycle for cycle as libjs, on c4pc-host and in QEMU |
-| not yet | the display and mouse (M4), sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), accelerators |
+| done | C4IX's own accelerators (accel.c, src/c4ix/accel.mjs in C): libarc's inflater and CRC-32, behind libjs's loader numbers (INFO's C4I_ACCEL, ACC_FIND, ACC_OS); `--no-accel`, `--no-osaccel` as cli.js |
+| *measured* | with them and the MMU: the session byte for byte libjs's (its build listing os/c4ix), in its 111,571,007 cycles, on c4pc-host and in QEMU: 13 times fewer than C4IX's own C |
+| not yet | the display and mouse (M4), sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), games' accelerators |
 
 ## One engine, two front ends
 
@@ -20,6 +22,7 @@ src/c4pc/
   engine.c              libjs/c4m.js's interpreter, traps and syscalls, the user window; boot.js's loader and trampoline
   mmu.c                 libjs/mmu.js: the MMU's registers, translation, the user loop; arena.js's kernel map
   dev.c                 src/c4bb/sim/devices.js: the registers at 0x100-0x1FF
+  accel.c               src/c4ix/accel.mjs: C4IX's inflater and CRC-32, behind libjs/accel.js's numbers
   heap.c                libjs/heap.js, block for block
   fmt.c                 libjs/printf.js (PRTF), with JavaScript's float formatting
   fpu.c                 src/c4bb/sim/fpu.js (F3) and c4m.js's FLT
@@ -55,9 +58,10 @@ without the windows' offsets while they are all 0 and hands over to the
 general one, a cycle later, when one is not; mmu.c has one loop and
 counts that cycle the same way, so that the two agree to the cycle.
 
-**What differs from libjs.** One CPU; no display, sound, mailbox,
-downloads or accelerators, so INFO says so and C4IX does without (its
-root archive unpacks in its own C, as with libjs's `--no-osaccel`). Past
+**What differs from libjs.** One CPU; no display, sound, mailbox or
+downloads, so INFO says so and C4IX does without. Of the accelerators
+only C4IX's own (accel.c): a game's ACC_FIND gets 0, and the game runs
+its own loops, as on libjs with `--no-accel`. Past
 the arena's end libjs's typed arrays read 0 and drop the write, where
 c4pc's word index wraps inside the arena: only a wild program can tell.
 
@@ -139,13 +143,13 @@ keeps libjs's 20 MHz, so that it is cycle for cycle libjs's. *Measured*
 2026-11-22, the loop against C4IX's own work: 177M and 180M (140M with
 the MMU) under KVM, 13M and 15M (13M) under TCG. And the boot with the
 MMU, `exit` at the first prompt, which waits for `c4ix-persist` to
-inflate the root archive (1,500M cycles; libjs inflates it natively,
-and keeps the result on drive 1):
+inflate the root archive (1,500M cycles in C4IX's own C; 111M with its
+accelerators, accel.c):
 
-| | 20 MHz, before | auto |
-|---|---|---|
-| KVM | 75 s | 12 s (130 MHz, running 127M a second) |
-| TCG | about 112 s (behind its clock: the unpaced run's time) | 150 s (10 MHz, keeping time) |
+| | 20 MHz, no accelerators | auto clock | auto clock, accelerators |
+|---|---|---|---|
+| KVM | 75 s | 12 s (130 MHz, running 127M a second) | 3.1 s |
+| TCG | about 112 s (behind its clock: the unpaced run's time) | 150 s (10 MHz, keeping time) | 12 s |
 
 Under an emulator the share kept back costs a quarter; `--fast` or a
 higher `-hz` trades the clock's truth for it. Keys come from the PS/2 keyboard and

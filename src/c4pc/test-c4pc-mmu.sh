@@ -32,7 +32,7 @@ if [ ! -f $W/disk/wild.c ]; then
     process.stdout.write(new Function("return `" + m[1] + "`")());' > $W/disk/wild.c || exit 1
 fi
 cp $IMAGES/c4ix32.c4r $W/c4ix32.c4r
-host () { timeout 900 ./c4pc-host -s --mmu -m 64 -c $CYC -d $W/disk $W/c4ix32.c4r < $1 > $2 2> $3; }
+host () { timeout 900 ./c4pc-host -s --mmu --no-accel --no-osaccel -m 64 -c $CYC -d $W/disk $W/c4ix32.c4r < $1 > $2 2> $3; }
 
 # every case, the victim's address and its physical one in the pokes
 cases () {
@@ -95,7 +95,7 @@ else
   rm -f $W/serial.txt
   timeout 1800 "$Q" -m 512 -display none -no-reboot -serial file:$W/serial.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
-    -append "-s --mmu -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
+    -append "-s --mmu --no-accel --no-osaccel -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
   st=$?
   [ $st = 1 ] && ok "c4pc.elf in QEMU: the session ends with status 0" || bad "c4pc.elf in QEMU: QEMU's status $st"
   tr -d '\r' < $W/serial.txt | grep -v '^c4pc: ' > $W/qemu.out

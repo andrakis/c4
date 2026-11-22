@@ -11,7 +11,7 @@ check () {
   local name=$1; shift
   local a b sa sb
   a=$(timeout 300 node libjs/cli.js --no-accel "$@" 2>&1); sa=$?
-  b=$(timeout 300 ./c4pc-host "$@" 2>&1); sb=$?
+  b=$(timeout 300 ./c4pc-host --no-accel "$@" 2>&1); sb=$?
   if [ "$a" = "$b" ] && [ $sa = $sb ]; then ok "$name (status $sa)"
   else bad "$name (status libjs $sa, c4pc $sb)"; diff <(echo "$a") <(echo "$b") | head -8; fi
 }

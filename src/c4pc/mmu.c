@@ -1113,3 +1113,11 @@ out:
 #undef CW
 #undef SW
 }
+
+/* the physical page at va for an accelerator's read or write (accel.c,
+ * accel.js's mmu.page and throw FAULT) */
+i32 mmu_frame(mmu *u, i32 va, int write) {
+  i32 p = page(u, va, write ? FK_WRITE : FK_READ);
+  if (p < 0) fault(u);
+  return p;
+}

@@ -91,12 +91,12 @@ static void dir_remove(drive *d, const char *name) {
 }
 
 static void usage(void) {
-  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] program.c4r [args...]\n");
+  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--no-accel] [--no-osaccel] program.c4r [args...]\n");
   exit(1);
 }
 
 int main(int argc, char **argv) {
-  u32 mb = 32; double maxc = -1, mhz = 20; int stats = 0, inter = 0, nofpu = 0, mmu_on = 0;
+  u32 mb = 32; double maxc = -1, mhz = 20; int stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0;
   drive *drives[16]; int nd = 0;
   int i = 1;
   for (; i < argc && argv[i][0] == '-'; i++) {
@@ -115,6 +115,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(f, "-i")) inter = 1;
     else if (!strcmp(f, "-hz") && i + 1 < argc) mhz = atof(argv[++i]);
     else if (!strcmp(f, "--no-fpu")) nofpu = 1;
+    else if (!strcmp(f, "--no-accel")) noaccel = 1;      /* cli.js's: no accelerators at all */
+    else if (!strcmp(f, "--no-osaccel")) noosaccel = 1;  /* ... nor C4IX's own (accel.c) */
     else if (!strcmp(f, "--mmu")) mmu_on = 1;            /* cli.js's: fit an MMU (mmu.c) */
     else if (!strcmp(f, "--no-mmu")) mmu_on = 0;
     else if (!strcmp(f, "--fast") || !strcmp(f, "--no-accel") || !strcmp(f, "--no-osaccel")) ;
@@ -129,6 +131,8 @@ int main(int argc, char **argv) {
   machine *m = machine_new(mb * 1024 * 1024, drives, nd, mhz);
   m->on_byte = on_byte;
   m->no_fpu = nofpu;
+  if (noaccel) m->accel = 0;
+  if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
   if (!inter && !isatty(0)) {
     int c;

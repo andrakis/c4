@@ -3,12 +3,13 @@
 #
 # Then test-c4pc-mmu.sh, test-libjs's MMU cases, and test-c4pc-progs.sh,
 # its native-oracle programs, on both.
-# The session is test-libjs's boot check (ps, then exit), run with no
-# accelerators, since c4pc has none: libjs, c4pc-host and, where QEMU is
-# installed, c4pc.elf on a bare (emulated) PC. Each must print what the
-# others print, byte for byte, and take the same number of cycles. It runs
-# twice: without an MMU, and with one (--mmu: C4IX's user tasks each in a
-# space of its own, mmu.c).
+# The session is test-libjs's boot check (ps, then exit), on libjs,
+# c4pc-host and, where QEMU is installed, c4pc.elf on a bare (emulated) PC.
+# Each must print what the others print, byte for byte, and take the same
+# number of cycles. It runs three times: with no accelerators, without an
+# MMU and with one (--mmu: C4IX's user tasks each in a space of its own,
+# mmu.c); and with the MMU and C4IX's own accelerators (accel.c: its
+# inflater and CRC-32), where libjs's build lists them.
 #   QEMU=path   the emulator (default: qemu-system-i386 on PATH, or
 #               ~/opt/pctools/bin/qemu-system-i386)
 #   NO_QEMU=1   only libjs and c4pc-host
@@ -26,15 +27,17 @@ cp $IMAGES/c4ix32.c4r $W/c4ix32.c4r
 [ -f $W/disk.tar ] || tar --format=ustar -C $IMAGES/disk -cf $W/disk.tar .
 Q=${QEMU:-$(command -v qemu-system-i386 || echo ~/opt/pctools/bin/qemu-system-i386)}
 
-# session TAG FLAG: the session on libjs, c4pc-host and QEMU, FLAG --mmu or --no-mmu
+# session TAG FLAG [accel]: the session on libjs, c4pc-host and QEMU, FLAG
+# --mmu or --no-mmu; with accel, C4IX's own accelerators on both (accel.c)
 session () {
-  local t=$1 f=$2 st
-  echo "  ---   the session, $f"
-  timeout 900 node libjs/cli.js -s $f --no-accel --no-osaccel -m 64 -c $CYC -d $IMAGES/disk $W/c4ix32.c4r \
+  local t=$1 f=$2 st la="--no-accel --no-osaccel" ca="--no-accel --no-osaccel"
+  [ "${3:-}" = accel ] && { la=""; ca=""; }
+  echo "  ---   the session, $f ${3:-}"
+  timeout 900 node libjs/cli.js -s $f $la -m 64 -c $CYC -d $IMAGES/disk $W/c4ix32.c4r \
     < $W/in.txt > $W/libjs$t.out 2> $W/libjs$t.err
   st=$?
   [ $st = 0 ] && ok "libjs: the session ends with status 0" || bad "libjs: status $st"
-  timeout 600 ./c4pc-host -s $f -m 64 -c $CYC -d $IMAGES/disk $W/c4ix32.c4r < $W/in.txt > $W/host$t.out 2> $W/host$t.err
+  timeout 600 ./c4pc-host -s $f $ca -m 64 -c $CYC -d $IMAGES/disk $W/c4ix32.c4r < $W/in.txt > $W/host$t.out 2> $W/host$t.err
   st=$?
   [ $st = 0 ] && ok "c4pc-host: the session ends with status 0" || bad "c4pc-host: status $st"
   for want in "C4IX booting" "c4ix-sh" "c4ix-ps.c4r" "tasks," "shutdown complete"; do
@@ -57,7 +60,7 @@ session () {
   rm -f $W/serial$t.txt
   timeout 1800 "$Q" -m 512 -display none -no-reboot -serial file:$W/serial$t.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
-    -append "-s $f -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
+    -append "-s $f $ca -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
   st=$?
   # isa-debug-exit: QEMU exits (status << 1) | 1
   [ $st = 1 ] && ok "c4pc.elf in QEMU: the session ends with status 0" || bad "c4pc.elf in QEMU: QEMU's status $st"
@@ -72,6 +75,10 @@ session () {
 session "" --no-mmu
 if [ -z "${NO_MMU:-}" ]; then
   session -mmu --mmu
+  # libjs loads C4IX's accelerators only where its tree's build listed them
+  # (src/c4bb/images/accel.json, build-images.sh)
+  if grep -q '"os/c4ix"' src/c4bb/images/accel.json 2>/dev/null; then session -accel --mmu accel
+  else echo "  skip  the session with C4IX's accelerators (no os/c4ix in src/c4bb/images/accel.json for libjs)"; fi
   # test-libjs's MMU cases (test-c4ix-mmu.mjs), on c4pc-host and libjs
   cases=$(IMAGES=$IMAGES bash src/c4pc/test-c4pc-mmu.sh); r=$?
   echo "$cases" | grep -v '^test-c4pc-mmu: '

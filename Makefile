@@ -3192,7 +3192,7 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # flags, so that it can be held against libjs; c4pc.elf is a multiboot
 # kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
 C4PC_SRC  := src/c4pc
-C4PC_MODS := engine mmu dev heap fmt fpu drive util
+C4PC_MODS := engine mmu accel dev heap fmt fpu drive util
 C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h
 # The images it runs, and what makes them. To build from another tree
 # whose images are made: C4PC_IMAGES=~/git/c4/src/c4bb/images C4PC_IMAGES_DEP=

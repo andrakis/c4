@@ -72,6 +72,10 @@ enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OP
 #define C4I_FPU   0x10000
 #define C4I_DRV   0x40000
 #define C4I_MMU   0x80000
+#define C4I_ACCEL 0x100000
+/* the accelerators' numbers (libjs/accel.js, accel.c) */
+#define ACC_BASE 0x1000
+#define ACC_END  0x2000
 
 /* ---- the MMU's registers, a window at 0x500 (mmu.c, libjs/mmu.js) ---- */
 #define MMU_BASE  0x500
@@ -165,6 +169,9 @@ struct machine {
   i32 tt, tp, hnd, jmode, jinterval;
   i32 irq_hold;
   int no_fpu;
+  /* the accelerators' loader (INFO's C4I_ACCEL; --no-accel) and the OS
+   * modules' switch (--no-osaccel, ACC_OS): accel.c */
+  int accel, osaccel;
   i32 fpu_v;
   i32 rom_stores;
   heap *heap;
@@ -243,6 +250,8 @@ void mmu_write32(mmu *u, i32 x, i32 v);
  * the innermost catch (u->jb) */
 i32 mmu_ld32(mmu *u, i32 x);
 i32 mmu_ld8(mmu *u, i32 x);
+/* the physical page at va for a read or a write, or the fault (accel.c) */
+i32 mmu_frame(mmu *u, i32 va, int write);
 void mmu_st32(mmu *u, i32 x, i32 v);
 void mmu_st8(mmu *u, i32 x, i32 v);
 int mmu_block(mmu *u, i32 op);         /* MSET, MCMP, MCPY in user mode */
@@ -258,6 +267,11 @@ i32 m_ld32(machine *m, i32 x);
 void m_st32(machine *m, i32 x, i32 v);
 int eng_trap(machine *m, i32 type, i32 param, i32 handler);
 int eng_halt(machine *m, i32 status);
+i32 eng_ld8(machine *m, i32 x);
+void eng_st8(machine *m, i32 x, i32 v);
+i32 eng_guard_lo(machine *m);
+/* an accelerator (accel.c): a STOP, or -1 for a number nobody has */
+int accel_op(machine *m, i32 op);
 int eng_sys(machine *m, i32 op);
 i64 eng_boundary(machine *m, i64 cycle, i64 next_irq);
 int eng_need_checks(machine *m);

@@ -426,7 +426,7 @@ int eng_halt(machine *m, i32 status) { return halt(m, status); }
 
 i32 machine_info(machine *m) {
   return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
-         (m->no_fpu ? 0 : C4I_FPU) | (m->mmu ? C4I_MMU : 0) | (m->trap_handler ? C4I_TRAPH : 0);
+         (m->no_fpu ? 0 : C4I_FPU) | (m->mmu ? C4I_MMU : 0) | (m->accel ? C4I_ACCEL : 0) | (m->trap_handler ? C4I_TRAPH : 0);
 }
 
 void machine_stacktrace(machine *m) {
@@ -730,6 +730,12 @@ static int sys(machine *m, i32 op) {
       return STOP_BUDGET;
     }
     case OP_DBG: trap(m, TRAP_DEBUG, 0, m->trap_handler); return STOP_BUDGET;
+  }
+  if (op >= ACC_BASE && op < ACC_END && m->accel) {
+    /* an accelerator (accel.c); a number nobody has is a custom opcode
+     * like any other */
+    int s = accel_op(m, op);
+    if (s >= 0) return s;
   }
   if (op == (i32)NULL_GUARD_OP) return null_jump(m, m->pc - 4);
   if (op >= 0 && op < INS_SIZE && !m->trap_handler) {
@@ -1067,6 +1073,7 @@ machine *machine_new(u32 arena_bytes, drive **drives, int ndrives, double mhz) {
   i64 cpm = (i64)(mhz * 1000 + 0.5);
   m->cycles_per_ms = mhz ? (u32)(cpm > 1 ? cpm : 1) : 20000;
   m->t0 = plat_now_ms();
+  m->accel = m->osaccel = 1;           /* as libjs: off with --no-accel, --no-osaccel */
   return m;
 }
 
@@ -1219,3 +1226,8 @@ u32 machine_kips(int ms, u32 bytes) {
   xfree(c->u8); xfree(c);
   return k;
 }
+
+/* for accel.c */
+i32 eng_ld8(machine *m, i32 x) { return m_ld8(m, x); }
+void eng_st8(machine *m, i32 x, i32 v) { m_st8(m, x, v); }
+i32 eng_guard_lo(machine *m) { return guard_lo(m); }

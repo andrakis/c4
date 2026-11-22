@@ -20,6 +20,10 @@
 #include "../snd.h"
 const char *sb16_init(snd *s);
 void sb16_poll(void);
+const char *hda_init(snd *s);
+void hda_poll(void);
+extern u32 sb16_underruns, hda_underruns;
+static void (*audio_poll)(void) = sb16_poll;   /* the card under the machine's */
 
 /* the clock -hz auto sets: this share, in percent, of machine_kips's
  * loop rate (pc_main) */
@@ -524,6 +528,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--no-realtime")) realtime = 0;
     else if (!strcmp(args[a], "--no-wc")) wc = 0;
     else if (!strcmp(args[a], "--no-sound")) sound = 0;
+    else if (!strcmp(args[a], "--debug-sound")) { extern void (*hda_log)(const char *); hda_log = con_puts; }
     else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : -1; }
     else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
     else if (!strcmp(args[a], "--no-mmu")) mmu_on = 0;
@@ -619,8 +624,9 @@ void pc_main(u32 magic, struct mb_info *mb) {
   if (paced && sound) {
     snd *s = snd_new(m, 44100, 1);
     const char *how = sb16_init(s);
+    if (!how && (how = hda_init(s))) audio_poll = hda_poll;
     if (how) { m->snd = s; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); }
-    else con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h\n");
+    else { extern const char *hda_why; con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h; "); con_puts(hda_why); con_puts("\n"); }
   }
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU, running " : " MB arena, running ");
@@ -662,7 +668,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
      * second; scripted, or with --fast, as fast as it goes */
     i64 slice = paced ? (i64)m->cycles_per_ms * 4 : 20000000;
     int r = machine_run(m, left < slice ? left : slice);
-    if (m->snd) sb16_poll();
+    if (m->snd) audio_poll();
     if (m->gui) display_tick(m);
     /* -s at the keyboard: every 10 s, on COM1 alone, how the PC kept up */
     if (stats && paced) {
@@ -675,7 +681,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         con_puts("c4pc: "); con_dec((ran - rep_cyc) / dt); con_puts("k inst/s, ");
         con_dec((display_ms - rep_disp) * 100 / dt); con_puts("% drawing to the screen, ");
         con_dec((idle_ms - rep_idle) * 100 / dt); con_puts("% idle");
-        if (m->snd) { extern u32 sb16_underruns; con_puts(", "); con_dec(sb16_underruns); con_puts(" sound underruns"); }
+        if (m->snd) { con_puts(", "); con_dec(sb16_underruns + hda_underruns); con_puts(" sound underruns"); }
         con_puts("\n");
         com1_only = 0;
         rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_idle = idle_ms;
@@ -686,7 +692,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
       if (have_in) { con_puts("c4pc: blocked on input with nothing left to read\n"); status = 8; break; }
       con_flush();
       i64 t = plat_now_ms();
-      if (m->snd) sb16_poll();
+      if (m->snd) audio_poll();
       __asm__ volatile("sti; hlt");           /* until a key, or the next tick */
       parked += plat_now_ms() - t;
       continue;
@@ -700,7 +706,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         if (m->pit_ms && m->pit_next < until) until = m->pit_next;
         if (until > now + 100) until = now + 100;
         while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
-          if (m->snd) sb16_poll();
+          if (m->snd) audio_poll();
           __asm__ volatile("sti; hlt");
         }
         idle_ms += plat_now_ms() - now;
@@ -711,7 +717,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         con_flush();
         i64 until = plat_now_ms() + (ahead < 100 ? ahead : 100);
         while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
-          if (m->snd) sb16_poll();
+          if (m->snd) audio_poll();
           __asm__ volatile("sti; hlt");
         }
         /* input during a nap: the guest wakes now, and its clock gets only

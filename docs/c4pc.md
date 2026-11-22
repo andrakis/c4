@@ -17,7 +17,7 @@ run there unchanged. It is in `src/c4pc/`.
 | done | at the keyboard, the real clock: games drop frames on a slow PC rather than play in slow motion or at uneven speed; the screen written a row at a time, write-combined through the PAT; the console drawn on a framebuffer while no program has the display |
 | done | the games' accelerators (games/NAME.c, each game's c4/accel.mjs in C): Doom, Duke Nukem 3D, Quake, Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, behind libjs's loader numbers as its full build lists them |
 | *measured* | every game's acceltest passes on c4pc-host and on c4pc.elf in QEMU, with libjs's count of cases; every game's timedemo shows the same frames with them and without, on the bare machine and inside C4IX under the MMU; a timedemo takes a sixth to a half of the time it did (section Speed) |
-| done (M5) | the sound card (snd.c, opl.c): libjs's device at 0x480 and its mixer, the AdLib (DOSBox's dbopl, as libjs/opl.js has it), sixteen sample channels and the speaker, in C; on a PC played through a Sound Blaster 16 (pc/sb16.c); `c4pc-host --wav` as cli.js's |
+| done (M5) | the sound card (snd.c, opl.c): libjs's device at 0x480 and its mixer, the AdLib (DOSBox's dbopl, as libjs/opl.js has it), sixteen sample channels and the speaker, in C; on a PC played through a Sound Blaster 16 (pc/sb16.c) or Intel HD Audio (pc/hda.c); `c4pc-host --wav` as cli.js's |
 | *measured* | on c4pc-host, Rise of the Triad's timedemo 4 and Doom's demo3 with a card fitted give the WAV cli.js --wav gives, byte for byte (8,619,724 and 15,956,420 bytes; test-c4pc holds the first); on c4pc.elf in QEMU with KVM and -device sb16, Doom's demo3 plays its music and sounds through the card (QEMU's wav audiodev records them) at 190 frames a second |
 | done (M8) | x86-64: c4pc64.elf, the same machine built for long mode (pc/boot64.S), on the ISO beside the i386 one |
 | *measured* | under KVM the session byte for byte libjs's in its cycles, with the MMU and without; every acceltest; Doom's demo3 with the SB16; the desktop and Doom on it. With the MMU 24% faster than c4pc.elf (194M against 157M c4 instructions a second), without it 3% |
@@ -42,7 +42,7 @@ src/c4pc/
   fpu.c                 src/c4bb/sim/fpu.js (F3) and c4m.js's FLT
   drive.c util.c        drives (and ustar archives as drives), maps, blobs
   host.c                c4pc-host: Linux, with libjs/cli.js's flags
-  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c (sound), libc.c, link.ld;
+  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c and hda.c (sound), libc.c, link.ld;
                         c4pc64.elf: boot64.S in boot.S's place
   dos/                  C4PC.COM: the DOS loader
   test-c4pc.sh          make test-c4pc: C4IX on libjs, c4pc-host and QEMU, without an MMU and with one
@@ -175,7 +175,30 @@ has got and mixes the ring 2,048 frames (46 ms) ahead of it again; no
 interrupt reaches the CPU. The card's now is then the real clock, and the
 events of now go 10 ms after the last frame made. QEMU (`-device sb16`),
 DOSBox, DOSBox-X and VMware (`sound.virtualDev = "sb16"` in the VM's
-.vmx) have one; `--no-sound` leaves it be. A PC without one runs silent.
+.vmx) have one; `--no-sound` leaves it be.
+
+Where there is no Sound Blaster, Intel High Definition Audio (pc/hda.c):
+VMware's default sound device, VirtualBox's, QEMU's `-device intel-hda
+-device hda-output`, and most PCs since 2004. The controller is the first
+PCI function of class 0403h, its registers at BAR0; after its reset the
+first codec that answers is spoken to through the CORB and the RIRB
+(RIRBSTS cleared after every answer: QEMU stops at RINTCNT until it is).
+In its audio function group every pin that can output and is connected
+(a line out, a speaker or headphones, by its default configuration) is
+walked back through its connections to a DAC, every node on the way
+powered, its input chosen and its amplifiers unmuted at 0 dB, and every
+such DAC put on stream 1, 44.1 kHz, 16 bits, stereo. The first output
+stream reads the same ring as the SB16's, its two halves a buffer
+descriptor list of two, and the poll goes by its link position (LPIB):
+`c4pc: sound: HD Audio, codec 1af4:0012, outputs: 1` under QEMU.
+`--debug-sound` prints the codec's nodes, their connections and their
+pins' configurations. A PC with neither runs silent, and says why.
+
+*Measured* (QEMU with KVM, Doom's demo3, QEMU's wav audiodev recording
+what the card played): through the SB16 and through HD Audio, on
+c4pc.elf and c4pc64.elf, the music and the sounds at levels of 4,000 to
+8,000 RMS a second, 4 or 5 underruns each, all while the game loads.
+Untried on VMware's and on real hardware's codecs.
 
 ### x86-64
 

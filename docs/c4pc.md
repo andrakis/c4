@@ -127,7 +127,28 @@ to a VNC viewer on port 5901.
 **At the keyboard**, with no `stdin` module, c4pc paces the machine to
 its own clock as cli.js `-i` does (16 simulated milliseconds at a time,
 then a wait for the real clock to catch up), so that `top` redraws once a
-second; `--fast` turns that off. Keys come from the PS/2 keyboard and
+second; `--fast` turns that off.
+
+The clock is then one the PC keeps up with: before the boot, c4pc times
+the interpreter for 100 ms on a loop of a scratch machine (engine.c
+`machine_kips`: locals, a call, and a load from across 16 MB each time
+round) and sets the clock to three quarters of that rate, saying so:
+`c4pc: 174M c4 instructions a second here, so a 130 MHz clock`. `-hz N`
+names one instead, and a scripted run (a `stdin` module) or `--fast`
+keeps libjs's 20 MHz, so that it is cycle for cycle libjs's. *Measured*
+2026-11-22, the loop against C4IX's own work: 177M and 180M (140M with
+the MMU) under KVM, 13M and 15M (13M) under TCG. And the boot with the
+MMU, `exit` at the first prompt, which waits for `c4ix-persist` to
+inflate the root archive (1,500M cycles; libjs inflates it natively,
+and keeps the result on drive 1):
+
+| | 20 MHz, before | auto |
+|---|---|---|
+| KVM | 75 s | 12 s (130 MHz, running 127M a second) |
+| TCG | about 112 s (behind its clock: the unpaced run's time) | 150 s (10 MHz, keeping time) |
+
+Under an emulator the share kept back costs a quarter; `--fast` or a
+higher `-hz` trades the clock's truth for it. Keys come from the PS/2 keyboard and
 from COM1, cooked as a terminal cooks them until a program opens the raw
 keyboard. *Measured* in QEMU with `-serial stdio`: typed commands echo,
 run, and `exit` shuts C4IX down.

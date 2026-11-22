@@ -212,6 +212,10 @@ machine *machine_new(u32 arena_bytes, drive **drives, int ndrives, double mhz);
 /* the image, its arguments: the trampoline set up, the heap laid out (boot.js) */
 int machine_boot(machine *m, const u8 *image, u32 len, int argc, char **argv);
 int machine_run(machine *m, i64 max_cycles);
+/* how fast the interpreter runs here: c4 instructions a millisecond,
+ * timed for ms milliseconds on a loop of a scratch machine with an arena
+ * of bytes (c4pc -hz auto) */
+u32 machine_kips(int ms, u32 bytes);
 void machine_emit(machine *m, const u8 *b, u32 n);
 void machine_emits(machine *m, const char *s);
 void machine_stacktrace(machine *m);

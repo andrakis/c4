@@ -18,6 +18,10 @@
 #include "../c4pc.h"
 #include "../clib.h"
 
+/* the clock -hz auto sets: this share, in percent, of machine_kips's
+ * loop rate (pc_main) */
+#define CLOCK_SHARE 75
+
 void pc_malloc_init(void *lo, void *hi);
 extern u32 pc_heap_free_bytes;
 extern char _end[];
@@ -319,13 +323,14 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = 20; int stats = 0, nofpu = 0, fast = 0, mmu_on = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, mmu_on = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
   for (; a < nargs; a++) {
     if (!strcmp(args[a], "-m") && a + 1 < nargs) { mb_arena = 0; for (char *p = args[++a]; *p; p++) mb_arena = mb_arena * 10 + (u32)(*p - '0'); }
     else if (!strcmp(args[a], "-c") && a + 1 < nargs) { maxc = 0; for (char *p = args[++a]; *p; p++) maxc = maxc * 10 + (*p - '0'); }
+    else if (!strcmp(args[a], "-hz") && a + 1 < nargs && !strcmp(args[a + 1], "auto")) { mhz = -1; a++; }
     else if (!strcmp(args[a], "-hz") && a + 1 < nargs) { mhz = 0; for (char *p = args[++a]; *p; p++) mhz = mhz * 10 + (*p - '0'); }
     else if (!strcmp(args[a], "-s")) stats = 1;
     else if (!strcmp(args[a], "--no-fpu")) nofpu = 1;
@@ -375,6 +380,25 @@ void pc_main(u32 magic, struct mb_info *mb) {
   pargv[pargc++] = (char *)img_name;
   for (; a < nargs && pargc < 63; a++) pargv[pargc++] = args[a];
 
+  /* the clock. Scripted (a stdin module) or --fast, libjs's 20 MHz, so
+   * that a run is cycle for cycle libjs's; at the keyboard, unless -hz
+   * names one, what this PC keeps up with (engine.c machine_kips): the
+   * loop's rate (measured: within a fifth of C4IX's own, under KVM and
+   * under TCG), less a quarter, so that the clock mostly keeps time; a
+   * machine that falls behind its clock only runs slow */
+  int paced = !have_in && !fast;
+  if (mhz < 0 && !paced) mhz = 20;
+  if (mhz < 0) {
+    u32 sz = 16u << 20;                 /* the scratch arena, freed again */
+    while (sz > (1u << 20) && sz + (2u << 20) > pc_heap_free_bytes) sz >>= 1;
+    u32 k = machine_kips(100, sz);
+    u32 hz = (u32)((i64)k * CLOCK_SHARE / 100000);    /* MHz */
+    if (hz < 2) hz = 2;
+    if (hz > 1000) hz = 1000;
+    mhz = hz;
+    con_puts("c4pc: "); con_dec(k / 1000); con_puts("M c4 instructions a second here, so a ");
+    con_dec(hz); con_puts(" MHz clock (-hz N to choose)\n");
+  }
   machine *m = machine_new(mb_arena << 20, drives, nd, mhz);
   m->on_byte = on_byte;
   m->no_fpu = nofpu;
@@ -386,7 +410,6 @@ void pc_main(u32 magic, struct mb_info *mb) {
 
   i64 t0 = plat_now_ms(), parked = 0;
   i64 limit = maxc < 0 ? INT64_MAX : maxc;
-  int paced = !have_in && !fast;
   int status;
   for (;;) {
     /* what the keyboard and COM1 brought: cooked as a terminal would,

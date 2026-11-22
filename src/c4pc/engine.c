@@ -1176,3 +1176,46 @@ int machine_boot(machine *m, const u8 *img, u32 len, int argc, char **argv) {
   m->a = 0;
   return 0;
 }
+
+/* ---- the clock, measured (c4pc's -hz auto) ----
+ * c4pc at the keyboard paces the machine to its clock, as cli.js -i
+ * does, so the clock must be one this PC keeps up with: 20 MHz, libjs's,
+ * holds a VM with hardware virtualization at a seventh of what it can
+ * do, and is more than an emulator gives. So before the boot, the
+ * interpreter runs a loop on a scratch machine of its own for a moment,
+ * and the count says how fast it goes here. The loop is the shape of
+ * compiled c4: locals loaded, pushed, combined, stored, a call and a
+ * branch, and a load from somewhere else in its arena each time round
+ * (bytes of it, 16 MB where there is room), as
+ * C4IX's own work is spread over its arena (which a VM's nested paging
+ * makes dear, where a loop in a page or two is not). */
+u32 machine_kips(int ms, u32 bytes) {
+  machine *c = machine_new(bytes, 0, 0, 20);
+  i32 *w = c->w;
+  u32 p = MEM_BASE >> 2, loop, fn, call;
+#define E(x) (w[p++] = (i32)(x))
+  E(OP_ENT); E(2);
+  loop = p << 2;
+  E(OP_LEA); E(-1); E(OP_PSH); E(OP_LDL); E(-1); E(OP_PSH); E(OP_IMM); E(3); E(OP_ADD); E(OP_SI);
+  E(OP_LEA); E(-2); E(OP_PSH); E(OP_LDL); E(-1); E(OP_PSH); E(OP_IMM); E(4099 * 4); E(OP_MUL);
+  E(OP_PSH); E(OP_IMM); E(0xfffffc); E(OP_AND); E(OP_LI); E(OP_PSH); E(OP_LDL); E(-2); E(OP_ADD); E(OP_SI);
+  E(OP_JSR); call = p; E(0);
+  E(OP_LDL); E(-1); E(OP_PSH); E(OP_IMM); E(0x7fffffff); E(OP_AND); E(OP_BNZ); E(loop);
+  E(OP_JMP); E(loop);
+  fn = p << 2;
+  E(OP_ENT); E(0); E(OP_IMM); E(1); E(OP_LEV);
+  w[call] = (i32)fn;
+#undef E
+  c->pc = MEM_BASE;
+  c->sp = c->bp = (i32)c->stack_top;
+  /* start on a tick, so that ms of them are ms */
+  i64 t = plat_now_ms();
+  while (plat_now_ms() == t) machine_run(c, 1000);
+  i64 c0 = c->cycle, t0 = plat_now_ms();
+  while (plat_now_ms() - t0 < ms) machine_run(c, 100000);
+  i64 dt = plat_now_ms() - t0;
+  u32 k = (u32)((c->cycle - c0) / (dt > 0 ? dt : 1));
+  /* the heap and maps are a few hundred bytes, kept */
+  xfree(c->u8); xfree(c);
+  return k;
+}

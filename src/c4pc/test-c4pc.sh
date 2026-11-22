@@ -84,6 +84,25 @@ if [ -z "${NO_MMU:-}" ]; then
   echo "$cases" | grep -v '^test-c4pc-mmu: '
   [ $r = 0 ] || fail=1
 fi
+# The display (gui.c): the desktop booted on c4pc-host with a display
+# fitted (C4IX --desktop, as the web page boots it), the Calculator's icon
+# double-clicked, and the strings it then draws looked for
+echo "  ---   the desktop, on a display"
+cat > $W/gui-events.txt <<EV
+9000 move 40 330
+9100 click 40 330
+9250 click 40 330
+13000 shot $W/desktop.png
+13100 quit
+EV
+timeout 600 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --events $W/gui-events.txt --texts $W/gui-texts.txt \
+  -d $IMAGES/disk $W/c4ix32.c4r --desktop > $W/gui.out 2> $W/gui.err
+st=$?
+[ $st = 0 ] && ok "c4pc-host with a display: quits at the script's end" || bad "c4pc-host with a display: status $st"
+for want in Filesystem Terminal "Text Editor" Calculator Integer Double; do
+  grep -q " $want\$\| $want " $W/gui-texts.txt && ok "the display draws '$want'" || bad "the display draws '$want'"
+done
+grep -h 'display:' $W/gui.err | sed 's/^/        /'
 # test-libjs's programs with a native oracle, on both
 progs=$(IMAGES=$IMAGES bash src/c4pc/test-c4pc-progs.sh); r=$?
 echo "$progs" | grep -v '^test-c4pc-progs: '

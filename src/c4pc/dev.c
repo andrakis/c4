@@ -631,3 +631,7 @@ void dev_write32(machine *m, u32 addr, i32 val) {
     default: return;
   }
 }
+
+/* for the display (gui.c) */
+i64 dev_dma(machine *m, u32 addr, i32 len, int write, int pin) { return dma(m, addr, len, write, pin); }
+u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out) { return dma_read(m, addr, len, out); }

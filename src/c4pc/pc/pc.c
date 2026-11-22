@@ -133,6 +133,15 @@ static void con_puts(const char *s) { while (*s) con_put(*s++); }
 static void con_flush(void) { if (vga_dirty) { vga_cursor(); vga_dirty = 0; } }
 static void con_dec(i64 v) { char t[24]; int n = 0; int neg = v < 0; uint64_t u = neg ? (uint64_t)-v : (uint64_t)v;
   do { t[n++] = (char)('0' + u % 10); u /= 10; } while (u); if (neg) con_put('-'); while (n) con_put(t[--n]); }
+void pc_log(const char *s) { con_puts(s); }
+static machine *dbg_m;
+static void trace_event(i32 type, const i32 *pl, int n, int sent) {
+  con_puts("event "); con_dec(type);
+  if (dbg_m) { con_puts(" sim "); con_dec(machine_sim_ms(dbg_m)); con_puts(" real "); con_dec(plat_now_ms()); con_puts(" nap "); con_dec(dbg_m->nap_ms); con_puts(" :"); }
+  for (int i = 0; i < n; i++) { con_puts(" "); con_dec(pl[i]); }
+  con_puts(sent ? " sent#" : " masked#");
+}
+void pc_logn(i64 v) { con_dec(v); }
 static void con_hex(u32 v) { con_puts("0x"); for (int i = 7; i >= 0; i--) con_put("0123456789abcdef"[(v >> (4 * i)) & 15]); }
 
 /* ---- leaving ---- */
@@ -152,6 +161,19 @@ i64 plat_now_ms(void) {
   i64 t;
   do { t = ticks; } while (t != ticks);       /* two words: read until they agree */
   return t;
+}
+
+/* the local time of day from the RTC (CMOS: BCD unless status B says
+ * binary, 12-hour unless it says 24), for the display's CLOCK */
+static u8 cmos(u8 r) { outb(0x70, r); return inb(0x71); }
+i32 plat_clock_secs(void) {
+  u8 s, mi, h, b;
+  while (cmos(0x0a) & 0x80) ;                 /* not while it updates */
+  s = cmos(0x00); mi = cmos(0x02); h = cmos(0x04); b = cmos(0x0b);
+  int pm = h & 0x80; h &= 0x7f;
+  if (!(b & 4)) { s = (s >> 4) * 10 + (s & 15); mi = (mi >> 4) * 10 + (mi & 15); h = (h >> 4) * 10 + (h & 15); }
+  if (!(b & 2)) { if (h == 12) h = 0; if (pm) h += 12; }
+  return h * 3600 + mi * 60 + s;
 }
 
 /* ---- input: what the interrupts bring, for the run loop ---- */
@@ -176,8 +198,14 @@ static const char km_hi[128] = {
   'D','F','G','H','J','K','L',':','"','~', 0, '|','Z','X','C','V',
   'B','N','M','<','>','?', 0, '*', 0, ' ', 0 };
 static int k_shift, k_ctrl, k_caps, k_e0;
+static volatile int kbd_to_gui;
+static volatile u8 scq[256];
+static volatile u32 scq_head, scq_tail;
+void mouse_byte(u8 b);
 static void kbd_irq(void) {
+  if (inb(0x64) & 0x20) { mouse_byte(inb(0x60)); return; }     /* the mouse's byte, after all */
   u8 sc = inb(0x60);
+  if (kbd_to_gui) { u32 t = scq_tail; if (t - scq_head < sizeof scq) { scq[t % sizeof scq] = sc; scq_tail = t + 1; } return; }
   if (sc == 0xE0) { k_e0 = 1; return; }
   int up = sc & 0x80; sc &= 0x7f;
   int e0 = k_e0; k_e0 = 0;
@@ -206,6 +234,60 @@ static void kbd_irq(void) {
   inq_push(c);
 }
 
+/* ---- the keyboard to the display: while a program has the display's
+ * keys (gui_attached), scancodes go to it as the page's keydown and keyup:
+ * the DOM's keyCode, the character typed (0 for none) and the modifiers
+ * (1 shift, 2 ctrl, 4 alt); COM1 stays the console's ---- */
+int mouse_init(void);
+int mouse_pending(void);
+void mouse_poll(gui *g);
+int screen_from_multiboot(const void *info);
+int screen_bga(int w, int h);
+void screen_size(int *w, int *h);
+void screen_show(gui *g);
+/* set 1 to keyCode: plain, and after E0 */
+static const u8 kc[0x59] = {
+  0, 27, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48, 189, 187, 8, 9,
+  81, 87, 69, 82, 84, 89, 85, 73, 79, 80, 219, 221, 13, 17, 65, 83,
+  68, 70, 71, 72, 74, 75, 76, 186, 222, 192, 16, 220, 90, 88, 67, 86,
+  66, 78, 77, 188, 190, 191, 16, 106, 18, 32, 20, 112, 113, 114, 115, 116,
+  117, 118, 119, 120, 121, 144, 145, 36, 38, 33, 109, 37, 12, 39, 107, 35,
+  40, 34, 45, 46, 0, 0, 0, 122, 123 };
+static int g_shift, g_ctrl, g_alt, g_caps, g_e0;
+static void key_event(gui *g, u8 sc) {
+  if (sc == 0xE0) { g_e0 = 1; return; }
+  int up = sc & 0x80, e0 = g_e0; sc &= 0x7f; g_e0 = 0;
+  if (sc >= sizeof kc) return;
+  int code = kc[sc];
+  if (e0) {
+    if (sc == 0x35) code = 111; else if (sc == 0x5B) code = 91;
+    else if (sc == 0x2A || sc == 0x37) return;             /* PrtSc's fake shifts */
+  }
+  if (!code) return;
+  if (code == 16) g_shift = !up;
+  if (code == 17) g_ctrl = !up;
+  if (code == 18) g_alt = !up;
+  if (code == 20 && !up) g_caps = !g_caps;
+  int ch = 0;
+  if (!e0 && sc < 0x3A && sc != 0x1D && sc != 0x2A && sc != 0x36 && sc != 0x38) {
+    ch = (u8)(g_shift ? km_hi[sc] : km_lo[sc]);
+    if (g_caps && ch >= 'a' && ch <= 'z') ch -= 32;
+    else if (g_caps && ch >= 'A' && ch <= 'Z' && g_shift) ch += 32;
+    if (ch == '\n') ch = 10;
+  } else if (e0 && sc == 0x1C) ch = 10;
+  else if (e0 && sc == 0x35) ch = '/';
+  gui_key(g, !up, code, ch, (g_shift ? 1 : 0) | (g_ctrl ? 2 : 0) | (g_alt ? 4 : 0));
+}
+/* after a slice: the keys and the mouse to the display, what it drew to the screen */
+static void display_tick(machine *m) {
+  gui *g = m->gui;
+  kbd_to_gui = gui_attached(g);
+  while (scq_head != scq_tail) { u8 sc = scq[scq_head % sizeof scq]; scq_head++; key_event(g, sc); }
+  mouse_poll(g);
+  gui_tick(g);
+  screen_show(g);
+}
+
 /* ---- the CPU: GDT, IDT, PIC, PIT ---- */
 struct regs { u32 edi, esi, ebp, esp, ebx, edx, ecx, eax, vec, err, eip, cs, eflags; };
 static u32 gdt[6];
@@ -228,6 +310,7 @@ void isr(struct regs *r) {
   u32 irq = r->vec - 32;
   if (irq == 0) ticks++;
   else if (irq == 1) kbd_irq();
+  else if (irq == 12) { u8 st = inb(0x64); if (st & 1) { u8 b = inb(0x60); if (st & 0x20) mouse_byte(b); } }
   else if (irq == 4) { while (inb(0x3FD) & 1) { int c = inb(0x3F8); inq_push(c == '\r' ? '\n' : c); } }
   else if (irq == 7 || irq == 15) {       /* spurious: no EOI for the one that did not happen */
     if (irq == 7) { outb(0x20, 0x0B); if (!(inb(0x20) & 0x80)) return; }
@@ -323,7 +406,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, mmu_on = 0, noaccel = 0, noosaccel = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -334,6 +417,13 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "-hz") && a + 1 < nargs) { mhz = 0; for (char *p = args[++a]; *p; p++) mhz = mhz * 10 + (*p - '0'); }
     else if (!strcmp(args[a], "-s")) stats = 1;
     else if (!strcmp(args[a], "--no-fpu")) nofpu = 1;
+    else if (!strcmp(args[a], "--debug-mouse")) { extern int mouse_debug; extern void (*gui_trace)(i32, const i32 *, int, int); mouse_debug = 1; gui_trace = trace_event; }
+    else if (!strcmp(args[a], "--gui") && a + 1 < nargs) {      /* WxH: a display, by the BGA where GRUB set none */
+      char *p = args[++a]; gui_w = 0; gui_h = 0;
+      while (*p >= '0' && *p <= '9') gui_w = gui_w * 10 + (*p++ - '0');
+      if (*p == 'x') p++;
+      while (*p >= '0' && *p <= '9') gui_h = gui_h * 10 + (*p++ - '0');
+    }
     else if (!strcmp(args[a], "--no-accel")) noaccel = 1;
     else if (!strcmp(args[a], "--no-osaccel")) noosaccel = 1;
     else if (!strcmp(args[a], "--fast")) fast = 1;
@@ -407,6 +497,17 @@ void pc_main(u32 magic, struct mb_info *mb) {
   if (noaccel) m->accel = 0;
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
+  /* the display: GRUB's framebuffer, or the BGA's at --gui's size */
+  if (screen_from_multiboot(mb) || (gui_w > 0 && gui_h > 0 && screen_bga(gui_w, gui_h))) {
+    int w, h; screen_size(&w, &h);
+    { extern void screen_describe(void); screen_describe(); }
+    m->gui = gui_new(m, w, h);
+    dbg_m = m;
+    int mouse = mouse_init();
+    if (mouse) outb(0xA1, 0xEF);           /* IRQ 12 */
+    con_puts("c4pc: a display of "); con_dec(w); con_puts(" x "); con_dec(h);
+    con_puts(mouse ? ", and a mouse\n" : ", and no mouse\n");
+  }
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU, running " : " MB arena, running ");
   con_puts(img_name); con_puts("\n");
@@ -440,6 +541,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
      * --fast, as fast as it goes */
     i64 slice = paced ? (i64)m->cycles_per_ms * 16 : 20000000;
     int r = machine_run(m, left < slice ? left : slice);
+    if (m->gui) display_tick(m);
     if (r == STOP_HALT) { status = m->status; break; }
     if (r == STOP_INPUT) {
       if (have_in) { con_puts("c4pc: blocked on input with nothing left to read\n"); status = 8; break; }
@@ -454,7 +556,15 @@ void pc_main(u32 magic, struct mb_info *mb) {
       if (ahead > 2) {
         con_flush();
         i64 until = plat_now_ms() + (ahead < 100 ? ahead : 100);
-        while (plat_now_ms() < until && inq_head == inq_tail) __asm__ volatile("sti; hlt");
+        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) __asm__ volatile("sti; hlt");
+        /* input during a nap: the guest wakes now, and its clock gets only
+         * what it slept (libjs/worker.js wake). Kept whole, every pointer
+         * move gave it a nap's worth of time, and two clicks a moment apart
+         * were seconds apart to the desktop: never a double click */
+        if (r == STOP_SLEEP && (inq_head != inq_tail || scq_head != scq_tail || mouse_pending())) {
+          i64 a2 = machine_sim_ms(m) - (plat_now_ms() - t0 - parked);
+          if (a2 > 0) { i64 cut = a2 < m->nap_ms ? a2 : m->nap_ms; m->sleep_ms -= cut; m->nap_ms -= cut; }
+        }
       }
     }
   }

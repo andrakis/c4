@@ -81,12 +81,14 @@ static void rom_store(machine *m, i32 x, i32 v);
 
 static i32 arena_rd32(machine *m, u32 a) {
   if (a >= DEV_BASE && a < DEV_END) return dev_read32(m, a);
+  if (a >= 0x400 && a < 0x480 && m->gui) return gui_read32(m->gui, a & ~3u);     /* bus.js: the display */
   if (!(a & 3)) return a + 4 <= m->size ? m->w[a >> 2] : 0;
   if ((i64)a + 4 > m->size) return 0;
   return (i32)(m->u8[a] | m->u8[a + 1] << 8 | m->u8[a + 2] << 16 | (u32)m->u8[a + 3] << 24);
 }
 static void arena_wr32(machine *m, u32 a, i32 v) {
   if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, a, v); return; }
+  if (a >= 0x400 && a < 0x480 && m->gui) { gui_write32(m->gui, a & ~3u, v); return; }
   if (!(a & 3)) { if (a + 4 <= m->size) m->w[a >> 2] = v; return; }
   if ((i64)a + 4 > m->size) return;
   m->u8[a] = (u8)v; m->u8[a + 1] = (u8)(v >> 8); m->u8[a + 2] = (u8)(v >> 16); m->u8[a + 3] = (u8)((u32)v >> 24);
@@ -96,6 +98,7 @@ static i32 bus_rd32(machine *m, u32 a) { return a < 0x10 ? 0 : arena_rd32(m, a);
 static i32 bus_rd8s(machine *m, u32 a) { return a < 0x10 || a >= m->size ? 0 : (int8_t)m->u8[a]; }
 static void bus_wr8(machine *m, u32 a, i32 v) {
   if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, a & ~3u, v & 0xff); return; }
+  if (a >= 0x400 && a < 0x480 && m->gui) { gui_write32(m->gui, a & ~3u, v & 0xff); return; }
   if (a < m->size) m->u8[a] = (u8)v;
 }
 
@@ -426,7 +429,7 @@ int eng_halt(machine *m, i32 status) { return halt(m, status); }
 
 i32 machine_info(machine *m) {
   return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
-         (m->no_fpu ? 0 : C4I_FPU) | (m->mmu ? C4I_MMU : 0) | (m->accel ? C4I_ACCEL : 0) | (m->trap_handler ? C4I_TRAPH : 0);
+         (m->no_fpu ? 0 : C4I_FPU) | (m->mmu ? C4I_MMU : 0) | (m->accel ? C4I_ACCEL : 0) | (m->gui ? C4I_GUI : 0) | (m->trap_handler ? C4I_TRAPH : 0);
 }
 
 void machine_stacktrace(machine *m) {
@@ -756,7 +759,7 @@ static int sys(machine *m, i32 op) {
 int eng_sys(machine *m, i32 op) { return sys(m, op); }
 
 static int need_checks(machine *m) {
-  return m->cycle_interval || m->pit_ms || m->pending_signal || m->mbox_irq;
+  return m->cycle_interval || m->pit_ms || m->pending_signal || m->mbox_irq || (m->gui && gui_irq_pending(m->gui));
 }
 int eng_need_checks(machine *m) { return need_checks(m); }
 
@@ -775,6 +778,10 @@ static inline __attribute__((always_inline)) i64 boundary(machine *m, i64 cycle,
   } else if (m->mbox_irq && m->cycle_handler && !held) {
     m->mbox_irq = 0;
     hirq(m, 2);
+  } else if (m->gui && m->cycle_handler && gui_irq_pending(m->gui) && !tlev) {
+    /* the display's events: not held for a handler (c4m.js boundary) */
+    gui_irq_taken(m->gui);
+    hirq(m, 3);
   } else {
     int irq = 0;
     if (interval > 0 && cycle >= next_irq) { next_irq = next_multiple(cycle, interval); irq = !tlev; }
@@ -789,7 +796,8 @@ static inline __attribute__((always_inline)) i64 boundary(machine *m, i64 cycle,
     return 0;
   }
   m->b_next_irq = next_irq;
-  if ((m->mbox_irq && m->cycle_handler && !m->irq_hold) || m->pending_signal) return 0;
+  if ((m->mbox_irq && m->cycle_handler && !m->irq_hold) || m->pending_signal ||
+      (m->gui && m->cycle_handler && gui_irq_pending(m->gui))) return 0;
   i64 next = INT64_MAX;
   if (interval > 0) next = next_irq;
   if (m->pit_ms) { i64 pit = (cycle / 4096 + 1) * 4096; if (pit < next) next = pit; }

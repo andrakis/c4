@@ -1121,3 +1121,8 @@ i32 mmu_frame(mmu *u, i32 va, int write) {
   if (p < 0) fault(u);
   return p;
 }
+
+/* [addr, addr + len) in the space at ptbr, one run of memory, or -1: no
+ * fault (the display's ring drained by the host, gui-device.js ringDma) */
+i64 mmu_dma_space(machine *m, u32 ptbr, u32 addr, i32 len, int write) { return dma_phys(m, ptbr, addr, len, write, 0); }
+i32 mmu_ptbr(mmu *u) { return u->ptbr; }

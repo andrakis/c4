@@ -12,7 +12,9 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | with the MMU: the same session byte for byte libjs `--mmu`'s, in its 1,500,630,450 cycles, on c4pc-host and on c4pc.elf in QEMU; test-c4ix-mmu.mjs's cases but the display's (test-c4pc-mmu.sh) are killed by the page faults that test names, byte for byte and cycle for cycle as libjs, on c4pc-host and in QEMU |
 | done | C4IX's own accelerators (accel.c, src/c4ix/accel.mjs in C): libarc's inflater and CRC-32, behind libjs's loader numbers (INFO's C4I_ACCEL, ACC_FIND, ACC_OS); `--no-accel`, `--no-osaccel` as cli.js |
 | *measured* | with them and the MMU: the session byte for byte libjs's (its build listing os/c4ix), in its 111,571,007 cycles, on c4pc-host and in QEMU: 13 times fewer than C4IX's own C |
-| not yet | the display and mouse (M4), sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), games' accelerators |
+| done (M4) | the display (gui.c): libjs's device at 0x400, its rings and IRQ, the page's drawing done in C with c4pc's own faces (font.c); on a PC a VBE framebuffer from GRUB or the BGA, the PS/2 mouse, the keyboard to the display |
+| *measured* | C4IX's desktop from the ISO under KVM, mouse and keyboard; on c4pc-host, scripted, in `make test-c4pc` |
+| not yet | sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), games' accelerators |
 
 ## One engine, two front ends
 
@@ -23,12 +25,14 @@ src/c4pc/
   mmu.c                 libjs/mmu.js: the MMU's registers, translation, the user loop; arena.js's kernel map
   dev.c                 src/c4bb/sim/devices.js: the registers at 0x100-0x1FF
   accel.c               src/c4ix/accel.mjs: C4IX's inflater and CRC-32, behind libjs/accel.js's numbers
+  gui.c                 libjs/gui-device.js's display at 0x400, and display.js's drawing
+  font.c mkfont.py      the display's text: outlines from the system's free fonts, filled at any size
   heap.c                libjs/heap.js, block for block
   fmt.c                 libjs/printf.js (PRTF), with JavaScript's float formatting
   fpu.c                 src/c4bb/sim/fpu.js (F3) and c4m.js's FLT
   drive.c util.c        drives (and ustar archives as drives), maps, blobs
   host.c                c4pc-host: Linux, with libjs/cli.js's flags
-  pc/                   c4pc.elf: boot.S, pc.c (the PC), libc.c, link.ld
+  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), libc.c, link.ld
   dos/                  C4PC.COM: the DOS loader
   test-c4pc.sh          make test-c4pc: C4IX on libjs, c4pc-host and QEMU, without an MMU and with one
   test-c4pc-mmu.sh      ... test-c4ix-mmu.mjs's wild programs, on libjs, c4pc-host and QEMU
@@ -157,10 +161,68 @@ from COM1, cooked as a terminal cooks them until a program opens the raw
 keyboard. *Measured* in QEMU with `-serial stdio`: typed commands echo,
 run, and `exit` shuts C4IX down.
 
+**The display** (M4, 2026-11-22). `gui.c` is libjs/gui-device.js's
+device, register for register at 0x400: INFO's C4I_GUI, the command and
+event rings in the guest's memory (src/c4bb/sim/mbox.js's format), the
+IRQ through the cycle handler, the framebuffer flips and BLIT8, checked
+against the task's space under the MMU as libjs checks them. Where the
+page draws the commands on a canvas (libjs/display.js), c4pc draws them
+itself, as each is taken from the ring, into a back buffer, and a
+PRESENT copies what changed to the front:
+
+- rectangles, outlines and lines on whole pixels, as a canvas strokes
+  them at +0.5; circles with coverage; images over what is there by their
+  alpha; BLIT8 and framebuffer frames scaled by the nearest pixel
+  (`imageSmoothingEnabled` false); clips as a canvas's (CLEAR inside one);
+- text in c4pc's own faces, anti-aliased and unhinted, as a browser
+  draws a canvas's: `mkfont.py` reads the system's free fonts with
+  fonttools at build time and writes their outlines for the characters
+  0-255 as C tables (`.c4pc/fontdata.c`), which `font.c` fills at any size
+  and keeps. TEXT2's nine faces are DejaVu Sans Mono (mono, Lucida),
+  Liberation Sans and Bold (the UI face), Liberation Mono (Courier),
+  DejaVu Sans and Bold (Verdana), Liberation Serif and Bold. A string is
+  the face's width, near what the window kit guesses (`ui_len * 6` to `7`),
+  not the browser's to the pixel. Liberation is under the SIL OFL 1.1,
+  DejaVu the Bitstream Vera licence; each face's copyright lines go into
+  the generated file beside its data.
+
+On a PC (`pc/screen.c`) the front goes to a linear framebuffer: GRUB's,
+when the multiboot header's video request is granted (the ISO's first
+entry: `gfxpayload=1024x768x32`), or the Bochs display adapter's (BGA,
+PCI 1234:1111 in QEMU and Bochs, 80EE:BEEF in VirtualBox) where c4pc is
+given `--gui WxH` and no GRUB set a mode. A display smaller than the
+screen is scaled up and centred, as the page's canvas is (C4IX's desktop
+asks for 800 x 600); a pointer is drawn over it. The mouse is the 8042's
+second port, with the IntelliMouse wheel where it has one, each packet
+queued so that a press and its release between two looks are both seen.
+While a program has the display's keys (the ring attached, keys in its
+event mask) the keyboard's scancodes go to it as the page's keydown and
+keyup -- the DOM's keyCode, the character, the modifiers -- and COM1
+stays the console's. A key or the mouse during a nap wakes the machine
+with its clock given only what it slept (libjs/worker.js wake): kept
+whole, two clicks a moment apart were seconds apart to the desktop.
+
+*Measured*, 2026-11-22, under KVM on helios: the ISO's first entry boots
+C4IX's desktop in QEMU (std VGA, GRUB's 1024 x 768 x 32); the desktop
+is as the page draws it (wallpaper, icons, the Terminal, the taskbar's
+clock); a PS/2 double-click on the Calculator's icon opens it, and keys
+typed at the Terminal appear there. `make test-c4pc` boots the desktop
+on c4pc-host with `--gui`, double-clicks the Calculator by script and
+looks for its strings among those drawn (`--texts`).
+
+    make c4pc.elf .c4pc/disk.tar
+    qemu-system-i386 -accel kvm -cpu host -m 512 -vga std -vnc :1 -serial stdio \
+        -kernel c4pc.elf -append "--mmu -m 128 --gui 1024x768 -- --desktop" \
+        -initrd "c4ix32.c4r,.c4pc/disk.tar drive"
+
+c4pc-host fits one with `--gui WxH`; `--events FILE` plays mouse and key
+events at the machine's own milliseconds, and `--shot FILE.png` (or a
+`shot` event) writes what the display shows.
+
 **GRUB** (VirtualBox, VMware, Hyper-V Gen 1, real PCs with a BIOS):
-`make c4pc.iso` makes a 169 MB ISO with the whole disk and a menu of three
-(src/c4pc/pc/grub.cfg: with the MMU, without it, and 128 MB with
-statistics), by `grub-mkrescue-pc`, the wrapper that points
+`make c4pc.iso` makes a 169 MB ISO with the whole disk and a menu of four
+(src/c4pc/pc/grub.cfg: C4IX's desktop, then the text screen with the
+MMU, without it, and 128 MB with statistics), by `grub-mkrescue-pc`, the wrapper that points
 the system's grub-mkrescue at the unpacked i386-pc modules. GRUB passes a
 module's arguments, not its path, so each `module` line names its file
 again:
@@ -216,7 +278,9 @@ then needs SIGKILL, ignoring SIGTERM while halted).
 
 - **M3, the console**: `-i`-style pacing to the machine's clock, a
   scrollback, and the keyboard's raw mode as keys.js has it.
-- **M4, the display**: the 0x400 registers on a VBE framebuffer (BGA in
-  QEMU and Bochs), bitmap fonts, the PS/2 mouse.
+- **The display, further**: the desktop on DOSBox (C4PC.COM setting a
+  VESA mode with INT 10h and handing it over as GRUB does); the page's
+  pointer shapes; a resize to the screen's own size rather than scaling;
+  the display's command stream held against libjs's in a test.
 - A test in the gate: `test-c4pc` takes about ten minutes, most of it
   QEMU's three runs (`NO_MMU=1`: three minutes; `NO_QEMU=1`: two).

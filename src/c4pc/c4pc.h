@@ -23,6 +23,8 @@ typedef int64_t i64;
 typedef uint32_t u32;
 typedef int32_t i32;
 typedef uint8_t u8;
+typedef uint16_t u16;
+typedef int16_t i16;
 
 /* ---- opcodes (c4m.js OP) ---- */
 enum {
@@ -73,6 +75,7 @@ enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OP
 #define C4I_DRV   0x40000
 #define C4I_MMU   0x80000
 #define C4I_ACCEL 0x100000
+#define C4I_GUI   0x4000
 /* the accelerators' numbers (libjs/accel.js, accel.c) */
 #define ACC_BASE 0x1000
 #define ACC_END  0x2000
@@ -135,6 +138,7 @@ u32 heap_base(heap *h), heap_end(heap *h);
 /* ---- the machine ---- */
 typedef struct fdent fdent;
 typedef struct machine machine;
+typedef struct gui gui;
 
 /* ---- the MMU (mmu.c: libjs/mmu.js's Mmu) ---- */
 typedef struct mmu {
@@ -172,6 +176,8 @@ struct machine {
   /* the accelerators' loader (INFO's C4I_ACCEL; --no-accel) and the OS
    * modules' switch (--no-osaccel, ACC_OS): accel.c */
   int accel, osaccel;
+  /* the display, when one is fitted (gui.c): the registers at 0x400-0x47F */
+  gui *gui;
   i32 fpu_v;
   i32 rom_stores;
   heap *heap;
@@ -318,6 +324,29 @@ int drive_add_tar(drive *d, u8 *tar, u32 len);
 
 /* ---- what the platform gives ---- */
 i64 plat_now_ms(void);                 /* a real millisecond clock */
+i32 plat_clock_secs(void);             /* the local time of day, in seconds since midnight */
+
+/* ---- the display (gui.c) ---- */
+gui *gui_new(machine *m, int w, int h);
+i32 gui_read32(gui *g, u32 a);
+void gui_write32(gui *g, u32 a, i32 v);
+int gui_irq_pending(gui *g);
+void gui_irq_taken(gui *g);
+void gui_tick(gui *g);
+void gui_mouse(gui *g, int dx256, int dy256, int buttons, int wheel);
+void gui_mouse_at(gui *g, int x, int y, int buttons);
+void gui_key(gui *g, int down, int code, int ch, int mods);
+void gui_focus(gui *g, int on);
+int gui_attached(gui *g);
+u32 *gui_front(gui *g, int *w, int *h);
+int gui_take_dirty(gui *g, int *x0, int *y0, int *x1, int *y1);
+int gui_pointer(gui *g, int *x, int *y);
+void gui_stats(gui *g, u32 *commands, u32 *presents, u32 *events, u32 *flips);
+/* memory as a device reaches it (dev.c), and a space's own (mmu.c) */
+i64 dev_dma(machine *m, u32 addr, i32 len, int write, int pin);
+u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out);
+i64 mmu_dma_space(machine *m, u32 ptbr, u32 addr, i32 len, int write);
+i32 mmu_ptbr(mmu *u);
 void plat_fatal(const char *msg);      /* never returns */
 
 /* the little of libc the engine uses: the PC build has its own (pc/libc.c) */

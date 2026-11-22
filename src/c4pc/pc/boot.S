@@ -1,11 +1,14 @@
 /* boot.S -- c4pc's way in: a multiboot v1 header (GRUB, QEMU's -kernel),
  * a stack, and the interrupt stubs pc.c's IDT points at. */
 #define MB_MAGIC 0x1BADB002
-#define MB_FLAGS 0x00000003        /* modules page-aligned, memory info */
+#define MB_FLAGS 0x00000007        /* modules page-aligned, memory info, a video mode */
 
         .section .multiboot, "a"
         .align 4
         .long MB_MAGIC, MB_FLAGS, -(MB_MAGIC + MB_FLAGS)
+        .long 0, 0, 0, 0, 0         /* the addresses: the ELF's own */
+        .long 0, 1024, 768, 32      /* linear graphics, 1024 x 768 x 32, if the loader will
+                                     * (GRUB; gfxpayload=text keeps text). screen.c */
 
         .text
         .globl _start

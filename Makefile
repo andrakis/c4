@@ -3192,15 +3192,18 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # flags, so that it can be held against libjs; c4pc.elf is a multiboot
 # kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
 C4PC_SRC  := src/c4pc
-C4PC_MODS := engine mmu accel dev gui font heap fmt fpu drive util \
+C4PC_MODS := engine mmu accel dev gui font heap fmt fpu drive util snd opl \
 	games/doom games/duke3d games/quake games/rott games/sbk games/tyrian games/wolf3d
-C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h $(C4PC_SRC)/font.h $(C4PC_SRC)/accel.h
+C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h $(C4PC_SRC)/font.h $(C4PC_SRC)/accel.h $(C4PC_SRC)/snd.h
 # The display's faces (font.c), as tables mkfont.py makes from the system's
 # free fonts (fonttools): DejaVu and Liberation, in gui.c's FONTMAP order
 C4PC_FONTDIR ?= /usr/share/fonts/truetype
 C4PC_FONTS := $(addprefix $(C4PC_FONTDIR)/,dejavu/DejaVuSansMono.ttf liberation/LiberationSans-Regular.ttf \
 	liberation/LiberationSans-Bold.ttf liberation/LiberationMono-Regular.ttf dejavu/DejaVuSans.ttf dejavu/DejaVuSans-Bold.ttf \
 	liberation/LiberationSerif-Regular.ttf liberation/LiberationSerif-Bold.ttf)
+# The OPL's tables (opl.c), as libjs's: one source for both machines
+.c4pc/opltables.c: $(C4PC_SRC)/mkopl.py libjs/opl-tables.js
+	mkdir -p .c4pc && python3 -I $(C4PC_SRC)/mkopl.py $@ libjs/opl-tables.js
 .c4pc/fontdata.c: $(C4PC_SRC)/mkfont.py
 	mkdir -p .c4pc && python3 -I $(C4PC_SRC)/mkfont.py $@ $(C4PC_FONTS)
 # The images it runs, and what makes them. To build from another tree
@@ -3213,13 +3216,13 @@ C4PC_IMAGES_DEP ?= c4bb-images
 C4PC_CFLAGS := -O2 -g -Wall -Wno-unused-parameter -fwrapv -fno-strict-aliasing -fno-math-errno -fno-tree-slp-vectorize
 # i486: what DOSBox's cores and every emulator here run; the x87 for floats
 C4PC_BARE_CFLAGS := -m32 -march=i486 -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
-c4pc-host: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) $(C4PC_HDRS) .c4pc/fontdata.c
-	$(NATIVE_CC) $(C4PC_CFLAGS) -I$(C4PC_SRC) $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) .c4pc/fontdata.c -o $@ -lm
-c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/libc.c \
-		$(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c
+c4pc-host: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
+	$(NATIVE_CC) $(C4PC_CFLAGS) -I$(C4PC_SRC) $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) .c4pc/fontdata.c .c4pc/opltables.c -o $@ -lm
+c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/libc.c \
+		$(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	gcc $(C4PC_BARE_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
-		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/libc.c \
-		$(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c
+		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/libc.c \
+		$(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 # The DOS loader (src/c4pc/dos): boots c4pc.elf from DOS, for DOSBox.
 # gcc -m16 is 32-bit C run in real mode, in one 64 KB segment.
 C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com.ld

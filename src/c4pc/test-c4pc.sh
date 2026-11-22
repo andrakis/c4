@@ -105,6 +105,21 @@ for want in Filesystem Terminal "Text Editor" Calculator Integer Double; do
   grep -q " $want\$\| $want " $W/gui-texts.txt && ok "the display draws '$want'" || bad "the display draws '$want'"
 done
 grep -h 'display:' $W/gui.err | sed 's/^/        /'
+# The sound card (snd.c, opl.c): Rise of the Triad's timedemo on the bare
+# machine with a card fitted (--wav), its OPL music and its samples: the
+# same WAV from libjs and from c4pc-host, sample for sample. Where the
+# images have the game and its data (a full build's).
+if [ -f $IMAGES/games/rott.c4r ] && [ -f $IMAGES/games/HUNTBGIN.WAD ]; then
+  echo "  ---   the sound card, on Rise of the Triad's timedemo 4"
+  top=$PWD
+  ( cd $IMAGES/games && timeout 600 node $top/libjs/cli.js -m 64 -d . --wav $top/$W/snd-js.wav rott.c4r --timedemo 4 > /dev/null 2>&1 )
+  ( cd $IMAGES/games && timeout 600 $top/c4pc-host -s -m 64 -d . --wav $top/$W/snd-pc.wav rott.c4r --timedemo 4 > /dev/null 2> $top/$W/snd-pc.err )
+  if [ -s $W/snd-js.wav ] && cmp -s $W/snd-js.wav $W/snd-pc.wav; then ok "the same WAV on both ($(stat -c %s $W/snd-pc.wav) bytes)"
+  else bad "the WAVs differ"; cmp $W/snd-js.wav $W/snd-pc.wav | head -2; fi
+  grep -h 'sound:' $W/snd-pc.err | sed 's/^/        /'
+else
+  echo "  skip  the sound card (no rott.c4r and its data in $IMAGES/games)"
+fi
 # test-libjs's programs with a native oracle, on both
 progs=$(IMAGES=$IMAGES bash src/c4pc/test-c4pc-progs.sh); r=$?
 echo "$progs" | grep -v '^test-c4pc-progs: '

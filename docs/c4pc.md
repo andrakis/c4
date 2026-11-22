@@ -17,7 +17,9 @@ run there unchanged. It is in `src/c4pc/`.
 | done | at the keyboard, the real clock: games drop frames on a slow PC rather than play in slow motion or at uneven speed; the screen written a row at a time, write-combined through the PAT; the console drawn on a framebuffer while no program has the display |
 | done | the games' accelerators (games/NAME.c, each game's c4/accel.mjs in C): Doom, Duke Nukem 3D, Quake, Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, behind libjs's loader numbers as its full build lists them |
 | *measured* | every game's acceltest passes on c4pc-host and on c4pc.elf in QEMU, with libjs's count of cases; every game's timedemo shows the same frames with them and without, on the bare machine and inside C4IX under the MMU; a timedemo takes a sixth to a half of the time it did (section Speed) |
-| not yet | sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8) |
+| done (M5) | the sound card (snd.c, opl.c): libjs's device at 0x480 and its mixer, the AdLib (DOSBox's dbopl, as libjs/opl.js has it), sixteen sample channels and the speaker, in C; on a PC played through a Sound Blaster 16 (pc/sb16.c); `c4pc-host --wav` as cli.js's |
+| *measured* | on c4pc-host, Rise of the Triad's timedemo 4 and Doom's demo3 with a card fitted give the WAV cli.js --wav gives, byte for byte (8,619,724 and 15,956,420 bytes; test-c4pc holds the first); on c4pc.elf in QEMU with KVM and -device sb16, Doom's demo3 plays its music and sounds through the card (QEMU's wav audiodev records them) at 190 frames a second |
+| not yet | persistent storage (M6), real SMP (M7), x86-64 (M8), General MIDI (no synth: games play the AdLib) |
 
 ## One engine, two front ends
 
@@ -30,13 +32,15 @@ src/c4pc/
   accel.c accel.h       libjs/accel.js's loader and kit; src/c4ix/accel.mjs: C4IX's inflater and CRC-32
   games/                the games' accelerators, games/NAME/c4/accel.mjs each in C
   gui.c                 libjs/gui-device.js's display at 0x400, and display.js's drawing
+  snd.c snd.h           libjs/snd-device.js's sound card at 0x480, and snd-mix.js's mixer
+  opl.c mkopl.py        libjs/opl.js: the OPL2/OPL3 (DOSBox's dbopl), its tables from libjs/opl-tables.js
   font.c mkfont.py      the display's text: outlines from the system's free fonts, filled at any size
   heap.c                libjs/heap.js, block for block
   fmt.c                 libjs/printf.js (PRTF), with JavaScript's float formatting
   fpu.c                 src/c4bb/sim/fpu.js (F3) and c4m.js's FLT
   drive.c util.c        drives (and ustar archives as drives), maps, blobs
   host.c                c4pc-host: Linux, with libjs/cli.js's flags
-  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), libc.c, link.ld
+  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c (sound), libc.c, link.ld
   dos/                  C4PC.COM: the DOS loader
   test-c4pc.sh          make test-c4pc: C4IX on libjs, c4pc-host and QEMU, without an MMU and with one
   test-c4pc-mmu.sh      ... test-c4ix-mmu.mjs's wild programs, on libjs, c4pc-host and QEMU
@@ -66,8 +70,8 @@ without the windows' offsets while they are all 0 and hands over to the
 general one, a cycle later, when one is not; mmu.c has one loop and
 counts that cycle the same way, so that the two agree to the cycle.
 
-**What differs from libjs.** One CPU; no display, sound, mailbox or
-downloads, so INFO says so and C4IX does without. Past
+**What differs from libjs.** One CPU; no mailbox, downloads or General
+MIDI synth, so INFO says so and C4IX does without. Past
 the arena's end libjs's typed arrays read 0 and drop the write, where
 c4pc's word index wraps inside the arena: only a wild program can tell.
 
@@ -140,6 +144,35 @@ checksums docs/accel.md gives. On c4pc-host, seconds without and with:
 | Super Blit Kart -demo | 133.6 / 25.9 | |
 | Duke Nukem 3D, 600 frames of the script | 14.7 / 8.2 | 27.3 / 13.0 |
 | Quake demo3 | 47.7 / 25.1 | 61.7 / 29.6 |
+
+### Sound
+
+snd.c is libjs/snd-device.js and snd-mix.js in C: the card's registers
+at 0x480 (bus.js), the events they make stamped with the card's clock
+(OPL writes at the stream's cursor, which WAIT moves on, the rest at
+now), and the mixer that makes them samples: opl.c (libjs/opl.js, which
+is DOSBox's dbopl line for line, its tables from libjs/opl-tables.js
+through mkopl.py), sixteen channels of 8-bit samples, the PC speaker's
+square wave, the card's MASTER, each stage rounded to a single as the
+page's Float32Arrays round it. CAPS says there is no General MIDI synth,
+so a game plays its music on the AdLib.
+
+`c4pc-host --wav FILE` fits the card and writes the session's sound when
+it ends, as cli.js's `--wav`: the card's now is the machine's clock
+(cycles and sleeps), so the file is the same every time, and libjs's,
+sample for sample.
+
+On a PC the card is fitted at the keyboard when there is a Sound Blaster
+16 (pc/sb16.c: the DSP's reset at 0x220 or 0x240, version 4 or more, the
+16-bit DMA channel its mixer names): `c4pc: sound: SB16 at 220h, DSP
+4.5, 16-bit DMA 5`. The mixer's output goes round a ring of 8,192 frames
+at 44,100 Hz by the DSP's auto-initialised DMA, and the run loop, after
+every slice and at every tick it waits through, reads how far the DMA
+has got and mixes the ring 2,048 frames (46 ms) ahead of it again; no
+interrupt reaches the CPU. The card's now is then the real clock, and the
+events of now go 10 ms after the last frame made. QEMU (`-device sb16`),
+DOSBox, DOSBox-X and VMware (`sound.virtualDev = "sb16"` in the VM's
+.vmx) have one; `--no-sound` leaves it be. A PC without one runs silent.
 
 ## Running it
 

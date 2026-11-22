@@ -76,6 +76,7 @@ enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OP
 #define C4I_MMU   0x80000
 #define C4I_ACCEL 0x100000
 #define C4I_GUI   0x4000
+#define C4I_SND   0x8000
 /* the accelerators' numbers (libjs/accel.js, accel.c) */
 #define ACC_BASE 0x1000
 #define ACC_END  0x2000
@@ -178,6 +179,8 @@ struct machine {
   int accel, osaccel;
   /* the display, when one is fitted (gui.c): the registers at 0x400-0x47F */
   gui *gui;
+  /* the sound card, when one is fitted (snd.c): the registers at 0x480-0x4FF */
+  struct snd *snd;
   i32 fpu_v;
   i32 rom_stores;
   heap *heap;
@@ -328,6 +331,7 @@ int drive_add_tar(drive *d, u8 *tar, u32 len);
 
 /* ---- what the platform gives ---- */
 i64 plat_now_ms(void);                 /* a real millisecond clock */
+double plat_now_us(void);              /* ... and in microseconds, for the sound card */
 i32 plat_clock_secs(void);             /* the local time of day, in seconds since midnight */
 
 /* ---- the display (gui.c) ---- */

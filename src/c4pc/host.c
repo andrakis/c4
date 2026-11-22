@@ -20,11 +20,17 @@
 #include <poll.h>
 #include <termios.h>
 #include <errno.h>
+#include "snd.h"
 
 i64 plat_now_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (i64)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+double plat_now_us(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec * 1e6 + ts.tv_nsec / 1000.0;
 }
 void plat_fatal(const char *msg) { fflush(stdout); fprintf(stderr, "%s\n", msg); exit(70); }
 
@@ -197,13 +203,13 @@ static FILE *texts;
 static void text_hook(int x, int y, const char *s, int n) { fprintf(texts, "%d %d %.*s\n", x, y, n, s); }
 
 static void usage(void) {
-  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--no-accel] [--no-osaccel] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
+  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
   exit(1);
 }
 
 int main(int argc, char **argv) {
   u32 mb = 32; double maxc = -1, mhz = 20; int stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0;
-  const char *shot = 0;
+  const char *shot = 0, *wav = 0;
   drive *drives[16]; int nd = 0;
   int i = 1;
   for (; i < argc && argv[i][0] == '-'; i++) {
@@ -228,6 +234,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(f, "--gui") && i + 1 < argc) { if (sscanf(argv[++i], "%dx%d", &gw, &gh) != 2) usage(); }   /* fit a display (gui.c) */
     else if (!strcmp(f, "--events") && i + 1 < argc) load_events(argv[++i]);
     else if (!strcmp(f, "--shot") && i + 1 < argc) shot = argv[++i];    /* the display as a PNG at the end */
+    else if (!strcmp(f, "--wav") && i + 1 < argc) wav = argv[++i];      /* cli.js's: fit a sound card, write what it played */
     else if (!strcmp(f, "--texts") && i + 1 < argc) {
       extern void (*gui_text_hook)(int, int, const char *, int);
       if (!(texts = fopen(argv[++i], "w"))) { fprintf(stderr, "c4pc: cannot write %s\n", argv[i]); return 1; }
@@ -250,6 +257,7 @@ int main(int argc, char **argv) {
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
   if (gw > 0 && gh > 0) m->gui = gui_new(m, gw, gh);
+  if (wav) m->snd = snd_new(m, 44100, 0);
   if (!inter && !isatty(0)) {
     int c;
     while ((c = getchar()) != EOF) kbd_push(m, c);
@@ -303,6 +311,15 @@ int main(int argc, char **argv) {
   }
   flush_out();
   if (raw) tcsetattr(0, TCSANOW, &saved);
+  if (m->snd) {
+    u32 n, w, p; u8 *b = snd_wav(m->snd, &n);
+    FILE *f = fopen(wav, "wb");
+    if (!f || fwrite(b, 1, n, f) != n) fprintf(stderr, "c4pc: cannot write %s\n", wav);
+    if (f) fclose(f);
+    free(b);
+    snd_stats(m->snd, &w, &p);
+    if (stats) fprintf(stderr, "c4pc: sound: %u OPL writes, %u samples played\n", w, p);
+  }
   if (m->gui && shot) { int w, h; u32 *px = gui_front(m->gui, &w, &h); write_png(shot, px, w, h); }
   if (m->gui && stats) { u32 c, p, e, fl; gui_stats(m->gui, &c, &p, &e, &fl); fprintf(stderr, "c4pc: display: %u commands, %u presents, %u flips, %u events\n", c, p, fl, e); }
   if (stats) {

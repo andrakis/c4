@@ -17,6 +17,9 @@
  */
 #include "../c4pc.h"
 #include "../clib.h"
+#include "../snd.h"
+const char *sb16_init(snd *s);
+void sb16_poll(void);
 
 /* the clock -hz auto sets: this share, in percent, of machine_kips's
  * loop rate (pc_main) */
@@ -188,6 +191,13 @@ i64 plat_now_ms(void) {
   uint64_t step = (uint64_t)tsc_per_ms * 256;
   while (d >= 0x80000000u) { tsc_at += step; tsc_ms += 256; d -= step; }
   return tsc_ms + (u32)d / tsc_per_ms;
+}
+/* the same in microseconds, for the sound card (snd.c) */
+double plat_now_us(void) {
+  if (!tsc_per_ms) return (double)ticks_now() * 1000;
+  (void)plat_now_ms();                        /* tsc_at folded on: what is left is under 2^31 */
+  u32 d = (u32)(rdtsc() - tsc_at);
+  return (double)tsc_ms * 1000 + (double)d * 1000 / tsc_per_ms;
 }
 static inline void cpuid_(u32 l, u32 *a, u32 *b, u32 *c, u32 *d) { __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(l), "c"(0)); }
 /* the TSC's cycles in 30 ms of the PIT's channel 2 (1193182 Hz) */
@@ -475,7 +485,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -498,6 +508,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--fast")) fast = 1;
     else if (!strcmp(args[a], "--no-realtime")) realtime = 0;
     else if (!strcmp(args[a], "--no-wc")) wc = 0;
+    else if (!strcmp(args[a], "--no-sound")) sound = 0;
     else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : -1; }
     else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
     else if (!strcmp(args[a], "--no-mmu")) mmu_on = 0;
@@ -588,6 +599,14 @@ void pc_main(u32 magic, struct mb_info *mb) {
     vga_real = 0;                       /* graphics: the VGA's text is not shown */
     screen_console(vtext, vy * 80 + vx);
   }
+  /* the sound card (snd.c), at the keyboard, on a Sound Blaster 16 (sb16.c):
+   * scripted or --fast, the machine's clock is not the one it would play to */
+  if (paced && sound) {
+    snd *s = snd_new(m, 44100, 1);
+    const char *how = sb16_init(s);
+    if (how) { m->snd = s; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); }
+    else con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h\n");
+  }
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU, running " : " MB arena, running ");
   con_puts(img_name); con_puts("\n");
@@ -628,6 +647,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
      * second; scripted, or with --fast, as fast as it goes */
     i64 slice = paced ? (i64)m->cycles_per_ms * 4 : 20000000;
     int r = machine_run(m, left < slice ? left : slice);
+    if (m->snd) sb16_poll();
     if (m->gui) display_tick(m);
     /* -s at the keyboard: every 10 s, on COM1 alone, how the PC kept up */
     if (stats && paced) {
@@ -639,7 +659,9 @@ void pc_main(u32 magic, struct mb_info *mb) {
         com1_only = 1;
         con_puts("c4pc: "); con_dec((ran - rep_cyc) / dt); con_puts("k inst/s, ");
         con_dec((display_ms - rep_disp) * 100 / dt); con_puts("% drawing to the screen, ");
-        con_dec((idle_ms - rep_idle) * 100 / dt); con_puts("% idle\n");
+        con_dec((idle_ms - rep_idle) * 100 / dt); con_puts("% idle");
+        if (m->snd) { extern u32 sb16_underruns; con_puts(", "); con_dec(sb16_underruns); con_puts(" sound underruns"); }
+        con_puts("\n");
         com1_only = 0;
         rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_idle = idle_ms;
       }
@@ -649,6 +671,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
       if (have_in) { con_puts("c4pc: blocked on input with nothing left to read\n"); status = 8; break; }
       con_flush();
       i64 t = plat_now_ms();
+      if (m->snd) sb16_poll();
       __asm__ volatile("sti; hlt");           /* until a key, or the next tick */
       parked += plat_now_ms() - t;
       continue;
@@ -661,7 +684,10 @@ void pc_main(u32 magic, struct mb_info *mb) {
         i64 now = plat_now_ms(), until = t0 + m->nap_until;
         if (m->pit_ms && m->pit_next < until) until = m->pit_next;
         if (until > now + 100) until = now + 100;
-        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) __asm__ volatile("sti; hlt");
+        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
+          if (m->snd) sb16_poll();
+          __asm__ volatile("sti; hlt");
+        }
         idle_ms += plat_now_ms() - now;
       }
     } else if (paced) {
@@ -669,7 +695,10 @@ void pc_main(u32 magic, struct mb_info *mb) {
       if (ahead > 2) {
         con_flush();
         i64 until = plat_now_ms() + (ahead < 100 ? ahead : 100);
-        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) __asm__ volatile("sti; hlt");
+        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
+          if (m->snd) sb16_poll();
+          __asm__ volatile("sti; hlt");
+        }
         /* input during a nap: the guest wakes now, and its clock gets only
          * what it slept (libjs/worker.js wake). Kept whole, every pointer
          * move gave it a nap's worth of time, and two clicks a moment apart

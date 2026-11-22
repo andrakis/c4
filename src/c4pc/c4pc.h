@@ -194,6 +194,10 @@ struct machine {
   u8 *rx; u32 rx_head, rx_tail, rx_cap;
   int rx_eof, rx_starved, raw_kbd;
   i64 sleep_ms; i64 nap_ms;
+  /* wall: TIME is the real clock, ms since wall_base (plat_now_ms), and a
+   * nap ends at nap_until on it (pc.c, at the keyboard); else TIME is
+   * cycles / MHz plus what was slept, the same every run */
+  int wall; i64 wall_base, nap_until;
   u32 cycles_per_ms;
   i64 t0;
   i32 pit_ms, pit_armed; i64 pit_next;

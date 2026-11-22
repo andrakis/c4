@@ -448,6 +448,7 @@ static i32 uart_write(machine *m, i32 len) {
 }
 
 i64 machine_sim_ms(machine *m) {
+  if (m->wall) return (i32)(plat_now_ms() - m->wall_base);
   return (i32)(m->cycle / m->cycles_per_ms + m->sleep_ms);
 }
 
@@ -554,6 +555,7 @@ void dev_write32(machine *m, u32 addr, i32 val) {
       i64 ms = (i64)(val / 1000);
       m->nap_ms = ms > 1 ? ms : 1;
       m->sleep_ms += m->nap_ms;
+      m->nap_until = machine_sim_ms(m) + m->nap_ms;
       return;
     }
     case OPNAME: { char s[17]; dma_cstring(m, (u32)val, s, 16); m->opname_result = dev_opcode_by_name(s); return; }

@@ -535,7 +535,14 @@ void pc_main(u32 magic, struct mb_info *mb) {
   con_puts(img_name); con_puts("\n");
   if (machine_boot(m, img, img_len, pargc, pargv)) power_off(75);
 
-  i64 t0 = plat_now_ms(), parked = 0, behind_ms = 0;
+  i64 t0 = plat_now_ms(), parked = 0, idle_ms = 0;
+  /* At the keyboard the machine's clock is the real one (--no-realtime:
+   * its own, cycles / MHz, stretching when the PC falls behind). Given the
+   * cycles' clock and pulled up to the real one only between slices, as
+   * libjs's page does, TIME crawled through a frame and then jumped: Duke
+   * Nukem 3D said 40 to 240 frames a second, and turned at a speed that
+   * jumped with them. Timers (PIT, the display's TICKS) were real already */
+  if (paced && realtime) { m->wall = 1; m->wall_base = t0; }
   i64 limit = maxc < 0 ? INT64_MAX : maxc;
   int status;
   for (;;) {
@@ -566,7 +573,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (m->gui) display_tick(m);
     /* -s at the keyboard: every 10 s, on COM1 alone, how the PC kept up */
     if (stats && paced) {
-      static i64 rep_at, rep_cyc, rep_disp, rep_behind;
+      static i64 rep_at, rep_cyc, rep_disp, rep_idle;
       i64 now = plat_now_ms();
       if (!rep_at) { rep_at = now; rep_cyc = m->cycle - m->skipped; }
       else if (now - rep_at >= 10000) {
@@ -574,9 +581,9 @@ void pc_main(u32 magic, struct mb_info *mb) {
         com1_only = 1;
         con_puts("c4pc: "); con_dec((ran - rep_cyc) / dt); con_puts("k inst/s, ");
         con_dec((display_ms - rep_disp) * 100 / dt); con_puts("% drawing to the screen, ");
-        con_dec((behind_ms - rep_behind) * 100 / dt); con_puts("% of the clock skipped\n");
+        con_dec((idle_ms - rep_idle) * 100 / dt); con_puts("% idle\n");
         com1_only = 0;
-        rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_behind = behind_ms;
+        rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_idle = idle_ms;
       }
     }
     if (r == STOP_HALT) { status = m->status; break; }
@@ -588,7 +595,18 @@ void pc_main(u32 magic, struct mb_info *mb) {
       parked += plat_now_ms() - t;
       continue;
     }
-    if (paced) {
+    if (paced && m->wall) {
+      /* a nap: wait for the real time it asked to wake at, or the PIT's
+       * next tick, or input (which ends it early, as an interrupt would) */
+      if (r == STOP_SLEEP) {
+        con_flush();
+        i64 now = plat_now_ms(), until = t0 + m->nap_until;
+        if (m->pit_ms && m->pit_next < until) until = m->pit_next;
+        if (until > now + 100) until = now + 100;
+        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) __asm__ volatile("sti; hlt");
+        idle_ms += plat_now_ms() - now;
+      }
+    } else if (paced) {
       i64 ahead = machine_sim_ms(m) - (plat_now_ms() - t0 - parked);
       if (ahead > 2) {
         con_flush();
@@ -603,15 +621,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
           if (a2 > 0) { i64 cut = a2 < m->nap_ms ? a2 : m->nap_ms; m->sleep_ms -= cut; m->nap_ms -= cut; }
         }
       }
-      /* Behind: the machine's clock is the wall's (libjs's realtime, the
-       * page's default). TIME moves on by what the CPU could not get done,
-       * so a PC slower than the clock asked for gives the guest fewer
-       * cycles a second, not a slower second: a game drops frames rather
-       * than playing in slow motion. What falls behind: the games' own
-       * work, dearer than -hz auto's loop, and the drawing and the screen.
-       * --no-realtime: the machine's second stretches instead */
-      else if (realtime && ahead < -20) { m->sleep_ms += -ahead; behind_ms += -ahead; }
-      else if (!realtime && ahead < -1000) parked += -ahead - 1000;
+      /* hopelessly behind: stop trying to catch up (worker.js) */
+      else if (ahead < -1000) parked += -ahead - 1000;
     }
   }
   con_flush();
@@ -621,7 +632,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     con_puts("c4pc: "); con_dec(ran); con_puts(" cycles in "); con_dec(dt); con_puts(" ms (");
     con_dec(dt > 0 ? ran / dt : 0); con_puts("k inst/s), status "); con_dec(status); con_puts("\n");
     if (m->gui) { con_puts("c4pc: "); con_dec(display_ms); con_puts(" ms drawing to the screen\n"); }
-    if (behind_ms) { con_puts("c4pc: the clock moved on "); con_dec(behind_ms); con_puts(" ms the machine could not keep up with\n"); }
+    if (m->wall) { con_puts("c4pc: "); con_dec(idle_ms); con_puts(" ms idle, on the real clock\n"); }
     con_puts("c4pc: heap "); con_dec(heap_used(m->heap) / 1024); con_puts(" KB in use at exit, ");
     con_dec(heap_peak(m->heap) / 1024); con_puts(" KB at most; host memory free "); con_dec(pc_heap_free_bytes >> 10); con_puts(" KB\n");
   }

@@ -14,7 +14,7 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | with them and the MMU: the session byte for byte libjs's (its build listing os/c4ix), in its 111,571,007 cycles, on c4pc-host and in QEMU: 13 times fewer than C4IX's own C |
 | done (M4) | the display (gui.c): libjs's device at 0x400, its rings and IRQ, the page's drawing done in C with c4pc's own faces (font.c); on a PC a VBE framebuffer from GRUB or the BGA, the PS/2 mouse, the keyboard to the display |
 | *measured* | C4IX's desktop from the ISO under KVM, mouse and keyboard; on c4pc-host, scripted, in `make test-c4pc`; in DOSBox-X through C4PC.COM's VESA mode; Doom from the desktop at the clock's whole rate under KVM, 1% of the time drawing |
-| done | the clock the wall's when the PC falls behind (libjs's realtime): games drop frames rather than play in slow motion; the screen written a row at a time, write-combined through the PAT; the console drawn on a framebuffer while no program has the display |
+| done | at the keyboard, the real clock: games drop frames on a slow PC rather than play in slow motion or at uneven speed; the screen written a row at a time, write-combined through the PAT; the console drawn on a framebuffer while no program has the display |
 | not yet | sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), games' accelerators |
 
 ## One engine, two front ends
@@ -133,26 +133,35 @@ text screen in the ssh terminal (the wrapper sets `QEMU_MODULE_DIR` so
 that QEMU finds the unpacked ui-curses module), and `-vnc :1` serves it
 to a VNC viewer on port 5901.
 
-**At the keyboard**, with no `stdin` module, c4pc paces the machine to
-its own clock as libjs/worker.js does (4 simulated milliseconds at a
-time, then a wait for the real clock to catch up), so that `top` redraws
-once a second; `--fast` turns that off.
+**At the keyboard**, with no `stdin` module, the machine's clock is the
+real one: TIME (and `/proc/uptime`) are milliseconds since the boot on
+the PIT's clock, as the display's TICKS and the PIT's interrupt already
+were. The machine runs flat out in slices of 4 ms' worth of cycles, and
+a nap (USLP) waits for the real time it asked to wake at, or the PIT's
+next tick, or a key or the mouse, which end it early as an interrupt
+would. A game sees each frame's real length, whatever the PC keeps up
+with: a slower PC gives it fewer frames, never slower ones.
 
-When the PC cannot keep up with the clock, the clock is the wall's, as
-libjs's page has it by default (worker.js, `realtime`): more than 20 ms
-behind, TIME moves on by what the CPU could not do, so a game gets fewer
-cycles a second, drops frames and keeps its speed, instead of playing in
-slow motion. `--no-realtime` lets the machine's second stretch instead
-(libjs's `?realtime=0`). What falls behind is the games' own work, dearer
-than the calibration's loop, and the drawing: before the screen was
-written a row at a time (below), Doom from the desktop under KVM spent
-20% of the time drawing to the screen and the clock fell 20% behind,
-which is how Duke Nukem 3D came to say 50 to 250 frames a second and
-move in slow motion in VMware. `-s` at the keyboard says every 10
-seconds on COM1 (not on the screen) how the PC kept up: `c4pc: 128262k inst/s, 1% drawing to
-the screen, 2% of the clock skipped`; at the end, the totals.
+First (ea38e68) TIME was the cycles' clock, cycles / MHz plus what was
+slept, pulled up to the real one between slices when more than 20 ms
+behind, as libjs's page does (worker.js, `realtime`). That cured the slow
+motion of a PC falling behind -- Duke Nukem 3D in VMware said 50 to 250
+frames a second and moved in slow motion -- but within a slice TIME
+crawled at the cycles' rate and then jumped: Duke then said 40 to 240,
+and turned at a speed that jumped with the frame rate. `--no-realtime`
+keeps the cycles' clock, paced as cli.js `-i` paces it (a simulated
+second stretching when the PC falls behind); a scripted run (a `stdin`
+module) or `--fast` keeps it unpaced, cycle for cycle libjs's.
 
-The clock is then one the PC keeps up with: before the boot, c4pc times
+What falls behind is the games' own work, dearer than the calibration's
+loop, and the drawing: before the screen was written a row at a time
+(below), Doom from the desktop under KVM spent 20% of the time drawing to
+the screen. `-s` at the keyboard says every 10 seconds on COM1 (not on
+the screen) how the PC kept up: `c4pc: 120779k inst/s, 2% drawing to the
+screen, 0% idle`; at the end, the totals.
+
+The cycles' clock (`--no-realtime`; and the slices' size) is one the PC
+keeps up with: before the boot, c4pc times
 the interpreter for 100 ms on a loop of a scratch machine (engine.c
 `machine_kips`: locals, a call, and a load from across 16 MB each time
 round) and sets the clock to three quarters of that rate, saying so:

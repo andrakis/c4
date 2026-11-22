@@ -7,15 +7,18 @@ run there unchanged. It is in `src/c4pc/`.
 | status | what |
 |---|---|
 | done (M0, M1) | the engine, devices, heap, formatter and FPU, as libjs has them; multiboot; GDT, IDT, PIC, PIT; COM1; VGA text with enough ANSI for a shell; the keyboard; drives from tar archives; the DOS loader |
+| done (M2) | the MMU, libjs/mmu.js as it is (`--mmu`): its registers, the TLB arrays and the stack and code windows, the user loop, faults, the user window, devices checked against the task's space, swap through the window |
 | *measured* | C4IX boots, runs `ps` and shuts down with output byte for byte libjs's, in the same 1,474,118,389 cycles, on c4pc-host, on c4pc.elf in QEMU (`make test-c4pc`), and in DOSBox-X through C4PC.COM; test-libjs's 27 native-oracle programs print what they print on libjs, with the same status |
-| not yet | the MMU (M2), the display and mouse (M4), sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), accelerators |
+| *measured* | with the MMU: the same session byte for byte libjs `--mmu`'s, in its 1,500,630,450 cycles, on c4pc-host and on c4pc.elf in QEMU; test-c4ix-mmu.mjs's cases but the display's (test-c4pc-mmu.sh) are killed by the page faults that test names, byte for byte and cycle for cycle as libjs, on c4pc-host and in QEMU |
+| not yet | the display and mouse (M4), sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), accelerators |
 
 ## One engine, two front ends
 
 ```
 src/c4pc/
   c4pc.h  clib.h        the machine, and the C library calls it makes
-  engine.c              libjs/c4m.js's interpreter, traps and syscalls; boot.js's loader and trampoline
+  engine.c              libjs/c4m.js's interpreter, traps and syscalls, the user window; boot.js's loader and trampoline
+  mmu.c                 libjs/mmu.js: the MMU's registers, translation, the user loop; arena.js's kernel map
   dev.c                 src/c4bb/sim/devices.js: the registers at 0x100-0x1FF
   heap.c                libjs/heap.js, block for block
   fmt.c                 libjs/printf.js (PRTF), with JavaScript's float formatting
@@ -24,7 +27,8 @@ src/c4pc/
   host.c                c4pc-host: Linux, with libjs/cli.js's flags
   pc/                   c4pc.elf: boot.S, pc.c (the PC), libc.c, link.ld
   dos/                  C4PC.COM: the DOS loader
-  test-c4pc.sh          make test-c4pc: C4IX on libjs, c4pc-host and QEMU
+  test-c4pc.sh          make test-c4pc: C4IX on libjs, c4pc-host and QEMU, without an MMU and with one
+  test-c4pc-mmu.sh      ... test-c4ix-mmu.mjs's wild programs, on libjs, c4pc-host and QEMU
   test-c4pc-progs.sh    ... and test-libjs's native-oracle programs on libjs and c4pc-host
 ```
 
@@ -40,12 +44,22 @@ comments' reasons, so that a change to libjs has one obvious place to go.
 c4pc-host takes cli.js's flags (`-m -c -s -d -w -i -hz`), so one can stand
 in for the other in a test.
 
-**What differs from libjs.** One CPU; no MMU, so C4IX runs as libjs runs
-it with `--no-mmu`; no display, sound, mailbox, downloads or accelerators,
-so INFO says so and C4IX does without (its root archive unpacks in its own
-C, as with libjs's `--no-osaccel`). Past the arena's end libjs's typed
-arrays read 0 and drop the write, where c4pc's word index wraps inside the
-arena: only a wild program can tell.
+**The MMU.** `--mmu` (c4pc-host's flag, and c4pc.elf's on its command
+line) fits mmu.c, as cli.js's does; INFO then has C4I_MMU, and C4IX turns
+it on. Without it C4IX runs as libjs runs it with `--no-mmu`, the default
+of both. mmu.js throws a FAULT from deep in sys(), the FPU or a device;
+mmu.c longjmps instead, to the innermost of the places mmu.js catches it
+(a `c4_jmp_buf` stack through `u->jb`: libc's `_setjmp` on Linux,
+pc/boot.S's own on the bare PC). mmu.js runs a copy of its user loop
+without the windows' offsets while they are all 0 and hands over to the
+general one, a cycle later, when one is not; mmu.c has one loop and
+counts that cycle the same way, so that the two agree to the cycle.
+
+**What differs from libjs.** One CPU; no display, sound, mailbox,
+downloads or accelerators, so INFO says so and C4IX does without (its
+root archive unpacks in its own C, as with libjs's `--no-osaccel`). Past
+the arena's end libjs's typed arrays read 0 and drop the write, where
+c4pc's word index wraps inside the arena: only a wild program can tell.
 
 ## Speed
 
@@ -54,8 +68,11 @@ arena: only a wild program can tell.
 | machine | c4 instructions a second |
 |---|---|
 | libjs (node 24), `--no-accel --no-osaccel` | 153–155M |
-| c4pc-host (gcc -O2, x86-64) | 303–307M |
+| c4pc-host (gcc -O2, x86-64) | 292–312M |
+| libjs `--mmu` (most of the session is user mode, in mmu.js's loop) | 131–135M |
+| c4pc-host `--mmu` | 223–226M |
 | c4pc.elf in QEMU 10.2, TCG (helios has no KVM) | 15.1–15.5M |
+| c4pc.elf `--mmu` in QEMU | 13.6M |
 | c4pc.elf in DOSBox-X 2026.01, dynamic core, `cycles=max`, through C4PC.COM | 13.5M |
 | c4pc.elf in Bochs 2.8 from a GRUB ISO, the disk less the games, `clock: sync=none` | 5.3M (output byte for byte c4pc-host's on the same disk) |
 
@@ -77,8 +94,8 @@ them on PATH (`~/opt/pctools/mkwrap.sh` makes them).
 `-initrd` its modules. The program comes first; a module whose string's
 second word is `drive` is a drive (a ustar archive, `drive rw` writable in
 RAM), and `stdin` is fed to the keyboard up front with end of input, as
-cli.js feeds piped input. `-append` takes cli.js's `-m -c -s -hz`, then
-the program's arguments after `--`. c4pc writes the status to
+cli.js feeds piped input. `-append` takes cli.js's `-m -c -s -hz` and
+`--mmu`, then the program's arguments after `--`. c4pc writes the status to
 isa-debug-exit, so QEMU exits `(status << 1) | 1`.
 
     make c4pc.elf .c4pc/disk.tar
@@ -148,10 +165,9 @@ then needs SIGKILL, ignoring SIGTERM while halted).
 
 ## Next
 
-- **M2, the MMU**: mmu.js's user loop and TLB, so C4IX's user tasks run
-  in their own spaces, as libjs runs them by default.
 - **M3, the console**: `-i`-style pacing to the machine's clock, a
   scrollback, and the keyboard's raw mode as keys.js has it.
 - **M4, the display**: the 0x400 registers on a VBE framebuffer (BGA in
   QEMU and Bochs), bitmap fonts, the PS/2 mouse.
-- A test in the gate: `test-c4pc` takes about two minutes, most of it QEMU.
+- A test in the gate: `test-c4pc` takes about ten minutes, most of it
+  QEMU's three runs (`NO_MMU=1`: three minutes; `NO_QEMU=1`: two).

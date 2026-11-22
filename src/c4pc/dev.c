@@ -32,22 +32,94 @@ struct fdent {
   drive *wd; char *wname; u8 *wbuf; u32 wlen, wcap;   /* a file being written */
 };
 
-/* ---- memory as a device reaches it: no MMU, so an address is itself ---- */
-static u32 dma_read(machine *m, u32 addr, u32 len, u8 *out) {     /* bytes copied */
-  if (addr >= m->size) return 0;
-  if (len > m->size - addr) len = m->size - addr;
-  memcpy(out, m->u8 + addr, len);
+/* ---- memory as a device reaches it (src/c4bb/sim/arena.js dma ...) ----
+ * Every device that reads or writes guest memory at an address it was
+ * handed comes through these, so that a user task under the MMU can only
+ * hand it its own memory: the range is checked against the task's space
+ * (dma_ctx, mmu_dma_check), and a refusal is the task's page fault. In
+ * kernel mode a user address is reached through the window (uwin, udir).
+ * dma: where [addr, addr + len) is, one run of memory, or -1. PIN: the
+ * device may keep the address, so C4IX must not move the pages. */
+static i64 dma(machine *m, u32 addr, i32 len, int write, int pin) {
+  if (m->dma_ctx) return mmu_dma_check(m->dma_ctx, addr, len, write, pin);
+  if (m->uwin && addr >= m->uwin) {
+    if (m->udir) return kernel_phys(m, m->udir, addr, pin);
+    u32 off = addr - m->uwin;
+    return off < m->size ? (i64)off : -1;
+  }
+  return addr;
+}
+/* a page the kernel's map has put out to swap, where kernel mode hands a
+ * device a user address: 1 and the host's copy of it (0: a slot never
+ * written, zeros, unless WRITE, which makes it); 0 if it is not out */
+static int dma_swapped(machine *m, u32 va, int write, u8 **page) {
+  if (m->dma_ctx || !m->udir) return 0;
+  i32 pte = kernel_pte(m, m->udir, va);
+  if ((pte & 1) || !(pte & PTE_SWAP)) return 0;
+  u32 slot = (u32)pte >> 12;
+  u8 *p = imap_get(m->swap_pages, slot);
+  if (!p && write) {
+    if (slot >= m->swap_slots) return 0;
+    p = xmalloc(SWAP_PAGE);
+    imap_set(m->swap_pages, slot, p);
+  }
+  *page = p;
+  return 1;
+}
+static int dma_plain(machine *m, u32 addr) { return !m->dma_ctx && !(m->uwin && addr >= m->uwin); }
+/* a copy of LEN bytes at addr, a page at a time: how many (short past the end) */
+static u32 dma_read(machine *m, u32 addr, u32 len, u8 *out) {
+  if (dma_plain(m, addr)) {
+    if (addr >= m->size) return 0;
+    if (len > m->size - addr) len = m->size - addr;
+    memcpy(out, m->u8 + addr, len);
+    return len;
+  }
+  for (u32 k = 0; k < len;) {
+    u32 va = addr + k, r = len - k < 4096 - (va & 4095) ? len - k : 4096 - (va & 4095);
+    i64 p = dma(m, va, (i32)r, 0, 0);
+    if (p >= 0 && p + r <= m->size) memcpy(out + k, m->u8 + p, r);
+    else {
+      u8 *pg;
+      if (!dma_swapped(m, va, 0, &pg)) return k;
+      if (pg) memcpy(out + k, pg + (va & 4095), r); else memset(out + k, 0, r);
+    }
+    k += r;
+  }
   return len;
 }
+/* ... and LEN bytes written there: how many were (short where memory ends) */
 static u32 dma_write(machine *m, u32 addr, const u8 *b, u32 len) {
-  if (addr >= m->size) return 0;
-  if (len > m->size - addr) len = m->size - addr;
-  memcpy(m->u8 + addr, b, len);
+  if (dma_plain(m, addr)) {
+    if (addr >= m->size) return 0;
+    if (len > m->size - addr) len = m->size - addr;
+    memcpy(m->u8 + addr, b, len);
+    return len;
+  }
+  for (u32 k = 0; k < len;) {
+    u32 va = addr + k, r = len - k < 4096 - (va & 4095) ? len - k : 4096 - (va & 4095);
+    i64 p = dma(m, va, (i32)r, 1, 0);
+    if (p >= 0 && p + r <= m->size) memcpy(m->u8 + p, b + k, r);
+    else {
+      u8 *pg;
+      if (!dma_swapped(m, va, 1, &pg)) return k;
+      memcpy(pg + (va & 4095), b + k, r);
+    }
+    k += r;
+  }
   return len;
 }
 u32 dma_cstring(machine *m, u32 addr, char *out, u32 max) {
   u32 n = 0;
-  while (n < max && addr + n < m->size && m->u8[addr + n]) { out[n] = (char)m->u8[addr + n]; n++; }
+  i64 p = -1;
+  for (u32 k = 0; k < max; k++) {
+    u32 va = addr + k;
+    if (p < 0 || (va & 4095) == 0) { p = dma(m, va, 1, 0, 1); if (p < 0 || p >= m->size) break; }
+    else p++;
+    u8 b = m->u8[p];
+    if (!b) break;
+    out[n++] = (char)b;
+  }
   out[n] = 0;
   return n;
 }
@@ -79,8 +151,9 @@ static i32 tap_drain(machine *m, i32 n) {
   if (n < 0) n = 0;
   if ((u32)n > m->tap_len) n = (i32)m->tap_len;
   u32 a = (u32)m->tap_addr;
-  if (a < 0x1000 || a >= m->size) return 0;
-  if ((u32)n > m->size - a) n = (i32)(m->size - a);
+  int mine = !m->uwin || a < m->uwin;
+  if (a < 0x1000 || (mine && a >= m->size)) return 0;
+  if (mine && (u32)n > m->size - a) n = (i32)(m->size - a);
   dma_write(m, a, m->tap_buf, (u32)n);
   memmove(m->tap_buf, m->tap_buf + n, m->tap_len - (u32)n);
   m->tap_len -= (u32)n;
@@ -115,9 +188,10 @@ static i32 kbd_read(machine *m, u32 addr, i32 len, int nonblock, int raw) {
   }
   i32 n = 0;
   while (n < len && m->rx_head < m->rx_tail) {
-    u32 at = addr + (u32)n;
+    i64 at = dma(m, addr + (u32)n, 1, 1, 1);   /* before the byte leaves the queue */
+    if (at < 0) break;
     int b = kbd_shift(m);
-    arena_write8(m, at, b);
+    arena_write8(m, (u32)at, b);
     n++;
     if (!raw && b == 10) break;
   }
@@ -360,9 +434,16 @@ static i32 disk_unlink(machine *m, u32 name_addr) {
 static i32 uart_write(machine *m, i32 len) {
   if (len <= 0) return 0;
   u32 a = (u32)m->uart_tx_addr, n = (u32)len;
-  if (a >= m->size) return 0;
-  if (n > m->size - a) n = m->size - a;
-  for (u32 i = 0; i < n; i++) { m->uart_activity++; con_byte(m, m->u8[a + i]); }
+  if (dma_plain(m, a)) {
+    if (a >= m->size) return 0;
+    if (n > m->size - a) n = m->size - a;
+    for (u32 i = 0; i < n; i++) { m->uart_activity++; con_byte(m, m->u8[a + i]); }
+    return (i32)n;
+  }
+  static u8 *buf; static u32 cap;
+  if (n > cap) { cap = n; buf = xrealloc(buf, cap); }
+  n = dma_read(m, a, n, buf);
+  for (u32 i = 0; i < n; i++) { m->uart_activity++; con_byte(m, buf[i]); }
   return (i32)n;
 }
 

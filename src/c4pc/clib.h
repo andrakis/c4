@@ -19,8 +19,18 @@ void *calloc(size_t n, size_t k);
 void *realloc(void *p, size_t n);
 void free(void *p);
 void qsort(void *base, size_t n, size_t sz, int (*cmp)(const void *, const void *));
+/* the MMU's way out of a fault (mmu.c): pc/boot.S's, which keeps what
+ * the i386 calling convention says a callee keeps, and the stack and pc */
+typedef unsigned long c4_jmp_buf[6];
+int c4_setjmp(c4_jmp_buf b) __attribute__((returns_twice));
+void c4_longjmp(c4_jmp_buf b, int v) __attribute__((noreturn));
 #else
 #include <string.h>
 #include <stdlib.h>
+#include <setjmp.h>
+/* without the signal mask, which nothing here changes */
+typedef jmp_buf c4_jmp_buf;
+#define c4_setjmp(b) _setjmp(b)
+#define c4_longjmp(b, v) _longjmp(b, v)
 #endif
 #endif

@@ -319,7 +319,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = 20; int stats = 0, nofpu = 0, fast = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = 20; int stats = 0, nofpu = 0, fast = 0, mmu_on = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -330,6 +330,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "-s")) stats = 1;
     else if (!strcmp(args[a], "--no-fpu")) nofpu = 1;
     else if (!strcmp(args[a], "--fast")) fast = 1;
+    else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
+    else if (!strcmp(args[a], "--no-mmu")) mmu_on = 0;
     else if (!strcmp(args[a], "--")) { a++; break; }
     else break;
   }
@@ -376,8 +378,9 @@ void pc_main(u32 magic, struct mb_info *mb) {
   machine *m = machine_new(mb_arena << 20, drives, nd, mhz);
   m->on_byte = on_byte;
   m->no_fpu = nofpu;
+  if (mmu_on) mmu_new(m);
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
-  con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(" MB arena, running ");
+  con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU, running " : " MB arena, running ");
   con_puts(img_name); con_puts("\n");
   if (machine_boot(m, img, img_len, pargc, pargv)) power_off(75);
 

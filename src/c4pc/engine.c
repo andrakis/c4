@@ -1,5 +1,7 @@
 /* engine.c -- the c4m interpreter: libjs/c4m.js's Machine (one CPU, no
- * MMU, no display or sound) and boot.js, in C.
+ * display or sound) and boot.js, in C. The MMU's user loop is mmu.c's;
+ * kernel mode under it runs here, reaching user addresses through the
+ * user window (kpa).
  *
  * Words are int32, addresses byte offsets into the arena. Arithmetic
  * wraps as JavaScript's | 0 does; a shift takes its count mod 32; DIV and
@@ -34,18 +36,7 @@ const char OPNAMES[] =
 #define HEAP_END_REG 0x148
 
 #define W(x) m->w[((u32)(x) >> 2) & m->wmask]
-
-static int has_operand(i32 i) {
-  return i <= OP_ADJ || i == OP_JSRI || i == OP_JSRS || (i >= OP_LDL && i <= OP_IMMP) || i == OP_STL;
-}
-static int is_rom(i32 x, i32 n) {
-  i64 lo = x, hi = lo + n;
-  return (lo < ROM_LOW_END && hi > 0) || (lo < OPNAMES_ROM + (i64)OPNAMES_LEN && hi > OPNAMES_ROM);
-}
-static int is_plain_op(i32 i) {
-  return (i >= OP_LEV && i <= OP_MOD) || i == OP__JMP || i == OP__ADJ || i == OP_C4CY ||
-         i == OP_JMPA || i == OP_LIP || i == OP_ADDL || i == OP_POPA || (i >= OP_LH && i <= OP_LCU);
-}
+_Static_assert(sizeof OPNAMES - 1 == INS_SIZE * 5, "is_rom (c4pc.h) counts the names as INS_SIZE of 5 bytes");
 
 void machine_emit(machine *m, const u8 *b, u32 n) {
   m->uart_activity += n;
@@ -80,7 +71,10 @@ static i32 guard_lo(machine *m) {
   i32 g = m->stack_guard ? (i32)m->stack_base : 0x7fffffff;
   /* the loop's own bound: below the arena's end, so its fast paths need no other */
   i32 e = (i32)m->size - 4;
-  return g < e ? g : e;
+  if (e < g) g = e;
+  /* the user window too: an address in it is a user task's, which kernel
+   * mode reaches through kpa */
+  return m->uwin && (i64)m->uwin < g ? (i32)m->uwin : g;
 }
 static void guard_hit(machine *m, i32 x, i32 n, int write, i32 v, i32 op, i32 from);
 static void rom_store(machine *m, i32 x, i32 v);
@@ -105,23 +99,42 @@ static void bus_wr8(machine *m, u32 a, i32 v) {
   if (a < m->size) m->u8[a] = (u8)v;
 }
 
+i32 eng_bus_rd32(machine *m, u32 a) { return bus_rd32(m, a); }
+i32 eng_bus_rd8s(machine *m, u32 a) { return bus_rd8s(m, a); }
+void eng_bus_wr32(machine *m, u32 a, i32 v) { arena_wr32(m, a, v); }
+void eng_bus_wr8(machine *m, u32 a, i32 v) { bus_wr8(m, a, v); }
+void eng_rom_store(machine *m, i32 x, i32 v) { rom_store(m, x, v); }
+
+static i32 kld32(machine *m, u32 x);
+static void kst32(machine *m, u32 x, i32 v);
+static i32 kld8(machine *m, u32 x);
+static void kst8(machine *m, u32 x, i32 v);
+
 i32 m_ld32(machine *m, i32 x) {
+  if (m->vm) return mmu_ld32(m->mmu, x);
+  if (m->uwin && (u32)x >= m->uwin) return kld32(m, (u32)x);
   if ((x & 3) == 0 && x >= 0x1000) {
     if (in_guard(m, x, 4)) { guard_hit(m, x, 4, 0, 0, 0, 0); return 0; }
     return (u32)x + 4 <= m->size ? m->w[(u32)x >> 2] : 0;
   }
+  if (m->mmu && x >= MMU_BASE && x < MMU_END) return mmu_read32(m->mmu, x);
   return bus_rd32(m, (u32)x);
 }
 void m_st32(machine *m, i32 x, i32 v) {
+  if (m->vm) { mmu_st32(m->mmu, x, v); return; }
+  if (m->uwin && (u32)x >= m->uwin) { kst32(m, (u32)x, v); return; }
   if ((x & 3) == 0 && x >= 0x1000) {
     if (in_guard(m, x, 4)) { guard_hit(m, x, 4, 1, v, 0, 0); return; }
     if ((u32)x + 4 <= m->size) m->w[(u32)x >> 2] = v;
     return;
   }
+  if (m->mmu && x >= MMU_BASE && x < MMU_END) { mmu_write32(m->mmu, x, v); return; }
   if (is_rom(x, 4)) { rom_store(m, x, v); return; }
   arena_wr32(m, (u32)x, v);
 }
 static i32 m_ld8(machine *m, i32 x) {
+  if (m->vm) return mmu_ld8(m->mmu, x);
+  if (m->uwin && (u32)x >= m->uwin) return kld8(m, (u32)x);
   if (x >= 0x1000) {
     if (in_guard(m, x, 1)) { guard_hit(m, x, 1, 0, 0, 0, 0); return 0; }
     return (u32)x < m->size ? (int8_t)m->u8[x] : 0;
@@ -129,6 +142,8 @@ static i32 m_ld8(machine *m, i32 x) {
   return bus_rd8s(m, (u32)x);
 }
 static void m_st8(machine *m, i32 x, i32 v) {
+  if (m->vm) { mmu_st8(m->mmu, x, v); return; }
+  if (m->uwin && (u32)x >= m->uwin) { kst8(m, (u32)x, v); return; }
   if (x >= 0x1000) {
     if (in_guard(m, x, 1)) { guard_hit(m, x, 1, 1, v, 0, 0); return; }
     if ((u32)x < m->size) m->u8[x] = (u8)v;
@@ -142,6 +157,134 @@ static i32 m_ld16(machine *m, i32 x) {
   return lo | (i32)((u32)m_ld8(m, (i32)((u32)x + 1)) << 8);
 }
 static void m_st16(machine *m, i32 x, i32 v) { m_st8(m, x, v); m_st8(m, (i32)((u32)x + 1), v >> 8); }
+
+/* ---------------------------------------------------------------- */
+/* the user window (c4m.js kpa ...): under C4IX's MMU a user task's memory
+ * is at user addresses from uwin, mapped in its page tables; kernel mode
+ * runs untranslated and reaches a user address through the window --
+ * where udir, the kernel's map of all of them, says it is, or with no
+ * map, the page uwin below it. A page the map has put out to swap is -1
+ * here, and its bytes are the host's copy (kswap). kpa: physical, or -1 */
+static void kmiss(machine *m, u32 x);
+static int halt(machine *m, i32 status);
+static i32 kswap(machine *m, u32 x) {
+  if (!m->udir) return -1;
+  i32 pte = kernel_pte(m, m->udir, x);
+  return (pte & 1) || !(pte & PTE_SWAP) ? -1 : (i32)((u32)pte >> 12);
+}
+static i64 kpa(machine *m, u32 x) {
+  if (m->udir) {
+    i64 p = kernel_phys(m, m->udir, x, 0);
+    if (p < 0 && kswap(m, x) < 0) kmiss(m, x);
+    return p;
+  }
+  u32 off = x - m->uwin;
+  return off < m->size ? (i64)off : -1;
+}
+static void kmiss(machine *m, u32 x) {
+  if (m->halted) return;
+  char a[12], b[12];
+  machine_emits(m, "libjs: the kernel used user address "); machine_emits(m, hex8(a, x));
+  machine_emits(m, ", which nothing is at (pc "); machine_emits(m, hex8(b, (u32)m->pc));
+  machine_emits(m, "). Halting.\n");
+  halt(m, -105);
+}
+static i64 kaddr(machine *m, u32 x) { return m->uwin && x >= m->uwin ? kpa(m, x) : (i64)x; }
+/* the host's copy of a page put out (devices.js swapRd8, swapWr8) */
+static int swap_rd8(machine *m, i32 slot, u32 off) {
+  u8 *p = imap_get(m->swap_pages, (u32)slot);
+  return p ? p[off & 4095] : 0;
+}
+static void swap_wr8(machine *m, i32 slot, u32 off, int v) {
+  u8 *p = imap_get(m->swap_pages, (u32)slot);
+  if (!p) { if ((u32)slot >= m->swap_slots) return; p = xmalloc(4096); imap_set(m->swap_pages, (u32)slot, p); }
+  p[off & 4095] = (u8)v;
+}
+static i32 kld8(machine *m, u32 x) {
+  i64 p = kpa(m, x);
+  if (p >= 0) return (int8_t)m->u8[p];
+  i32 s = kswap(m, x);
+  return s < 0 ? 0 : (int8_t)swap_rd8(m, s, x & 4095);
+}
+static void kst8(machine *m, u32 x, i32 v) {
+  i64 p = kpa(m, x);
+  if (p >= 0) { m->u8[p] = (u8)v; return; }
+  i32 s = kswap(m, x);
+  if (s >= 0) swap_wr8(m, s, x & 4095, v & 255);
+}
+static i32 kbytes32(machine *m, u32 x) {
+  i32 b0 = kld8(m, x) & 255, b1 = kld8(m, x + 1) & 255, b2 = kld8(m, x + 2) & 255, b3 = kld8(m, x + 3);
+  return (i32)((u32)b0 | (u32)b1 << 8 | (u32)b2 << 16 | (u32)b3 << 24);
+}
+static i32 kld32(machine *m, u32 x) {
+  i64 p = kpa(m, x);
+  if (p < 0) return kswap(m, x) < 0 ? 0 : kbytes32(m, x);
+  if ((p & 3) == 0) return m->w[p >> 2];
+  return kbytes32(m, x);
+}
+static void kst32(machine *m, u32 x, i32 v) {
+  i64 p = kpa(m, x);
+  if (p >= 0 && (p & 3) == 0) { m->w[p >> 2] = v; return; }
+  if (p < 0 && kswap(m, x) < 0) return;
+  for (int k = 0; k < 4; k++) kst8(m, x + (u32)k, v >> (8 * k));
+}
+/* does the block opcode at the top of the stack touch the window? */
+static int kwin(machine *m, i32 op) {
+  i32 sp = m->sp; u32 w = m->uwin; i32 n = m_ld32(m, sp);
+  if (n <= 0) return 0;
+  u32 d = (u32)m_ld32(m, sp + 8);
+  if (d >= w || d + (u32)n > w) return 1;
+  if (op == OP_MSET) return 0;
+  u32 s = (u32)m_ld32(m, sp + 4);
+  return s >= w || s + (u32)n > w;
+}
+/* MSET, MCMP and MCPY in kernel mode with a user address among them: a
+ * run at a time that stays inside a page of each */
+static u32 krun(u32 x, u32 y, i32 left) {
+  i64 r = left;
+  if (4096 - (x & 4095) < r) r = 4096 - (x & 4095);
+  if (4096 - (y & 4095) < r) r = 4096 - (y & 4095);
+  return (u32)r;
+}
+static int kblock(machine *m, i32 op) {
+  i32 sp = m->sp; u8 *u = m->u8;
+  if (op == OP_MSET) {
+    i32 d = m_ld32(m, sp + 8), v = m_ld32(m, sp + 4) & 0xff, n = m_ld32(m, sp);
+    for (i32 k = 0; k < n;) {
+      u32 x = (u32)d + (u32)k, r = krun(x, x, n - k);
+      i64 p = kaddr(m, x);
+      if (p >= 0x1000 && p + r <= m->size) memset(u + p, v, r);
+      else for (u32 j = 0; j < r; j++) m_st8(m, (i32)(x + j), v);   /* a page put out: the host's copy */
+      k += (i32)r;
+    }
+    m->a = d;
+    return STOP_BUDGET;
+  }
+  if (op == OP_MCMP) {
+    i32 p = m_ld32(m, sp + 8), q = m_ld32(m, sp + 4), n = m_ld32(m, sp);
+    i32 r = 0;
+    for (i32 k = 0; k < n; k++) {
+      i32 x = (m_ld8(m, (i32)((u32)p + (u32)k)) & 255) - (m_ld8(m, (i32)((u32)q + (u32)k)) & 255);
+      if (x) { r = x; break; }
+    }
+    m->a = r;
+    return STOP_BUDGET;
+  }
+  i32 d = m_ld32(m, sp + 8), s = m_ld32(m, sp + 4), n = m_ld32(m, sp);
+  if (d > s && (i64)d < (i64)s + n) {
+    for (i32 k = 0; k < n; k++) m_st8(m, (i32)((u32)d + (u32)k), m_ld8(m, (i32)((u32)s + (u32)k)));
+  } else {
+    for (i32 k = 0; k < n;) {
+      u32 x = (u32)d + (u32)k, y = (u32)s + (u32)k, r = krun(x, y, n - k);
+      i64 pd = kaddr(m, x), ps = kaddr(m, y);
+      if (pd >= 0x1000 && ps >= 0 && pd + r <= m->size && ps + r <= m->size) memmove(u + pd, u + ps, r);
+      else for (u32 j = 0; j < r; j++) m_st8(m, (i32)(x + j), m_ld8(m, (i32)(y + j)));
+      k += (i32)r;
+    }
+  }
+  m->a = d;
+  return STOP_BUDGET;
+}
 
 static void rom_store(machine *m, i32 x, i32 v) {
   m->rom_stores++;
@@ -193,6 +336,22 @@ static int guard_range(machine *m, i32 op, i32 x, i32 n, int write) {
 
 /* the bytes of a C string at addr, in place: how many (to the arena's end at most) */
 static u32 cstr(machine *m, u32 addr, u32 max, const u8 **p) {
+  if (m->vm || (m->uwin && addr >= m->uwin)) {
+    /* a copy, a byte at a time: in user mode translated (a fault goes to
+     * the user loop's catch), in the window through kpa (c4m.js cstring).
+     * PRTF holds its format while it asks for its %s strings: a few
+     * buffers, taken in turn */
+    static obuf bufs[8]; static int next;
+    obuf *o = &bufs[next++ & 7];
+    o->n = 0;
+    for (u32 k = 0; k < max; k++) {
+      int b = (m->vm ? mmu_ld8(m->mmu, (i32)(addr + k)) : kld8(m, addr + k)) & 255;
+      if (!b) break;
+      ob_put(o, b);
+    }
+    *p = o->b ? o->b : m->u8;
+    return o->n;
+  }
   if (addr >= m->size) { *p = m->u8; return 0; }
   u32 lim = m->size - addr < max ? m->size - addr : max, n = 0;
   while (n < lim && m->u8[addr + n]) n++;
@@ -207,6 +366,15 @@ static int trap(machine *m, i32 type, i32 param, i32 handler) {
   if (!handler) { m->missed_traps++; return 0; }
   i32 t = m->sp;
   i32 sp = t - TRAP_OFFSET * 4;
+  /* With the MMU on, a trap is the way into kernel mode: from user mode
+   * it switches to the kernel's stack (KSP), as an x86 does, and the
+   * handler runs untranslated */
+  mmu *u = m->mmu;
+  int kern = u && u->on;
+  if (kern) {
+    if (m->mode && u->ksp) sp = u->ksp - TRAP_OFFSET * 4;
+    m->vm = 0;
+  }
 #define PUSHW(v) (sp -= 4, W(sp) = (v))
   PUSHW(m->cycle_interval);            /* bp+9 */
   m->cycle_interval = 0;
@@ -226,9 +394,11 @@ static int trap(machine *m, i32 type, i32 param, i32 handler) {
   m->sp = sp;
   m->pc = handler + 8;
   m->trap_pc = m->pc;
+  if (kern) m->mode = 0;
   m->irq_hold++;
   return 1;
 }
+int eng_trap(machine *m, i32 type, i32 param, i32 handler) { return trap(m, type, param, handler); }
 static void hirq(machine *m, i32 param) {
   trap(m, TRAP_HARD_IRQ, param, m->cycle_handler);
   m->cycle_interval = 0;
@@ -252,10 +422,11 @@ static int halt(machine *m, i32 status) {
   m->status = status;
   return STOP_HALT;
 }
+int eng_halt(machine *m, i32 status) { return halt(m, status); }
 
 i32 machine_info(machine *m) {
   return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
-         (m->no_fpu ? 0 : C4I_FPU) | (m->trap_handler ? C4I_TRAPH : 0);
+         (m->no_fpu ? 0 : C4I_FPU) | (m->mmu ? C4I_MMU : 0) | (m->trap_handler ? C4I_TRAPH : 0);
 }
 
 void machine_stacktrace(machine *m) {
@@ -341,10 +512,22 @@ static void opv_note(machine *m, i32 op) {
   machine_emits(m, a); machine_emits(m, " does not support opcodes requiring arguments (");
   machine_emits(m, b); machine_emits(m, " given)\n");
 }
+/* OPCD handed an opcode that carries an operand: refused with a (usually
+ * missed) OPV (c4m.js opvTrap, for the user loop) */
+void eng_opv_trap(machine *m, i32 op) {
+  opv_note(m, op);
+  trap(m, TRAP_OPV, op, m->trap_handler);
+  m->cycle_interval = 0; m->mode = 0;
+}
 
 /* the rare opcodes (c4m.js sys) */
 static int sys(machine *m, i32 op) {
   i32 sp = m->sp;
+  /* Under the MMU, the opcodes that run the machine rather than the task
+   * are the kernel's: starting, halting and waking CPUs, IPIs, and the
+   * cycle interrupt's configuration (docs/c4ix-mmu.md 6) */
+  if (m->vm && (op == OP_C4CF || (op >= OP_CPUS && op <= OP_CPUH) || (op >= OP_CWAI && op <= OP_IPI)))
+    return pm_trap(m, op);
   switch (op) {
     case OP_OPEN:
       if (m->mode) return pm_trap(m, op);
@@ -397,6 +580,8 @@ static int sys(machine *m, i32 op) {
       m->a = (i32)heap_realloc(m->heap, m->u8, (u32)m_ld32(m, sp + 4), m_ld32(m, sp));
       return STOP_BUDGET;
     case OP_MSET: {
+      if (m->vm) return mmu_block(m->mmu, op);
+      if (m->uwin && kwin(m, op)) return kblock(m, op);
       i32 d = m_ld32(m, sp + 8), v = m_ld32(m, sp + 4), n = m_ld32(m, sp);
       if (n > 0) {
         if (in_guard(m, d, n)) return guard_range(m, OP_MSET, d, n, 1);
@@ -407,6 +592,8 @@ static int sys(machine *m, i32 op) {
       return STOP_BUDGET;
     }
     case OP_MCMP: {
+      if (m->vm) return mmu_block(m->mmu, op);
+      if (m->uwin && kwin(m, op)) return kblock(m, op);
       i32 p = m_ld32(m, sp + 8), q = m_ld32(m, sp + 4), n = m_ld32(m, sp);
       if (n > 0 && in_guard(m, p, n)) return guard_range(m, OP_MCMP, p, n, 0);
       if (n > 0 && in_guard(m, q, n)) return guard_range(m, OP_MCMP, q, n, 0);
@@ -420,6 +607,8 @@ static int sys(machine *m, i32 op) {
       return STOP_BUDGET;
     }
     case OP_MCPY: {
+      if (m->vm) return mmu_block(m->mmu, op);
+      if (m->uwin && kwin(m, op)) return kblock(m, op);
       i32 d = m_ld32(m, sp + 8), s = m_ld32(m, sp + 4), n = m_ld32(m, sp);
       if (n > 0) {
         if (in_guard(m, s, n)) return guard_range(m, OP_MCPY, s, n, 0);
@@ -470,7 +659,8 @@ static int sys(machine *m, i32 op) {
       return STOP_BUDGET;
     }
     case OP__OPC: {
-      char s[17]; dma_cstring(m, (u32)m_ld32(m, sp), s, 16);
+      char s[17]; const u8 *q; u32 n = cstr(m, (u32)m_ld32(m, sp), 16, &q);
+      memcpy(s, q, n); s[n] = 0;
       m->a = dev_opcode_by_name(s);
       return STOP_BUDGET;
     }
@@ -515,6 +705,16 @@ static int sys(machine *m, i32 op) {
       break;
     }
     case OP_TLEV: {
+      if (m->vm) {
+        /* a user task's own TLEV, a C4KE signal handler returning: the
+         * registers from its frame, but never the mode or the preemption mask */
+        i32 bp = m->bp;
+        i32 pc = m_ld32(m, bp + 8);
+        if (pc == m->pc - 4) return tlev_wedge(m, pc);
+        i32 nsp = m_ld32(m, bp + 12), nbp = m_ld32(m, bp + 16), na = m_ld32(m, bp + 20);
+        m->sp = nsp; m->bp = nbp; m->a = na; m->pc = pc;
+        return STOP_BUDGET;
+      }
       if (m->irq_hold > 0) m->irq_hold--;
       i32 bp = m->bp;
       i32 pc = m_ld32(m, bp + 8);
@@ -526,6 +726,7 @@ static int sys(machine *m, i32 op) {
       m->mode = m_ld32(m, bp + 24);
       if (m->trap_restores_interval) m->cycle_interval = m_ld32(m, bp + 36);
       m->pc = pc;
+      if (m->mode && m->mmu && m->mmu->on) return STOP_SWITCH;
       return STOP_BUDGET;
     }
     case OP_DBG: trap(m, TRAP_DEBUG, 0, m->trap_handler); return STOP_BUDGET;
@@ -546,15 +747,19 @@ static int sys(machine *m, i32 op) {
   return STOP_BUDGET;
 }
 
+int eng_sys(machine *m, i32 op) { return sys(m, op); }
+
 static int need_checks(machine *m) {
   return m->cycle_interval || m->pit_ms || m->pending_signal || m->mbox_irq;
 }
+int eng_need_checks(machine *m) { return need_checks(m); }
 
 static i64 next_multiple(i64 cycle, i32 interval) { return (cycle / interval + 1) * interval; }
 
-/* the boundary checks, in c4bb's order (c4m.js boundary) */
-static i64 boundary(machine *m, i64 cycle, i64 next_irq) {
-  int tlev = W(m->pc) == OP_TLEV;
+/* the boundary checks, in c4bb's order (c4m.js boundary): inlined into the
+ * loop (out of it, the loop ran 7% slower); mmu.c's calls eng_boundary */
+static inline __attribute__((always_inline)) i64 boundary(machine *m, i64 cycle, i64 next_irq) {
+  int tlev = (m->vm ? mmu_peek(m->mmu, m->pc) : W(m->pc)) == OP_TLEV;   /* TLEV is never interrupted */
   int held = tlev || m->irq_hold > 0;
   i32 interval = m->cycle_interval;
   int fired = 1;
@@ -584,6 +789,7 @@ static i64 boundary(machine *m, i64 cycle, i64 next_irq) {
   if (m->pit_ms) { i64 pit = (cycle / 4096 + 1) * 4096; if (pit < next) next = pit; }
   return next;
 }
+i64 eng_boundary(machine *m, i64 cycle, i64 next_irq) { return boundary(m, cycle, next_irq); }
 
 /* OPCD of one of the loop's own opcodes with no operand (c4m.js opcd) */
 static void opcd(machine *m, i32 op) {
@@ -633,7 +839,16 @@ static void opcd(machine *m, i32 op) {
 }
 
 /* ---------------------------------------------------------------- */
+/* Up to max_cycles. With the MMU on, user mode runs a loop of its own
+ * (mmu.c), and the MMU says which loop runs when (c4m.js run) */
 int machine_run(machine *m, i64 max_cycles) {
+  if (m->mmu && m->mmu->on) return mmu_run(m->mmu, max_cycles);
+  return eng_run_plain(m, max_cycles);
+}
+
+/* the interpreter's loop: every guest's, and C4IX's kernel mode under the
+ * MMU, which leaves it with STOP_SWITCH at a TLEV into user mode */
+int eng_run_plain(machine *m, i64 max_cycles) {
   if (m->halted) return STOP_HALT;
   i32 *const mw = m->w;
   u8 *const mu = m->u8;

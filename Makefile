@@ -3192,13 +3192,16 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # flags, so that it can be held against libjs; c4pc.elf is a multiboot
 # kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
 C4PC_SRC  := src/c4pc
-C4PC_MODS := engine dev heap fmt fpu drive util
+C4PC_MODS := engine mmu dev heap fmt fpu drive util
 C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h
 # The images it runs, and what makes them. To build from another tree
 # whose images are made: C4PC_IMAGES=~/git/c4/src/c4bb/images C4PC_IMAGES_DEP=
 C4PC_IMAGES ?= src/c4bb/images
 C4PC_IMAGES_DEP ?= c4bb-images
-C4PC_CFLAGS := -O2 -g -Wall -Wno-unused-parameter -fwrapv -fno-strict-aliasing -fno-math-errno
+# -fno-tree-slp-vectorize: gcc 15 at -O2 packs the loops' four registers into an
+# SSE register for their saves, spilling the rest; the MMU's user loop ran at
+# half the speed for it (126M against 226M instructions a second on helios)
+C4PC_CFLAGS := -O2 -g -Wall -Wno-unused-parameter -fwrapv -fno-strict-aliasing -fno-math-errno -fno-tree-slp-vectorize
 # i486: what DOSBox's cores and every emulator here run; the x87 for floats
 C4PC_BARE_CFLAGS := -m32 -march=i486 -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
 c4pc-host: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) $(C4PC_HDRS)

@@ -4,9 +4,10 @@
  * Linux, where the same engine runs as c4pc-host so that it can be held
  * against libjs on the same images (docs/c4pc.md).
  *
- * One CPU, no MMU, no display or sound yet: the machine C4IX boots on
- * with libjs's --no-mmu. Every address the guest sees is a byte offset
- * into one arena, as in libjs.
+ * One CPU, no display or sound yet; an MMU when the platform fits one
+ * (mmu.c), as libjs's --mmu does. Every address the guest sees is a byte
+ * offset into one arena, as in libjs, or with the MMU on, user mode's
+ * goes through the guest's page tables to one.
  *
  * The platform (pc/pc.c, or host.c on Linux) gives the engine a clock,
  * a console and somewhere to wait; the engine gives the platform a
@@ -51,8 +52,10 @@ extern const char OPNAMES[];   /* 5 bytes an opcode, the ROM at 0x200 */
 #define ARGS_RESERVE  4096
 #define NULL_GUARD_OP 0x4c554e00
 
-/* ---- why run() stopped (c4m.js STOP) ---- */
-enum { STOP_BUDGET, STOP_HALT, STOP_INPUT, STOP_SLEEP };
+/* ---- why run() stopped (c4m.js STOP). PARK and CPUHALT are SMP's,
+ * which c4pc has not; SWITCH is the MMU's: the mode changed, and with it
+ * the loop to run (mmu.c run). A host that sees it runs on. ---- */
+enum { STOP_BUDGET, STOP_HALT, STOP_INPUT, STOP_SLEEP, STOP_PARK, STOP_CPUHALT, STOP_SWITCH };
 
 enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OPV, TRAP_PM, TRAP_DEBUG };
 
@@ -68,6 +71,14 @@ enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OP
 #define C4I_MBOX  0x2000
 #define C4I_FPU   0x10000
 #define C4I_DRV   0x40000
+#define C4I_MMU   0x80000
+
+/* ---- the MMU's registers, a window at 0x500 (mmu.c, libjs/mmu.js) ---- */
+#define MMU_BASE  0x500
+#define MMU_END   0x540
+/* a C4IX page table entry's bits the host looks at (src/c4bb/sim/arena.js) */
+#define PTE_PIN   0x200
+#define PTE_SWAP  0x400
 
 /* ---- a file's bytes: shared by the drive that holds it and every fd
  * open on it, freed when the last lets go (a file the ramdisk brought
@@ -120,6 +131,25 @@ u32 heap_base(heap *h), heap_end(heap *h);
 /* ---- the machine ---- */
 typedef struct fdent fdent;
 typedef struct machine machine;
+
+/* ---- the MMU (mmu.c: libjs/mmu.js's Mmu) ---- */
+typedef struct mmu {
+  machine *m;
+  /* translations by virtual page: read, write, fetch -- the physical
+   * page or -1 -- and nx, known not runnable; log, the pages filled */
+  i32 *rd, *wr, *ex; u8 *nx; i32 *log; u32 nlog;
+  i32 cwins[12]; int ncwins;           /* lo, len, off of each code window kept */
+  i32 misses, faults;
+  int on, general;
+  i32 ptbr, ksp, iopm, faddr, finfo, fpc;
+  i32 s_lo, s_len, s_off, c_lo, c_len, c_off;   /* the stack and code windows */
+  i32 pte_at;                          /* probe's: the word the entry was read from */
+  i32 fpu_v;
+  /* a block opcode a fault stopped part way (block) */
+  struct { int has; i32 op, pc, sp, ptbr, d, s, n, k; } part;
+  void *jb;                            /* where a fault goes (a c4_jmp_buf), or 0 */
+} mmu;
+
 struct machine {
   /* the arena: size is a power of two, and wmask makes every word index
    * one inside it (libjs's typed arrays read 0 past the end instead) */
@@ -170,6 +200,12 @@ struct machine {
   int reset_requested;
   /* the console sink */
   void (*on_byte)(machine *, int b);
+  /* the MMU when one is fitted (mmu_new); vm while the user loop runs,
+   * which makes the loads and stores translate. The user window (c4m.js
+   * kpa): where user addresses start, 0 for none, and udir the kernel's
+   * map of them. dma_ctx: the user task's MMU while its load or store is
+   * at a device, which checks the addresses it is given (arena.js dmaCtx) */
+  mmu *mmu; int vm; u32 uwin, udir; mmu *dma_ctx;
 };
 
 machine *machine_new(u32 arena_bytes, drive **drives, int ndrives, double mhz);
@@ -193,6 +229,53 @@ void dev_con_bytes(machine *m, const u8 *b, u32 n);
 /* the bytes at addr up to a NUL, at most max, as a C string (static buffer
  * of the caller's) */
 u32 dma_cstring(machine *m, u32 addr, char *out, u32 max);
+
+/* the MMU (mmu.c) */
+mmu *mmu_new(machine *m);              /* fitted, off until the guest turns it on */
+int mmu_run(mmu *u, i64 max_cycles);
+i32 mmu_read32(mmu *u, i32 x);         /* its registers, kernel mode's */
+void mmu_write32(mmu *u, i32 x, i32 v);
+/* user mode's loads and stores for sys(), the FPU, OPCD: a fault goes to
+ * the innermost catch (u->jb) */
+i32 mmu_ld32(mmu *u, i32 x);
+i32 mmu_ld8(mmu *u, i32 x);
+void mmu_st32(mmu *u, i32 x, i32 v);
+void mmu_st8(mmu *u, i32 x, i32 v);
+int mmu_block(mmu *u, i32 op);         /* MSET, MCMP, MCPY in user mode */
+i32 mmu_peek(mmu *u, i32 pc);
+i64 mmu_dma_check(mmu *u, u32 addr, i32 len, int write, int pin);
+/* the kernel's map of user addresses (arena.js pteWord, kernelPte, kernelPhys) */
+i64 pte_word(machine *m, u32 dir, u32 va);
+i32 kernel_pte(machine *m, u32 udir, u32 x);
+i64 kernel_phys(machine *m, u32 udir, u32 x, int pin);
+
+/* the engine's, for mmu.c */
+i32 m_ld32(machine *m, i32 x);
+void m_st32(machine *m, i32 x, i32 v);
+int eng_trap(machine *m, i32 type, i32 param, i32 handler);
+int eng_halt(machine *m, i32 status);
+int eng_sys(machine *m, i32 op);
+i64 eng_boundary(machine *m, i64 cycle, i64 next_irq);
+int eng_need_checks(machine *m);
+void eng_opv_trap(machine *m, i32 op);
+int eng_run_plain(machine *m, i64 max_cycles);
+void eng_rom_store(machine *m, i32 x, i32 v);
+i32 eng_bus_rd32(machine *m, u32 a);
+i32 eng_bus_rd8s(machine *m, u32 a);
+void eng_bus_wr32(machine *m, u32 a, i32 v);
+void eng_bus_wr8(machine *m, u32 a, i32 v);
+static inline int has_operand(i32 i) {
+  return i <= OP_ADJ || i == OP_JSRI || i == OP_JSRS || (i >= OP_LDL && i <= OP_IMMP) || i == OP_STL;
+}
+static inline int is_plain_op(i32 i) {
+  return (i >= OP_LEV && i <= OP_MOD) || i == OP__JMP || i == OP__ADJ || i == OP_C4CY ||
+         i == OP_JMPA || i == OP_LIP || i == OP_ADDL || i == OP_POPA || (i >= OP_LH && i <= OP_LCU);
+}
+/* the ROM a guest never stores to: below 0x20, and the opcode names */
+static inline int is_rom(i32 x, i32 n) {
+  i64 lo = x, hi = lo + n;
+  return (lo < 0x20 && hi > 0) || (lo < OPNAMES_ROM + (i64)(INS_SIZE * 5) && hi > OPNAMES_ROM);
+}
 
 /* the formatter (fmt.c): PRTF's bytes for fmt and its words */
 typedef struct obuf { u8 *b; u32 n, cap; } obuf;

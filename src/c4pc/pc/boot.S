@@ -19,6 +19,36 @@ _start: cli
         hlt
         jmp 1b
 
+/* c4_setjmp(buf), c4_longjmp(buf, v) (clib.h): ebx esi edi ebp, the
+ * stack as the caller has it after the call, and where it returns to.
+ * The MMU's faults come back through these (mmu.c). */
+        .globl c4_setjmp
+c4_setjmp:
+        mov 4(%esp), %eax
+        mov %ebx, 0(%eax)
+        mov %esi, 4(%eax)
+        mov %edi, 8(%eax)
+        mov %ebp, 12(%eax)
+        lea 4(%esp), %ecx
+        mov %ecx, 16(%eax)
+        mov (%esp), %ecx
+        mov %ecx, 20(%eax)
+        xor %eax, %eax
+        ret
+        .globl c4_longjmp
+c4_longjmp:
+        mov 4(%esp), %edx
+        mov 8(%esp), %eax
+        test %eax, %eax
+        jnz 1f
+        inc %eax
+1:      mov 0(%edx), %ebx
+        mov 4(%edx), %esi
+        mov 8(%edx), %edi
+        mov 12(%edx), %ebp
+        mov 16(%edx), %esp
+        jmp *20(%edx)
+
 /* gdt_load(ptr): load the GDT, reload the segments (code 0x08, data 0x10) */
         .globl gdt_load
 gdt_load:

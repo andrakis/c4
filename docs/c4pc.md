@@ -21,7 +21,9 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | on c4pc-host, Rise of the Triad's timedemo 4 and Doom's demo3 with a card fitted give the WAV cli.js --wav gives, byte for byte (8,619,724 and 15,956,420 bytes; test-c4pc holds the first); on c4pc.elf in QEMU with KVM and -device sb16, Doom's demo3 plays its music and sounds through the card (QEMU's wav audiodev records them) at 190 frames a second |
 | done (M8) | x86-64: c4pc64.elf, the same machine built for long mode (pc/boot64.S), on the ISO beside the i386 one |
 | *measured* | under KVM the session byte for byte libjs's in its cycles, with the MMU and without; every acceltest; Doom's demo3 with the SB16; the desktop and Doom on it. With the MMU 24% faster than c4pc.elf (194M against 157M c4 instructions a second), without it 3% |
-| not yet | persistent storage (M6), real SMP (M7), General MIDI (no synth: games play the AdLib) |
+| done (M6) | drive 1 kept on an IDE disk (pc/store.c), where C4IX's persist saves, as the page keeps it in IndexedDB and cli.js in a `-w` folder |
+| *measured* | under KVM on both builds: a file written and synced in one boot is there in the next, and after a second save both are; the store's drive 1 is what c4pc-host's `-w` folder gets, file for file |
+| not yet | real SMP (M7), General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk for the store |
 
 ## One engine, two front ends
 
@@ -42,7 +44,7 @@ src/c4pc/
   fpu.c                 src/c4bb/sim/fpu.js (F3) and c4m.js's FLT
   drive.c util.c        drives (and ustar archives as drives), maps, blobs
   host.c                c4pc-host: Linux, with libjs/cli.js's flags
-  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c and hda.c (sound), libc.c, link.ld;
+  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c and hda.c (sound), store.c (drive 1 on a disk), libc.c, link.ld;
                         c4pc64.elf: boot64.S in boot.S's place
   dos/                  C4PC.COM: the DOS loader
   test-c4pc.sh          make test-c4pc: C4IX on libjs, c4pc-host and QEMU, without an MMU and with one
@@ -228,6 +230,39 @@ session, two runs each, alternating):
 Both print libjs's output byte for byte in its 1,474,118,389 and
 1,500,630,450 cycles. The MMU's user loop is where the registers tell:
 C4IX's desktop and every game run with it.
+
+### A drive that outlasts the machine
+
+C4IX keeps what changes on host drive 1 (src/c4ix/user/persist.c): at its
+first boot the unpacked system as one tar (c4ix-base.tar, read from there
+afterwards), and at each save (`sync`, the desktop's) the changes since
+boot as another, c4ix-persist.tar or -b.tar in turn. The page keeps drive
+1 in IndexedDB, cli.js in its `-w` folder; c4pc on a PC keeps it on a disk
+(pc/store.c).
+
+The disk is an IDE one, spoken to by PIO (1F0h and 170h, master and
+slave, LBA28): QEMU's `-drive file=X,format=raw,if=ide`, VMware's and
+VirtualBox's IDE disks, a PC's in IDE mode. It is the store when its first
+sector says `C4PC STORE 1`; with `--store` (on the ISO's desktop entries)
+a disk whose first 64 sectors are all zero, a new blank virtual disk,
+is made one. No other disk is written. Its layout: the header, 64 sectors
+of directory (256 entries: a name, a run of sectors, a length, a CRC-32),
+then the files, each in one run. A file written goes to a run no file uses,
+not even its old self, and only then is its directory sector written, so
+a write cut short leaves the old file or the new one; at boot every file
+is read back into drive 1 and its CRC checked. `c4pc: drive 1: the store
+on the primary master, 64 MB: 5 files, 31163 KB` says what it found;
+`--no-store` leaves the disks alone.
+
+*Measured* (QEMU with KVM, a blank 64 MB image, both builds): a file
+written after persist's boot has noted the system, then `sync`, is there
+at the next boot (`cat` prints it); a second save onto the same store,
+and a third boot has both. 19 MB of base tar and 6 MB of changes a save.
+A file written before persist has noted the system counts as the
+system's, as on libjs, and is not saved.
+
+To give a VMware VM one: add a hard disk on an IDE controller (a SATA or
+NVMe one is not spoken to yet), new and blank, of 256 MB or more.
 
 ## Running it
 

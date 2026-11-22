@@ -15,7 +15,9 @@ run there unchanged. It is in `src/c4pc/`.
 | done (M4) | the display (gui.c): libjs's device at 0x400, its rings and IRQ, the page's drawing done in C with c4pc's own faces (font.c); on a PC a VBE framebuffer from GRUB or the BGA, the PS/2 mouse, the keyboard to the display |
 | *measured* | C4IX's desktop from the ISO under KVM, mouse and keyboard; on c4pc-host, scripted, in `make test-c4pc`; in DOSBox-X through C4PC.COM's VESA mode; Doom from the desktop at the clock's whole rate under KVM, 1% of the time drawing |
 | done | at the keyboard, the real clock: games drop frames on a slow PC rather than play in slow motion or at uneven speed; the screen written a row at a time, write-combined through the PAT; the console drawn on a framebuffer while no program has the display |
-| not yet | sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8), games' accelerators |
+| done | the games' accelerators (games/NAME.c, each game's c4/accel.mjs in C): Doom, Duke Nukem 3D, Quake, Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, behind libjs's loader numbers as its full build lists them |
+| *measured* | every game's acceltest passes on c4pc-host and on c4pc.elf in QEMU, with libjs's count of cases; every game's timedemo shows the same frames with them and without, on the bare machine and inside C4IX under the MMU; a timedemo takes a sixth to a half of the time it did (section Speed) |
+| not yet | sound (M5), persistent storage (M6), real SMP (M7), x86-64 (M8) |
 
 ## One engine, two front ends
 
@@ -25,7 +27,8 @@ src/c4pc/
   engine.c              libjs/c4m.js's interpreter, traps and syscalls, the user window; boot.js's loader and trampoline
   mmu.c                 libjs/mmu.js: the MMU's registers, translation, the user loop; arena.js's kernel map
   dev.c                 src/c4bb/sim/devices.js: the registers at 0x100-0x1FF
-  accel.c               src/c4ix/accel.mjs: C4IX's inflater and CRC-32, behind libjs/accel.js's numbers
+  accel.c accel.h       libjs/accel.js's loader and kit; src/c4ix/accel.mjs: C4IX's inflater and CRC-32
+  games/                the games' accelerators, games/NAME/c4/accel.mjs each in C
   gui.c                 libjs/gui-device.js's display at 0x400, and display.js's drawing
   font.c mkfont.py      the display's text: outlines from the system's free fonts, filled at any size
   heap.c                libjs/heap.js, block for block
@@ -64,9 +67,7 @@ general one, a cycle later, when one is not; mmu.c has one loop and
 counts that cycle the same way, so that the two agree to the cycle.
 
 **What differs from libjs.** One CPU; no display, sound, mailbox or
-downloads, so INFO says so and C4IX does without. Of the accelerators
-only C4IX's own (accel.c): a game's ACC_FIND gets 0, and the game runs
-its own loops, as on libjs with `--no-accel`. Past
+downloads, so INFO says so and C4IX does without. Past
 the arena's end libjs's typed arrays read 0 and drop the write, where
 c4pc's word index wraps inside the arena: only a wild program can tell.
 
@@ -103,6 +104,42 @@ C4IX shell, `ps` and `top` are usable; under KVM the machine is faster
 than libjs. The interpreter is libjs's loop as it is. c4mp's
 register-held dispatch, threaded code and a translator (M9) are where
 more would come from; so might an x86-64 build (M8), for the registers.
+
+### The games' accelerators
+
+libjs runs a game's innermost loops in the game's own JavaScript
+(docs/accel.md): a column, a span, a blit, a 64-bit multiply, one
+instruction however much it does. c4pc has the same, in C: games/NAME.c
+is games/NAME/c4/accel.mjs line for line, with accel.h's kit (readers and
+writers with a page each, `acc_probe`, `acc_span`, the arguments) as
+accel.js's, and a `hold_t` for the loops that read what they write (a
+blend, a shadow), whose writes wait until every page they go to is known
+to be there. The arithmetic is JavaScript's: int32 wrapping, shifts by
+their count mod 32, a single's operations done in double and rounded
+(`fr`, Math.fround), which the x87 set to double precision makes the
+single's own. The modules are numbered as libjs's full build lists them
+(src/c4bb/images/accel.json): doom, duke3d, quake, rott, sbk, tyrian,
+wolf3d, then C4IX's own. Each game asks with ACC_FIND, and its menu's
+switch (ACCELERATED) turns them off as on libjs; `--no-accel` takes the
+loader away.
+
+*Measured* (2026-11-23, helios): each game's acceltest (its loops
+against the C they stand for, on made-up data) passes on c4pc-host and on
+c4pc.elf in QEMU with KVM, with libjs's count of cases (Doom's 14,556,
+Quake's 1,000). Each timedemo shows the same frames with the accelerators
+and without, on the bare machine and inside C4IX with the MMU; Doom's
+demo3 01914fe7, Duke's script 96ab05bb and Quake's demo3 1f87d635 are the
+checksums docs/accel.md gives. On c4pc-host, seconds without and with:
+
+| timedemo | bare machine | in C4IX, the MMU on |
+|---|---|---|
+| Doom demo3 | 31.5 / 9.7 | 44.9 / 12.8 |
+| Wolfenstein 3D demo 0 | 9.6 / 2.6 | 22.0 / 6.3 |
+| Rise of the Triad demo 4 | 8.0 / 3.5 | 16.6 / 5.3 |
+| Tyrian demo 4 | 11.5 / 1.7 | 21.1 / 3.3 |
+| Super Blit Kart -demo | 133.6 / 25.9 | |
+| Duke Nukem 3D, 600 frames of the script | 14.7 / 8.2 | 27.3 / 13.0 |
+| Quake demo3 | 47.7 / 25.1 | 61.7 / 29.6 |
 
 ## Running it
 

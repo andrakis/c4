@@ -3192,8 +3192,9 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # flags, so that it can be held against libjs; c4pc.elf is a multiboot
 # kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
 C4PC_SRC  := src/c4pc
-C4PC_MODS := engine mmu accel dev gui font heap fmt fpu drive util
-C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h $(C4PC_SRC)/font.h
+C4PC_MODS := engine mmu accel dev gui font heap fmt fpu drive util \
+	games/doom games/duke3d games/quake games/rott games/sbk games/tyrian games/wolf3d
+C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h $(C4PC_SRC)/font.h $(C4PC_SRC)/accel.h
 # The display's faces (font.c), as tables mkfont.py makes from the system's
 # free fonts (fonttools): DejaVu and Liberation, in gui.c's FONTMAP order
 C4PC_FONTDIR ?= /usr/share/fonts/truetype

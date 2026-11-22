@@ -136,6 +136,9 @@ static double xsin(double x) { return sin(x); }
 static double xcos(double x) { return cos(x); }
 static double xtan(double x) { return tan(x); }
 #endif
+/* the same for the accelerators (accel.h) */
+double fpu_sin(double x) { return xsin(x); }
+double fpu_cos(double x) { return xcos(x); }
 
 void machine_emits(machine *m, const char *s);
 

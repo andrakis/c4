@@ -1,78 +1,31 @@
-/* accel.c -- libjs/accel.js's loader and C4IX's own accelerators,
+/* accel.c -- libjs/accel.js's loader and kit, and C4IX's own accelerators,
  * src/c4ix/accel.mjs: libarc's CRC-32 and its inflater's literal/match
  * loop, which are most of what a boot runs (unpacking the root archive,
- * docs/accel.md 7). c4pc has no game modules and loads none: only the
- * operating system's, "c4ix", the one module, so its operations are
- * ACC_BASE + ACC_SLOT and on. A game's ACC_FIND gets 0, and the game runs
- * its own loops, as with libjs's accelerators off.
+ * docs/accel.md 7).
+ *
+ * The modules are built in, where libjs loads the ones its build lists
+ * (src/c4bb/images/accel.json): the games' (games/NAME.c, each its
+ * games/NAME/c4/accel.mjs in C) and the operating system's, "c4ix", in the
+ * order of the full build's list, so that the k-th module's operation i
+ * is ACC_BASE + ACC_SLOT * (k + 1) + i as libjs numbers it there.
  *
  * INFO's C4I_ACCEL says the machine has the loader (machine.accel, off
  * with --no-accel), and ACC_FIND gives "c4ix" only while the OS modules'
  * switch is on (machine.osaccel: --no-osaccel, and the guest's ACC_OS).
  *
- * The operations are accel.mjs's, line for line: the same bytes written,
- * the same state left behind, and where its C would meet an edge they
+ * The operations are the modules' line for line: the same bytes written,
+ * the same state left behind, and where the C would meet an edge they
  * stop before that turn and the C takes it. Guest memory goes through
- * reader and writer (accel.js kit): plain memory as the loop's own loads
- * take it, a task's pages under the MMU (a page it may not use faults, to
- * sys()'s catch in mmu.c, as the program's own load would), or the
- * machine's loads for anything else. Each costs one cycle, as on libjs. */
-#include "c4pc.h"
-#include "clib.h"
+ * accel.h's readers and writers; each operation costs one cycle, as on
+ * libjs. */
+#include "accel.h"
 
 #define ACC_FIND ACC_BASE
 #define ACC_OS (ACC_BASE + 1)
 #define ACC_SLOT 0x100
 
-/* ---- the kit: readers and writers, each with a page of its own ---- */
-typedef struct { machine *m; u32 vp; u32 base; i32 hi; } rw_t;
-
-static void rw_init(rw_t *r, machine *m) {
-  r->m = m; r->vp = 0xffffffffu; r->base = 0;
-  i32 g = eng_guard_lo(m);
-  r->hi = (u32)g < m->size ? g : (i32)m->size;
-}
-static inline i32 rd8(rw_t *r, i32 x) {
-  machine *m = r->m;
-  if (m->vm) {
-    u32 v = (u32)x >> 12;
-    if (v != r->vp) {
-      if (v == 0) return eng_ld8(m, x) & 255;
-      r->base = (u32)mmu_frame(m->mmu, x, 0);
-      r->vp = v;
-    }
-    return m->u8[r->base | ((u32)x & 4095)];
-  }
-  if (!m->uwin && x >= 0x1000 && x < r->hi) return m->u8[x];
-  return eng_ld8(m, x) & 255;
-}
-static inline void wr8(rw_t *r, i32 x, i32 b) {
-  machine *m = r->m;
-  if (m->vm) {
-    u32 v = (u32)x >> 12;
-    if (v != r->vp) {
-      if (v == 0) { eng_st8(m, x, b); return; }
-      r->base = (u32)mmu_frame(m->mmu, x, 1);
-      r->vp = v;
-    }
-    m->u8[r->base | ((u32)x & 4095)] = (u8)b;
-    return;
-  }
-  if (!m->uwin && x >= 0x1000 && x < r->hi) { m->u8[x] = (u8)b; return; }
-  eng_st8(m, x, b);
-}
-static inline i32 rd32(rw_t *r, i32 x) {
-  machine *m = r->m;
-  if (!m->vm && !m->uwin && (x & 3) == 0 && x >= 0x1000 && x < r->hi - 3) return m->w[(u32)x >> 2];
-  return m_ld32(m, x);
-}
-static inline void wr32(rw_t *r, i32 x, i32 v) {
-  machine *m = r->m;
-  if (!m->vm && !m->uwin && (x & 3) == 0 && x >= 0x1000 && x < r->hi - 3) { m->w[(u32)x >> 2] = v; return; }
-  m_st32(m, x, v);
-}
-/* that the task may use [addr, addr + len), before anything is written */
-static void probe(machine *m, i32 addr, i32 len, int write) {
+/* ---- the kit ---- */
+void acc_probe(machine *m, i32 addr, i32 len, int write) {
   if (!m->vm || len <= 0) return;
   u32 last = (u32)addr + (u32)len - 1;
   for (u32 x = (u32)addr & ~4095u; ; x += 4096) {
@@ -80,9 +33,96 @@ static void probe(machine *m, i32 addr, i32 len, int write) {
     if (((x ^ last) & ~4095u) == 0) break;
   }
 }
-/* the n arguments, in the order the program wrote them */
-static void args(machine *m, int n, i32 *a) {
+void acc_args(machine *m, int n, i32 *a) {
   for (int i = 0; i < n; i++) a[i] = m_ld32(m, (i32)((u32)m->sp + 4u * (u32)(n - i)));
+}
+u8 *acc_span(machine *m, i32 addr, i32 len, int write) {
+  if (len <= 0) return 0;
+  if (m->vm) {
+    if (((u32)addr >> 12) == 0 || (((u32)addr ^ ((u32)addr + (u32)len - 1)) & ~4095u) != 0) return 0;
+    u32 p = (u32)mmu_frame(m->mmu, addr, write);
+    return m->u8 + (p | ((u32)addr & 4095));
+  }
+  if (m->uwin) return 0;
+  i32 g = eng_guard_lo(m);
+  i64 hi = (u32)g < m->size ? g : (i64)m->size;
+  if (addr >= 0x1000 && (i64)addr + len <= hi) return m->u8 + addr;
+  return 0;
+}
+
+hold_t acc_hold;
+static u32 hash32(i32 a, u32 mask) { u32 x = (u32)a; x ^= x >> 16; x *= 0x45d9f3bu; x ^= x >> 16; return x & mask; }
+static void hold_index(hold_t *h, u32 i) {
+  u32 k = hash32(h->a[i], h->hmask);
+  for (;; k = (k + 1) & h->hmask) {
+    if (h->hg[k] != h->g) { h->hg[k] = h->g; h->hs[k] = i + 1; return; }
+    if (h->a[h->hs[k] - 1] == h->a[i]) { h->hs[k] = i + 1; return; }
+  }
+}
+static void *grow(void *p, u32 n, u32 sz) { return xrealloc(p, (size_t)n * sz); }
+void hold_begin(hold_t *h) {
+  h->n = 0;
+  if (!h->hs) {
+    h->cap = 1024; h->a = grow(0, h->cap, 4); h->v = grow(0, h->cap, 4);
+    h->hmask = 2047; h->hs = grow(0, 2048, 4); h->hg = xmalloc(2048 * 4);
+  }
+  if (++h->g == 0) { memset(h->hg, 0, (size_t)(h->hmask + 1) * 4); h->g = 1; }
+}
+static void hold_room(hold_t *h) {
+  if (h->n < h->cap) return;
+  h->cap *= 2;
+  h->a = grow(h->a, h->cap, 4); h->v = grow(h->v, h->cap, 4);
+  /* the index at twice the writes' room, rebuilt */
+  u32 size = h->cap * 2;
+  free(h->hs); free(h->hg);
+  h->hs = grow(0, size, 4); h->hg = xmalloc((size_t)size * 4); h->hmask = size - 1; h->g = 1;
+  for (u32 i = 0; i < h->n; i++) hold_index(h, i);
+}
+void hold_put(hold_t *h, i32 a, i32 v) {
+  hold_room(h);
+  h->a[h->n] = a; h->v[h->n] = v;
+  hold_index(h, h->n);
+  h->n++;
+}
+static i32 hold_find(hold_t *h, i32 a) {
+  u32 k = hash32(a, h->hmask);
+  for (;; k = (k + 1) & h->hmask) {
+    if (h->hg[k] != h->g) return -1;
+    if (h->a[h->hs[k] - 1] == a) return (i32)h->hs[k] - 1;
+  }
+}
+void hold_set(hold_t *h, i32 a, i32 v) {
+  i32 i = hold_find(h, a);
+  if (i >= 0) { h->v[i] = v; return; }
+  hold_put(h, a, v);
+}
+int hold_get(hold_t *h, i32 a, i32 *v) {
+  i32 i = hold_find(h, a);
+  if (i < 0) return 0;
+  *v = h->v[i];
+  return 1;
+}
+void hold_probe(machine *m, hold_t *h, i32 len) {
+  u32 page = 0xffffffffu;
+  for (u32 i = 0; i < h->n; i++)
+    if (((u32)h->a[i] >> 12) != page) { acc_probe(m, h->a[i], len, 1); page = (u32)h->a[i] >> 12; }
+}
+void hold_write8(machine *m, hold_t *h) {
+  RW(w);
+  for (u32 i = 0; i < h->n; i++) wr8(&w, h->a[i], h->v[i]);
+}
+void hold_write32(machine *m, hold_t *h) {
+  RW(w);
+  for (u32 i = 0; i < h->n; i++) wr32(&w, h->a[i], h->v[i]);
+}
+static i32 *scr[4]; static u32 scr_n[4];
+i32 *acc_scratch(int which, u32 n) {
+  if (n > scr_n[which]) {
+    u32 k = scr_n[which] ? scr_n[which] : 256;
+    while (k < n) k *= 2;
+    scr[which] = grow(scr[which], k, 4); scr_n[which] = k;
+  }
+  return scr[which];
 }
 
 /* ---- CX_CRC32 (crc, buf, len): arc_crc32. Reads only ---- */
@@ -96,10 +136,10 @@ static void crc_table(void) {
   }
 }
 static i32 cx_crc32(machine *m) {
-  i32 a[3]; args(m, 3, a);
+  i32 a[3]; acc_args(m, 3, a);
   i32 crc = a[0], buf = a[1], len = a[2];
   if (len <= 0) return crc;
-  probe(m, buf, len, 0);
+  acc_probe(m, buf, len, 0);
   crc_table();
   rw_t rd; rw_init(&rd, m);
   u32 c = ~(u32)crc;
@@ -159,7 +199,7 @@ static i32 decode(inf_t *s, i32 fast, i32 count, i32 sym) {
 }
 
 static i32 cx_inflate(machine *m) {
-  i32 a[1]; args(m, 1, a);
+  i32 a[1]; acc_args(m, 1, a);
   i32 st = a[0];
   inf_t S, *s = &S;
   rw_t r32; rw_init(&r32, m);
@@ -173,12 +213,12 @@ static i32 cx_inflate(machine *m) {
   /* at most CHUNK of output and of input a time */
   i32 oend = oc < op + CHUNK ? oc : op + CHUNK, iend = s->il < s->ip + CHUNK ? s->il : s->ip + CHUNK;
   i32 wlo = op - WINDOW > 0 ? op - WINDOW : 0;
-  probe(m, st, 56, 1);
-  probe(m, s->ib + s->ip, iend - s->ip, 0);
-  probe(m, ob + wlo, oend - wlo, 1);
-  probe(m, lfast, 4 * (FASTMASK + 1), 0); probe(m, dfast, 4 * (FASTMASK + 1), 0);
-  probe(m, lcount, 4 * (MAXBITS + 1), 0); probe(m, dcount, 4 * (MAXBITS + 1), 0);
-  probe(m, lsym, 4 * 288, 0); probe(m, dsym, 4 * 30, 0);
+  acc_probe(m, st, 56, 1);
+  acc_probe(m, s->ib + s->ip, iend - s->ip, 0);
+  acc_probe(m, ob + wlo, oend - wlo, 1);
+  acc_probe(m, lfast, 4 * (FASTMASK + 1), 0); acc_probe(m, dfast, 4 * (FASTMASK + 1), 0);
+  acc_probe(m, lcount, 4 * (MAXBITS + 1), 0); acc_probe(m, dcount, 4 * (MAXBITS + 1), 0);
+  acc_probe(m, lsym, 4 * 288, 0); acc_probe(m, dsym, 4 * 30, 0);
   rw_init(&s->rin, m); rw_init(&s->rout, m); rw_init(&s->wout, m);
   rw_init(&s->tab, m); rw_init(&s->syms, m);
   s->ok = 1;
@@ -221,6 +261,21 @@ static i32 cx_inflate(machine *m) {
   wr32(&w, st, s->bb); wr32(&w, st + 4, s->bc); wr32(&w, st + 8, s->ip); wr32(&w, st + 16, op);
   return res;
 }
+static const acc_fn acc_c4ix[] = {cx_crc32, cx_inflate};
+
+/* ---- the modules, in the order of the full build's accel.json ---- */
+typedef struct { const char *name; int os; const acc_fn *ops; const int *n; } module;
+static const module MODS[] = {
+  {"doom", 0, acc_doom, &acc_doom_n},
+  {"duke3d", 0, acc_duke3d, &acc_duke3d_n},
+  {"quake", 0, acc_quake, &acc_quake_n},
+  {"rott", 0, acc_rott, &acc_rott_n},
+  {"sbk", 0, acc_sbk, &acc_sbk_n},
+  {"tyrian", 0, acc_tyrian, &acc_tyrian_n},
+  {"wolf3d", 0, acc_wolf3d, &acc_wolf3d_n},
+  {"c4ix", 1, acc_c4ix, 0},
+};
+#define NMODS (int)(sizeof MODS / sizeof MODS[0])
 
 /* sys(): ACC_FIND, ACC_OS, or an operation; -1 for a number nobody has,
  * which is then a custom opcode like any other */
@@ -230,7 +285,9 @@ int accel_op(machine *m, i32 op) {
     i32 p = m_ld32(m, (i32)((u32)m->sp + 4));
     while (n < 33) { i32 c = eng_ld8(m, (i32)((u32)p + (u32)n)) & 255; if (!c) break; name[n++] = (char)c; }
     name[n] = 0;
-    m->a = m->osaccel && !strcmp(name, "c4ix") ? ACC_BASE + ACC_SLOT : 0;
+    m->a = 0;
+    for (int k = 0; k < NMODS; k++)
+      if (!strcmp(name, MODS[k].name)) { if (!MODS[k].os || m->osaccel) m->a = ACC_BASE + ACC_SLOT * (k + 1); break; }
     return STOP_BUDGET;
   }
   if (op == ACC_OS) {
@@ -241,9 +298,11 @@ int accel_op(machine *m, i32 op) {
     m->a = was | 2;
     return STOP_BUDGET;
   }
-  switch (op - ACC_BASE - ACC_SLOT) {
-    case 0: m->a = cx_crc32(m); return STOP_BUDGET;
-    case 1: m->a = cx_inflate(m); return STOP_BUDGET;
-  }
-  return -1;
+  i32 r = op - ACC_BASE - ACC_SLOT;
+  if (r < 0 || (r >> 8) >= NMODS) return -1;
+  const module *mod = &MODS[r >> 8];
+  int nops = mod->n ? *mod->n : (int)(sizeof acc_c4ix / sizeof acc_c4ix[0]);
+  if ((r & 255) >= nops) return -1;
+  m->a = mod->ops[r & 255](m);
+  return STOP_BUDGET;
 }

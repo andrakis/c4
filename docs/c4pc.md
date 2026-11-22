@@ -119,7 +119,10 @@ Where `/dev/kvm` is there (helios has it since 2026-11-22), add
 `-accel kvm -cpu host`: the same session takes 8 seconds, not 96.
 
 Without `-display none` the VGA screen shows the same console, and the
-keyboard types at it.
+keyboard types at it. Helios has no X: there `-display curses` draws the
+text screen in the ssh terminal (the wrapper sets `QEMU_MODULE_DIR` so
+that QEMU finds the unpacked ui-curses module), and `-vnc :1` serves it
+to a VNC viewer on port 5901.
 
 **At the keyboard**, with no `stdin` module, c4pc paces the machine to
 its own clock as cli.js `-i` does (16 simulated milliseconds at a time,
@@ -130,18 +133,24 @@ keyboard. *Measured* in QEMU with `-serial stdio`: typed commands echo,
 run, and `exit` shuts C4IX down.
 
 **GRUB** (VirtualBox, VMware, Hyper-V Gen 1, real PCs with a BIOS):
-`make c4pc.iso` makes a 169 MB ISO with the whole disk and a menu of two
-(src/c4pc/pc/grub.cfg), by `grub-mkrescue-pc`, the wrapper that points
+`make c4pc.iso` makes a 169 MB ISO with the whole disk and a menu of three
+(src/c4pc/pc/grub.cfg: with the MMU, without it, and 128 MB with
+statistics), by `grub-mkrescue-pc`, the wrapper that points
 the system's grub-mkrescue at the unpacked i386-pc modules. GRUB passes a
 module's arguments, not its path, so each `module` line names its file
 again:
 
-    multiboot /boot/c4pc.elf -m 64
+    multiboot /boot/c4pc.elf --mmu -m 64
     module /boot/c4ix32.c4r c4ix32.c4r
     module /boot/disk.tar disk.tar drive
 
 GRUB reads COM1 too, so keys typed there while it loads (a minute in
 QEMU, for 160 MB from the CD) can be its own: wait for C4IX's prompt.
+*Measured* 2026-11-22 under KVM: the first entry boots with the MMU in
+36 seconds, most of it GRUB reading the CD, and `c4ix-ps.c4r` then
+`exit` typed on COM1 run and shut down. The ISO is hybrid (GRUB's
+boot_hybrid.img), so it can be written to a USB stick for a PC with a
+BIOS or CSM.
 
 **Bochs** boots the same ISO. Its build here has the debugger, so it
 needs `-rc` with a `c` in it, and its display wants `rfb` or `sdl2` (there

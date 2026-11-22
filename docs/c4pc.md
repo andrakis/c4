@@ -71,17 +71,29 @@ c4pc's word index wraps inside the arena: only a wild program can tell.
 | c4pc-host (gcc -O2, x86-64) | 292–312M |
 | libjs `--mmu` (most of the session is user mode, in mmu.js's loop) | 131–135M |
 | c4pc-host `--mmu` | 223–226M |
-| c4pc.elf in QEMU 10.2, TCG (helios has no KVM) | 15.1–15.5M |
-| c4pc.elf `--mmu` in QEMU | 13.6M |
+| c4pc-host built as c4pc.elf is, `-m32 -march=i486` | 228M; `--mmu` 197M |
+| c4pc.elf in QEMU 10.2 with KVM, `-cpu host` (helios is a Hyper-V guest: KVM nested) | 180M |
+| c4pc.elf `--mmu` in QEMU with KVM | 140M |
+| c4pc.elf in QEMU 10.2, TCG | 15.1–15.5M |
+| c4pc.elf `--mmu` in QEMU, TCG | 13.4–13.6M |
 | c4pc.elf in DOSBox-X 2026.01, dynamic core, `cycles=max`, through C4PC.COM | 13.5M |
 | c4pc.elf in Bochs 2.8 from a GRUB ISO, the disk less the games, `clock: sync=none` | 5.3M (output byte for byte c4pc-host's on the same disk) |
 
-The study guessed 15–40M in DOSBox: the low end. On helios, then, a
-C4IX shell, `ps` and `top` are usable under both emulators; the desktop
-will be slow until a VM with hardware virtualization (VirtualBox, VMware,
-Hyper-V on the Windows machines) runs it at the host's speed. The
-interpreter is libjs's loop as it is. c4mp's register-held dispatch,
-threaded code and a translator (M9) are where more would come from.
+With KVM (2026-11-22, after nested virtualization was turned on for
+helios), c4pc.elf is faster than libjs: 12 times TCG without the MMU,
+10 times with it, and about 60% of c4pc-host. Part of the gap is the
+build: a 32-bit i486 build of c4pc-host is 22% slower than the x86-64
+one (13% with the MMU), with fewer registers and no 64-bit arithmetic.
+The guest loses 21% more without the MMU and 29% with it. Perhaps the
+MMU's tables miss the TLB more, and each miss walks nested page tables
+(a guess, not measured). The output is byte for byte c4pc-host's in all
+four QEMU runs.
+
+The study guessed 15–40M in DOSBox: the low end. Under the emulators a
+C4IX shell, `ps` and `top` are usable; under KVM the machine is faster
+than libjs. The interpreter is libjs's loop as it is. c4mp's
+register-held dispatch, threaded code and a translator (M9) are where
+more would come from; so might an x86-64 build (M8), for the registers.
 
 ## Running it
 
@@ -102,6 +114,9 @@ isa-debug-exit, so QEMU exits `(status << 1) | 1`.
     qemu-system-i386 -m 512 -display none -serial file:serial.txt \
         -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
         -append "-s -m 64" -initrd "c4ix32.c4r,.c4pc/disk.tar drive,in.txt stdin"
+
+Where `/dev/kvm` is there (helios has it since 2026-11-22), add
+`-accel kvm -cpu host`: the same session takes 8 seconds, not 96.
 
 Without `-display none` the VGA screen shows the same console, and the
 keyboard types at it.

@@ -106,14 +106,15 @@ for want in Filesystem Terminal "Text Editor" Calculator Integer Double; do
 done
 grep -h 'display:' $W/gui.err | sed 's/^/        /'
 # The sound card (snd.c, opl.c): Rise of the Triad's timedemo on the bare
-# machine with a card fitted (--wav), its OPL music and its samples: the
+# machine with a card fitted (--wav), its OPL music and its samples, the
+# accelerators off (this tree's libjs may have none): the
 # same WAV from libjs and from c4pc-host, sample for sample. Where the
 # images have the game and its data (a full build's).
 if [ -f $IMAGES/games/rott.c4r ] && [ -f $IMAGES/games/HUNTBGIN.WAD ]; then
   echo "  ---   the sound card, on Rise of the Triad's timedemo 4"
   top=$PWD
-  ( cd $IMAGES/games && timeout 600 node $top/libjs/cli.js -m 64 -d . --wav $top/$W/snd-js.wav rott.c4r --timedemo 4 > /dev/null 2>&1 )
-  ( cd $IMAGES/games && timeout 600 $top/c4pc-host -s -m 64 -d . --wav $top/$W/snd-pc.wav rott.c4r --timedemo 4 > /dev/null 2> $top/$W/snd-pc.err )
+  ( cd $IMAGES/games && timeout 600 node $top/libjs/cli.js --no-accel -m 64 -d . --wav $top/$W/snd-js.wav rott.c4r --timedemo 4 > /dev/null 2>&1 )
+  ( cd $IMAGES/games && timeout 600 $top/c4pc-host --no-accel -s -m 64 -d . --wav $top/$W/snd-pc.wav rott.c4r --timedemo 4 > /dev/null 2> $top/$W/snd-pc.err )
   if [ -s $W/snd-js.wav ] && cmp -s $W/snd-js.wav $W/snd-pc.wav; then ok "the same WAV on both ($(stat -c %s $W/snd-pc.wav) bytes)"
   else bad "the WAVs differ"; cmp $W/snd-js.wav $W/snd-pc.wav | head -2; fi
   grep -h 'sound:' $W/snd-pc.err | sed 's/^/        /'

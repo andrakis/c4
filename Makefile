@@ -3223,6 +3223,19 @@ c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_
 	gcc $(C4PC_BARE_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
 		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/libc.c \
 		$(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
+# c4pc64.elf (M8): the same machine built for x86-64, its twice as many
+# registers and 64-bit arithmetic; pc/boot64.S enters long mode from the
+# multiboot loader's 32-bit protected mode. Linked for x86-64, then made an
+# ELF32, which multiboot loaders take (its addresses are all below 4 GB).
+# -mno-red-zone: an interrupt pushes its frame where the code is.
+C4PC_BARE64_CFLAGS := -m64 -mno-red-zone -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
+c4pc64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/libc.c \
+	$(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
+	gcc $(C4PC_BARE64_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
+		-Wl,--no-warn-rwx-segments -o .c4pc/c4pc64.elf64 $(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c \
+		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
+	objcopy -I elf64-x86-64 -O elf32-i386 .c4pc/c4pc64.elf64 $@
+
 # The DOS loader (src/c4pc/dos): boots c4pc.elf from DOS, for DOSBox.
 # gcc -m16 is 32-bit C run in real mode, in one 64 KB segment.
 C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com.ld
@@ -3246,9 +3259,9 @@ C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com
 # Hyper-V (generation 1) and real PCs with a BIOS. GRUB_MKRESCUE: one
 # with the i386-pc modules (~/opt/pctools/bin/grub-mkrescue-pc on helios).
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue-pc || echo grub-mkrescue)
-c4pc.iso: c4pc.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg
+c4pc.iso: c4pc.elf c4pc64.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg
 	rm -rf .c4pc/iso && mkdir -p .c4pc/iso/boot/grub
-	cp c4pc.elf $(C4PC_IMAGES)/c4ix32.c4r .c4pc/disk.tar .c4pc/iso/boot/
+	cp c4pc.elf c4pc64.elf $(C4PC_IMAGES)/c4ix32.c4r .c4pc/disk.tar .c4pc/iso/boot/
 	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
 	$(GRUB_MKRESCUE) -o $@ .c4pc/iso
 # The DOS package, for DOSBox-X: the whole disk (the desktop's files are

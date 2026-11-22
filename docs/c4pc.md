@@ -19,7 +19,9 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | every game's acceltest passes on c4pc-host and on c4pc.elf in QEMU, with libjs's count of cases; every game's timedemo shows the same frames with them and without, on the bare machine and inside C4IX under the MMU; a timedemo takes a sixth to a half of the time it did (section Speed) |
 | done (M5) | the sound card (snd.c, opl.c): libjs's device at 0x480 and its mixer, the AdLib (DOSBox's dbopl, as libjs/opl.js has it), sixteen sample channels and the speaker, in C; on a PC played through a Sound Blaster 16 (pc/sb16.c); `c4pc-host --wav` as cli.js's |
 | *measured* | on c4pc-host, Rise of the Triad's timedemo 4 and Doom's demo3 with a card fitted give the WAV cli.js --wav gives, byte for byte (8,619,724 and 15,956,420 bytes; test-c4pc holds the first); on c4pc.elf in QEMU with KVM and -device sb16, Doom's demo3 plays its music and sounds through the card (QEMU's wav audiodev records them) at 190 frames a second |
-| not yet | persistent storage (M6), real SMP (M7), x86-64 (M8), General MIDI (no synth: games play the AdLib) |
+| done (M8) | x86-64: c4pc64.elf, the same machine built for long mode (pc/boot64.S), on the ISO beside the i386 one |
+| *measured* | under KVM the session byte for byte libjs's in its cycles, with the MMU and without; every acceltest; Doom's demo3 with the SB16; the desktop and Doom on it. With the MMU 24% faster than c4pc.elf (194M against 157M c4 instructions a second), without it 3% |
+| not yet | persistent storage (M6), real SMP (M7), General MIDI (no synth: games play the AdLib) |
 
 ## One engine, two front ends
 
@@ -40,7 +42,8 @@ src/c4pc/
   fpu.c                 src/c4bb/sim/fpu.js (F3) and c4m.js's FLT
   drive.c util.c        drives (and ustar archives as drives), maps, blobs
   host.c                c4pc-host: Linux, with libjs/cli.js's flags
-  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c (sound), libc.c, link.ld
+  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c (sound), libc.c, link.ld;
+                        c4pc64.elf: boot64.S in boot.S's place
   dos/                  C4PC.COM: the DOS loader
   test-c4pc.sh          make test-c4pc: C4IX on libjs, c4pc-host and QEMU, without an MMU and with one
   test-c4pc-mmu.sh      ... test-c4ix-mmu.mjs's wild programs, on libjs, c4pc-host and QEMU
@@ -173,6 +176,35 @@ interrupt reaches the CPU. The card's now is then the real clock, and the
 events of now go 10 ms after the last frame made. QEMU (`-device sb16`),
 DOSBox, DOSBox-X and VMware (`sound.virtualDev = "sb16"` in the VM's
 .vmx) have one; `--no-sound` leaves it be. A PC without one runs silent.
+
+### x86-64
+
+`make c4pc64.elf` builds the same sources for long mode: twice the
+registers and 64-bit arithmetic for the interpreter's loop, and SSE for
+the floats (IEEE's doubles, with no x87 precision to set). pc/boot64.S
+takes the 32-bit protected mode a multiboot loader leaves, maps the first
+4 GB to itself in 2 MB pages (boot_pd, whose framebuffer pages screen.c
+gives the PAT's write-combining entry), turns on PAE, SSE, EFER.LME and
+paging, and calls pc_main as boot.S does; its interrupt stubs save every
+register for isr() (pc.c's `struct regs` and 16-byte gates under
+`__x86_64__`), and its c4_setjmp keeps rbx, rbp and r12-r15. Built with
+`-mno-red-zone`, since an interrupt pushes its frame on the stack the
+code is using; linked for x86-64 and made an ELF32 (objcopy), which is
+what multiboot loaders take. A CPU without long mode gets a line on the
+screen saying to boot c4pc.elf. DOSBox has no long mode: its package keeps
+c4pc.elf.
+
+*Measured* (2026-11-23, QEMU 10.2 with KVM on helios, test-c4pc's
+session, two runs each, alternating):
+
+| | c4pc.elf (i386) | c4pc64.elf |
+|---|---|---|
+| no MMU | 211M inst/s | 217M |
+| the MMU on | 157M | 194M |
+
+Both print libjs's output byte for byte in its 1,474,118,389 and
+1,500,630,450 cycles. The MMU's user loop is where the registers tell:
+C4IX's desktop and every game run with it.
 
 ## Running it
 

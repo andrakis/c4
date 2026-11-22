@@ -98,6 +98,27 @@ void screen_describe(void) {
 static inline void cpuid(u32 l, u32 *a, u32 *b, u32 *c, u32 *d) { __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(l), "c"(0)); }
 static inline uint64_t rdmsr(u32 r) { u32 lo, hi; __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(r)); return (uint64_t)hi << 32 | lo; }
 static inline void wrmsr(u32 r, uint64_t v) { __asm__ volatile("wrmsr" : : "c"(r), "a"((u32)v), "d"((u32)(v >> 32))); }
+#ifdef __x86_64__
+/* long mode: paging is boot64.S's already, 2 MB pages over 4 GB; the
+ * framebuffer's get the PAT's entry 1 */
+extern uint64_t boot_pd[2048];
+static const char *pat_wc(void) {
+  u32 base = (u32)(uintptr_t)fb, end = base + fb_pitch * (u32)sh;
+  uintptr_t eflags; __asm__ volatile("pushf; pop %0; cli" : "=r"(eflags));
+  uint64_t pat = rdmsr(0x277);
+  pat = (pat & ~((uint64_t)0xff << 8)) | ((uint64_t)0x01 << 8);   /* entry 1: WC */
+  __asm__ volatile("wbinvd" : : : "memory");
+  wrmsr(0x277, pat);
+  for (u32 i = 0; i < 2048; i++) {
+    uint64_t at = (uint64_t)i << 21;
+    if (at + (1u << 21) > base && at < end) boot_pd[i] |= 0x08;   /* PWT: the PAT's entry 1 */
+  }
+  uintptr_t cr3; __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) : : "memory");
+  __asm__ volatile("wbinvd" : : : "memory");
+  if (eflags & 0x200) __asm__ volatile("sti");
+  return "write-combining (PAT)";
+}
+#else
 static u32 pdir[1024] __attribute__((aligned(4096)));
 static const char *pat_wc(void) {
   u32 base = (u32)(uintptr_t)fb, end = base + fb_pitch * (u32)sh;
@@ -106,20 +127,21 @@ static const char *pat_wc(void) {
     pdir[i] = at | 0x83;                              /* 4 MB, writable, present */
     if (at + (1u << 22) > base && at < end) pdir[i] |= 0x08;   /* PWT: the PAT's entry 1 */
   }
-  u32 eflags; __asm__ volatile("pushf; pop %0; cli" : "=r"(eflags));
+  uintptr_t eflags; __asm__ volatile("pushf; pop %0; cli" : "=r"(eflags));
   uint64_t pat = rdmsr(0x277);
   pat = (pat & ~((uint64_t)0xff << 8)) | ((uint64_t)0x01 << 8);   /* entry 1: WC */
   __asm__ volatile("wbinvd" : : : "memory");
   wrmsr(0x277, pat);
-  u32 cr4; __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+  uintptr_t cr4; __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
   __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 | 0x10));          /* PSE */
   __asm__ volatile("mov %0, %%cr3" : : "r"((u32)(uintptr_t)pdir) : "memory");
-  u32 cr0; __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+  uintptr_t cr0; __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
   __asm__ volatile("mov %0, %%cr0; jmp 1f; 1:" : : "r"(cr0 | 0x80000000u) : "memory");
   __asm__ volatile("wbinvd" : : : "memory");
   if (eflags & 0x200) __asm__ volatile("sti");
   return "write-combining (PAT)";
 }
+#endif
 /* what happened, for the console */
 const char *screen_wc(void) {
   if (!fb) return "no framebuffer";
@@ -151,8 +173,8 @@ const char *screen_wc(void) {
     }
   }
   if (free_ < 0) return "no free MTRR";
-  u32 eflags; __asm__ volatile("pushf; pop %0; cli" : "=r"(eflags));
-  u32 cr0; __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+  uintptr_t eflags; __asm__ volatile("pushf; pop %0; cli" : "=r"(eflags));
+  uintptr_t cr0; __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
   __asm__ volatile("mov %0, %%cr0; wbinvd" : : "r"((cr0 | 0x40000000u) & ~0x20000000u) : "memory");
   uint64_t def = rdmsr(0x2FF);
   wrmsr(0x2FF, def & ~(uint64_t)0x800);
@@ -364,8 +386,8 @@ static int mouse_setup(void);
 int mouse_init(void) {
   /* with interrupts off: the controller's replies would raise the
    * keyboard's IRQ 1, whose handler would take them for keys */
-  u32 fl;
-  __asm__ volatile("pushfl; popl %0; cli" : "=r"(fl));
+  uintptr_t fl;
+  __asm__ volatile("pushf; pop %0; cli" : "=r"(fl));
   int r = mouse_setup();
   while (inb(0x64) & 1) (void)inb(0x60);      /* nothing left over */
   if (fl & 0x200) __asm__ volatile("sti");

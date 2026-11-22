@@ -368,10 +368,17 @@ static void display_tick(machine *m) {
 }
 
 /* ---- the CPU: GDT, IDT, PIC, PIT ---- */
+#ifdef __x86_64__
+/* boot64.S's isr_common: every register, then the vector, the error code and the CPU's frame */
+struct regs { uint64_t r15, r14, r13, r12, r11, r10, r9, r8, rdi, rsi, rbp, rbx, rdx, rcx, rax, vec, err, eip, cs, eflags, rsp, ss; };
+#define GATE_WORDS 4                    /* a long mode gate is 16 bytes */
+#else
 struct regs { u32 edi, esi, ebp, esp, ebx, edx, ecx, eax, vec, err, eip, cs, eflags; };
+#define GATE_WORDS 2
+#endif
 static u32 gdt[6];
-static struct { uint16_t lim; u32 base; } __attribute__((packed)) gdtr, idtr;
-static u32 idt[256 * 2];
+static struct { uint16_t lim; uintptr_t base; } __attribute__((packed)) gdtr, idtr;
+static u32 idt[256 * GATE_WORDS];
 
 static void pic_eoi(u32 irq) { if (irq >= 8) outb(0xA0, 0x20); outb(0x20, 0x20); }
 
@@ -382,11 +389,11 @@ void isr(struct regs *r) {
       "page fault", "?", "x87 error", "alignment", "machine check", "SIMD" };
     con_puts("\nc4pc: CPU exception ");
     con_dec(r->vec); con_puts(" ("); con_puts(r->vec < 20 ? names[r->vec] : "?");
-    con_puts(") at eip "); con_hex(r->eip); con_puts(", error "); con_hex(r->err);
+    con_puts(") at eip "); con_hex((u32)r->eip); con_puts(", error "); con_hex((u32)r->err);
     con_puts(". Halting.\n");
     power_off(71);
   }
-  u32 irq = r->vec - 32;
+  u32 irq = (u32)r->vec - 32;
   if (irq == 0) ticks++;
   else if (irq == 1) kbd_irq();
   else if (irq == 12) { u8 st = inb(0x64); if (st & 1) { u8 b = inb(0x60); if (st & 0x20) mouse_byte(b); } }
@@ -399,9 +406,13 @@ void isr(struct regs *r) {
 }
 
 static void idt_set(int n, void (*f)(void)) {
-  u32 a = (u32)(uintptr_t)f;
-  idt[n * 2] = (a & 0xffff) | (0x08 << 16);
-  idt[n * 2 + 1] = (a & 0xffff0000) | 0x8E00;
+  uintptr_t a = (uintptr_t)f;
+  idt[n * GATE_WORDS] = ((u32)a & 0xffff) | (0x08 << 16);
+  idt[n * GATE_WORDS + 1] = ((u32)a & 0xffff0000) | 0x8E00;
+#ifdef __x86_64__
+  idt[n * GATE_WORDS + 2] = (u32)((uint64_t)a >> 32);
+  idt[n * GATE_WORDS + 3] = 0;
+#endif
 }
 
 #define STUBS(X) X(0) X(1) X(2) X(3) X(4) X(5) X(6) X(7) X(8) X(9) X(10) X(11) X(12) X(13) X(14) X(15) X(16) X(17) X(18) X(19) \
@@ -412,13 +423,17 @@ STUBS(DECL)
 static void cpu_init(void) {
   /* flat 4 GB code and data, ring 0 */
   gdt[0] = 0; gdt[1] = 0;
+#ifdef __x86_64__
+  gdt[2] = 0x0000ffff; gdt[3] = 0x00af9a00;   /* long mode code */
+#else
   gdt[2] = 0x0000ffff; gdt[3] = 0x00cf9a00;
+#endif
   gdt[4] = 0x0000ffff; gdt[5] = 0x00cf9200;
-  gdtr.lim = sizeof gdt - 1; gdtr.base = (u32)(uintptr_t)gdt;
+  gdtr.lim = sizeof gdt - 1; gdtr.base = (uintptr_t)gdt;
   gdt_load(&gdtr);
 #define SET(n) idt_set(n, isr##n);
   STUBS(SET)
-  idtr.lim = sizeof idt - 1; idtr.base = (u32)(uintptr_t)idt;
+  idtr.lim = sizeof idt - 1; idtr.base = (uintptr_t)idt;
   __asm__ volatile("lidt %0" : : "m"(idtr));
   /* the 8259s: IRQ 0-7 at 0x20, 8-15 at 0x28 */
   outb(0x20, 0x11); outb(0xA0, 0x11);

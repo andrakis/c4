@@ -145,10 +145,10 @@ int  ustack(int bytes);           // stack size for tasks this one spawns from n
 int  vfork();
 int  uexecve(char *path, char **argv, char **envp);   // -1 if it would not load
 int  uwaitpid(int pid, int *st, int opts);  // st[0] exit code, st[1] signal; 0 none yet with UWNOHANG
-int  ulseek(int fd, int off, int whence);
+int  ulseek(int fd, int off, int whence);  // RAM files only; the new position
 // a position past 2 GB: POS the offset's two words, low then high (32 bits
 // each), the new position written back there; 0, or -1 (docs/c4ix-lfs.md)
-int  ulseek64(int fd, int *pos, int whence);  // RAM files only; the new position
+int  ulseek64(int fd, int *pos, int whence);
 int  ustat2(char *path, int *out, int n);  // the first n words of ST_*
 int  ufstat(int fd, int *out, int n);
 int  ulink(char *path, char *newpath);     // a second name for a file
@@ -160,6 +160,22 @@ int  getpid();
 int   ustrlen(char *s);
 int   ustrcmp(char *a, char *b);
 char *ustrcpy(char *dst, char *src);   // returns just past the terminator
+// strncmp: A's first N characters against B's, 0 the same
+int   ustrncmp(char *a, char *b, int n);
+int   ustarts(char *s, char *prefix);  // 1 if S begins with PREFIX
+char *ustrcat(char *dst, char *src);   // SRC on DST's end; DST
+char *ustpcpy(char *dst, char *src);   // copied; where its terminator is, to go on from
+int   uatoi(char *s);                  // a decimal, a sign first if any; to the first non-digit
+char *uitoa(int v, char *buf);         // V in decimal into BUF (12 bytes will do); BUF
+int   utolower(int c);
+int   utoupper(int c);
+// DIR/NAME into OUT, MAX bytes at most: one slash between them (none
+// added after a DIR that ends in one, as /), none at the end; OUT may be
+// DIR. 0, or -1 if it would not fit (OUT is then "")
+int   upathjoin(char *out, int max, char *dir, char *name);
+// the file at PATH into BUF, MAX - 1 bytes at most and a 0 after them:
+// how many, or -1 if it cannot be opened (BUF is then "")
+int   uslurp(char *path, char *buf, int max);
 
 int  upadstr(char *s, int width);
 int  upadhdr(char *s, int width);   // heading for a right-aligned column

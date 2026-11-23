@@ -312,6 +312,76 @@ char *ustrcpy(char *dst, char *src) {
     return dst + i + 1;
 }
 
+// The rest of what programs kept writing for themselves (install, df,
+// mount, cp, cc, persist ... each had its own num, join, cat or starts)
+int ustrncmp(char *a, char *b, int n) {
+    while (n > 0 && *a && *a == *b) { ++a; ++b; --n; }
+    if (n <= 0) return 0;
+    return (*a & 255) - (*b & 255);
+}
+int ustarts(char *s, char *prefix) {
+    while (*prefix) { if (*s != *prefix) return 0; ++s; ++prefix; }
+    return 1;
+}
+char *ustpcpy(char *dst, char *src) {
+    while (*src) { *dst = *src; ++dst; ++src; }
+    *dst = 0;
+    return dst;
+}
+char *ustrcat(char *dst, char *src) {
+    ustpcpy(dst + ustrlen(dst), src);
+    return dst;
+}
+int uatoi(char *s) {
+    int v, neg;
+    while (*s == ' ' || *s == 9) ++s;
+    neg = 0;
+    if (*s == '-') { neg = 1; ++s; }
+    else if (*s == '+') ++s;
+    v = 0;
+    while (*s >= '0' && *s <= '9') { v = v * 10 + *s - '0'; ++s; }
+    return neg ? 0 - v : v;
+}
+char *uitoa(int v, char *buf) {
+    char t[24];
+    int n, k, neg;
+    neg = v < 0;
+    n = 0;
+    // the digits from the last, of the value or (for the most negative)
+    // of each step's remainder, so that -v is never needed
+    k = 1;
+    while (k || v) { k = v % 10; if (k < 0) k = 0 - k; t[n] = '0' + k; ++n; v = v / 10; k = 0; }
+    k = 0;
+    if (neg) { buf[k] = '-'; ++k; }
+    while (n > 0) { --n; buf[k] = t[n]; ++k; }
+    buf[k] = 0;
+    return buf;
+}
+int utolower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+int utoupper(int c) { return c >= 'a' && c <= 'z' ? c - 32 : c; }
+int upathjoin(char *out, int max, char *dir, char *name) {
+    int n, m;
+    n = ustrlen(dir); m = ustrlen(name);
+    // OUT may be DIR itself (install: dir/boot, then that/NAME): nothing of
+    // it is touched before it is copied
+    if (n + m + 2 > max) { out[0] = 0; return 0 - 1; }
+    if (out != dir) ustrcpy(out, dir);
+    if (!(n && dir[n - 1] == '/')) { out[n] = '/'; ++n; }
+    ustrcpy(out + n, name);
+    while (n + m > 1 && out[n + m - 1] == '/') { out[n + m - 1] = 0; --m; }
+    return 0;
+}
+int uslurp(char *path, char *buf, int max) {
+    int fd, got, r;
+    buf[0] = 0;
+    if ((fd = uopen(path, O_RD)) < 0) return 0 - 1;
+    got = 0;
+    while (got < max - 1 && (r = uread(fd, buf + got, max - 1 - got)) > 0) got = got + r;
+    uclose(fd);
+    buf[got] = 0;
+    return got;
+}
+
 int uputs(char *s) {
     if (!s) s = "(null)";
     return write(STDOUT, s, ustrlen(s));

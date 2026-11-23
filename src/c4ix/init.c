@@ -340,7 +340,7 @@ int init_main(int argc, int argv) {
     char *shargv[16];
     char *vav[3];
     char *cmds[4];
-    char *home;
+    char *home, *root;
     int i, desktop, shargc, ncmd, k, vrc, hd;
 
     av = (char **)argv;
@@ -348,6 +348,7 @@ int init_main(int argc, int argv) {
     desktop = 0;
     ncmd = 0;
     home = 0;
+    root = 0;
 
     if (i < argc) {
         if (init_is(av[i], "-h") || init_is(av[i], "--help")) {
@@ -364,10 +365,18 @@ int init_main(int argc, int argv) {
         // --desktop (the browser's boot): the shell starts top in the
         // background on the console, then the desktop on the display,
         // as typing "top &" and "desktop" at the first prompt would
-        if (i < argc && init_is(av[i], "--desktop")) { desktop = 1; ++i; }
-        // --home hd0p1: the disk C4IX was installed on (install.c), its
-        // /home at /home once the system's files are there
-        if (i + 1 < argc && init_is(av[i], "--home")) { home = av[i + 1]; i = i + 2; }
+        // and in any order:
+        // --home hd0p1: a disk's /home at /home once the system's files are there
+        // --root hd0p1: / on the disk C4IX was installed on (install.c),
+        //   the whole system there: nothing unpacked, nothing loaded into
+        //   memory that is not in use, every change kept
+        k = 1;
+        while (k) {
+            k = 0;
+            if (i < argc && init_is(av[i], "--desktop")) { desktop = 1; ++i; k = 1; }
+            else if (i + 1 < argc && init_is(av[i], "--home")) { home = av[i + 1]; i = i + 2; k = 1; }
+            else if (i + 1 < argc && init_is(av[i], "--root")) { root = av[i + 1]; i = i + 2; k = 1; }
+        }
         // -e CMD: the shell runs CMD as if it were typed (the web page's
         // "Wolfenstein 3D on C4IX" boots the console with -e "wolf3d --direct")
         while (i + 1 < argc && ncmd < 4 && init_is(av[i], "-e")) { cmds[ncmd++] = av[i + 1]; i += 2; }
@@ -386,7 +395,16 @@ int init_main(int argc, int argv) {
         vav[0] = "c4ix-vfsload.c4r";
         vav[1] = "-w";
         vav[2] = 0;
-        vrc = (v = task_spawn(vav[0], desktop ? 2 : 1, (int)vav)) ? task_wait(v) : 0;
+        vrc = 0;
+        if (root) {
+            // the system is the disk's: no manifest, no archive to unpack
+            hd = blk_parse(root);
+            if (hd < 0 || vfs_mount_root(hd) < 0) {
+                kprintf("init: --root %s: it could not be mounted at / (dmesg says why), so the system's files are not there.\n", root);
+                kprintf("init: the boot stops here.\n");
+                return 4;
+            }
+        } else vrc = (v = task_spawn(vav[0], desktop ? 2 : 1, (int)vav)) ? task_wait(v) : 0;
         if (vrc == 3 && desktop) {
             // the system did not fit: say so and stop, rather than start
             // a desktop that falls over on what is missing

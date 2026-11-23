@@ -3247,12 +3247,20 @@ C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com
 # C4IX's programs this tree has that a C4PC_IMAGES built from another may
 # not (mount, umount, df, cp: the CD's), built as build-images.sh builds
 # them, and laid on the boot disk over its own, named in its manifest's BIN_ALL
-C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install
-.c4pc/bin/c4ix-%.c4r: $(SRCS)/c4ix/user/%.c $(C4PC_IMAGES_DEP)
+C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin
+.c4pc/bin/c4ix-%.c4r: $(SRCS)/c4ix/user/%.c .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP)
 	mkdir -p .c4pc/bin
 	./c4sc-host32 -c 400000 compile -O -c -D C4IX_SHARED -I $(SRCS)/c4ix/include $< .c4pc/u_$*.c4o > /dev/null
-	./c4rlink32 .c4pc/u_$*.c4o -l $(C4PC_IMAGES)/build/lib/libc4ix.c4s -o $@ > /dev/null
+	./c4rlink32 .c4pc/u_$*.c4o -l .c4pc/lib/libc4ix.c4s -o $@ > /dev/null
 	rm -f .c4pc/u_$*.c4o
+# libc4ix, the user library, as this tree has it -- what its programs above
+# call is there (ustrncmp, upathjoin, uslurp ...) -- built as build-images.sh
+# builds the shared one, and on the boot disk over the images' own: a
+# program finds it at run time as /lib/libc4ix.c4s
+.c4pc/lib/libc4ix.c4s: $(SRCS)/c4ix/lib/libc4ix.c $(SRCS)/c4ix/include/c4ix_user.h $(SRCS)/c4ix/include/window.c $(SRCS)/c4ix/include/cpustat.c
+	mkdir -p .c4pc/lib
+	for m in lib/libc4ix include/window include/cpustat; do ./c4sc-host32 -c 400000 compile -O -fpic -c -D C4IX_SHARED -I $(SRCS)/c4ix/include $(SRCS)/c4ix/$$m.c .c4pc/lib/s_$${m#*/}.c4o > /dev/null || exit 1; done
+	./c4rlink32 -r .c4pc/lib/s_libc4ix.c4o .c4pc/lib/s_window.c4o .c4pc/lib/s_cpustat.c4o -o $@ > /dev/null
 # C4IX's kernel as this tree has it (its disks: blk.c, ext2.c), built as
 # build-images.sh builds it, for the ISO (test-c4pc holds C4PC_IMAGES's
 # against libjs)
@@ -3262,11 +3270,15 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 	for m in $(C4PC_IX_MODS); do ./c4sc-host32 -c 400000 compile -O -c -I $(SRCS)/c4ix $(SRCS)/c4ix/$$m.c .c4pc/kernel/$$m.c4o > /dev/null || exit 1; done
 	./c4rlink32 $(patsubst %,.c4pc/kernel/%.c4o,$(C4PC_IX_MODS)) -o $@ > /dev/null
 # The boot disk as one archive, for a loader to hand c4pc as a module
-.c4pc/disk.tar: $(C4PC_IMAGES_DEP) $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW))
+.c4pc/disk.tar: $(C4PC_IMAGES_DEP) $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/lib/libc4ix.c4s $(C4PC_SRC)/pc/disksizes.py
 	rm -rf .c4pc/add && mkdir -p .c4pc/add
 	tar --format=ustar -C $(C4PC_IMAGES)/disk -cf $@ .
 	cp $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/add/
+	cp .c4pc/lib/libc4ix.c4s .c4pc/add/c4ix-libc4ix.c4s
 	awk -v add="$(C4PC_IX_NEW)" '/^BIN_ALL = /{n=split(add,w," "); for(i=1;i<=n;i++) if ((" " $$0 " ") !~ (" " w[i] " ")) $$0 = $$0 " " w[i]} {print}' $(C4PC_IMAGES)/disk/c4ix.vfs.txt > .c4pc/add/c4ix.vfs.txt
+	@# and the sizes C4IX's VFS believes until it reads a file: the new ones'
+	python3 $(C4PC_SRC)/pc/disksizes.py $(C4PC_IMAGES)/disk/c4ix.sizes .c4pc/add > .c4pc/add/c4ix.sizes.new
+	mv .c4pc/add/c4ix.sizes.new .c4pc/add/c4ix.sizes
 	tar --format=ustar -C .c4pc/add -rf $@ .
 # The boot disk less the games, for machines with little memory: plain
 # DOSBox has 63 MB at most. Every file under 300 KB outside the games'

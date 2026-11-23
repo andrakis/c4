@@ -24,22 +24,6 @@ static char info[BUF];
 static char tab[BUF * 2];
 static int human;
 
-static int num(char *s) {
-    int v;
-    v = 0;
-    while (*s >= '0' && *s <= '9') { v = v * 10 + *s - '0'; ++s; }
-    return v;
-}
-static int slurp(char *name, char *buf, int max) {
-    int fd, got, r;
-    buf[0] = 0;
-    if ((fd = uopen(name, O_RD)) < 0) return 0 - 1;
-    got = 0;
-    while (got < max - 1 && (r = uread(fd, buf + got, max - 1 - got)) > 0) got = got + r;
-    uclose(fd);
-    buf[got] = 0;
-    return got;
-}
 // the value of BUF's line KEY into out, "" where it has none
 static char *field(char *buf, char *key, char *out, int max) {
     char *p, *q;
@@ -115,7 +99,7 @@ static char *mounted_at(int n, char *out) {
         while (*p && *p != ' ' && *p != 10 && i < PATHW - 1) { out[i] = *p; ++i; ++p; }
         out[i] = 0;
         if (*p == ' ') ++p;
-        if (num(p) == n && *p >= '0' && *p <= '9') return out;
+        if (uatoi(p) == n && *p >= '0' && *p <= '9') return out;
         out[0] = 0;
         while (*p && *p != 10) ++p;
         if (*p) ++p;
@@ -131,15 +115,15 @@ int main(int argc, char **argv) {
     // the drives' registers: under the MMU a task has them only when it asks
     if (__c4_info() & C4I_MMU) uioperm(UIOPERM_DEV);
     uprintf("Filesystem              Size      Used     Avail  Use%% Mounted on\n");
-    slurp("/proc/meminfo", mem, 1024);
-    heap = num(field(mem, "heap", v, 64));
+    uslurp("/proc/meminfo", mem, 1024);
+    heap = uatoi(field(mem, "heap", v, 64));
     field(mem, "used", v, 64);
     used = 0 - 1;
-    if (v[0]) used = num(v);
+    if (v[0]) used = uatoi(v);
     if (used >= 0) row("ram", heap, used, heap - used, "/");
     else row("ram", heap, 0 - 1, 0 - 1, "/");
     // the disks mounted: "hd0 /mnt/disk ext2 rw" a line of /proc/mounts
-    slurp("/proc/mounts", tab, BUF * 2);
+    uslurp("/proc/mounts", tab, BUF * 2);
     p = tab;
     while (*p) {
         dev = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
@@ -152,12 +136,12 @@ int main(int argc, char **argv) {
         else row(name, fs[1] / (1024 / fs[0]), (fs[1] - fs[2]) / (1024 / fs[0]), fs[2] / (1024 / fs[0]), at);
     }
     if (!(__c4_info() & C4I_C4MJS)) return 0;
-    slurp("/tmp/mounts", tab, BUF * 2);
+    uslurp("/tmp/mounts", tab, BUF * 2);
     n = *(int *)DISK_COUNT;
     k = 0;
     while (k < n && k < 10) {
         d[0] = '0' + k; d[1] = ':'; ustrcpy(d + 2, ".c4pc-drive");
-        if (slurp(d, info, BUF) > 0) {
+        if (uslurp(d, info, BUF) > 0) {
             field(info, "kind", kind, 32);
             field(info, "label", label, 64);
             if (ustrcmp(kind, "none")) {
@@ -171,8 +155,8 @@ int main(int argc, char **argv) {
                     else ustrcpy(on, "-");
                 }
                 size = 0 - 1;
-                if (field(info, "size", v, 64)[0]) size = num(v);
-                if (size >= 0) row(name, size, num(field(info, "used", v, 64)), num(field(info, "free", v, 64)), on);
+                if (field(info, "size", v, 64)[0]) size = uatoi(v);
+                if (size >= 0) row(name, size, uatoi(field(info, "used", v, 64)), uatoi(field(info, "free", v, 64)), on);
                 else row(name, 0 - 1, 0 - 1, 0 - 1, on);
             }
         }

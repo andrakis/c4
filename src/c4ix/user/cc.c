@@ -84,10 +84,7 @@ static char *named(char *src, char *ext) {
     return p;
 }
 
-static int prefix(char *s, char *p) {
-    while (*p && *s == *p) { ++s; ++p; }
-    return !*p;
-}
+
 
 // What the kernel said about task pid in /var/log/kernel past its first
 // `from` bytes ("c4ix: task 8 (c4sc) overran its 1048576-byte stack;
@@ -109,7 +106,7 @@ static int why(int pid, int from) {
     while (*p) {
         q = p;
         while (*q && *q != 10) ++q;
-        if (prefix(p, "c4ix: task ")) {
+        if (ustarts(p, "c4ix: task ")) {
             id = 0; n = 11;
             while (p[n] >= '0' && p[n] <= '9') { id = id * 10 + p[n] - '0'; ++n; }
             if (id == pid && p[n] == ' ') {
@@ -117,7 +114,7 @@ static int why(int pid, int from) {
                 ufprintf(STDERR, "cc: the kernel said: %s\n", p + 6);   // less its "c4ix: "
                 *q = k;
                 said = 1;
-                while (p < q && !prefix(p, "overran")) ++p;
+                while (p < q && !ustarts(p, "overran")) ++p;
                 if (p < q) said = 2;
             }
         }

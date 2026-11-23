@@ -14,12 +14,6 @@ enum { SYS_MKFS = 250 };
 
 static int ksys(int num, int a, int b, int c) { return __c4_opcode(c, b, a, num); }
 
-static int num(char *s) {
-    int v;
-    v = 0;
-    while (*s >= '0' && *s <= '9') { v = v * 10 + *s - '0'; ++s; }
-    return v;
-}
 
 // a disk or partition by name, hdD or hdDpP (blk.c's numbers): -1 if not one
 static int disk_id(char *s) {
@@ -35,7 +29,7 @@ int main(int argc, char **argv) {
     bsize = 0; label = 0; dev = 0;
     a = 1;
     while (a < argc) {
-        if (!ustrcmp(argv[a], "-b") && a + 1 < argc) { ++a; bsize = num(argv[a]); }
+        if (!ustrcmp(argv[a], "-b") && a + 1 < argc) { ++a; bsize = uatoi(argv[a]); }
         else if (!ustrcmp(argv[a], "-L") && a + 1 < argc) { ++a; label = argv[a]; }
         else if (!dev) dev = argv[a];
         else { dev = 0; break; }

@@ -31,8 +31,8 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | in QEMU with KVM, helios (itself a Hyper-V VM): by PIO, writes 38 KB a second and CD reads 90 KB a second -- a request a sector, and the CD's read a word at a time -- so that install's 160 MB would have taken hours; by DMA a 1.9 MB file is written to ext2 in 0.48 s (was 50) and 1.8 MB read from the CD in 0.39 s (was 20) |
 | done | the machine off, the power button and a restart (pc/acpi.c): ACPI's S5 from the FADT and the DSDT's \_S5, the fixed power button polled and handed to C4IX as SIGTERM (a clean shutdown), C4IX's `shutdown` and `reboot` |
 | *measured* | in QEMU with KVM (pc and q35, c4pc.elf and c4pc64.elf): system_powerdown at the prompt, and `shutdown`, are C4IX's shutdown and then the VM off; `reboot` resets the PC; SIGTERM to c4pc-host or cli.js is the same shutdown. VMware not yet tried |
-| done | installed onto an IDE disk from the ISO (C4IX's `install`, docs/c4ix-install.md): GRUB and c4pc on the disk, the system's files in a partition of their own, /home kept on its ext2 |
-| *measured* | in QEMU with KVM: the ISO installs onto a blank 1 GB disk, e2fsck finds its ext2 clean, and the disk boots alone through its own GRUB; a file saved in /home is there at the next boot |
+| done | installed onto an IDE disk from the ISO (C4IX's `install`, docs/c4ix-install.md): GRUB and c4pc on the disk, and the whole system, / on its ext2 (`--root`): nothing unpacked at boot, every change kept |
+| *measured* | in QEMU with KVM: from the ISO's menu the system installs onto a blank 2 GB disk in 89 s (4,716 files, 220 MB); e2fsck finds it clean and /boot's files are the build's byte for byte; the disk boots alone through its own GRUB, its text entry and its desktop, a file saved is there at the next boot, and the power button shuts it down clean |
 | not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk, or a SATA CD drive |
 
 ## One engine, two front ends
@@ -458,11 +458,13 @@ off by the fixed ports alone, and no power button.
 ### Installed onto a disk
 
 C4IX's `install` puts it on the PC's first IDE disk, from the ISO, and
-the disk then boots without the CD: GRUB in its first sectors, c4pc and
-the kernel in partition 1's /boot (ext2), the system's files in partition
-2 as the ISO's disk.tar is, and /home on partition 1, kept. It erases the
-disk, says so, and asks for "yes" first. The ISO's menu has an entry
-for it. docs/c4ix-install.md has the layout and how GRUB is set up.
+the disk then boots without the CD: GRUB in its first sectors, and one
+ext2 partition holding the whole system as it was running, c4pc and the
+kernel in its /boot. Its menu boots C4IX with `--root hd0p1`: / is the
+disk's, so there is no boot drive to load into the PC's memory and no
+root archive to unpack, and every change is kept. It erases the disk,
+says so, and asks for "yes" first. The ISO's menu has an entry for it.
+docs/c4ix-install.md has the layout and how GRUB is set up.
 
 ## Running it
 

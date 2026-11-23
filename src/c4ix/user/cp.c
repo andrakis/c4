@@ -27,16 +27,7 @@ static char *base(char *p) {
     return b;
 }
 // A/B into out: 0, or -1 when it does not fit
-static int join(char *out, char *a, char *b) {
-    int n, m;
-    n = ustrlen(a); m = ustrlen(b);
-    if (n + m + 2 > PATHW) return 0 - 1;
-    ustrcpy(out, a);
-    if (!(n && a[n - 1] == '/')) { out[n] = '/'; ++n; }
-    ustrcpy(out + n, b);
-    while (n + m > 1 && out[n + m - 1] == '/') { out[n + m - 1] = 0; --m; }
-    return 0;
-}
+static int join(char *out, char *a, char *b) { return upathjoin(out, PATHW, a, b); }
 
 static int copy_file(char *src, char *dst) {
     int in, out, n, w, bad;

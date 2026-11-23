@@ -424,6 +424,7 @@ int  ext2_commit(struct e2fs *fs);    // the superblock, where its counts change
 int  ext2_mkfs(int dev, int bsize, char *label);
 int  ext2_read(struct e2fs *fs, int ino, char *buf, c4off pos, int len);
 c4off ext2_size(struct e2fs *fs, int ino);   // a file's whole size: past 4 GB with C4IX_LFS
+int  ext2_pwrite(struct e2fs *fs, int ino, char *buf, c4off pos, int len);   // LEN bytes at POS, on the disk
 int  ext2_write(struct e2fs *fs, int ino, char *buf, int len);      // the whole file
 int  ext2_dir_next(struct e2fs *fs, int dir, int *pos, char *name, int *ino, int *isdir);
 int  ext2_lookup(struct e2fs *fs, int dir, char *name);
@@ -441,6 +442,10 @@ int  ext2_ro(struct e2fs *fs);
 // the VFS's side (vfs.c)
 int  vfs_mount(int dev, char *path, int ro);
 int  vfs_mount_sub(int dev, char *sub, char *path, int ro);   // SUB, a directory on DEV, at PATH
+// / on a disk (init --root): DEV's ext2 behind the root directory, the
+// RAM's /proc and /tmp kept in front; vfs_rootdev the device, else -1
+int  vfs_mount_root(int dev);
+extern int vfs_rootdev;
 int  vfs_umount(char *path);
 int  vfs_statfs(char *path, int *out);    // ext2_statfs's, and the device; -1 if not on a disk
 int  vfs_sync();

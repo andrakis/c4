@@ -2,8 +2,9 @@
 
 c4pc's ISO boots C4IX from the CD. `install` puts it on the PC's first
 IDE disk, so that the PC (a VM: VMware, QEMU, VirtualBox; or a real one
-with a BIOS) boots it from there with no CD, and the person's files are
-kept on the disk.
+with a BIOS) boots it from there with no CD. The whole system is then on
+the disk: `/` is the disk's ext2, nothing is unpacked into memory at
+boot, and every change is kept.
 
 **It erases the disk.** `install` says so, with the disk's size, and goes
 on only when `yes` is typed.
@@ -15,14 +16,16 @@ first)", or at any C4IX prompt booted from the ISO:
 
     install          # hd0; install hd1 for the second disk; -y asks nothing
 
-It writes GRUB, partitions the disk, makes partition 1 ext2 and copies
-c4pc and the kernel onto it, writes the system's files into partition 2,
-and says when it is done. Then take the CD out (or put the disk first in
-the VM's boot order) and `reboot`. The disk's own menu is the ISO's, from
-the disk.
+It installs the system that is running: the one the ISO's menu started.
+It waits for the boot to finish unpacking the root archive, then writes
+GRUB, partitions the disk, makes partition 1 ext2, copies the whole tree
+onto it, then c4pc, the kernel and the disk's menu into `/boot`, and says
+when it is done. Then take the CD out (or put the disk first in the VM's
+boot order) and `reboot`. The disk's own menu is the ISO's, from the
+disk.
 
-The disk must be at least the system's files (160 MB now) plus 64 MB to
-spare plus 32 MB: 260 MB or so. A VM's default disk is far bigger.
+The disk must hold the system's files (230 MB now) and an eighth more for
+ext2's own blocks, and 16 MB more: a VM's default disk is far bigger.
 
 ## What is on the disk
 
@@ -30,32 +33,60 @@ spare plus 32 MB: 260 MB or so. A VM's default disk is far bigger.
 |---|---|
 | 0 | GRUB's boot.img (440 bytes), a disk signature, the partition table |
 | 1 to 2047 | GRUB's core.img: the BIOS's disks, the MBR's partitions, ext2, multiboot, the menu's commands; its prefix `(hd0,msdos1)/boot/grub` |
-| partition 1, type 0x83, active | ext2, label C4IX: `/boot` (c4pc.elf, c4pc64.elf, c4ix32.c4r, grub/grub.cfg) and `/home` |
-| partition 2, type 0xDA | the ISO's disk.tar as it is, sector for sector, and room to spare |
+| partition 1, type 0x83, active, the rest of the disk | ext2, label C4IX: the whole of `/` |
 
-Partition 2 is the boot drive: GRUB loads it by its block list,
-`module (hd0,msdos2)0+SECTORS disk.tar drive`, as the ISO's GRUB loads
-/boot/disk.tar. It is raw because C4IX's VFS holds a file it is writing
-to ext2 in memory until it is closed (docs/c4ix-ext2.md 3), and the
-system's files are 160 MB.
+install copies `/` as it is, every directory but `/proc` (the kernel's),
+`/tmp` and `/mnt` (made empty on the disk): `/bin`, `/lib`, `/usr` (the
+root archive's sources, headers and libraries, unpacked), `/etc`, `/var`,
+`/home` and the rest. Programs get mode 0755. A file the boot drive left
+on the host is read from there as it is copied.
 
-Partition 1's `/home` is the person's: the disk's menu boots C4IX with
-`--home hd0p1`, and init mounts that partition's `/home` at `/home` once
-the system's files are there (vfs.c vfs_mount_sub). What is saved there is
-on the disk at once and there at the next boot. The rest of the tree is
-the system's, from partition 2, in memory as it is when booted from the
-CD: a change outside /home lasts until the machine is switched off.
-`mount hd0p1 /mnt/disk` shows the whole partition, /boot too (unmount
-/home first: a partition is mounted once).
+`/boot` holds what GRUB loads: the files the ISO's menu for a disk
+names, `/boot/grub/disk.cfg` (`src/c4pc/pc/grub-disk.cfg`) for the 32-bit
+system, `disk64.cfg` for the 64-bit one -- every `/boot/NAME` that a
+`multiboot` or `module` line names is copied -- and that menu as
+`/boot/grub/grub.cfg`, its `@ROOT@` the partition's name. There is no
+boot drive to load: each entry is c4pc and the kernel, and C4IX's
+`--root hd0p1`.
+
+## Booted with --root
+
+init's `--root hd0p1` (init.c) mounts the partition at `/` before
+anything else starts (vfs.c, `vfs_mount_root`): the root directory is
+backed by the disk's ext2 as a mounted directory is, listed when first
+looked in. What the RAM made there already stays in front: `/proc` (the
+kernel's) and `/tmp` (the session's, in memory); the disk's of the same
+name are not seen. Anything made at the top otherwise is the disk's.
+`/proc/mounts` says `hd0p1 / ext2 rw`; `/` is not unmounted until
+shutdown, which writes everything and marks it clean.
+
+There is no vfsload: no manifest, no root archive. A program asked for by
+its name on the boot drive -- `c4ix-sh.c4r`, which init and the desktop's
+terminal start, `c4sc.c4r` -- is `/bin`'s (loader.c, `loader_alias`:
+`/bin/sh`, `/bin/c4sc`). Libraries are `/lib`'s, as always.
+
+Memory: booted so, a 64 MB machine has 6% of its memory in use at the
+prompt, where booted from the CD the system's files stay on the boot
+drive in the PC's memory and the root archive is unpacked into C4IX's.
+
+## Big files
+
+A file written to the disk is the RAM's until its last writer closes it
+(docs/c4ix-ext2.md 3). One that grows past 1 MB so is written out and let
+go of there (vfs.c, `e2_spill`), and a disk's file not in RAM is written
+to the disk at once, a range at a time (`e2_write_through`, ext2.c's
+`ext2_pwrite`), so a file bigger than the memory can be written: install
+copies Quake's 18 MB pak0.pak on a 128 MB machine, and `cp` copies it
+again on a 64 MB one.
+
+## GRUB's images
 
 GRUB's two images are made when the ISO is (Makefile, c4pc.iso):
 grub-mkimage with the modules the menu needs, then pc/grubdisk.py sets
 them as grub-bios-setup would for core.img from sector 1 -- boot.img's
 boot-drive check made NOPs (a hard disk), diskboot's block list given
 core.img's length. They are on the ISO as /boot/grub/c4pc-boot.img and
-c4pc-core.img, with the disk's menu, /boot/grub/disk.cfg (pc/
-grub-disk.cfg): install fills in its @DISK@, partition 2's block list,
-and @HOME@, partition 1's name.
+c4pc-core.img.
 
 ## Partitions in C4IX
 
@@ -73,33 +104,23 @@ its partitions again. install.c is its user.
 
 ## Not yet
 
-- / on the disk: the system's files in ext2, read when wanted instead of
-  unpacked into memory at boot. Partition 2 would then be a filesystem
-  too, or gone.
-- Updating an installed disk from a newer ISO without erasing /home.
+- The 64-bit system's install: install already picks `disk64.cfg` on a
+  64-bit word; the menu and the 64-bit c4pc come with that system.
+- Updating an installed disk from a newer ISO without erasing it.
 - SATA (AHCI) disks: C4IX sees IDE ones (pc/ata.c). A VM's disk must be
-  on an IDE controller.
+  on an IDE controller (VMware's default for some guest types is SCSI).
 - A disk bigger than 2 TB (the MBR's limit), or a UEFI PC.
+- persist's store: on a disk with `/` on it, nothing is the store, and
+  `persist` (the desktop starts it) says so and keeps nothing; the disk
+  keeps everything itself.
 
 ## Measured
 
-2026-11-23, QEMU 10.2 with KVM on helios (itself a Hyper-V VM), the pc
-machine, IDE disks:
-
-- From the ISO's menu, install onto a blank 2 GB disk takes 13 s, with
-  the disks and the CD by DMA (pc/ata.c). By PIO it would have taken
-  hours: writes went at 38 KB a second, the CD at 90 KB.
-- From Linux: the MBR has the two partitions, `e2fsck -fn` finds
-  partition 1 clean, debugfs reads /boot/c4pc.elf back byte for byte, and
-  partition 2 is disk.tar byte for byte.
-- Booted from the disk alone, its text and desktop entries: /home is
-  hd0p1's, a file saved there is there at the next boot, the power button
-  (system_powerdown) shuts C4IX down and the VM off, and e2fsck finds the
-  partition clean.
-- From power on to /home mounted, on the desktop entry: about 70 s, most
-  of it the BIOS reading partition 2 for GRUB (SeaBIOS's disk reads are
-  PIO); from the ISO, 25 s.
-- On c4pc-host (`--cdrom c4pc.iso --disk FILE`) install takes 1.2 s.
-
-VMware not yet tried. Its disk must be on an IDE controller (VMware's
-default for some guest types is SCSI, which C4IX does not see).
+2026-11-23, c4pc-host (`--cdrom c4pc.iso --disk FILE`): install onto a
+blank 1 GB disk, 4,717 files and 299 directories, 216 MB, in 19 s;
+e2fsck finds it clean, and debugfs reads /bin/sh, Quake's pak0.pak and
+Duke Nukem 3D's GRP back byte for byte. Booted with `--root hd0p1` and no
+boot drive at all: programs run from the disk, a 64 MB machine has 6% in
+use, an 18 MB file copied there has the same CRC and is the same byte for
+byte from Linux, files made in one boot are there in the next, and
+e2fsck finds it clean.

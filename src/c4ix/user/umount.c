@@ -50,12 +50,6 @@ static int disk_umount(char *want) {
     return 0;
 }
 
-static int num(char *s) {
-    int v;
-    v = 0;
-    while (*s >= '0' && *s <= '9') { v = v * 10 + *s - '0'; ++s; }
-    return v;
-}
 
 // DIR's contents, each directory as it empties; how many could not go
 static int rmtree(char *dir) {
@@ -104,7 +98,7 @@ int main(int argc, char **argv) {
         while (*p && *p != ' ' && *p != 10 && i < PATHW - 1) { d[i] = *p; ++i; ++p; }
         d[i] = 0;
         if (*p == ' ') ++p;
-        k = num(p);
+        k = uatoi(p);
         while (*p >= '0' && *p <= '9') ++p;
         if (*p == ' ') ++p;
         i = 0;

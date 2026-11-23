@@ -14,11 +14,7 @@
 
 static char path[96];
 
-static char *cat(char *d, char *s) {
-    while (*s) { *d = *s; ++d; ++s; }
-    *d = 0;
-    return d;
-}
+
 
 // a number, -10..10; 99 when it is not one
 static int num(char *s) {
@@ -54,20 +50,20 @@ static int run(char *name, int argc, char **argv) {
     pid = 0 - 1;
     while (form < 4 && pid == SPAWN_NOENT) {
         if (form <= 0) {
-            if (form == 0 - 2) p = cat(path, "/bin/");
-            else if (form == 0 - 1) p = cat(path, "/usr/bin/");
-            else p = cat(path, "/usr/games/bin/");
-            cat(p, name);
+            if (form == 0 - 2) p = ustpcpy(path, "/bin/");
+            else if (form == 0 - 1) p = ustpcpy(path, "/usr/bin/");
+            else p = ustpcpy(path, "/usr/games/bin/");
+            ustpcpy(p, name);
             if (ustat(path, st) < 0 || st[0] != 2) { ++form; continue; }
         } else if (form == 1) {
-            p = cat(path, "c4ix-");
-            p = cat(p, name);
-            cat(p, ".c4r");
+            p = ustpcpy(path, "c4ix-");
+            p = ustpcpy(p, name);
+            ustpcpy(p, ".c4r");
         } else if (form == 2) {
-            cat(path, name);
+            ustpcpy(path, name);
         } else {
-            p = cat(path, name);
-            cat(p, ".c4r");
+            p = ustpcpy(path, name);
+            ustpcpy(p, ".c4r");
         }
         pid = spawn(path, argc, argv);
         ++form;

@@ -224,19 +224,16 @@ static void lock_drop() {
 
 // ---- strings and paths ----
 
-static int starts(char *s, char *p) {
-    while (*p) { if (*s != *p) return 0; ++s; ++p; }
-    return 1;
-}
+
 
 static int same(char *a, char *b) { return !ustrcmp(a, b); }
 
 // never kept: what the system makes again itself, and this
 static int excluded(char *path) {
-    return same(path, "/tmp") || starts(path, "/tmp/") ||
-           same(path, "/var/log") || starts(path, "/var/log/") ||
-           same(path, "/proc") || starts(path, "/proc/") ||
-           same(path, "/var/persist") || starts(path, "/var/persist/");
+    return same(path, "/tmp") || ustarts(path, "/tmp/") ||
+           same(path, "/var/log") || ustarts(path, "/var/log/") ||
+           same(path, "/proc") || ustarts(path, "/proc/") ||
+           same(path, "/var/persist") || ustarts(path, "/var/persist/");
 }
 
 static char *dup(char *s) {
@@ -963,7 +960,7 @@ static int dl_tree(char *abs, char *rel) {
         ustrcpy(ustrcpy(ustrcpy(a, abs[1] ? abs : "") - 1, "/") - 1, name);
         ustrcpy(ustrcpy(ustrcpy(r, rel) - 1, "/") - 1, name);
         // what is made up as it is read is not taken away
-        if (starts(a, "/proc/") || same(a, "/proc")) continue;
+        if (ustarts(a, "/proc/") || same(a, "/proc")) continue;
         if (ustat(a, st) < 0) continue;
         if (st[0] == 1) n = n + dl_tree(a, r);
         else if (st[0] == 2 && dl_file(a, r, st[1])) ++n;
@@ -1038,7 +1035,7 @@ int main(int argc, char **argv) {
     while (argv[0][i]) { if (argv[0][i] == '/') me = argv[0] + i + 1; ++i; }
     if (argc > 1 && same(argv[1], "boot")) return boot(argc, argv);
     // (needs no drive 1: the page takes it)
-    if (starts(me, "download")) return download(argc, argv, 1);
+    if (ustarts(me, "download")) return download(argc, argv, 1);
     if (argc > 1 && same(argv[1], "download")) return download(argc, argv, 2);
 
     // the daemon is started on every desktop boot: where there is no
@@ -1050,7 +1047,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (starts(me, "sync") || (argc > 1 && same(argv[1], "save"))) {
+    if (ustarts(me, "sync") || (argc > 1 && same(argv[1], "save"))) {
         if (!lock_take(1)) { ufprintf(STDERR, "persist: another save is still running\n"); return 1; }
         survey();
         rc = save(0);

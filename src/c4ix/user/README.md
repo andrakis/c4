@@ -45,7 +45,7 @@ names (`/bin`, `/usr/bin`, `/usr/games/bin`), and then as
 | `chmod.c` | a file's permission bits, in octal; on a disk, in its inode |
 | `shutdown.c` | the machine off (`-r`: restarted): every program ended, every disk written and unmounted clean (SYS_SHUTDOWN) |
 | `reboot.c` | `shutdown -r` |
-| `install.c` | C4IX onto a PC's disk from c4pc's boot disc, to boot from it: GRUB, an ext2 partition for /boot and /home, the system's files in another (docs/c4ix-install.md). It erases the disk, and asks first |
+| `install.c` | C4IX onto a PC's disk from c4pc's boot disc, to boot from it: GRUB and one ext2 partition, the whole running system copied onto it, booted with / there (docs/c4ix-install.md). It erases the disk, and asks first |
 | `nice.c` | `nice [-n N] COMMAND`, `nice -p PID [N]`: a task's priority, -10 to 10 (`SYS_NICE`) |
 | `pin.c` | `pin CPUS COMMAND`, `pin -p PID [CPUS]`: which CPUs a task may run on (`SYS_AFFINITY`) |
 | `persist.c` | `persist boot\|save\|status\|forget\|-d SECS`, and `/bin/sync`: the filesystem's changes kept on drive 1 |

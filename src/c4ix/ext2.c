@@ -442,6 +442,63 @@ static int ext2_read_via(struct e2fs *fs, int ino, char *ib, char *buf, c4off po
     return done;
 }
 
+// LEN bytes of BUF at POS of inode INO, on the disk, and nowhere else (a
+// file too big for the RAM: vfs.c's write-through): its blocks made where
+// there were none -- a part of one the rest zeros -- and its size grown to
+// the end of them if that is past it. BUF may be a user task's (under the
+// MMU, not memory's), so the disk is written from the kernel's own buffer,
+// a run of up to 16 adjacent blocks at a time. The count, or -1.
+int ext2_pwrite(struct e2fs *fs, int ino, char *buf, c4off pos, int len) {
+    char ib[256];
+    char *blk;
+    c4off end;
+    int done, lbn, off, n, b, run, b0, had;
+    if (fs->ro || len < 0) return 0 - 1;
+    if (iget(fs, ino, ib) < 0) return 0 - 1;
+    if (!(blk = vfs_malloc(16 * fs->bsize))) return 0 - 1;
+    done = 0;
+    while (done < len) {
+        lbn = (int)((pos + done) / fs->bsize);
+        off = (int)((pos + done) % fs->bsize);
+        n = fs->bsize - off;
+        if (n > len - done) n = len - done;
+        if (off == 0 && n == fs->bsize) {
+            // whole blocks: a run of them, where the disk has them side by side
+            if (!(b0 = bmap(fs, ino, ib, lbn, 1))) break;
+            run = 1;
+            while (run < 16 && done + (run + 1) * fs->bsize <= len && bmap(fs, ino, ib, lbn + run, 1) == b0 + run) ++run;
+            memcpy(blk, buf + done, run * fs->bsize);
+            if (bwrite_from(fs, b0, run, blk) < 0) break;
+            done = done + run * fs->bsize;
+            continue;
+        }
+        // part of a block: what it had, or zeros where it is new
+        had = bmap(fs, ino, ib, lbn, 0);
+        if (!(b = had ? had : bmap(fs, ino, ib, lbn, 1))) break;
+        if (had) { if (bread_to(fs, b, 1, blk) < 0) break; }
+        else memset(blk, 0, fs->bsize);
+        memcpy(blk + off, buf + done, n);
+        if (bwrite_from(fs, b, 1, blk) < 0) break;
+        done = done + n;
+    }
+    free(blk);
+    end = pos + done;
+    if (end > i_fsize(ib)) {
+#ifdef C4IX_LFS
+        wr32(ib + 4, (int)(end & 0xFFFFFFFFll));
+        wr32(ib + 108, (int)(end >> 32));
+#else
+        wr32(ib + 4, end);
+        wr32(ib + 108, 0);
+#endif
+    }
+    wr32(ib + 16, e2_now(fs));                  // mtime
+    wr32(ib + 12, e2_now(fs));                  // ctime
+    if (iput(fs, ino, ib) < 0) return 0 - 1;
+    if (!done && len) return 0 - 1;             // full, or the disk refused
+    return done;
+}
+
 // inode INO's bytes made BUF's LEN: its blocks written (made, where it
 // grew), its blocks past the end freed, its size and mtime set. 0, or -1
 int ext2_write(struct e2fs *fs, int ino, char *buf, int len) {

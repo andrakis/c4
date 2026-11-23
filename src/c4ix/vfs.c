@@ -1359,6 +1359,30 @@ static struct e2fs *vfs_mfs[VFS_MOUNTS];
 // block device DEV's ext2 filesystem at PATH, an empty directory (made if
 // there is none): 0, or -1
 int vfs_mount(int dev, char *path, int ro) { return vfs_mount_sub(dev, 0, path, ro); }
+
+// / on a disk (init --root hd0p1; docs/c4ix-install.md): the root
+// directory backed by DEV's ext2 as a mounted directory is, listed when
+// first looked in. What the RAM has there already -- /proc, /tmp -- stays
+// in front, a disk's entry of the same name unseen; anything made at the
+// top otherwise is the disk's. Unmounted only at shutdown. 0, or -1
+int vfs_rootdev = 0 - 1;
+int vfs_mount_root(int dev) {
+    struct e2fs *fs;
+    int i;
+    sched_lock();
+    i = 0;
+    while (i < VFS_MOUNTS && vfs_mpt[i]) ++i;
+    if (i == VFS_MOUNTS || rootdir->e2 || !(fs = ext2_mount(dev, 0))) { sched_unlock(); return 0 - 1; }
+    rootdir->e2 = fs;
+    rootdir->e2ino = 2;
+    rootdir->e2unlisted = 1;
+    vfs_mpt[i] = rootdir;
+    vfs_mfs[i] = fs;
+    vfs_rootdev = dev;
+    klog("ext2: %s mounted on /%s\n", blk_nm(dev), ext2_ro(fs) ? ", read-only" : "");
+    sched_unlock();
+    return 0;
+}
 // ... SUB, a directory on it (0: its root), there instead: --home hd0p1
 // is the disk's /home at /home (init.c). A host's directory with nothing
 // in it may be mounted over (the boot disk's empty home/, where there
@@ -1434,7 +1458,8 @@ int vfs_umount(char *path) {
     dir = vfs_walk(path, 0, 0);
     i = 0;
     while (i < VFS_MOUNTS && (!vfs_mpt[i] || vfs_mpt[i] != dir)) ++i;
-    if (i == VFS_MOUNTS || e2_busy(dir)) { sched_unlock(); return 0 - 1; }
+    // / is the shutdown's to let go (vfs_umount_all)
+    if (i == VFS_MOUNTS || dir == rootdir || e2_busy(dir)) { sched_unlock(); return 0 - 1; }
     e2_flush_tree(dir);
     e2_forget(dir);
     ext2_umount(vfs_mfs[i]);
@@ -1459,6 +1484,7 @@ static int vfs_mounts_text(char *out, int max) {
             depth = 0;
             vn = vfs_mpt[i];
             while (vn && vn != rootdir && depth < 32) { up[depth] = vn; ++depth; vn = vn->parent; }
+            if (!depth) out[n++] = '/';           // / itself (--root)
             while (depth > 0) {
                 --depth;
                 out[n++] = '/';
@@ -1627,6 +1653,51 @@ int vfs_read(struct file *f, char *buf, int len) {
     return n;
 }
 
+// ---- a disk's big files: written where they are ----
+//
+// A disk's file is the RAM's while it is written (above), and the disk's
+// again when its last writer closes it: right for most files, but one
+// bigger than the memory cannot be held, and one of tens of MB costs that
+// much while it is (install's copies: Quake's 18 MB pak0.pak did not fit
+// a 128 MB machine). So a file grown past E2_SPILL in RAM is written out
+// and let go of there (e2_spill), and a disk's file not in RAM -- still on
+// the disk, or let go of so -- is written to the disk at once, a range at
+// a time (e2_write_through, ext2_pwrite). Reading it is as reading any
+// disk's file not in RAM: from the disk, a range at a time.
+enum { E2_SPILL = 1048576 };
+
+// VN's LEN bytes at F's position, on the disk: the count, or -1
+static int e2_write_through(struct vnode *vn, struct file *f, char *buf, int len) {
+    int n, old;
+    if (f->flags & C4IX_O_APPEND) f->pos = vn->e2size;
+    n = ext2_pwrite(vn->e2, vn->e2ino, buf, f->pos, len);
+    if (n < 0) return 0 - 1;
+    f->pos = f->pos + n;
+    if (f->pos > vn->e2size) {
+        old = vn->size;
+        vn->e2size = f->pos;
+        vn->size = C4OFF_WORD(vn->e2size);
+        vfs_lazybytes = vfs_lazybytes + vn->size - old;
+    }
+    vfs_clock = vfs_clock + 1;
+    vn->mtime = vfs_clock;
+    vn->sig = 0;
+    ext2_commit(vn->e2);
+    return n;
+}
+// VN, a disk's file in RAM, written to the disk and its RAM let go of:
+// the disk's from now on. 0, or -1 (it stays the RAM's)
+static int e2_spill(struct vnode *vn) {
+    if (!vn->e2 || vn->lazy) return 0;
+    if (ext2_write(vn->e2, vn->e2ino, vn->data, vn->size) < 0) return 0 - 1;
+    ext2_commit(vn->e2);
+    vn->e2dirty = 0;
+    vn->e2size = vn->size;
+    vn->backed = 1;
+    vn_drop(vn);
+    return 0;
+}
+
 int vfs_write(struct file *f, char *buf, int len) {
     struct vnode *vn;
     int i, end;
@@ -1654,6 +1725,8 @@ int vfs_write(struct file *f, char *buf, int len) {
         return len;
     }
 
+    // A disk's file not in RAM is written where it is (e2_write_through)
+    if (vn->e2 && vn->lazy) { i = e2_write_through(vn, f, buf, len); sched_unlock(); return i; }
     // RAM file: write at the description's position, extending as
     // needed, or at the end for O_APPEND.
     if (vn->lazy && !vfs_fill(vn)) { sched_unlock(); return -1; }
@@ -1664,6 +1737,8 @@ int vfs_write(struct file *f, char *buf, int len) {
     if (sizeof(int) == 4 && f->pos > 0x7FFFFFFF - len) { sched_unlock(); return -1; }
     i = (int)f->pos;
     end = i + len;
+    // a disk's file past E2_SPILL: the disk's from here on
+    if (vn->e2 && end > E2_SPILL && !e2_spill(vn)) { i = e2_write_through(vn, f, buf, len); sched_unlock(); return i; }
     if (!vn_grow(vn, end)) { sched_unlock(); return -1; }
     // past the end (lseek): the gap reads as zeros, whatever a truncate left in the buffer
     if (i > vn->size) memset(vn->data + vn->size, 0, i - vn->size);

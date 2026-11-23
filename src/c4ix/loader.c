@@ -149,9 +149,27 @@ static int mod_in(int fd, struct vnode *vn, int off, char *dst, int n) {
 
 // Read and relocate one image. Returns 1 and fills M; its buf stays
 // allocated until the caller has linked it.
+// a program asked for by its name on the boot drive (c4ix-sh.c4r,
+// c4sc.c4r: what init, the desktop's terminal and cc name) where / is a
+// disk (init --root): /bin/sh, /bin/c4sc into OUT. 1 if PATH is such a name
+static int loader_alias(char *path, char *out) {
+    int n, k, s;
+    n = 0;
+    while (path[n]) { if (path[n] == '/') return 0; ++n; }
+    if (n < 5 || n > 60 || path[n - 4] != '.' || path[n - 3] != 'c' || path[n - 2] != '4' || path[n - 1] != 'r') return 0;
+    s = 0;
+    if (n > 9 && path[0] == 'c' && path[1] == '4' && path[2] == 'i' && path[3] == 'x' && path[4] == '-') s = 5;
+    memcpy(out, "/bin/", 5);
+    k = 5;
+    while (s < n - 4) { out[k] = path[s]; ++k; ++s; }
+    out[k] = 0;
+    return 1;
+}
+
 static int mod_read(char *path, struct c4r_mod *m) {
     char *buf, *p, *data;
     char hdr[80];
+    char alias[72];
     int *code;
     int fd, n, total, hlen, rest;
     int entry, codelen, datalen, patchlen, symlen, conslen, deslen, memsz;
@@ -168,6 +186,11 @@ static int mod_read(char *path, struct c4r_mod *m) {
     // moment ago, ran the disk's own hello.c4r instead.
     vn = vfs_lookup(path);
     if (vn && vn->type != VN_RAMFILE) vn = 0;
+    // / on a disk: the boot drive's name for a program is /bin's
+    if (!vn && vfs_rootdev >= 0 && loader_alias(path, alias)) {
+        vn = vfs_lookup(alias);
+        if (vn && vn->type != VN_RAMFILE) vn = 0;
+    }
     if (!vn && (fd = open(path, 0)) >= 0) {
         // The host says nothing of a file's size, so it is read twice:
         // a chunk at a time to count it, then into allocations just that

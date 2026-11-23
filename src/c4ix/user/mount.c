@@ -93,12 +93,6 @@ static int disk_id(char *s) {
     if (s[3] != 'p' || s[4] < '1' || s[4] > '4' || s[5]) return 0 - 1;
     return 8 + (s[2] - '0') * 4 + s[4] - '1';
 }
-static int num(char *s) {
-    int v;
-    v = 0;
-    while (*s >= '0' && *s <= '9') { v = v * 10 + *s - '0'; ++s; }
-    return v;
-}
 
 // /tmp/mounts into tab: a line each, "DIR DRIVE KIND LABEL"
 static int tab_read() {
@@ -123,7 +117,7 @@ static int mounted(char *dir, int n) {
         if (dl && k == dl && p[k] == ' ') return 1;
         k = 0;
         while (p[k] && p[k] != ' ' && p[k] != 10) ++k;
-        if (n >= 0 && p[k] == ' ' && num(p + k + 1) == n && p[k + 1] >= '0' && p[k + 1] <= '9') return 1;
+        if (n >= 0 && p[k] == ' ' && uatoi(p + k + 1) == n && p[k + 1] >= '0' && p[k + 1] <= '9') return 1;
         while (*p && *p != 10) ++p;
         if (*p) ++p;
     }
@@ -143,7 +137,7 @@ static int list() {
             while (*p && *p != ' ' && *p != 10 && i < PATHW - 1) { d[i] = *p; ++i; ++p; }
             d[i] = 0;
             if (*p == ' ') ++p;
-            k = num(p);
+            k = uatoi(p);
             uprintf("%s on drive %d", d, k);
             if (drive_info(k) > 0) {
                 field("kind", kind, 32); field("label", label, 64); field("fs", fs, 48);
@@ -173,7 +167,7 @@ static int list() {
         p = proc;
         while (*p) {
             dev = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
-            uprintf("  %s: %d MB", dev, num(p) / 2048);
+            uprintf("  %s: %d MB", dev, uatoi(p) / 2048);
             while (*p && *p != ' ' && *p != 10) ++p;
             if (*p == ' ' && p[1] == 'r' && p[2] == 'o') uprintf(", read-only");
             while (*p && *p != 10) ++p; if (*p) ++p;
@@ -308,7 +302,7 @@ int main(int argc, char **argv) {
     if (kind[0]) {
         uprintf(" (%s", kind);
         if (label[0]) uprintf(" '%s'", label);
-        if (size[0]) uprintf(", %d MB", num(size) / 1024);
+        if (size[0]) uprintf(", %d MB", uatoi(size) / 1024);
         uprintf(")");
     }
     uprintf(" on %s\n", dir);

@@ -9,7 +9,8 @@ shown but not yet enforced; 6 and 7 are to come.
 | done | ext2 in the kernel (ext2.c): read and write, 1, 2 and 4 KB blocks, indirect blocks to triple, directories, links, rename, a mode; mkfs |
 | done | mounted into the VFS (vfs.c): `mount hdN DIR`, `mount -r`, `umount`, /proc/mounts, `df`, `mkfs`, `chmod`; every disk unmounted clean at shutdown |
 | *measured* | a disk Linux's mke2fs made (1 KB and 4 KB blocks) and one C4IX's mkfs made: listed, read, written (mkdir, cp, cp -r, mv, rm, chmod) and unmounted, and `e2fsck -fn` finds nothing wrong with any; debugfs reads the copies back byte for byte. On c4pc-host with and without the MMU and on 4 threads, on libjs's cli.js, and on c4pc64.elf in QEMU with an IDE disk |
-| done | MBR partitions as devices (blk.c: hd0p1 ...), and `install` (docs/c4ix-install.md): booted from the disk, its partition 1's /home is /home |
+| done | MBR partitions as devices (blk.c: hd0p1 ...), and `install` (docs/c4ix-install.md): the system on the disk, / its ext2 (`--root`) |
+| done | a disk's file past 1 MB written to the disk as it is written (vfs.c `e2_spill`, `e2_write_through`; ext2.c `ext2_pwrite`), so one bigger than the memory can be: an 18 MB copy on a 64 MB machine |
 | not yet | modes enforced (read-only, execute bits), `ls -l`; /dev/hdN; the page's disk; / on the disk (6); mmap (7) |
 
 
@@ -81,6 +82,11 @@ the disk, or mount it read-only where they are read-only compatible.
 
 ## 3. Into the VFS
 
+(2026-11-23: what is written is the RAM's until its last writer closes it
+only up to 1 MB. A file that grows past that is written out and let go
+of, and from then on, as for a disk's file not in RAM, each write goes to
+the disk at once: docs/c4ix-install.md, "Big files".)
+
 A mounted ext2 is a directory whose vnodes are backed by the disk, as a
 host directory's are backed by the host (vfs_lazydir, vfs_lazyfile), and
 the VFS's machinery for those carries over:
@@ -138,12 +144,15 @@ when C4IX has logins.
 
 ## 6. Installed: the system on the disk
 
-Built, in part (2026-11-23): `install` (docs/c4ix-install.md) writes GRUB
-and a partition table, makes partition 1 ext2 with /boot and /home, and
-writes the system's files raw into partition 2, which GRUB loads as the
-boot drive; booted from the disk, init mounts partition 1's /home at
-/home (`--home hd0p1`). The kernel reads MBR partitions (blk.c: hdDpP).
-Not yet: / on the disk, as below.
+Built (2026-11-23): `install` (docs/c4ix-install.md) writes GRUB and a
+partition table, makes the disk one ext2 partition and copies the whole
+running system onto it, c4pc and the kernel into its /boot. Booted from
+the disk, init mounts it at / (`--root hd0p1`, vfs.c `vfs_mount_root`):
+nothing unpacked, nothing in RAM that is not in use, every change on the
+disk; /proc and /tmp stay the RAM's. The kernel reads MBR partitions
+(blk.c: hdDpP). A file bigger than 1 MB written to a disk goes to the
+disk as it is written, not into RAM (section 3). persist and the store
+are for the CD boot and the browser only, as planned.
 
 The plan was: `install /dev/hd0` (a program, and the desktop's): a partition table, an
 ext2 partition, the system copied on (the boot disk's files, the root

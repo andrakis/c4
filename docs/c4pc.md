@@ -216,6 +216,25 @@ descriptor list of two, and the poll goes by its link position (LPIB):
 `--debug-sound` prints the codec's nodes, their connections and their
 pins' configurations. A PC with neither runs silent, and says why.
 
+Where there is neither, the Ensoniq AudioPCI (pc/es137x.c): the ES1371,
+VMware's sound device for many guest types -- the user's VMware said
+"no Sound Blaster 16 ...; no HD Audio controller" -- its CT5880 and
+EV1938 kin, and the ES1370 before it (QEMU's `-device ES1370`). The
+first on any PCI bus (VMware puts devices behind its PCIe root ports; the
+HD Audio probe looks on every bus now too), its registers I/O ports at
+BAR0. DAC2 goes round the same ring, 16-bit stereo, looping, no
+interrupt, and the poll reads its frame's count (the DAC page's 0x3c,
+high half). The ES1370 divides its clock for 44.1 kHz (CONTROL's
+PCLKDIV, 1411200 / 44100 - 2) and has an AK4531, reset and opened; the
+ES1371 sends DAC2 through its sample-rate converter, whose RAM is
+cleared and set before it is enabled, as Linux's ens1370.c does (one
+left unset locks the chip), and has an AC'97 codec: reset, then master,
+headphone and PCM out at 0 dB. `c4pc: sound: Ensoniq AudioPCI ES1371,
+DAC2 at 44.1 kHz`. *Measured*: on QEMU's ES1370, Doom's title loop
+recorded at the SB16's levels second for second; the ES1371's converter
+and codec are VMware's to try. In a VM's .vmx, `sound.virtualDev =
+"sb16"` or `"hdaudio"` chooses the other two.
+
 *Measured* (QEMU with KVM, Doom's demo3, QEMU's wav audiodev recording
 what the card played): through the SB16 and through HD Audio, on
 c4pc.elf and c4pc64.elf, the music and the sounds at levels of 4,000 to

@@ -794,8 +794,15 @@ void pc_main(u32 magic, struct mb_info *mb) {
     snd *s = snd_new(m, 44100, 1);
     const char *how = sb16_init(s);
     if (!how && (how = hda_init(s))) audio_poll = hda_poll;
+    /* the Ensoniq AudioPCI: VMware's ES1371 for many guest types (es137x.c) */
+    { extern const char *es137x_init(snd *); extern void es137x_poll(void);
+      if (!how && (how = es137x_init(s))) audio_poll = es137x_poll; }
     if (how) { m->snd = s; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); }
-    else { extern const char *hda_why; con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h; "); con_puts(hda_why); con_puts("\n"); }
+    else {
+      extern const char *hda_why, *es137x_why;
+      con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h; "); con_puts(hda_why);
+      con_puts("; "); con_puts(es137x_why); con_puts("\n");
+    }
   }
   /* the processors: the PC's others started (ap.c), each the machine's
    * CPU on a processor of its own (par.c); with none, the machine's CPUs

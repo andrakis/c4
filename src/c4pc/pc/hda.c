@@ -182,7 +182,8 @@ static int codec_setup(u32 cad) {
 const char *hda_init(snd *s) {
   static char desc[96];
   u32 bus, dev, fn = 0, found = 0;
-  for (bus = 0; bus < 8 && !found; bus++)
+  /* every bus: a VM's devices may be behind its PCIe root ports */
+  for (bus = 0; bus < 256 && !found; bus++)
     for (dev = 0; dev < 32 && !found; dev++)
       for (fn = 0; fn < 8; fn++) {
         u32 id = pci_rd(bus, dev, fn, 0);

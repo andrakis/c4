@@ -38,7 +38,7 @@
 // belong to the block anyway.
 
 const SMALL_MAX = 4096, NCLASS = 9;            // 16 << 0 .. 16 << 8
-const C = { LOCK: 0, BASE: 1, END: 2, BRK: 3, USED: 4, PEAK: 5, COUNT: 6, NLARGE: 7, LCAP: 8, TOP: 9, HIGH: 10, HEADS: 16, WORDS: 32 };
+const C = { LOCK: 0, BASE: 1, END: 2, BRK: 3, USED: 4, PEAK: 5, COUNT: 6, NLARGE: 7, LCAP: 8, TOP: 9, HEADS: 16, WORDS: 32 };
 const M_FREE = 16, M_LARGE = 32;               // map: 1..9 a used small block of that class, +16 free
 
 function classOf(n) {
@@ -59,6 +59,7 @@ export class SharedHeap {
       new Int32Array(books, 0, C.WORDS)[C.LCAP] = lcap;
     }
     this.books = books;
+    this.high = 0;                      // this thread's (setHigh)
     this.i32 = arena.i32;
     this.ctl = new Int32Array(books, 0, C.WORDS);
     const lcap = this.ctl[C.LCAP];
@@ -86,7 +87,7 @@ export class SharedHeap {
     const ctl = this.ctl;
     base = (base + 15) & ~15;
     end = end & ~15;
-    ctl[C.BASE] = base; ctl[C.END] = end; ctl[C.BRK] = base; ctl[C.TOP] = end; ctl[C.HIGH] = 0;
+    ctl[C.BASE] = base; ctl[C.END] = end; ctl[C.BRK] = base; ctl[C.TOP] = end; this.high = 0;
     ctl[C.USED] = 0; ctl[C.PEAK] = 0; ctl[C.COUNT] = 0; ctl[C.NLARGE] = 0;
     for (let k = 0; k < NCLASS; k++) ctl[C.HEADS + k] = 0;
     this.map.fill(0);
@@ -94,10 +95,13 @@ export class SharedHeap {
     this.unlock();
   }
 
-  // the books are every thread's, and so is the flag: one CPU's frames
-  // taken while it is set send another's large blocks up too, which harms
-  // nothing
-  setHigh(on) { Atomics.store(this.ctl, C.HIGH, on ? 1 : 0); }
+  // the books are every thread's, but the flag is this one's: a thread is
+  // a CPU, and C4IX sets it around one allocation (mmu.c mmu_fnew,
+  // umem_block). Shared, two CPUs' windows overlapped: one's frames went
+  // to the bottom among the kernel's blocks, or another's kernel blocks to
+  // the top among programs', and free memory was left in pieces when the
+  // programs had gone (test-c4ix-loadctl, 3 runs in 6)
+  setHigh(on) { this.high = on ? 1 : 0; }
 
   // the biggest block alloc could hand out now, as heap.js's
   largest() {
@@ -169,7 +173,7 @@ export class SharedHeap {
       addr = this.pop(k);
     } else {
       span = (n + 15) & ~15;
-      addr = ctl[C.HIGH] ? this.takeHigh(span) : this.takeLarge(span);
+      addr = this.high ? this.takeHigh(span) : this.takeLarge(span);
     }
     if (!addr) {
       if (ctl[C.BRK] + span <= ctl[C.TOP]) { addr = ctl[C.BRK]; ctl[C.BRK] = addr + span; }

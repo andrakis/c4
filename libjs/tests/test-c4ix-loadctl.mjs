@@ -101,7 +101,9 @@ check(!/killed/.test(t), 'no program is killed', t);
 check(!/BAD|no memory/.test(t), 'every word of every program is as it left it', t);
 check((t.match(/hog \d+: fine/g) || []).length === 6, 'all six finish', t);
 
-const d = runFor('dmesg -t\necho @@dmesg@@', /@@dmesg@@\n/, 200000);
+// (a hog that has said fine may not have gone yet, and may be held until it
+// has: every job waited for first)
+const d = runFor('wait\ndmesg -t\necho @@dmesg@@', /@@dmesg@@\n/, 2000000);
 check(/\bheld, \d+ held/.test(d), 'load control held a task', d);
 check(/let go, 0 held/.test(d), '... and let every one go again', d);
 

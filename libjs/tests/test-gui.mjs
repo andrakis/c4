@@ -165,4 +165,23 @@ check(gui.dropped === 0 && gui.lostCommands === 0, 'nothing dropped either way')
   check(types(g.drain()) === `${CMD.CLIP},${CMD.RECT},${CMD.RGB}`, 'nor one inside a narrower clip');
 }
 
+// ---- a command over half the ring, with the ring's head in its middle ----
+// gui-wrap.c steers the head to where the command cannot fit before the
+// end and the wrap and the command are more than the ring, twelve times:
+// gui_frame dropped each of them before c9681e6 (the desktop's picture
+// at 1024x768 with 8-byte words). All twelve must reach the display.
+{
+  const g = new GuiDevice({ w: 320, h: 200 });
+  const o = [];
+  const m = createMachine({ arenaMb: 4, gui: g, onByte: b => o.push(b) });
+  m.dev.rxEof = true;
+  boot(m, new Uint8Array(readFileSync(new URL('../../src/c4bb/images/gui-wrap.c4r', import.meta.url))), ['gui-wrap.c4r']);
+  let rr, defs = 0;
+  const count = f => { for (let i = 0; f && i < f.length; i += f[i]) if (f[i + 1] === CMD.IMGDEF && f[i + 3] === 20 && f[i + 4] === 15) defs++; };
+  for (let s = 0; s < 1000; s++) { rr = m.run(320000); count(g.drain()); if (rr === STOP.HALT) break; }
+  const t = Buffer.from(o).toString('latin1');
+  check(rr === STOP.HALT && m.dev.status === 0 && t.includes('gui-wrap: 12 of 12 sent') && defs === 12,
+        `commands over half the ring, sent mid-ring: all 12 reach the display (${defs})`, t);
+}
+
 process.exit(fail);

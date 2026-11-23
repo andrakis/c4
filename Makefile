@@ -3193,7 +3193,7 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # flags, so that it can be held against libjs; c4pc.elf is a multiboot
 # kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
 C4PC_SRC  := src/c4pc
-C4PC_MODS := engine mmu smp par accel dev cdrom gui font heap fmt fpu drive util snd opl \
+C4PC_MODS := engine mmu smp par accel dev cdrom gui font heap fmt fpu drive util inflate snd opl \
 	games/doom games/duke3d games/quake games/rott games/sbk games/tyrian games/wolf3d
 C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h $(C4PC_SRC)/font.h $(C4PC_SRC)/accel.h $(C4PC_SRC)/snd.h
 # The display's faces (font.c), as tables mkfont.py makes from the system's
@@ -3280,6 +3280,11 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 	python3 $(C4PC_SRC)/pc/disksizes.py $(C4PC_IMAGES)/disk/c4ix.sizes .c4pc/add > .c4pc/add/c4ix.sizes.new
 	mv .c4pc/add/c4ix.sizes.new .c4pc/add/c4ix.sizes
 	tar --format=ustar -C .c4pc/add -rf $@ .
+# ... and with its files compressed, for the ISO and the DOS package
+# (pc/packdisk.py: each gzipped alone as NAME.c4pcz, a third the size,
+# inflated by c4pc's drive when first read: drive.c, inflate.c)
+.c4pc/diskz.tar: .c4pc/disk.tar $(C4PC_SRC)/pc/packdisk.py
+	python3 $(C4PC_SRC)/pc/packdisk.py .c4pc/disk.tar $@
 # The boot disk less the games, for machines with little memory: plain
 # DOSBox has 63 MB at most. Every file under 300 KB outside the games'
 # folders, and the root archive.
@@ -3292,10 +3297,11 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 # Hyper-V (generation 1) and real PCs with a BIOS. GRUB_MKRESCUE: one
 # with the i386-pc modules (~/opt/pctools/bin/grub-mkrescue-pc on helios).
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue-pc || echo grub-mkrescue)
-c4pc.iso: c4pc.elf c4pc64.elf .c4pc/disk.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg \
+c4pc.iso: c4pc.elf c4pc64.elf .c4pc/diskz.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg \
           .c4pc/grub/c4pc-core.img $(C4PC_SRC)/pc/grub-disk.cfg
 	rm -rf .c4pc/iso && mkdir -p .c4pc/iso/boot/grub
-	cp c4pc.elf c4pc64.elf .c4pc/kernel/c4ix32.c4r .c4pc/disk.tar .c4pc/iso/boot/
+	cp c4pc.elf c4pc64.elf .c4pc/kernel/c4ix32.c4r .c4pc/iso/boot/
+	cp .c4pc/diskz.tar .c4pc/iso/boot/disk.tar
 	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
 	cp .c4pc/grub/c4pc-boot.img .c4pc/grub/c4pc-core.img .c4pc/iso/boot/grub/
 	cp $(C4PC_SRC)/pc/grub-disk.cfg .c4pc/iso/boot/grub/disk.cfg
@@ -3316,12 +3322,12 @@ GRUB_DISK_MODS := biosdisk part_msdos ext2 normal configfile multiboot boot seri
 # The DOS package, for DOSBox-X: the whole disk (the desktop's files are
 # among the big ones small.tar leaves out); copy the folder to a DOSBox
 # drive and run C4PC, or C4PC DESKTOP.CFG.
-c4pc-dos: C4PC.COM c4pc.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/dos/C4PC.CFG $(C4PC_SRC)/dos/DESKTOP.CFG $(C4PC_SRC)/dos/dosbox.conf
+c4pc-dos: C4PC.COM c4pc.elf .c4pc/diskz.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/dos/C4PC.CFG $(C4PC_SRC)/dos/DESKTOP.CFG $(C4PC_SRC)/dos/dosbox.conf
 	rm -rf .c4pc/dos && mkdir -p .c4pc/dos
 	cp C4PC.COM .c4pc/dos/C4PC.COM
 	cp c4pc.elf .c4pc/dos/C4PC.ELF
 	cp $(C4PC_IMAGES)/c4ix32.c4r .c4pc/dos/C4IX32.C4R
-	cp .c4pc/disk.tar .c4pc/dos/DISK.TAR
+	cp .c4pc/diskz.tar .c4pc/dos/DISK.TAR
 	sed 's/$$/\r/' $(C4PC_SRC)/dos/C4PC.CFG > .c4pc/dos/C4PC.CFG
 	sed 's/$$/\r/' $(C4PC_SRC)/dos/DESKTOP.CFG > .c4pc/dos/DESKTOP.CFG
 	cp $(C4PC_SRC)/dos/dosbox.conf .c4pc/dos/DOSBOX.CONF

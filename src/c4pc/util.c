@@ -36,9 +36,14 @@ blob *blob_static(u8 *bytes, u32 len) {
   return b;
 }
 void blob_ref(blob *b) { if (b && b->refs > 0) b->refs++; }
+void drive_zforget(blob *b);
 void blob_unref(blob *b) {
   if (!b || b->refs < 0) return;
-  if (--b->refs == 0) { xfree(b->bytes); xfree(b); }
+  if (--b->refs == 0) {
+    if (b->z) drive_zforget(b);              /* a compressed file's: its place let go */
+    if (b->bytes) xfree(b->bytes);
+    xfree(b);
+  }
 }
 
 /* ---- string -> pointer: open addressing, linear probing ---- */

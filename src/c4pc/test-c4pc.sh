@@ -127,6 +127,21 @@ fi
 # A CD to copy from (cdrom.c; C4IX's mount, cp, umount): c4pc-host with a
 # disc made here (xorriso: Rock Ridge and Joliet names) as drive 2. The
 # disc's files list, read and copy with their own CRCs; umount ejects it.
+# The ISO's boot disk is packed (pc/packdisk.py: each file gzipped alone,
+# inflated by c4pc's drive when it is first read: drive.c, inflate.c): as
+# --tar it gives the plain archive's session, byte for byte and in its
+# cycles.
+echo "  ---   a packed boot disk"
+python3 src/c4pc/pc/packdisk.py $W/test-disk.tar $W/test-diskz.tar > /dev/null
+for t in test-disk test-diskz; do
+  timeout 600 ./c4pc-host -s --mmu -m 64 -c $CYC --tar $W/$t.tar $W/c4ix32.c4r < $W/in.txt > $W/$t.out 2> $W/$t.err
+done
+grep -qF "shutdown complete" $W/test-diskz.out && cmp -s $W/test-disk.out $W/test-diskz.out &&
+  ok "the packed disk's session is the plain one's, byte for byte" || { bad "the packed disk's session"; diff $W/test-disk.out $W/test-diskz.out | head -6; }
+c1=$(sed -n 's/^c4pc: \([0-9]*\) cycles.*/\1/p' $W/test-disk.err); c2=$(sed -n 's/^c4pc: \([0-9]*\) cycles.*/\1/p' $W/test-diskz.err)
+[ -n "$c1" ] && [ "$c1" = "$c2" ] && ok "the same cycles from both ($c1)" || bad "cycles: plain $c1, packed $c2"
+echo "        $(stat -c %s $W/test-disk.tar) bytes packed to $(stat -c %s $W/test-diskz.tar)"
+
 # Where the images have the programs (a build since they were added) and
 # xorriso is on PATH (~/opt/pctools/env.sh on helios).
 XORRISO=$(command -v xorriso || true)

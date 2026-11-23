@@ -35,6 +35,10 @@ ext2's own blocks, and 16 MB more: a VM's default disk is far bigger.
 | 1 to 2047 | GRUB's core.img: the BIOS's disks, the MBR's partitions, ext2, multiboot, the menu's commands; its prefix `(hd0,msdos1)/boot/grub` |
 | partition 1, type 0x83, active, the rest of the disk | ext2, label C4IX: the whole of `/` |
 
+The ISO's boot disk is compressed (docs/c4pc.md, "The boot disk,
+compressed"): c4pc inflates each file as install reads it, so what lands
+on the disk is the system's files as they are.
+
 install copies `/` as it is, every directory but `/proc` (the kernel's),
 `/tmp` and `/mnt` (made empty on the disk): `/bin`, `/lib`, `/usr` (the
 root archive's sources, headers and libraries, unpacked), `/etc`, `/var`,

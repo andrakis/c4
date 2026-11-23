@@ -262,6 +262,8 @@ static blob *disk_find(machine *m, const char *name) {
     if (!b) b = smap_get(d->files, rest);
   }
   if (!b && strchr(rest, '/') && !(rest != name && rest[0] == '/')) b = smap_get(d->files, strrchr(rest, '/') + 1);
+  /* a compressed one inflated now, if it is not (drive.c) */
+  if (b && b->z && !blob_ready(b)) return 0;
   return b;
 }
 

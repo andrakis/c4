@@ -231,7 +231,7 @@ static FILE *texts;
 static void text_hook(int x, int y, const char *s, int n) { fprintf(texts, "%d %d %.*s\n", x, y, n, s); }
 
 static void usage(void) {
-  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--disk FILE.img] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
+  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--disk FILE.img] [--tar FILE.tar] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
   exit(1);
 }
 
@@ -292,6 +292,19 @@ int main(int argc, char **argv) {
     else if (!strcmp(f, "-q") && i + 1 < argc) quantum = atoi(argv[++i]);    /* ... each -q instructions in turn */
     else if (!strcmp(f, "--parallel")) parallel = 1;                         /* ... each on a thread (par.c) */
     else if (!strcmp(f, "--cdrom") && i + 1 < argc && ncd < 4) cds[ncd++] = argv[++i];   /* an ISO image as a CD drive, from drive 2 */
+    else if (!strcmp(f, "--tar") && i + 1 < argc && nd < 16) {
+      /* a ustar archive as a drive, as a PC's bootloader hands c4pc one
+       * (drive.c: its .c4pcz members compressed, inflated when read) */
+      FILE *tf = fopen(argv[++i], "rb");
+      if (!tf) { fprintf(stderr, "c4pc-host: cannot open %s\n", argv[i]); return 1; }
+      fseek(tf, 0, SEEK_END); long tl = ftell(tf); fseek(tf, 0, SEEK_SET);
+      u8 *tb = malloc((size_t)tl + 1);
+      if (!tb || fread(tb, 1, (size_t)tl, tf) != (size_t)tl) { fprintf(stderr, "c4pc-host: cannot read %s\n", argv[i]); return 1; }
+      fclose(tf);
+      drive *d = drive_new(0);
+      drive_add_tar(d, tb, (u32)tl);
+      drives[nd++] = d;
+    }
     else if (!strcmp(f, "--disk") && i + 1 < argc && ndisk < 8) disks[ndisk++] = argv[++i];  /* a disk image as a block device */
     else if (!strcmp(f, "--gui") && i + 1 < argc) { if (sscanf(argv[++i], "%dx%d", &gw, &gh) != 2) usage(); }   /* fit a display (gui.c) */
     else if (!strcmp(f, "--events") && i + 1 < argc) load_events(argv[++i]);

@@ -105,7 +105,14 @@ typedef struct blkdev {
 /* ---- a file's bytes: shared by the drive that holds it and every fd
  * open on it, freed when the last lets go (a file the ramdisk brought
  * is never freed: refs < 0) ---- */
-typedef struct blob { int refs; u32 len; u8 *bytes; } blob;
+/* A file's bytes. One of the boot disk's compressed files (drive.c, a
+ * member NAME.c4pcz) has Z, its gzip member where the archive is, and
+ * BYTES only once it is first read (blob_ready); USED orders them for
+ * letting go, ZSLOT is its place among them. */
+typedef struct blob { int refs; u32 len; u8 *bytes; const u8 *z; u32 zlen; u32 used; int zslot; } blob;
+int blob_ready(blob *b);           /* its bytes there to read: 1, or 0 (no memory, or not inflating) */
+int gz_size(const u8 *z, u32 n, u32 *size);
+int gz_inflate(const u8 *z, u32 n, u8 *out, u32 len);
 blob *blob_new(u32 len);           /* bytes zeroed */
 blob *blob_static(u8 *bytes, u32 len);
 void blob_ref(blob *b);

@@ -33,6 +33,8 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | in QEMU with KVM (pc and q35, c4pc.elf and c4pc64.elf): system_powerdown at the prompt, and `shutdown`, are C4IX's shutdown and then the VM off; `reboot` resets the PC; SIGTERM to c4pc-host or cli.js is the same shutdown. VMware not yet tried |
 | done | installed onto an IDE disk from the ISO (C4IX's `install`, docs/c4ix-install.md): GRUB and c4pc on the disk, and the whole system, / on its ext2 (`--root`): nothing unpacked at boot, every change kept |
 | *measured* | in QEMU with KVM: from the ISO's menu the system installs onto a blank 2 GB disk in 89 s (4,716 files, 220 MB); e2fsck finds it clean and /boot's files are the build's byte for byte; the disk boots alone through its own GRUB, its text entry and its desktop, a file saved is there at the next boot, and the power button shuts it down clean |
+| done | the ISO's boot disk compressed (pc/packdisk.py: each file gzipped alone, as NAME.c4pcz), inflated by c4pc's drive when a file is first read (drive.c, inflate.c), what is inflated kept to 96 MB; `c4pc-host --tar FILE` loads such an archive |
+| *measured* | the boot disk 152 MB to 48.5 MB (3,235 of its 3,721 files compressed); every file inflated is the original byte for byte; test-c4pc holds the session from the packed archive to the plain one's, byte for byte and in its cycles |
 | not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk, or a SATA CD drive |
 
 ## One engine, two front ends
@@ -454,6 +456,28 @@ nothing to say). A control method power button (FADT flag PWR_BUTTON) is
 the AML's, which needs an interpreter: c4pc says so, and VMware's, if it
 is one, may then still need `shutdown` typed. `--no-acpi` leaves ACPI be:
 off by the fixed ports alone, and no power button.
+
+### The boot disk, compressed
+
+The ISO's boot disk -- the tar GRUB hands c4pc as drive 0, which stays in
+the PC's memory while it runs -- is .c4pc/diskz.tar, .c4pc/disk.tar with
+its files compressed (pc/packdisk.py): each one gzipped alone at level 9
+and named NAME.c4pcz, unless it is compressed already (.tgz, .zip ...) or
+gzip does not make it a tenth smaller; a name the archive has twice is
+the later one's. 152 MB is 48.5 MB so: programs to a fifth, sources to a
+quarter, the games' data to a little under half.
+
+c4pc's drive (drive.c) takes a .c4pcz member as NAME, of the size its
+gzip trailer says, and inflates it (inflate.c: stored, fixed and dynamic
+DEFLATE blocks, the CRC checked) the first time it is read, into memory
+of its own. C4IX never sees the difference: c4ix.sizes, the listings and
+every read are the file's own. What is inflated is kept while it all fits
+96 MB; past that the one least recently read and not open is let go of,
+to be inflated again if it is wanted -- so `install`, which reads every
+file once, extracts the whole system onto the disk in passing. The DOS
+package (c4pc-dos) is the packed archive too. `c4pc-host --tar FILE`
+loads an archive as a drive, packed or not, as a PC's loader hands one
+over.
 
 ### Installed onto a disk
 

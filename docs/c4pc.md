@@ -25,7 +25,9 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | under KVM on both builds: a file written and synced in one boot is there in the next, and after a second save both are; the store's drive 1 is what c4pc-host's `-w` folder gets, file for file |
 | done (M7) | several CPUs: libjs's round robin (smp.c, `--cpus N`) and its parallel engine (par.c): a thread each in c4pc-host (`--parallel`), and on a PC each of its own processors, started by INIT and Startup IPIs (pc/ap.c, pc/aptramp.S) |
 | *measured* | taking turns: c4mp's transcripts, and the session with the MMU on 4 CPUs byte for byte libjs's `--cpus 4`, in its cycles; libjs's C4IX tests for several CPUs (test-c4ix-smp.sh) pass on c4pc-host at 2 and 4, taking turns and on threads; on c4pc.elf and c4pc64.elf in QEMU with 4 processors, what test-libjs asks of par.js, and C4IX on all four; four compiles at once take a third of the time on 4 processors (section Several processors) |
-| not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk for the store |
+| done | a CD to copy from (cdrom.c): the PC's ATAPI drives from drive 2, ISO 9660 with Rock Ridge or Joliet names, read when wanted; C4IX's `mount`, `umount` (and eject), `df` and `cp`; `c4pc-host --cdrom FILE.iso` |
+| *measured* | on c4pc-host with an image and on c4pc.elf in QEMU with KVM, the ISO as one CD and a test disc as the other: the disc's files listed, read and copied byte for byte, kept on the store by `sync` and there at the next boot |
+| not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk for the store, or a SATA CD drive |
 
 ## One engine, two front ends
 
@@ -35,6 +37,7 @@ src/c4pc/
   engine.c              libjs/c4m.js's interpreter, traps and syscalls, the user window; boot.js's loader and trampoline
   mmu.c                 libjs/mmu.js: the MMU's registers, translation, the user loop; arena.js's kernel map
   smp.c                 libjs/smp.js: several CPUs taking turns
+  cdrom.c               CD drives (ATAPI) and ISO 9660, as drives from 2; an ISO image's for c4pc-host
   par.c                 libjs/par.js and ap.js: several CPUs at once, the devices CPU 0's
   dev.c                 src/c4bb/sim/devices.js: the registers at 0x100-0x1FF
   accel.c accel.h       libjs/accel.js's loader and kit; src/c4ix/accel.mjs: C4IX's inflater and CRC-32
@@ -350,6 +353,57 @@ CPUs summing 70 million each with nothing to ask, does four CPUs' work in
 2.06 s on c4pc-host against 1.50 s for one CPU's. A game is one task, and
 runs on one CPU however many there are.
 
+### A second CD, to copy from
+
+A VM's way to give it files is a second CD drive with an ISO in it.
+c4pc speaks to CD drives on the IDE channels, as store.c does to disks:
+ATAPI's PACKET commands by polled PIO (TEST UNIT READY, REQUEST SENSE,
+READ CAPACITY, READ(10), START STOP UNIT to eject). Each is a host drive
+from drive 2 on (drive 1 is persist's, an empty read-only one where
+there is no store). The disc is ISO 9660, its names Rock Ridge's where
+it has them (Linux's mkisofs -R, xorriso), else Joliet's (Windows'),
+else its own less ";1".
+
+Nothing is read ahead. C4IX's `mount cdrom` makes /mnt/cdrom a host
+directory of "N:/" (vfs.c vfs_lazydir, as the games' directories are):
+when it is first looked in, the kernel asks for N:/.c4ix-dir, which
+cdrom.c makes from the directory's records ("SIZE NAME" or "d NAME", a
+line each); a file is read from the disc a 32 KB run at a time as it is
+read (dev.c's drive hooks, an fd of kind FD_DRV), never whole. So a disc
+of any size mounts at once, and costs memory only for what is copied off
+it: `cp -r /mnt/cdrom/stuff /home` makes RAM files, which `sync` (or the
+desktop's save) keeps on the store, and the next boot reads from there.
+
+Each drive says what it is in N:.c4pc-drive ("kind cdrom", "label",
+"size", "used", "free", a line each; the boot disk's and the store's
+too), which `mount` (alone: the mounts and the drives), `df` and `mount
+cdrom` read: the first CD drive with a disc in it that is not c4pc's own
+(the ISO's volume id is C4PC). `mount` looks at the disc again first
+(DISK_RESCAN), so a disc changed while nothing was mounted is the new
+one; `umount` lets the directory's entries go and opens the tray
+(DISK_EJECT), and VMware lets the ISO go with it. A file open there
+keeps the mount (busy).
+
+    mount cdrom
+    cp -r /mnt/cdrom/project /home
+    sync
+    umount
+
+In VMware: a second CD/DVD drive on an IDE controller (a SATA one is not
+spoken to), its ISO connected. On c4pc-host, `--cdrom FILE.iso` is the
+same with an image, for the tests; on a PC, `--no-cdrom` leaves the CD
+drives be (test-c4pc does, so that its sessions are libjs's: QEMU has an
+empty one by default).
+
+*Measured* (2026-11-23, QEMU 10.2 with KVM): c4pc.elf from `-kernel`
+with the ISO on the secondary master, a test disc (xorriso: Rock Ridge
+and Joliet, a 5 MB file, long names with spaces, folders three deep) on
+the secondary slave and a blank 256 MB disk for the store: `mount cdrom`
+takes the test disc, its files list and read with the CRCs their
+originals have, `cp -r` copies them, `sync` keeps them, and the next boot
+has them. On c4pc-host the same with Rock Ridge, Joliet-only and
+xorriso's default discs.
+
 ## Running it
 
 The tools (QEMU, Bochs, DOSBox-X, DOSBox 0.74, mtools, xorriso, GRUB's
@@ -634,6 +688,10 @@ then needs SIGKILL, ignoring SIGTERM while halted).
 - **libjs's par.js**: the swap's registers run on the CPU that touches
   them, as par.c runs them (section Several processors): C4IX on four of
   its threads is slower than on one until then.
+- **Installing to the IDE disk**, and booting from it: the store read a
+  file at a time as it is wanted, rather than whole at boot; the store as
+  a known filesystem (FAT32: GRUB reads it, and Windows and Linux open
+  it), the kernel, C4IX and the boot disk on it, GRUB on the disk.
 - **Several processors on real hardware and VMware**: only QEMU's have
   been started; ACPI's MADT is not read (every processor that answers
   the broadcast is taken), and x2APIC-only machines are not spoken to.

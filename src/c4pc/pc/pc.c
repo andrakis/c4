@@ -521,7 +521,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -547,6 +547,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--no-sound")) sound = 0;
     else if (!strcmp(args[a], "--store")) store_create = 1;      /* a blank ATA disk may become the store */
     else if (!strcmp(args[a], "--no-store")) store = 0;
+    else if (!strcmp(args[a], "--no-cdrom")) cdrom = 0;      /* the CD drives left be (cdrom.c): a session libjs can match */
     else if (!strcmp(args[a], "--debug-sound")) { extern void (*hda_log)(const char *); hda_log = con_puts; }
     else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : -1; }
     else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
@@ -586,6 +587,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
       drive *d = drive_new(0);
       if (nw > 2 && !strcmp(w[2], "rw")) { d->writable = 1; d->sink = 0; }
       int k = drive_add_tar(d, p, n);
+      d->kind = nd ? "tar" : "boot"; d->size_kb = d->used_kb = n >> 10;
       con_puts("c4pc: drive "); con_dec(nd); con_puts(": "); con_dec(k); con_puts(" files, ");
       con_dec(n >> 10); con_puts(" KB\n");
       drives[nd++] = d;
@@ -615,6 +617,14 @@ void pc_main(u32 magic, struct mb_info *mb) {
       drives[1] = sd; nd++;
       con_puts("c4pc: drive 1: "); con_puts(what); con_puts("\n");
     }
+  }
+  /* the CD drives (cdrom.c), from drive 2 on: drive 1 is the store's
+   * place (persist's), an empty read-only one where there is no store */
+  {
+    drive *cds[4]; int nc = 0;
+    if (cdrom) cdrom_find(cds, &nc, 4, nd < 2 ? 2 : nd, con_puts);
+    if (nc && nd < 2) { drive *e = drive_new(0); e->kind = "none"; drives[nd++] = e; }
+    for (int i = 0; i < nc && nd < 16; i++) drives[nd++] = cds[i];
   }
 
   pargv[pargc++] = (char *)img_name;

@@ -124,6 +124,22 @@ DEPS $(OUT)/user/free.c4o : src/c4ix/user/free.c $(U)
 RUN $(LC) src/c4ix/user/free.c $(OUT)/user/free.c4o
 DEPS $(OUT)/bin/c4ix-free.c4r : $(OUT)/user/free.c4o $(LIBC)
 RUN c4rlink $(OUT)/user/free.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-free.c4r
+DEPS $(OUT)/user/mount.c4o : src/c4ix/user/mount.c $(U)
+RUN $(LC) src/c4ix/user/mount.c $(OUT)/user/mount.c4o
+DEPS $(OUT)/bin/c4ix-mount.c4r : $(OUT)/user/mount.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/mount.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-mount.c4r
+DEPS $(OUT)/user/umount.c4o : src/c4ix/user/umount.c $(U)
+RUN $(LC) src/c4ix/user/umount.c $(OUT)/user/umount.c4o
+DEPS $(OUT)/bin/c4ix-umount.c4r : $(OUT)/user/umount.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/umount.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-umount.c4r
+DEPS $(OUT)/user/df.c4o : src/c4ix/user/df.c $(U)
+RUN $(LC) src/c4ix/user/df.c $(OUT)/user/df.c4o
+DEPS $(OUT)/bin/c4ix-df.c4r : $(OUT)/user/df.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/df.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-df.c4r
+DEPS $(OUT)/user/cp.c4o : src/c4ix/user/cp.c $(U)
+RUN $(LC) src/c4ix/user/cp.c $(OUT)/user/cp.c4o
+DEPS $(OUT)/bin/c4ix-cp.c4r : $(OUT)/user/cp.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/cp.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-cp.c4r
 DEPS $(OUT)/user/crc32.c4o : src/c4ix/user/crc32.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/crc32.c $(OUT)/user/crc32.c4o
 DEPS $(OUT)/bin/c4ix-crc32.c4r : $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC)

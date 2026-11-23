@@ -105,6 +105,19 @@ typedef struct drive {
   void (*sink)(struct drive *, const char *name, blob *);   /* a file written, or 0 */
   void (*remove)(struct drive *, const char *name);
   void *ctx;                       /* the platform's */
+  /* a drive whose files are elsewhere (pc/cdrom.c), asked for by name
+   * rather than kept in files (dev.c): a file made when it is asked for
+   * (a listing, .c4pc-drive), or a file's size and where it is, which is
+   * read a range at a time; and the tray, opened, and the disc, looked
+   * at again (DISK_EJECT, DISK_RESCAN) */
+  blob *(*fetch)(struct drive *, const char *name);
+  int (*find)(struct drive *, const char *name, u32 *size, u32 *where);
+  u32 (*pread)(struct drive *, u32 where, u32 pos, u8 *buf, u32 n);
+  void (*eject)(struct drive *);
+  void (*rescan)(struct drive *);
+  /* what N:.c4pc-drive says of a drive of files: what it is, its KB in
+   * all and free (0: not known) */
+  const char *kind; u32 size_kb, used_kb, free_kb;
 } drive;
 
 /* string -> pointer, in insertion order of nothing (lookups only) */
@@ -432,6 +445,9 @@ u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out);
 i64 mmu_dma_space(machine *m, u32 ptbr, u32 addr, i32 len, int write);
 i32 mmu_ptbr(mmu *u);
 void plat_fatal(const char *msg);      /* never returns */
+/* CD drives (cdrom.c): the PC's, from base on (pc.c); and an ISO image's (c4pc-host --cdrom) */
+int cdrom_find(drive **drives, int *nd, int max, int base, void (*log)(const char *));
+drive *cdrom_image(int (*rd)(void *, u32, u32, u8 *), void *ctx, u32 blocks, const char *what);
 
 /* the little of libc the engine uses: the PC build has its own (pc/libc.c) */
 void *xmalloc(size_t n);               /* zeroed; fatal when there is none */

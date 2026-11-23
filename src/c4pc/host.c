@@ -230,14 +230,25 @@ static FILE *texts;
 static void text_hook(int x, int y, const char *s, int n) { fprintf(texts, "%d %d %.*s\n", x, y, n, s); }
 
 static void usage(void) {
-  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
+  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
   exit(1);
+}
+
+/* --cdrom FILE: an ISO image as a CD drive (cdrom.c), its sectors read
+ * from the file as they are wanted */
+static int iso_rd(void *ctx, u32 lba, u32 n, u8 *buf) {
+  FILE *f = ctx;
+  if (fseeko(f, (off_t)lba * 2048, SEEK_SET)) return -1;
+  size_t got = fread(buf, 2048, n, f);
+  if (got < n) memset(buf + got * 2048, 0, (size_t)(n - got) * 2048);
+  return 0;
 }
 
 int main(int argc, char **argv) {
   u32 mb = 32; double maxc = -1, mhz = 20; int cpus = 0, quantum = 0, parallel = 0, stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0;
   const char *shot = 0, *wav = 0;
   drive *drives[16]; int nd = 0;
+  const char *cds[4]; int ncd = 0;
   int i = 1;
   for (; i < argc && argv[i][0] == '-'; i++) {
     const char *f = argv[i];
@@ -261,6 +272,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(f, "--cpus") && i + 1 < argc) cpus = atoi(argv[++i]);   /* cli.js's: N processors (smp.c) */
     else if (!strcmp(f, "-q") && i + 1 < argc) quantum = atoi(argv[++i]);    /* ... each -q instructions in turn */
     else if (!strcmp(f, "--parallel")) parallel = 1;                         /* ... each on a thread (par.c) */
+    else if (!strcmp(f, "--cdrom") && i + 1 < argc && ncd < 4) cds[ncd++] = argv[++i];   /* an ISO image as a CD drive, from drive 2 */
     else if (!strcmp(f, "--gui") && i + 1 < argc) { if (sscanf(argv[++i], "%dx%d", &gw, &gh) != 2) usage(); }   /* fit a display (gui.c) */
     else if (!strcmp(f, "--events") && i + 1 < argc) load_events(argv[++i]);
     else if (!strcmp(f, "--shot") && i + 1 < argc) shot = argv[++i];    /* the display as a PNG at the end */
@@ -277,6 +289,16 @@ int main(int argc, char **argv) {
   }
   if (i >= argc) usage();
   if (!nd) drives[nd++] = drive_new(0);
+  /* CD drives from 2 on, as on a PC (pc.c): drive 1 is persist's, an
+   * empty read-only one where -w gave none */
+  for (int k = 0; k < ncd && nd < 16; k++) {
+    FILE *f = fopen(cds[k], "rb");
+    if (!f) { fprintf(stderr, "c4pc: cannot read %s\n", cds[k]); return 1; }
+    fseeko(f, 0, SEEK_END);
+    u32 blocks = (u32)(ftello(f) / 2048);
+    if (nd < 2) { drive *e = drive_new(0); e->kind = "none"; drives[nd++] = e; }
+    drives[nd++] = cdrom_image(iso_rd, f, blocks, cds[k]);
+  }
   u32 len; u8 *img = read_file(argv[i], &len);
   if (!img) { fprintf(stderr, "c4pc: cannot read %s\n", argv[i]); return 1; }
 

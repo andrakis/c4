@@ -24,7 +24,10 @@ bad () { echo "  FAIL  $*"; fail=1; }
 printf 'c4ix-ps.c4r\nexit\n' > $W/in.txt
 CYC=3000000000
 cp $IMAGES/c4ix32.c4r $W/c4ix32.c4r
-[ -f $W/disk.tar ] || tar --format=ustar -C $IMAGES/disk -cf $W/disk.tar .
+# the disk libjs is given, as one archive (not the ISO's .c4pc/disk.tar, which
+# this tree's newer programs are laid over): made again when the images change
+[ $W/test-disk.tar -nt $IMAGES/disk/c4ix.vfs.txt ] && [ "$(cat $W/test-disk.from 2>/dev/null)" = "$IMAGES" ] ||
+  { tar --format=ustar -C $IMAGES/disk -cf $W/test-disk.tar . && echo "$IMAGES" > $W/test-disk.from; }
 Q=${QEMU:-$(command -v qemu-system-i386 || echo ~/opt/pctools/bin/qemu-system-i386)}
 
 # session TAG FLAG [accel]: the session on libjs, c4pc-host and QEMU, FLAG
@@ -60,7 +63,7 @@ session () {
   rm -f $W/serial$t.txt
   timeout 1800 "$Q" -m 512 -display none -no-reboot -serial file:$W/serial$t.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
-    -append "-s $f $ca -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
+    -append "--no-cdrom -s $f $ca -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/test-disk.tar drive,$W/in.txt stdin"
   st=$?
   # isa-debug-exit: QEMU exits (status << 1) | 1
   [ $st = 1 ] && ok "c4pc.elf in QEMU: the session ends with status 0" || bad "c4pc.elf in QEMU: QEMU's status $st"
@@ -121,6 +124,31 @@ if [ -f $IMAGES/games/rott.c4r ] && [ -f $IMAGES/games/HUNTBGIN.WAD ]; then
 else
   echo "  skip  the sound card (no rott.c4r and its data in $IMAGES/games)"
 fi
+# A CD to copy from (cdrom.c; C4IX's mount, cp, umount): c4pc-host with a
+# disc made here (xorriso: Rock Ridge and Joliet names) as drive 2. The
+# disc's files list, read and copy with their own CRCs; umount ejects it.
+# Where the images have the programs (a build since they were added) and
+# xorriso is on PATH (~/opt/pctools/env.sh on helios).
+XORRISO=$(command -v xorriso || true)
+if [ -f $IMAGES/disk/c4ix-mount.c4r ] && [ -n "$XORRISO" ]; then
+  echo "  ---   a CD to copy from"
+  rm -rf $W/cd && mkdir -p $W/cd/src/sub/deeper
+  echo "hello from the second CD" > $W/cd/src/README.TXT
+  head -c 300000 /dev/urandom > $W/cd/src/sub/deeper/deep.bin
+  echo "spaces" > "$W/cd/src/Long File Name.txt"
+  "$XORRISO" -as mkisofs -R -J -V TESTDISC -o $W/cd/test.iso $W/cd/src > /dev/null 2>&1
+  want=$(python3 -I -c "import zlib,sys; d=open(sys.argv[1],'rb').read(); print('%08x %d' % (zlib.crc32(d), len(d)))" $W/cd/src/sub/deeper/deep.bin)
+  printf 'mount cdrom\nls /mnt/cdrom\ncat /mnt/cdrom/README.TXT\nmkdir /home/t\ncp -r /mnt/cdrom/sub /home/t/sub\ncrc32 /mnt/cdrom/sub/deeper/deep.bin /home/t/sub/deeper/deep.bin\ndf\numount\nmount\nexit\n' > $W/cd/in.txt
+  timeout 300 ./c4pc-host -m 64 -d $IMAGES/disk --cdrom $W/cd/test.iso $W/c4ix32.c4r < $W/cd/in.txt > $W/cd/out.txt 2>&1
+  out=$(cat $W/cd/out.txt)
+  echo "$out" | grep -qF "mount: drive 2 (cdrom 'TESTDISC'" && ok "mount cdrom mounts the disc at /mnt/cdrom" || bad "mount cdrom"
+  echo "$out" | grep -qxF "Long File Name.txt" && echo "$out" | grep -qxF "hello from the second CD" && ok "its names (Rock Ridge's) and its files" || bad "the disc's names and files"
+  [ "$(echo "$out" | grep -cE "^$want /(mnt/cdrom|home/t)/sub/deeper/deep.bin")" = 2 ] && ok "a file read off it and copied off it, byte for byte ($want)" || bad "the copy off the disc"
+  echo "$out" | grep -qE "^2:cdrom TESTDISC" && ok "df counts the disc" || bad "df and the disc"
+  echo "$out" | grep -qF "umount: /mnt/cdrom let go; drive 2's disc ejected" && echo "$out" | grep -qF "2: cdrom, no disc" && ok "umount lets it go and ejects it" || bad "umount"
+else
+  echo "  skip  a CD to copy from (no c4ix-mount.c4r in $IMAGES/disk, or no xorriso)"
+fi
 # Several CPUs (smp.c, par.c). Taking turns (--cpus N): c4mp's own
 # transcripts, and the session with the MMU on 4 CPUs byte for byte libjs's
 # --cpus 4, in its cycles. On threads (--parallel), and on a PC's own
@@ -173,7 +201,7 @@ else
   rm -f $W/serial-smp.txt
   timeout 900 "$Q" $accel -smp 4 -m 512 -display none -no-reboot -serial file:$W/serial-smp.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf -append "--mmu --cpus 4 -m 64" \
-    -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin" > /dev/null 2>&1
+    -initrd "$W/c4ix32.c4r,$W/test-disk.tar drive,$W/in.txt stdin" > /dev/null 2>&1
   out=$(tr -d '\r' < $W/serial-smp.txt)
   if echo "$out" | grep -qxF "c4ix: 4 processors" && echo "$out" | grep -qxF "  a thread each, all at once" &&
      echo "$out" | grep -qF "shutdown complete, 0 tasks remain" && ! echo "$out" | grep -qE "cache .task. .*live [1-9]|panic|illegal"; then

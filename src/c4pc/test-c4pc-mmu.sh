@@ -95,7 +95,7 @@ else
   rm -f $W/serial.txt
   timeout 1800 "$Q" -m 512 -display none -no-reboot -serial file:$W/serial.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
-    -append "-s --mmu --no-accel --no-osaccel -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
+    -append "--no-cdrom -s --mmu --no-accel --no-osaccel -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
   st=$?
   [ $st = 1 ] && ok "c4pc.elf in QEMU: the session ends with status 0" || bad "c4pc.elf in QEMU: QEMU's status $st"
   tr -d '\r' < $W/serial.txt | grep -v '^c4pc: ' > $W/qemu.out

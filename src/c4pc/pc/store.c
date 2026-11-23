@@ -130,8 +130,14 @@ static u32 alloc(u32 n) {
     return 0;
   }
 }
+/* what .c4pc-drive says: the store's KB in all, used and free */
+static void tally(drive *d) {
+  u32 used = DATA0;
+  for (u32 i = 0; i < ENTRIES; i++) if (dir[i].name[0]) used += dir[i].nsect;
+  d->kind = "store";
+  d->size_kb = total / 2; d->used_kb = used / 2; d->free_kb = total > used ? (total - used) / 2 : 0;
+}
 static void store_sink(drive *d, const char *name, blob *b) {
-  (void)d;
   if (strlen(name) >= NAMEMAX) return;
   u32 n = (b->len + 511) / 512;
   i32 i = find(name);
@@ -157,13 +163,14 @@ static void store_sink(drive *d, const char *name, blob *b) {
   dir[i] = e;
   write_dir_sector((u32)i);
   store_writes++; store_bytes += b->len;
+  tally(d);
 }
 static void store_remove(drive *d, const char *name) {
-  (void)d;
   i32 i = find(name);
   if (i < 0) return;
   memset(&dir[i], 0, sizeof dir[i]);
   write_dir_sector((u32)i);
+  tally(d);
 }
 
 /* the store's disk found (or, with create, a blank one made one) and its
@@ -212,6 +219,7 @@ drive *store_open(int create, void (*log)(const char *), char *what, u32 whatlen
   }
   d->sink = store_sink;
   d->remove = store_remove;
+  tally(d);
   /* "a new store on the primary slave, 1024 MB" or "the store on ...: 12 files, 3456 KB" */
   char *p = what, *end = what + whatlen - 1;
 #define PUT(s) do { const char *q_ = (s); while (*q_ && p < end) *p++ = *q_++; } while (0)

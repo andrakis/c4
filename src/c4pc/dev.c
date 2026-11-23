@@ -24,12 +24,13 @@ enum {
 #define TAP_MAX (16u << 20)
 #define SWAP_PAGE 4096
 
-enum { FD_FILE = 1, FD_KBD, FD_WRITE };
+enum { FD_FILE = 1, FD_KBD, FD_WRITE, FD_DRV };
 struct fdent {
   int kind;
   blob *b; u32 off, len, pos;          /* a file: len bytes of b from off */
   int raw, nonblock;                   /* a keyboard */
   drive *wd; char *wname; u8 *wbuf; u32 wlen, wcap;   /* a file being written */
+  drive *rd; u32 where;                /* a file read from its drive as it is read (FD_DRV: len bytes from off) */
 };
 
 /* ---- memory as a device reaches it (src/c4bb/sim/arena.js dma ...) ----
@@ -311,6 +312,51 @@ static int span_of(const char *name, char *base, u32 *off, u32 *len) {
   return 1;
 }
 
+/* N:.c4pc-drive for a drive of files: what the platform said of it */
+static blob *describe(drive *d) {
+  obuf o = {0, 0, 0};
+  char t[16];
+#define NUM(v) do { u32 x_ = (v); int k_ = 0; do t[k_++] = (char)('0' + x_ % 10); while (x_ /= 10); while (k_) ob_put(&o, t[--k_]); } while (0)
+  ob_puts(&o, "kind "); ob_puts(&o, d->kind ? d->kind : "files");
+  ob_puts(&o, d->writable && d->sink ? "\nwritable yes" : "\nwritable no");
+  if (d->size_kb) { ob_puts(&o, "\nsize "); NUM(d->size_kb); ob_puts(&o, "\nused "); NUM(d->used_kb); ob_puts(&o, "\nfree "); NUM(d->free_kb); }
+  ob_put(&o, '\n');
+#undef NUM
+  blob *b = blob_new(o.n);
+  memcpy(b->bytes, o.b, o.n);
+  xfree(o.b);
+  return b;
+}
+/* a name no drive's map has: a drive whose files are elsewhere asked for
+ * it (pc/cdrom.c), whole or a span, NAME@OFF+LEN; -1 for none */
+static i32 drive_open(machine *m, const char *name) {
+  static char base[257];
+  const char *rest;
+  drive *d = resolve_drive(m, name, &rest);
+  if (!d) return -1;
+  while (*rest == '/') rest++;
+  if (rest[0] == '.' && rest[1] == '/') rest += 2;
+  u32 so = 0, sl = 0xffffffffu;
+  const char *nm = rest;
+  if (span_of(rest, base, &so, &sl)) nm = base;
+  i32 fd;
+  blob *b = 0;
+  if (d->fetch) b = d->fetch(d, nm);
+  else if (!strcmp(nm, ".c4pc-drive")) b = describe(d);
+  if (b) {
+    fdent *f = fd_new(m, FD_FILE, &fd);
+    u32 off = so < b->len ? so : b->len;
+    f->b = b; f->off = off; f->len = (i64)off + sl < b->len ? sl : b->len - off;   /* the blob is the fd's alone */
+    return fd;
+  }
+  u32 size, where;
+  if (!d->find || !d->pread || d->find(d, nm, &size, &where)) return -1;
+  fdent *f = fd_new(m, FD_DRV, &fd);
+  u32 off = so < size ? so : size;
+  f->rd = d; f->where = where; f->off = off; f->len = (i64)off + sl < size ? sl : size - off;
+  return fd;
+}
+
 i32 dev_disk_open(machine *m, u32 name_addr) {
   static char name[257], base[257];
   dma_cstring(m, name_addr, name, 256);
@@ -341,7 +387,7 @@ i32 dev_disk_open(machine *m, u32 name_addr) {
     u32 end = (i64)off + sl < b->len ? off + sl : b->len;
     len = end - off;
   }
-  if (!b) return -1;
+  if (!b) return drive_open(m, name);
   blob_ref(b);
   fdent *f = fd_new(m, FD_FILE, &fd);
   f->b = b; f->off = off; f->len = len;
@@ -355,6 +401,18 @@ i32 dev_disk_read(machine *m, i32 len) {
   fdent *f = imap_get(m->dv->fds, (u32)m->dv->disk_fd);
   if (!f) return -1;
   if (f->kind == FD_KBD) return kbd_read(m, (u32)m->dv->disk_addr, len, f->nonblock, f->raw);
+  if (f->kind == FD_DRV) {
+    /* read from the drive, a buffer at a time, into the guest's memory */
+    static u8 *tb; static u32 tcap;
+    i64 n = (i64)f->len - f->pos;
+    if (len < n) n = len;
+    if (n <= 0) return 0;
+    if ((u32)n > tcap) { tcap = (u32)n; tb = xrealloc(tb, tcap); }
+    u32 got = f->rd->pread(f->rd, f->where, f->off + f->pos, tb, (u32)n);
+    got = dma_write(m, (u32)m->dv->disk_addr, tb, got);
+    f->pos += got;
+    return (i32)got;
+  }
   if (f->kind != FD_FILE) return -1;
   i64 n = (i64)f->len - f->pos;
   if (len < n) n = len;
@@ -607,12 +665,16 @@ void dev_write32(machine *m, u32 addr, i32 val) {
     case DISK_EJECT: {
       if (val >= 0 && val < m->dv->ndrives) {
         drive *d = m->dv->drives[val];
-        /* the files go: a fresh map (the old blobs are let go) */
-        d->files = smap_new();
+        /* a CD drive's tray opens (pc/cdrom.c); a drive of files has
+         * its files go: a fresh map (the old blobs are let go) */
+        if (d->eject) d->eject(d);
+        else d->files = smap_new();
       }
       return;
     }
-    case DISK_RESCAN: return;
+    case DISK_RESCAN:
+      if (val >= 0 && val < m->dv->ndrives && m->dv->drives[val]->rescan) m->dv->drives[val]->rescan(m->dv->drives[val]);
+      return;
     case RESET:
       m->dv->pit_ms = m->dv->pit_armed = 0; m->dv->pit_next = 0;
       m->dv->reset_requested = 1;

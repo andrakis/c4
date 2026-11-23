@@ -3192,7 +3192,7 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # flags, so that it can be held against libjs; c4pc.elf is a multiboot
 # kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
 C4PC_SRC  := src/c4pc
-C4PC_MODS := engine mmu smp par accel dev gui font heap fmt fpu drive util snd opl \
+C4PC_MODS := engine mmu smp par accel dev cdrom gui font heap fmt fpu drive util snd opl \
 	games/doom games/duke3d games/quake games/rott games/sbk games/tyrian games/wolf3d
 C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h $(C4PC_SRC)/font.h $(C4PC_SRC)/accel.h $(C4PC_SRC)/snd.h
 # The display's faces (font.c), as tables mkfont.py makes from the system's
@@ -3243,10 +3243,22 @@ C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com
 		-fno-delete-null-pointer-checks -fno-asynchronous-unwind-tables -fno-builtin -Wall -Wa,--no-warn \
 		-nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/dos/com.ld -Wl,--build-id=none \
 		-o $@ $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c
+# C4IX's programs this tree has that a C4PC_IMAGES built from another may
+# not (mount, umount, df, cp: the CD's), built as build-images.sh builds
+# them, and laid on the boot disk over its own, named in its manifest's BIN_ALL
+C4PC_IX_NEW := mount umount df cp
+.c4pc/bin/c4ix-%.c4r: $(SRCS)/c4ix/user/%.c $(C4PC_IMAGES_DEP)
+	mkdir -p .c4pc/bin
+	./c4sc-host32 -c 400000 compile -O -c -D C4IX_SHARED -I $(SRCS)/c4ix/include $< .c4pc/u_$*.c4o > /dev/null
+	./c4rlink32 .c4pc/u_$*.c4o -l $(C4PC_IMAGES)/build/lib/libc4ix.c4s -o $@ > /dev/null
+	rm -f .c4pc/u_$*.c4o
 # The boot disk as one archive, for a loader to hand c4pc as a module
-.c4pc/disk.tar: $(C4PC_IMAGES_DEP)
-	mkdir -p .c4pc
+.c4pc/disk.tar: $(C4PC_IMAGES_DEP) $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW))
+	rm -rf .c4pc/add && mkdir -p .c4pc/add
 	tar --format=ustar -C $(C4PC_IMAGES)/disk -cf $@ .
+	cp $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/add/
+	awk -v add="$(C4PC_IX_NEW)" '/^BIN_ALL = /{n=split(add,w," "); for(i=1;i<=n;i++) if ((" " $$0 " ") !~ (" " w[i] " ")) $$0 = $$0 " " w[i]} {print}' $(C4PC_IMAGES)/disk/c4ix.vfs.txt > .c4pc/add/c4ix.vfs.txt
+	tar --format=ustar -C .c4pc/add -rf $@ .
 # The boot disk less the games, for machines with little memory: plain
 # DOSBox has 63 MB at most. Every file under 300 KB outside the games'
 # folders, and the root archive.
@@ -3263,7 +3275,7 @@ c4pc.iso: c4pc.elf c4pc64.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/g
 	rm -rf .c4pc/iso && mkdir -p .c4pc/iso/boot/grub
 	cp c4pc.elf c4pc64.elf $(C4PC_IMAGES)/c4ix32.c4r .c4pc/disk.tar .c4pc/iso/boot/
 	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
-	$(GRUB_MKRESCUE) -o $@ .c4pc/iso
+	$(GRUB_MKRESCUE) -o $@ .c4pc/iso -volid C4PC
 # The DOS package, for DOSBox-X: the whole disk (the desktop's files are
 # among the big ones small.tar leaves out); copy the folder to a DOSBox
 # drive and run C4PC, or C4PC DESKTOP.CFG.
@@ -3427,7 +3439,8 @@ C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cat.c4r c4ix-sh.c4r c4ix-ps.c4r c4ix-bench.c4r \
               c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r c4ix-top.c4r \
               c4ix-spin.c4r c4ix-pin.c4r c4ix-nice.c4r c4ix-fmt.c4r c4ix-gui.c4r c4ix-desktop.c4r \
-              c4ix-b4ke.c4r c4ix-cc.c4r c4ix-dmesg.c4r c4ix-free.c4r $(C4IX_ARC_PROGS)
+              c4ix-b4ke.c4r c4ix-cc.c4r c4ix-dmesg.c4r c4ix-free.c4r c4ix-mount.c4r c4ix-umount.c4r \
+              c4ix-df.c4r c4ix-cp.c4r $(C4IX_ARC_PROGS)
 # The demonstrations are opt-in (--demo) and take their six images
 # positionally; `c4ix.c4r --help` documents the roles. With no
 # arguments at all the kernel boots to a shell, which is what

@@ -27,7 +27,8 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | taking turns: c4mp's transcripts, and the session with the MMU on 4 CPUs byte for byte libjs's `--cpus 4`, in its cycles; libjs's C4IX tests for several CPUs (test-c4ix-smp.sh) pass on c4pc-host at 2 and 4, taking turns and on threads; on c4pc.elf and c4pc64.elf in QEMU with 4 processors, what test-libjs asks of par.js, and C4IX on all four; four compiles at once take a third of the time on 4 processors (section Several processors) |
 | done | a CD to copy from (cdrom.c): the PC's ATAPI drives from drive 2, ISO 9660 with Rock Ridge or Joliet names, read when wanted; C4IX's `mount`, `umount` (and eject), `df` and `cp`; `c4pc-host --cdrom FILE.iso` |
 | *measured* | on c4pc-host with an image and on c4pc.elf in QEMU with KVM, the ISO as one CD and a test disc as the other: the disc's files listed, read and copied byte for byte, kept on the store by `sync` and there at the next boot |
-| not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk for the store, or a SATA CD drive |
+| done | block devices (dev.c BLK_*): the PC's IDE disks but the store's (pc/ata.c, LBA28 and LBA48), `c4pc-host --disk FILE.img`; C4IX keeps ext2 on them, its own (docs/c4ix-ext2.md) |
+| not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk, or a SATA CD drive |
 
 ## One engine, two front ends
 

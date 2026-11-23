@@ -626,6 +626,18 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (nc && nd < 2) { drive *e = drive_new(0); e->kind = "none"; drives[nd++] = e; }
     for (int i = 0; i < nc && nd < 16; i++) drives[nd++] = cds[i];
   }
+  /* the IDE disks but the store's, as block devices (ata.c), for C4IX's
+   * own filesystem (docs/c4ix-ext2.md) */
+  static blkdev *blks[8]; int nblk = 0;
+  {
+    extern int ata_find(blkdev **, int *, int, u32, int);
+    extern u32 store_io; extern int store_slave;
+    ata_find(blks, &nblk, 8, store_io, store_slave);
+    for (int i = 0; i < nblk; i++) {
+      con_puts("c4pc: block device "); con_dec(i); con_puts(": "); con_puts(blks[i]->what);
+      con_puts(", "); con_dec(blks[i]->sectors / 2048); con_puts(" MB\n");
+    }
+  }
 
   pargv[pargc++] = (char *)img_name;
   for (; a < nargs && pargc < 63; a++) pargv[pargc++] = args[a];
@@ -655,6 +667,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   if (noaccel) m->accel = 0;
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
+  for (int i = 0; i < nblk; i++) m->blk[m->nblk++] = blks[i];
   /* the display: GRUB's framebuffer, or the BGA's at --gui's size */
   if (screen_from_multiboot(mb) || (gui_w > 0 && gui_h > 0 && screen_bga(gui_w, gui_h))) {
     int w, h; screen_size(&w, &h);

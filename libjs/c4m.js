@@ -81,6 +81,8 @@ const TRAP_OFFSET = 15;                 // words of slack above a trap frame (c4
 // exactly this host. C4I_GUI announces the display device (gui-device.js),
 // C4I_SND the sound card (snd-device.js).
 export const C4I_C4MJS = 0x8, C4I_GUI = 0x4000, C4I_SND = 0x8000;
+// Block devices are fitted (blk.js, docs/c4ix-ext2.md): the window at 0x540
+export const C4I_BLK = 0x200000;
 // c4mp's: the processor opcodes and the CPU-local window are there. The
 // count is __c4_cpu_count()'s to say. (c4m.c gives 0x100 to its memory
 // protection guard too, which libjs never runs.)
@@ -499,6 +501,7 @@ export class Machine {
            (this.smp && this.smp.parallel ? C4I_PAR : 0) |
            (this.mmu ? C4I_MMU : 0) |
            (this.accel !== null ? C4I_ACCEL : 0) |
+           (this.bus && this.bus.blk ? C4I_BLK : 0) |
            (this.trapHandler ? C4I_TRAPH : 0);
   }
 

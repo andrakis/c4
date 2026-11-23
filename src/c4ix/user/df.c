@@ -9,12 +9,16 @@
 // dev.c, pc/store.c, pc/cdrom.c): the boot disk, the store where persist
 // keeps the changes (drive 1, on an IDE disk), a CD. What is saved to the
 // store is counted there; a file written and not yet saved is ram's.
+// And each disk mounted (mount hdN: ext2, the kernel's own), from its
+// superblock's counts.
 
 #include "c4ix_user.h"
 
 enum { C4I_C4MJS = 8, C4I_MMU = 0x80000 };
 enum { DISK_COUNT = 0x188 };
-enum { BUF = 2048, PATHW = 256 };
+enum { BUF = 2048, PATHW = 256, SYS_STATFS = 251 };
+
+static int ksys(int num, int a, int b, int c) { return __c4_opcode(c, b, a, num); }
 
 static char info[BUF];
 static char tab[BUF * 2];
@@ -121,7 +125,8 @@ static char *mounted_at(int n, char *out) {
 
 int main(int argc, char **argv) {
     char mem[1024], v[64], kind[32], label[64], name[48], on[PATHW], d[24];
-    int heap, used, n, k, size;
+    char *p, *dev, *at;
+    int heap, used, n, k, size, fs[8];
     human = argc > 1 && !ustrcmp(argv[1], "-h");
     // the drives' registers: under the MMU a task has them only when it asks
     if (__c4_info() & C4I_MMU) uioperm(UIOPERM_DEV);
@@ -133,6 +138,19 @@ int main(int argc, char **argv) {
     if (v[0]) used = num(v);
     if (used >= 0) row("ram", heap, used, heap - used, "/");
     else row("ram", heap, 0 - 1, 0 - 1, "/");
+    // the disks mounted: "hd0 /mnt/disk ext2 rw" a line of /proc/mounts
+    slurp("/proc/mounts", tab, BUF * 2);
+    p = tab;
+    while (*p) {
+        dev = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
+        at = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
+        while (*p && *p != 10) ++p; if (*p) ++p;
+        if (ksys(SYS_STATFS, (int)at, (int)fs, 0) < 0) continue;
+        k = fs[0] / 1024;
+        ustrcpy(name, dev); ustrcpy(name + ustrlen(name), " ext2");
+        if (k > 0) row(name, fs[1] * k, (fs[1] - fs[2]) * k, fs[2] * k, at);
+        else row(name, fs[1] / (1024 / fs[0]), (fs[1] - fs[2]) / (1024 / fs[0]), fs[2] / (1024 / fs[0]), at);
+    }
     if (!(__c4_info() & C4I_C4MJS)) return 0;
     slurp("/tmp/mounts", tab, BUF * 2);
     n = *(int *)DISK_COUNT;

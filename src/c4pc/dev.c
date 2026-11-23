@@ -703,3 +703,56 @@ void dev_write32(machine *m, u32 addr, i32 val) {
 /* for the display (gui.c) */
 i64 dev_dma(machine *m, u32 addr, i32 len, int write, int pin) { return dma(m, addr, len, write, pin); }
 u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out) { return dma_read(m, addr, len, out); }
+
+/* ---- the block devices (docs/c4ix-ext2.md 1) ----
+ * A command moves BLK_NSECT sectors at BLK_LBA of the selected device
+ * to or from BLK_ADDR, and is done when the write to BLK_CMD returns:
+ * 0, or -1 in BLK_CMD after. The memory is the kernel's, physical: a
+ * user task never reaches the window (mmu.c low_ok has no bit for it) */
+enum { BLK_COUNT = 0x540, BLK_SEL = 0x544, BLK_SECTORS = 0x548, BLK_FLAGS = 0x54c,
+       BLK_LBA = 0x550, BLK_NSECT = 0x554, BLK_ADDR = 0x558, BLK_CMD = 0x55c };
+#define BLK_MAX_RUN 256                 /* sectors a command moves at most: 128 KB */
+i32 blk_read32(machine *m, u32 a) {
+  machine *d = m->dv;
+  blkdev *b = d->blk_sel >= 0 && d->blk_sel < d->nblk ? d->blk[d->blk_sel] : 0;
+  switch (a) {
+    case BLK_COUNT: return d->nblk;
+    case BLK_SEL: return d->blk_sel;
+    case BLK_SECTORS: return b ? (i32)b->sectors : 0;
+    case BLK_FLAGS: return b ? b->flags : 0;
+    case BLK_LBA: return (i32)d->blk_lba;
+    case BLK_NSECT: return (i32)d->blk_nsect;
+    case BLK_ADDR: return (i32)d->blk_addr;
+    case BLK_CMD: return d->blk_result;
+  }
+  return 0;
+}
+void blk_write32(machine *m, u32 a, i32 v) {
+  machine *d = m->dv;
+  switch (a) {
+    case BLK_SEL: d->blk_sel = v; return;
+    case BLK_LBA: d->blk_lba = (u32)v; return;
+    case BLK_NSECT: d->blk_nsect = (u32)v; return;
+    case BLK_ADDR: d->blk_addr = (u32)v; return;
+    case BLK_CMD: break;
+    default: return;
+  }
+  blkdev *b = d->blk_sel >= 0 && d->blk_sel < d->nblk ? d->blk[d->blk_sel] : 0;
+  d->blk_result = -1;
+  if (!b) return;
+  if (v == 3) { d->blk_result = b->flush ? b->flush(b) : 0; return; }
+  if (v != 1 && v != 2) return;
+  u32 n = d->blk_nsect, lba = d->blk_lba, addr = d->blk_addr;
+  if (!n || n > BLK_MAX_RUN || lba >= b->sectors || n > b->sectors - lba) return;
+  if (v == 2 && (b->flags & 1)) return;
+  static u8 *buf; static u32 cap;
+  if (n * 512 > cap) { cap = n * 512; buf = xrealloc(buf, cap); }
+  if (v == 1) {
+    if (b->rw(b, 0, lba, n, buf)) return;
+    if (dma_write(m, addr, buf, n * 512) != n * 512) return;
+  } else {
+    if (dma_read(m, addr, n * 512, buf) != n * 512) return;
+    if (b->rw(b, 1, lba, n, buf)) return;
+  }
+  d->blk_result = 0;
+}

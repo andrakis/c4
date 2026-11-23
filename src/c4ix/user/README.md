@@ -37,10 +37,12 @@ names (`/bin`, `/usr/bin`, `/usr/games/bin`), and then as
 | `gunzip.c` | `gunzip FILE.gz` writes `FILE`; `-c` writes to fd 1. The gzip CRC is checked before anything is written. Links `libarc.c4l` too |
 | `dmesg.c` | the kernel's log (`/proc/kmsg`); `-t` without times, `-w` follows |
 | `free.c` | where the memory is, from `/proc/meminfo`: size, use, the biggest free block, unsaved RAM files, the cache |
-| `mount.c` | a host drive's files under a directory, read from the drive as they are wanted: `mount cdrom` puts a CD at /mnt/cdrom (c4pc: docs/c4pc.md); `mount` alone lists the mounts and the drives |
+| `mount.c` | a disk's ext2 under a directory (`mount hd0 /mnt/disk`, the kernel's ext2.c), or a host drive's files, read from the drive as they are wanted: `mount cdrom` puts a CD at /mnt/cdrom (c4pc: docs/c4pc.md); `mount` alone lists the mounts and the drives |
 | `umount.c` | a mount let go, and a CD's tray opened; busy while a file there is open |
 | `df.c` | how full each place is: memory (/) and each drive that says (the boot disk, the store, a CD); `-h` in MB |
 | `cp.c` | copy files, `-r` directories too |
+| `mkfs.c` | an empty ext2 filesystem on a disk (`mkfs hd0`), the kernel's ext2.c making it |
+| `chmod.c` | a file's permission bits, in octal; on a disk, in its inode |
 | `nice.c` | `nice [-n N] COMMAND`, `nice -p PID [N]`: a task's priority, -10 to 10 (`SYS_NICE`) |
 | `pin.c` | `pin CPUS COMMAND`, `pin -p PID [CPUS]`: which CPUs a task may run on (`SYS_AFFINITY`) |
 | `persist.c` | `persist boot\|save\|status\|forget\|-d SECS`, and `/bin/sync`: the filesystem's changes kept on drive 1 |

@@ -331,7 +331,7 @@ static void walk(char *dir) {
         ustrcpy(ustrcpy(ustrcpy(path, dir) - 1, "/") - 1, name);
         if (excluded(path)) continue;
         if (ustat2(path, st, ST_WORDS) < 0) continue;
-        if (kind == 1 && st[ST_DEV] == 3) { found(path, 2, st[3]); continue; }
+        if (kind == 1 && (st[ST_DEV] == 3 || st[ST_DEV] == 4)) { found(path, 2, st[3]); continue; }   // a host's directory, or a disk's (its own persistence)
         found(path, kind == 1, st[3]);
         if (kind == 1) walk(path);
     }

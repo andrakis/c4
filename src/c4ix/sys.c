@@ -507,6 +507,11 @@ static int sys_args_ok(int num, int *args) {
     case SYS_EXECVE:   return ustrlen((char *)args[0]) >= 0 && uvecok((char **)args[1], -1) &&
                               uvecok((char **)args[2], -1);
     case SYS_EVWAIT:   return !args[1] || uaccess(args[1], 3 * sizeof(int), 0);
+    case SYS_MOUNT:    return ustrlen((char *)args[1]) >= 0;
+    case SYS_UMOUNT: case SYS_CHMOD:
+                       return ustrlen((char *)args[0]) >= 0;
+    case SYS_MKFS:     return !args[2] || ustrlen((char *)args[2]) >= 0;
+    case SYS_STATFS:   return ustrlen((char *)args[0]) >= 0 && uaccess(args[1], 7 * sizeof(int), 1);
     }
     return 1;
 }
@@ -521,6 +526,15 @@ int sys_dispatch(int num, int *args) {
     switch (num) {
     case SYS_WRITE:    return sys_write(args[0], (char *)args[1], args[2]);
     case SYS_READ:     return sys_read(args[0], (char *)args[1], args[2]);
+    // disks (docs/c4ix-ext2.md): block device args[0]'s ext2 at a path,
+    // read-only where args[2]; unmounted; made (block size, label); the
+    // counts of the disk a path is on; every change written; a mode
+    case SYS_MOUNT:    return vfs_mount(args[0], (char *)args[1], args[2]);
+    case SYS_UMOUNT:   return vfs_umount((char *)args[0]);
+    case SYS_MKFS:     return ext2_mkfs(args[0], args[1], (char *)args[2]);
+    case SYS_STATFS:   return vfs_statfs((char *)args[0], (int *)args[1]);
+    case SYS_SYNC:     return vfs_sync();
+    case SYS_CHMOD:    return vfs_chmod((char *)args[0], args[1]);
     case SYS_OPEN:     return sys_open((char *)args[0], args[1]);
     case SYS_CLOSE:    return sys_close(args[0]);
     case SYS_DUP:      return sys_dup(args[0]);

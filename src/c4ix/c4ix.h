@@ -125,7 +125,11 @@ enum {
     SYS_RELAZY = 246,
     // a descriptor given to a task this one started (sys.c, sys_fdgive)
     SYS_FDGIVE = 247,
-    SYS_TOP = 248          // one past the last: sched_trap's range check
+    // disks (vfs.c, ext2.c; docs/c4ix-ext2.md): mount and unmount an ext2
+    // filesystem, make one, its counts, every change written, a mode
+    SYS_MOUNT = 248, SYS_UMOUNT = 249, SYS_MKFS = 250, SYS_STATFS = 251, SYS_SYNC = 252,
+    SYS_CHMOD = 253,
+    SYS_TOP = 254          // one past the last: sched_trap's range check
 };
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
 enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_YIELDS = 1 };
@@ -137,9 +141,10 @@ enum {
     ST_SIZE = 1, ST_PROG = 2, ST_MTIME = 3,
     ST_INO = 4,            // the vnode's number: two names of one file share it
     ST_NLINK = 5,          // its names (SYS_LINK)
-    ST_MODE = 6,           // made up: 0755 for directories and programs, 0644 for the rest
+    ST_MODE = 6,           // a disk's file's own (ext2), or chmod's; else made up: 0755 directories and programs, 0644 the rest
     ST_DEV = 7,            // 1 for the RAM filesystem, 2 for a host file, 0 for the console or a pipe,
-                           // 3 for a directory whose entries are still the host's (vfs.c, vfs_lazydir)
+                           // 3 for a directory whose entries are still the host's (vfs.c, vfs_lazydir),
+                           // 4 for a file or directory on a disk (ext2.c)
     ST_WORDS = 8
 };
 // SYS_WAITPID: options, and the two words it writes (exit code, signal)
@@ -263,6 +268,15 @@ struct vnode {
     struct vnode *links;
     struct vnode *lnext;
     int nlinks;
+    // On a disk (ext2.c; docs/c4ix-ext2.md 3): its filesystem and inode.
+    // A directory not yet listed from its entries (e2unlisted) is listed
+    // when it is first looked in; a file is lazy until read, as a host's
+    // is, and written back when its last writer closes it (e2dirty).
+    struct e2fs *e2;
+    int e2ino, e2unlisted, e2dirty;
+    // Its mode's permission bits, with 4096 set where it has one of its
+    // own (a disk's, or chmod's); 0: the default, which stat makes up
+    int mode;
 };
 
 struct file {
@@ -341,6 +355,46 @@ int   host_detect();
 int   host_info();
 int   task_info();   // host_info() as a task sees it: plus C4I_TRAPH
 int   host_has(int bit);
+
+// ---- disks (docs/c4ix-ext2.md) ----
+// The block devices: libjs/blk.js and c4pc's, the window at 0x540 (blk.c)
+enum { C4IX_I_BLK = 0x200000 };
+int  blk_count();
+int  blk_sectors(int dev);
+int  blk_flags(int dev);              // 1 read-only, 2 removable
+int  blk_read(int dev, int lba, int n, char *buf);    // 0, or -1
+int  blk_write(int dev, int lba, int n, char *buf);
+int  blk_flush(int dev);
+void blk_banner();
+// ext2, on one (ext2.c). Inodes by number; names one component
+struct e2fs;
+struct e2fs *ext2_mount(int dev, int ro);
+int  ext2_umount(struct e2fs *fs);
+int  ext2_sync(struct e2fs *fs);
+int  ext2_commit(struct e2fs *fs);    // the superblock, where its counts changed
+int  ext2_mkfs(int dev, int bsize, char *label);
+int  ext2_read(struct e2fs *fs, int ino, char *buf, int pos, int len);
+int  ext2_write(struct e2fs *fs, int ino, char *buf, int len);      // the whole file
+int  ext2_dir_next(struct e2fs *fs, int dir, int *pos, char *name, int *ino, int *isdir);
+int  ext2_lookup(struct e2fs *fs, int dir, char *name);
+int  ext2_create(struct e2fs *fs, int dir, char *name, int mode);
+int  ext2_mkdir(struct e2fs *fs, int dir, char *name, int mode);
+int  ext2_unlink(struct e2fs *fs, int dir, char *name);
+int  ext2_link(struct e2fs *fs, int dir, char *name, int ino);
+int  ext2_rename(struct e2fs *fs, int olddir, char *oldname, int newdir, char *newname);
+int  ext2_chmod(struct e2fs *fs, int ino, int mode);
+int  ext2_stat(struct e2fs *fs, int ino, int *out);   // mode, size, links, uid, gid, mtime
+void ext2_statfs(struct e2fs *fs, int *out);          // block size, blocks, free, inodes, free, read-only
+char *ext2_label(struct e2fs *fs);
+int  ext2_dev(struct e2fs *fs);
+int  ext2_ro(struct e2fs *fs);
+// the VFS's side (vfs.c)
+int  vfs_mount(int dev, char *path, int ro);
+int  vfs_umount(char *path);
+int  vfs_statfs(char *path, int *out);    // ext2_statfs's, and the device; -1 if not on a disk
+int  vfs_sync();
+void vfs_umount_all();                 // at shutdown: every disk written and marked clean
+int  vfs_chmod(char *path, int mode);
 char *host_name();
 
 // ---- console (console.c) ----

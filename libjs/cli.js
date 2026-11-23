@@ -33,6 +33,8 @@
 //                message is written to FILE as it is stamped, a line each:
 //                microseconds, then the bytes in hex
 //   --sf2 FILE   ... and --wav plays them with this SoundFont (snd-gm.js)
+//   --disk FILE  a disk image as a block device (blk.js), read and written
+//                in place: C4IX's own filesystem's (docs/c4ix-ext2.md)
 //   --no-accel   no accelerators (accel.js): a game draws with its own
 //                loops, as on any other machine
 //   --no-osaccel ... nor C4IX's own (src/c4ix/accel.mjs): its gunzip, tar and
@@ -43,7 +45,8 @@
 // front with end-of-file set, which is how scripted OS sessions run:
 //   printf 'ps\nexit\n' | node libjs/cli.js -d src/c4bb/images/disk src/c4bb/images/c4ix32.c4r
 
-import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, existsSync, rmSync,
+  openSync, readSync, writeSync, fstatSync, fsyncSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
@@ -79,6 +82,7 @@ function parseArgs(argv) {
     else if (f === '--no-osaccel') o.osAccel = false;
     else if (f === '--mbox') o.mbox = parseInt(argv[++i], 10);
     else if (f === '--wav') o.wav = argv[++i];
+    else if (f === '--disk') (o.disks = o.disks || []).push(argv[++i]);
     else if (f === '--midi') o.midi = argv[++i];
     else if (f === '--sf2') o.sf2 = argv[++i];
     else if (f === '--cpus') o.cpus = parseInt(argv[++i], 10);
@@ -112,6 +116,24 @@ function loadDisk(dir, rel = '') {
   return files;
 }
 
+
+// --disk FILE: a disk image file, read and written in place (blk.js)
+function fileDisk(path) {
+  let fd, flags = 0;
+  try { fd = openSync(path, 'r+'); } catch { fd = openSync(path, 'r'); flags = 1; }
+  const sectors = Math.floor(fstatSync(fd).size / 512);
+  return {
+    sectors, flags, path,
+    read(lba, n) {
+      const b = new Uint8Array(n * 512);
+      readSync(fd, b, 0, b.length, lba * 512);
+      return b;
+    },
+    write(lba, bytes) { writeSync(fd, bytes, 0, bytes.length, lba * 512); },
+    flush() { fsyncSync(fd); },
+  };
+}
+
 async function main(argv) {
   const o = parseArgs(argv);
   const image = new Uint8Array(readFileSync(o.progPath));
@@ -137,6 +159,7 @@ async function main(argv) {
   const machine = createMachine({
     arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, accel: o.accel, osAccel: o.osAccel, snd, cpus: o.cpus, quantum: o.quantum,
     parallel: o.parallel, spawn: url => new Worker(url), mmu: o.mmu,
+    disks: (o.disks || []).map(fileDisk),
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const dev = machine.dev;

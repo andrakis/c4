@@ -140,6 +140,14 @@ DEPS $(OUT)/user/cp.c4o : src/c4ix/user/cp.c $(U)
 RUN $(LC) src/c4ix/user/cp.c $(OUT)/user/cp.c4o
 DEPS $(OUT)/bin/c4ix-cp.c4r : $(OUT)/user/cp.c4o $(LIBC)
 RUN c4rlink $(OUT)/user/cp.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-cp.c4r
+DEPS $(OUT)/user/mkfs.c4o : src/c4ix/user/mkfs.c $(U)
+RUN $(LC) src/c4ix/user/mkfs.c $(OUT)/user/mkfs.c4o
+DEPS $(OUT)/bin/c4ix-mkfs.c4r : $(OUT)/user/mkfs.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/mkfs.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-mkfs.c4r
+DEPS $(OUT)/user/chmod.c4o : src/c4ix/user/chmod.c $(U)
+RUN $(LC) src/c4ix/user/chmod.c $(OUT)/user/chmod.c4o
+DEPS $(OUT)/bin/c4ix-chmod.c4r : $(OUT)/user/chmod.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/chmod.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-chmod.c4r
 DEPS $(OUT)/user/crc32.c4o : src/c4ix/user/crc32.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/crc32.c $(OUT)/user/crc32.c4o
 DEPS $(OUT)/bin/c4ix-crc32.c4r : $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC)

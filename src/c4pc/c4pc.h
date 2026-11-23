@@ -81,6 +81,20 @@ enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OP
 #define ACC_BASE 0x1000
 #define ACC_END  0x2000
 
+/* ---- the block devices: the machine's disks as sectors, a window at
+ * 0x540 the kernel's alone (dev.c; docs/c4ix-ext2.md 1) ---- */
+#define BLK_BASE 0x540
+#define BLK_END  0x560
+#define C4I_BLK  0x200000
+typedef struct blkdev {
+  u32 sectors; int flags;              /* 512-byte sectors; 1 read-only, 2 removable */
+  /* n sectors at lba to or from buf: 0, or -1 */
+  int (*rw)(struct blkdev *, int write, u32 lba, u32 n, u8 *buf);
+  int (*flush)(struct blkdev *);
+  void *ctx;
+  char what[48];                       /* for the console */
+} blkdev;
+
 /* ---- the MMU's registers, a window at 0x500 (mmu.c, libjs/mmu.js) ---- */
 #define MMU_BASE  0x500
 #define MMU_END   0x540
@@ -232,6 +246,9 @@ struct machine {
   /* swap */
   imap *swap_pages; u32 swap_slots; u32 swap_addr; i32 swap_result;
   volatile int swap_lk;                /* the swap's pages, which every CPU reaches (par.c) */
+  /* the block devices (BLK_*): fitted, selected, the next command's */
+  blkdev *blk[8]; int nblk, blk_sel;
+  u32 blk_lba, blk_nsect, blk_addr; i32 blk_result;
   int reset_requested;
   /* the console sink */
   void (*on_byte)(machine *, int b);
@@ -334,6 +351,8 @@ int kbd_pending(machine *m);
 i32 dev_read32(machine *m, u32 addr);
 void dev_write32(machine *m, u32 addr, i32 val);
 i32 dev_disk_open(machine *m, u32 name_addr);
+i32 blk_read32(machine *m, u32 addr);  /* the block devices' window (BLK_BASE) */
+void blk_write32(machine *m, u32 addr, i32 val);
 i32 dev_disk_read(machine *m, i32 len);
 int dev_opcode_by_name(const char *name);
 void dev_con_bytes(machine *m, const u8 *b, u32 n);

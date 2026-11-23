@@ -40,6 +40,7 @@ static u8 sec[512];
 static void (*say)(const char *);
 static int full_said;
 u32 store_writes, store_bytes;
+u32 store_io; int store_slave = -1;     /* the store's disk, which ata.c leaves be */
 
 /* ---- ATA, by PIO ---- */
 static int ata_wait(int drq) {
@@ -203,6 +204,7 @@ drive *store_open(int create, void (*log)(const char *), char *what, u32 whatlen
       total = nsect; found = 2;
     }
   if (!found) return 0;
+  store_io = io; store_slave = slave;
   if (ata_read(1, DIRS, (u8 *)dir)) return 0;
   drive *d = drive_new(1);
   u32 files = 0, bytes = 0, bad = 0;

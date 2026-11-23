@@ -149,6 +149,30 @@ if [ -f $IMAGES/disk/c4ix-mount.c4r ] && [ -n "$XORRISO" ]; then
 else
   echo "  skip  a CD to copy from (no c4ix-mount.c4r in $IMAGES/disk, or no xorriso)"
 fi
+# C4IX's own filesystem (docs/c4ix-ext2.md): a disk mke2fs makes, as a
+# block device (--disk), mounted, read, written and unmounted by the
+# kernel's ext2.c; then e2fsck finds nothing wrong, and debugfs reads the
+# copy back byte for byte. Where the images have it (mkfs on the disk) and
+# e2fsprogs is installed.
+if [ -f $IMAGES/disk/c4ix-mkfs.c4r ] && command -v mke2fs > /dev/null && command -v debugfs > /dev/null; then
+  echo "  ---   a disk of C4IX's own: ext2"
+  rm -rf $W/e2 && mkdir -p $W/e2/src/docs
+  head -c 1500000 /dev/urandom > $W/e2/src/docs/big.bin; echo hi > $W/e2/src/hi.txt
+  mke2fs -q -t ext2 -b 4096 -d $W/e2/src $W/e2/disk.img 16M
+  truncate -s 24M $W/e2/new.img
+  want=$(python3 -I -c "import zlib,sys; d=open(sys.argv[1],'rb').read(); print('%08x' % zlib.crc32(d))" $W/e2/src/docs/big.bin)
+  printf 'mount hd0 /mnt/a\ncrc32 /mnt/a/docs/big.bin\nmkdir /mnt/a/made\ncp /mnt/a/docs/big.bin /mnt/a/made/copy.bin\nrm /mnt/a/hi.txt\nchmod 600 /mnt/a/made/copy.bin\numount /mnt/a\nmkfs hd1\nmount hd1 /mnt/b\nmkdir /mnt/b/home\necho made > /mnt/b/home/n.txt\nexit\n' > $W/e2/in.txt
+  timeout 600 ./c4pc-host --mmu -m 64 -d $IMAGES/disk --disk $W/e2/disk.img --disk $W/e2/new.img $W/c4ix32.c4r < $W/e2/in.txt > $W/e2/out.txt 2>&1
+  grep -qE "^$want 1500000 /mnt/a/docs/big.bin" $W/e2/out.txt && ok "a Linux-made disk mounted and read" || bad "a Linux-made disk mounted and read"
+  debugfs -R "dump /made/copy.bin $W/e2/copy.bin" $W/e2/disk.img 2> /dev/null
+  cmp -s $W/e2/copy.bin $W/e2/src/docs/big.bin && ok "a file written to it, byte for byte (debugfs)" || bad "the file written to it"
+  debugfs -R "stat /made/copy.bin" $W/e2/disk.img 2> /dev/null | grep -q "Mode:  0600" && ok "chmod kept in its inode" || bad "chmod"
+  e2fsck -fn $W/e2/disk.img > $W/e2/fsck1.txt 2>&1 && ok "e2fsck finds nothing wrong with it" || { bad "e2fsck on the written disk"; tail -4 $W/e2/fsck1.txt; }
+  e2fsck -fn $W/e2/new.img > $W/e2/fsck2.txt 2>&1 && debugfs -R "cat /home/n.txt" $W/e2/new.img 2> /dev/null | grep -qx made &&
+    ok "a disk mkfs made, written and left mounted at shutdown: clean, its file there" || { bad "the disk mkfs made"; tail -4 $W/e2/fsck2.txt; }
+else
+  echo "  skip  a disk of C4IX's own (no c4ix-mkfs.c4r in $IMAGES/disk, or no e2fsprogs)"
+fi
 # Several CPUs (smp.c, par.c). Taking turns (--cpus N): c4mp's own
 # transcripts, and the session with the MMU on 4 CPUs byte for byte libjs's
 # --cpus 4, in its cycles. On threads (--parallel), and on a PC's own

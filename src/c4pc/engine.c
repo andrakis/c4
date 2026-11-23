@@ -89,13 +89,15 @@ static void rom_store(machine *m, i32 x, i32 v);
  * and a compile) */
 #define SWAP_ADDR_REG 0x11c
 #define SWAP_CMD_REG 0x158
-#define AP_DEV(m, a) ((m)->par_ap && !(m)->serving && (((a) >= DEV_BASE && (a) < DEV_END) || ((a) >= 0x400 && (a) < 0x500)) && \
+#define AP_DEV(m, a) ((m)->par_ap && !(m)->serving && (((a) >= DEV_BASE && (a) < DEV_END) || ((a) >= 0x400 && (a) < 0x500) || \
+                      ((a) >= BLK_BASE && (a) < BLK_END && (m)->dv->nblk)) && \
                       ((a) & ~3u) != SWAP_ADDR_REG && ((a) & ~3u) != SWAP_CMD_REG)
 static i32 arena_rd32(machine *m, u32 a) {
   if (AP_DEV(m, a)) return par_rd32(m, a & ~3u);
   if (a >= DEV_BASE && a < DEV_END) return dev_read32(m, a);
   if (a >= 0x400 && a < 0x480 && m->gui) return gui_read32(m->gui, a & ~3u);     /* bus.js: the display */
   if (a >= 0x480 && a < 0x500 && m->snd) return snd_read32(m->snd, a & ~3u);     /* ... and the sound card */
+  if (a >= BLK_BASE && a < BLK_END && m->dv->nblk) return blk_read32(m, a & ~3u); /* ... and the disks */
   if (!(a & 3)) return a + 4 <= m->size ? m->w[a >> 2] : 0;
   if ((i64)a + 4 > m->size) return 0;
   return (i32)(m->u8[a] | m->u8[a + 1] << 8 | m->u8[a + 2] << 16 | (u32)m->u8[a + 3] << 24);
@@ -105,6 +107,7 @@ static void arena_wr32(machine *m, u32 a, i32 v) {
   if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, a, v); return; }
   if (a >= 0x400 && a < 0x480 && m->gui) { gui_write32(m->gui, a & ~3u, v); return; }
   if (a >= 0x480 && a < 0x500 && m->snd) { snd_write32(m->snd, a & ~3u, v); return; }
+  if (a >= BLK_BASE && a < BLK_END && m->dv->nblk) { blk_write32(m, a & ~3u, v); return; }
   if (!(a & 3)) { if (a + 4 <= m->size) m->w[a >> 2] = v; return; }
   if ((i64)a + 4 > m->size) return;
   m->u8[a] = (u8)v; m->u8[a + 1] = (u8)(v >> 8); m->u8[a + 2] = (u8)(v >> 16); m->u8[a + 3] = (u8)((u32)v >> 24);
@@ -464,6 +467,7 @@ int eng_halt(machine *m, i32 status) { return halt(m, status); }
 i32 machine_info(machine *m) {
   return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
          (m->no_fpu ? 0 : C4I_FPU) | (m->mmu ? C4I_MMU : 0) | (m->accel ? C4I_ACCEL : 0) | (m->gui ? C4I_GUI : 0) | (m->snd ? C4I_SND : 0) |
+         (m->dv->nblk ? C4I_BLK : 0) |
          (m->trap_handler ? C4I_TRAPH : 0) | (m->smp ? C4I_SMP : 0) | (m->smp && m->smp->par ? C4I_PAR : 0);
 }
 

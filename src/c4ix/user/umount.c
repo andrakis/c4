@@ -3,6 +3,8 @@
 //   umount [DIR | cdrom | DRIVE]   /mnt/cdrom, or the one mount there is,
 //                                  by default
 //   umount -k ...                  ... and the disc left in its drive
+//   umount DIR | hdN               a disk's ext2 (mount hdN): what changed
+//                                  written, the disk marked clean
 //
 // The directory's entries go (as rm -r takes them: only the made entries,
 // nothing on the drive), and DIR stays, empty, for the next mount. A file
@@ -14,9 +16,39 @@
 
 enum { C4I_C4MJS = 8, C4I_MMU = 0x80000 };
 enum { DISK_EJECT = 0x190 };
-enum { BUF = 4096, NAME_MAX = 64, PATHW = 256 };
+enum { BUF = 4096, NAME_MAX = 64, PATHW = 256, SYS_UMOUNT = 249 };
 
 static char tab[BUF];
+static char proc[BUF];
+
+static int ksys(int num, int a, int b, int c) { return __c4_opcode(c, b, a, num); }
+// a disk's mount (/proc/mounts) by its directory or its disk, let go: 1
+// done, -1 refused (busy), 0 not one
+static int disk_umount(char *want) {
+    char *p, *dev, *at;
+    int fd, got, r;
+    proc[0] = 0;
+    if ((fd = uopen("/proc/mounts", O_RD)) < 0) return 0;
+    got = 0;
+    while (got < BUF - 1 && (r = uread(fd, proc + got, BUF - 1 - got)) > 0) got = got + r;
+    uclose(fd);
+    proc[got] = 0;
+    p = proc;
+    while (*p) {
+        dev = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
+        at = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
+        while (*p && *p != 10) ++p; if (*p) ++p;
+        if (!ustrcmp(want, dev) || !ustrcmp(want, at)) {
+            if (ksys(SYS_UMOUNT, (int)at, 0, 0) < 0) {
+                ufprintf(STDERR, "umount: %s is busy: a file there is open, or a task is in it\n", at);
+                return 0 - 1;
+            }
+            uprintf("umount: %s (%s) let go; its disk is clean\n", at, dev);
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static int num(char *s) {
     int v;
@@ -53,6 +85,7 @@ int main(int argc, char **argv) {
     if (argc > a && !ustrcmp(argv[a], "-k")) { keep = 1; ++a; }
     want = "";
     if (argc > a) want = argv[a];
+    if (want[0]) { r = disk_umount(want); if (r) return r < 0; }
     tab[0] = 0; got = 0;
     if ((fd = uopen("/tmp/mounts", O_RD)) >= 0) {
         while (got < BUF - 1 && (r = uread(fd, tab + got, BUF - 1 - got)) > 0) got = got + r;

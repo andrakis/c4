@@ -112,6 +112,8 @@ static void vfs_ramuse(struct vnode *d, int *c) {
     }
 }
 
+enum { VFS_MOUNTS = 4 };            // disks mounted at once (vfs_mount)
+static int vfs_mounts_text(char *out, int max);
 static void vfs_proc(struct vnode *vn) {
     int ms, n, size, r[2], c[12];
     // /proc/kmsg: the kernel log (console.c), as dmesg prints it
@@ -128,6 +130,30 @@ static void vfs_proc(struct vnode *vn) {
     // block of frames, how many, the frames in use in them and the blocks
     // less than an eighth in use (mmu_counts), and swap: its slots, the pages out
     // and in since boot, the tasks load control holds, the pages moved in memory
+    // /proc/disks: the block devices, "hd0 SECTORS rw" a line (blk.c)
+    if (vn->name[0] == 'd') {
+        if (!vn_grow(vn, 16 * 32 + 1)) return;
+        n = 0; ms = 0; size = blk_count();
+        while (ms < size && ms < 16) {
+            vn->data[n++] = 'h'; vn->data[n++] = 'd';
+            n = n + vfs_dec(vn->data + n, ms);
+            vn->data[n++] = ' ';
+            n = n + vfs_dec(vn->data + n, blk_sectors(ms));
+            if (blk_flags(ms) & 1) { memcpy(vn->data + n, " ro", 3); } else { memcpy(vn->data + n, " rw", 3); }
+            n = n + 3;
+            vn->data[n++] = '
+';
+            ++ms;
+        }
+        vn->size = n;
+        return;
+    }
+    // /proc/mounts: the disks mounted, "hd0 /mnt/disk ext2 rw" a line
+    if (vn->name[0] == 'm' && vn->name[1] == 'o') {
+        if (!vn_grow(vn, VFS_MOUNTS * (PATH_MAX + 40) + 1)) return;
+        vn->size = vfs_mounts_text(vn->data, VFS_MOUNTS * (PATH_MAX + 40));
+        return;
+    }
     if (vn->name[0] == 'm') {
         if (!vn_grow(vn, 640)) return;
         r[0] = 0; r[1] = 0;
@@ -233,6 +259,10 @@ void vfs_init() {
     if ((vn = vfs_ramfile("/proc/cache"))) vn->type = VN_PROC;
     // /proc/meminfo: where memory is, which free prints (vfs_proc)
     if ((vn = vfs_ramfile("/proc/meminfo"))) vn->type = VN_PROC;
+    // /proc/mounts: the disks mounted (vfs_mount)
+    if ((vn = vfs_ramfile("/proc/mounts"))) vn->type = VN_PROC;
+    // /proc/disks: the block devices (blk.c)
+    if ((vn = vfs_ramfile("/proc/disks"))) vn->type = VN_PROC;
     vfs_cache_init();
     // /var/log/kernel: the console, logged (console.c)
     con_logopen();
@@ -320,10 +350,11 @@ static struct vnode *vfs_walk(char *path, int create, int mkdir) {
     return vn_res(vfs_walk2(path, create, mkdir));
 }
 
+static int vfs_e2_nomake;         // vfs_link's walk: the disk's entry is ext2_link's
 static struct vnode *vfs_walk2(char *path, int create, int mkdir) {
     struct vnode *dir;
     struct vnode *vn;
-    int i, start, len;
+    int i, start, len, ino;
 
     dir = (path[0] == '/') ? rootdir : vfs_cwd();
     i = 0;
@@ -350,6 +381,14 @@ static struct vnode *vfs_walk2(char *path, int create, int mkdir) {
             if (path[i]) return 0;
             if (!(vn = vn_alloc(mkdir ? VN_DIR : VN_RAMFILE))) return 0;
             vfs_namecpy2(vn->name, path + start, len);
+            if (dir->e2 && !vfs_e2_nomake) {
+                // on the disk first: refused there (full, read-only), not made
+                if (mkdir) ino = ext2_mkdir(dir->e2, dir->e2ino, vn->name, 493);
+                else ino = ext2_create(dir->e2, dir->e2ino, vn->name, 420);
+                if (!ino) { sl4b_free(vn_cache, (char *)vn); return 0; }
+                ext2_commit(dir->e2);
+                vn->e2 = dir->e2; vn->e2ino = ino; vn->mode = (mkdir ? 493 : 420) | 4096;
+            }
             vn->parent = dir;
             vn->next = dir->child;
             dir->child = vn;
@@ -383,6 +422,7 @@ static void vn_unback(struct vnode *vn);
 void vfs_touch(struct vnode *vn) {
     vfs_clock = vfs_clock + 1;
     vn->mtime = vfs_clock;
+    if (vn->e2 && vn->type == VN_RAMFILE) vn->e2dirty = 1;
     // what it holds now is its own, not the host's
     if (vn->backed) vn_unback(vn);
     vn->sig = 0;
@@ -673,13 +713,83 @@ static int vfs_dirent_make(struct vnode *dir, char *pfx, int pl, char *name, int
 }
 
 static void vfs_dirlist(struct vnode *dir);
+static void e2_dirlist(struct vnode *dir);
 
 // (lookups take no lock, and this changes the tree)
 static void vfs_dirfill(struct vnode *dir) {
-    if (!dir || dir->type != VN_DIR || !dir->hostname) return;
+    if (!dir || dir->type != VN_DIR || (!dir->hostname && !dir->e2unlisted)) return;
     sched_lock();
-    if (dir->hostname) vfs_dirlist(dir);
+    if (dir->e2unlisted) e2_dirlist(dir);
+    else if (dir->hostname) vfs_dirlist(dir);
     sched_unlock();
+}
+
+// ---- a disk's directories and files (ext2.c; docs/c4ix-ext2.md 3) ----
+//
+// A mounted directory and everything under it is backed by the disk: a
+// directory's entries are made from its ext2 entries when it is first
+// looked in, each file lazy until it is read (then read in whole and
+// kept as a cache, or a big one read a range at a time), as a host's
+// are. What changes is RAM's until its last writer closes it, and then
+// the disk's again: the file rewritten (e2_flush). Making and removing go
+// to the disk at once. Stamped 0 as a host's files are: older than
+// anything made since the boot.
+static void e2_backed(struct vnode *vn, struct e2fs *fs, int ino) {
+    int st[6];
+    vn->e2 = fs;
+    vn->e2ino = ino;
+    vn->mtime = 0;
+    if (ext2_stat(fs, ino, st) < 0) return;
+    vn->mode = (st[0] & 4095) | 4096;     // its own: even 0000
+    if (vn->type == VN_DIR) { vn->e2unlisted = 1; return; }
+    vn->size = st[1];
+    vn->lazy = 1;
+    vn->backed = 1;
+    ++vfs_nlazy;
+    vfs_lazybytes = vfs_lazybytes + st[1];
+}
+static void e2_dirlist(struct vnode *dir) {
+    char name[VN_NAME_MAX];
+    struct vnode *vn;
+    int pos, ino, isdir, n;
+    dir->e2unlisted = 0;
+    pos = 0;
+    while (ext2_dir_next(dir->e2, dir->e2ino, &pos, name, &ino, &isdir)) {
+        if (vfs_nameeq(name, ".") || vfs_nameeq(name, "..")) continue;
+        n = 0; while (name[n]) ++n;
+        if (vfs_child(dir, name, n)) continue;
+        if (!(vn = vn_alloc(isdir ? VN_DIR : VN_RAMFILE))) return;
+        vfs_namecpy(vn->name, name);
+        vn->parent = dir;
+        vn->next = dir->child;
+        dir->child = vn;
+        e2_backed(vn, dir->e2, ino);
+    }
+}
+// a disk's file written back: its bytes the disk's again, and a cache
+static int e2_flush(struct vnode *vn) {
+    if (!vn->e2 || !vn->e2dirty || vn->type != VN_RAMFILE || vn->lazy) return 0;
+    if (ext2_write(vn->e2, vn->e2ino, vn->data, vn->size) < 0) {
+        klog("ext2: %s: could not be written back to the disk\n", vn->name);
+        return 0 - 1;
+    }
+    vn->e2dirty = 0;
+    ext2_commit(vn->e2);
+    if (!vn->backed && vn_droppable(vn)) { vn->backed = 1; cache_in(vn); }
+    return 0;
+}
+// every changed file under DIR written back; how many could not be
+static int e2_flush_tree(struct vnode *dir) {
+    struct vnode *vn;
+    int bad;
+    bad = 0;
+    vn = dir->child;
+    while (vn) {
+        if (vn->type == VN_DIR) bad = bad + e2_flush_tree(vn);
+        else if (vn->e2dirty && e2_flush(vn) < 0) ++bad;
+        vn = vn->next;
+    }
+    return bad;
 }
 
 static void vfs_dirlist(struct vnode *dir) {
@@ -828,6 +938,15 @@ int vfs_fill(struct vnode *vn) {
     if (!vn || !vn->lazy) return 1;
     size = vn->size;
     if (!(nd = vfs_malloc(size + 1))) return 0;
+    if (vn->e2) {
+        got = ext2_read(vn->e2, vn->e2ino, nd, 0, size);
+        if (got < 0) got = 0;
+        nd[got] = 0;
+        vn_unlazy(vn);
+        vn->data = nd; vn->cap = size + 1; vn->size = got;
+        if (vn->backed) cache_in(vn);
+        return 1;
+    }
     if ((fd = open(vn->hostname, 0)) < 0) {
         free(nd);
         vn_unlazy(vn);
@@ -856,7 +975,8 @@ int vfs_pread(struct vnode *vn, char *buf, int pos, int len) {
     n = vn->size - pos;
     if (n > len) n = len;
     if (n <= 0) { sched_unlock(); return 0; }
-    if (vn->lazy && vfs_spans) n = vfs_span_read(vn, buf, pos, n);
+    if (vn->lazy && vn->e2) n = ext2_read(vn->e2, vn->e2ino, buf, pos, n);
+    else if (vn->lazy && vfs_spans) n = vfs_span_read(vn, buf, pos, n);
     else if (vn->lazy && !vfs_fill(vn)) n = -1;
     else {
         if (n > vn->size - pos) n = vn->size - pos;   // a host file that went
@@ -923,6 +1043,9 @@ void vn_stat(struct vnode *vn, int *out, int n) {
                 : vn->type == VN_PIPE ? 4534 : 8630;   // S_IFDIR|0755, S_IFREG|0755 or 0644, S_IFIFO|0666, S_IFCHR|0666
     st[ST_DEV] = (vn->type == VN_DIR && vn->hostname) ? 3
                : (vn->type == VN_RAMFILE || vn->type == VN_DIR) ? 1 : vn->type == VN_HOSTFILE ? 2 : 0;
+    if (vn->e2) st[ST_DEV] = 4;
+    // a mode of its own (a disk's file's, or chmod's): its bits, with the type's
+    if (vn->mode) st[ST_MODE] = (st[ST_MODE] & 61440) | (vn->mode & 4095);
     if (n <= 0) n = 4;
     if (n > ST_WORDS) n = ST_WORDS;
     i = 0;
@@ -950,7 +1073,21 @@ int vfs_link(char *path, char *newpath) {
         sched_unlock();
         return -1;
     }
-    if (!(l = vfs_walk2(newpath, 1, 0))) { sched_unlock(); return -1; }   // its directory is not there
+    vfs_e2_nomake = 1;
+    l = vfs_walk2(newpath, 1, 0);
+    vfs_e2_nomake = 0;
+    if (!l) { sched_unlock(); return -1; }   // its directory is not there
+    if (l->parent->e2 || vn->e2) {
+        // on a disk, a link is the disk's: the same filesystem's only
+        if (l->parent->e2 != vn->e2 || ext2_link(vn->e2, l->parent->e2ino, l->name, vn->e2ino) < 0) {
+            vn_detach(l);
+            sl4b_free(vn_cache, (char *)l);
+            sched_unlock();
+            return -1;
+        }
+        l->e2 = vn->e2;
+        ext2_commit(vn->e2);
+    }
     l->type = VN_LINK;
     l->target = vn;
     l->lnext = vn->links;
@@ -1013,6 +1150,7 @@ int vfs_put(char *path, char *buf, int len) {
     vn->data[len] = 0;
     vn->size = len;
     vfs_touch(vn);
+    if (vn->e2) e2_flush(vn);     // no descriptor to close: the disk's now
     sched_unlock();
     return 0;
 }
@@ -1092,6 +1230,15 @@ int vfs_unlink(char *path) {
     if (!vn || vn == rootdir || !vn->parent ||
         (vn->type == VN_DIR && vn->child) ||
         (vn->type != VN_DIR && vn->type != VN_RAMFILE && vn->type != VN_LINK)) { sched_unlock(); return -1; }
+    // a disk's mount point is unmounted, not removed; an entry on a disk
+    // goes from the disk first (an open file there stays, as the VFS's does)
+    if (vn->e2 && (vn->parent->e2 != vn->e2 || vn->e2ino == 2)) { sched_unlock(); return -1; }
+    if (vn->parent->e2) {
+        if (vn->type == VN_RAMFILE && !vn->nlinks && vn->refs > 0) { sched_unlock(); return -1; }
+        if (ext2_unlink(vn->parent->e2, vn->parent->e2ino, vn->name) < 0) { sched_unlock(); return -1; }
+        ext2_commit(vn->parent->e2);
+        if (vn->type == VN_RAMFILE && !vn->nlinks) vn->e2dirty = 0;
+    }
     if (vn->type == VN_LINK) {
         vn_detach(vn);
         l = vn->target;
@@ -1151,6 +1298,10 @@ int vfs_rename(char *path, char *newname) {
     sched_lock();
     vn = vfs_walk2(path, 0, 0);   // a link is renamed, not its file
     if (!vn || vn == rootdir || !vn->parent || vn->type == VN_PROC || vfs_child(vn->parent, newname, n)) { sched_unlock(); return -1; }
+    if (vn->parent->e2 && ext2_rename(vn->parent->e2, vn->parent->e2ino, vn->name, vn->parent->e2ino, newname) < 0) {
+        sched_unlock();
+        return -1;
+    }
     vfs_namecpy(vn->name, newname);
     sched_unlock();
     return 0;
@@ -1172,6 +1323,164 @@ int vfs_chdir(char *path) {
     if (!vfs_isdir(vn)) return -1;
     if (!(t = sched_current())) return -1;
     t->cwd = vn;
+    return 0;
+}
+
+// ---- mounting a disk (docs/c4ix-ext2.md 3) ----
+
+static struct vnode *vfs_mpt[VFS_MOUNTS];   // each mount's directory
+static struct e2fs *vfs_mfs[VFS_MOUNTS];
+
+// block device DEV's ext2 filesystem at PATH, an empty directory (made if
+// there is none): 0, or -1
+int vfs_mount(int dev, char *path, int ro) {
+    struct vnode *dir;
+    struct e2fs *fs;
+    int i;
+    sched_lock();
+    i = 0;
+    while (i < VFS_MOUNTS && vfs_mpt[i]) ++i;
+    if (i == VFS_MOUNTS) { sched_unlock(); return 0 - 1; }
+    if (!(dir = vfs_walk(path, 0, 0))) dir = vfs_walk(path, 1, 1);
+    if (!dir || dir->type != VN_DIR || dir == rootdir || dir->e2 || dir->hostname) { sched_unlock(); return 0 - 1; }
+    vfs_dirfill(dir);
+    if (dir->child) { sched_unlock(); return 0 - 1; }
+    if (!(fs = ext2_mount(dev, ro))) { sched_unlock(); return 0 - 1; }
+    dir->e2 = fs;
+    dir->e2ino = 2;
+    dir->e2unlisted = 1;
+    vfs_mpt[i] = dir;
+    vfs_mfs[i] = fs;
+    klog("ext2: hd%d mounted on %s%s\n", dev, path, ext2_ro(fs) ? ", read-only" : "");
+    sched_unlock();
+    return 0;
+}
+
+// is anything under DIR open, or a task's working directory
+static int e2_busy(struct vnode *dir) {
+    struct vnode *vn;
+    struct task *t;
+    t = task_head;
+    while (t) { if (t->cwd == dir) return 1; t = t->next; }
+    vn = dir->child;
+    while (vn) {
+        if (vn->refs > 0 || vn->held) return 1;
+        if (vn->type == VN_DIR && e2_busy(vn)) return 1;
+        vn = vn->next;
+    }
+    return 0;
+}
+// DIR's entries let go (their files written back already)
+static void e2_forget(struct vnode *dir) {
+    struct vnode *vn, *nx;
+    vn = dir->child;
+    while (vn) {
+        nx = vn->next;
+        if (vn->type == VN_DIR) e2_forget(vn);
+        if (vn->type == VN_RAMFILE) { cache_out(vn); vn_unlazy(vn); if (vn->data) free(vn->data); }
+        if (vn->hostname) free(vn->hostname);
+        sl4b_free(vn_cache, (char *)vn);
+        vn = nx;
+    }
+    dir->child = 0;
+}
+// the disk mounted at PATH: what changed written back, its entries let
+// go, the filesystem marked clean. 0, or -1 (not a mount, or busy)
+int vfs_umount(char *path) {
+    struct vnode *dir;
+    int i;
+    sched_lock();
+    dir = vfs_walk(path, 0, 0);
+    i = 0;
+    while (i < VFS_MOUNTS && (!vfs_mpt[i] || vfs_mpt[i] != dir)) ++i;
+    if (i == VFS_MOUNTS || e2_busy(dir)) { sched_unlock(); return 0 - 1; }
+    e2_flush_tree(dir);
+    e2_forget(dir);
+    ext2_umount(vfs_mfs[i]);
+    dir->e2 = 0; dir->e2ino = 0; dir->e2unlisted = 0;
+    vfs_mpt[i] = 0; vfs_mfs[i] = 0;
+    sched_unlock();
+    return 0;
+}
+// what is mounted, for /proc/mounts: "hd0 /mnt/disk ext2 rw\n" a line
+static int vfs_mounts_text(char *out, int max) {
+    struct vnode *up[32];
+    struct vnode *vn;
+    int i, n, k, depth;
+    n = 0;
+    i = 0;
+    while (i < VFS_MOUNTS) {
+        if (vfs_mpt[i] && n + PATH_MAX + 32 < max) {
+            out[n++] = 'h'; out[n++] = 'd';
+            n = n + vfs_dec(out + n, ext2_dev(vfs_mfs[i]));
+            out[n++] = ' ';
+            // its path, from the root: the directories up to it, then down
+            depth = 0;
+            vn = vfs_mpt[i];
+            while (vn && vn != rootdir && depth < 32) { up[depth] = vn; ++depth; vn = vn->parent; }
+            while (depth > 0) {
+                --depth;
+                out[n++] = '/';
+                k = 0; while (up[depth]->name[k]) { out[n++] = up[depth]->name[k]; ++k; }
+            }
+            memcpy(out + n, " ext2 ", 6); n = n + 6;
+            if (ext2_ro(vfs_mfs[i])) { memcpy(out + n, "ro", 2); } else { memcpy(out + n, "rw", 2); }
+            n = n + 2;
+            out[n++] = '\n';
+        }
+        ++i;
+    }
+    return n;
+}
+// at shutdown: every disk's changes written, and each marked clean
+void vfs_umount_all() {
+    int i;
+    sched_lock();
+    i = 0;
+    while (i < VFS_MOUNTS) {
+        if (vfs_mpt[i]) {
+            e2_flush_tree(vfs_mpt[i]);
+            ext2_umount(vfs_mfs[i]);
+            vfs_mpt[i]->e2unlisted = 0;
+            vfs_mpt[i] = 0; vfs_mfs[i] = 0;
+        }
+        ++i;
+    }
+    sched_unlock();
+}
+
+// the counts of the disk PATH is on: ext2_statfs's six, then the device
+int vfs_statfs(char *path, int *out) {
+    struct vnode *vn;
+    sched_lock();
+    if (!(vn = vfs_walk(path, 0, 0)) || !vn->e2) { sched_unlock(); return 0 - 1; }
+    ext2_statfs(vn->e2, out);
+    out[6] = ext2_dev(vn->e2);
+    sched_unlock();
+    return 0;
+}
+// everything changed on every disk written back, and each disk's
+// superblock and cache: how many files could not be
+int vfs_sync() {
+    int i, bad;
+    sched_lock();
+    bad = 0;
+    i = 0;
+    while (i < VFS_MOUNTS) {
+        if (vfs_mpt[i]) { bad = bad + e2_flush_tree(vfs_mpt[i]); ext2_sync(vfs_mfs[i]); }
+        ++i;
+    }
+    sched_unlock();
+    return bad;
+}
+// PATH's permission bits made MODE's (and the disk's, on one)
+int vfs_chmod(char *path, int mode) {
+    struct vnode *vn;
+    sched_lock();
+    if (!(vn = vfs_walk(path, 0, 0)) || vn->type == VN_PROC) { sched_unlock(); return 0 - 1; }
+    if (vn->e2 && ext2_chmod(vn->e2, vn->e2ino, mode) < 0) { sched_unlock(); return 0 - 1; }
+    vn->mode = (mode & 4095) | 4096;    // 4096: a mode of its own, even 0000
+    sched_unlock();
     return 0;
 }
 
@@ -1254,8 +1563,8 @@ int vfs_read(struct file *f, char *buf, int len) {
     // Still on the host: a small file is read in and kept, while there
     // is room; a big one -- a game's data -- is read where it is, a span
     // at a time, and never takes the RAM
-    if (vn->lazy && (!vfs_spans || (vn->size <= VFS_KEEP && !vfs_short()))) {
-        if (!vfs_fill(vn) && !vfs_spans) { sched_unlock(); return -1; }
+    if (vn->lazy && (!(vfs_spans || vn->e2) || (vn->size <= VFS_KEEP && !vfs_short()))) {
+        if (!vfs_fill(vn) && !(vfs_spans || vn->e2)) { sched_unlock(); return -1; }
     }
     if (vn->lazy) {
         n = vfs_pread(vn, buf, f->pos, len);
@@ -1361,6 +1670,7 @@ static void file_unref(struct file *f) {
         --f->vn->writers;
         sched_wake = 1;
         if (!f->vn->writers && f->vn->type == VN_PIPE) sched_pipewake(f->vn);
+        if (!f->vn->writers && f->vn->e2dirty) e2_flush(f->vn);   // on a disk: written back
     }
     vn_release(f->vn);
     sl4b_free(file_cache, (char *)f);

@@ -107,6 +107,7 @@ void boot_report() {
         }
         *(int *)C4IX_DISK_DRIVE = cur;
     }
+    if (info & C4IX_I_BLK) blk_banner();
     if (info & C4IX_I_MBOX)
         klog("mailbox: %d KB at 0x%08x\n", *(int *)C4IX_MBOX_LEN / 1024, *(int *)C4IX_MBOX_BASE);
     if (info & C4IX_I_GUI)
@@ -159,6 +160,7 @@ static int kernel_main(int argc, int argv) {
     sched_stop();
 
     task_shutdown();
+    vfs_umount_all();          // the disks written and marked clean (docs/c4ix-ext2.md)
     sl4b_stats();
     kprintf("c4ix: shutdown complete, %d tasks remain\n", task_count());
     return 0;

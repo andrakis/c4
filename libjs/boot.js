@@ -25,6 +25,7 @@ import { parseC4r, loadImage } from '../src/c4bb/sim/loader.js';
 import { Arena, MEM_BASE, TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.js';
 import { Devices, OPNAMES, HEAP_BASE, HEAP_END, CYCLES_PER_MS } from '../src/c4bb/sim/devices.js';
 import { OP, Machine, CPU_HALT_ADDR, NULL_GUARD_OP } from './c4m.js';
+import { BlockDevices } from './blk.js';
 import { Smp } from './smp.js';
 import { ParHost } from './par.js';
 import { Bus } from './bus.js';
@@ -73,7 +74,9 @@ export function createMachine(opts = {}) {
     cyclesPerMs: opts.mhz ? Math.max(1, Math.round(opts.mhz * 1000)) : CYCLES_PER_MS,
     hostNow: opts.hostNow,
   });
-  const bus = new Bus(arena, opts.gui || null, opts.snd || null);
+  // the block devices (blk.js): opts.disks, each a disk blk.js describes
+  const bus = new Bus(arena, opts.gui || null, opts.snd || null,
+    opts.disks && opts.disks.length ? new BlockDevices(opts.disks) : null);
   // on threads, a heap every CPU's thread allocates from itself (sheap.js)
   const machine = new Machine(arena, dev, bus, par ? new SharedHeap(arena, null) : new Heap(0, 0));
   // the FPU opcode (F3): on unless asked otherwise (fpu: false)

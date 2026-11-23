@@ -230,7 +230,7 @@ static FILE *texts;
 static void text_hook(int x, int y, const char *s, int n) { fprintf(texts, "%d %d %.*s\n", x, y, n, s); }
 
 static void usage(void) {
-  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
+  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--disk FILE.img] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
   exit(1);
 }
 
@@ -244,11 +244,24 @@ static int iso_rd(void *ctx, u32 lba, u32 n, u8 *buf) {
   return 0;
 }
 
+/* --disk FILE: a disk image as a block device (dev.c BLK_*), read and
+ * written in place */
+static int img_rw(blkdev *b, int write, u32 lba, u32 n, u8 *buf) {
+  FILE *f = b->ctx;
+  if (fseeko(f, (off_t)lba * 512, SEEK_SET)) return -1;
+  if (write) return fwrite(buf, 512, n, f) == n ? 0 : -1;
+  size_t got = fread(buf, 512, n, f);
+  if (got < n) memset(buf + got * 512, 0, (size_t)(n - got) * 512);
+  return 0;
+}
+static int img_flush(blkdev *b) { return fflush((FILE *)b->ctx) ? -1 : 0; }
+
 int main(int argc, char **argv) {
   u32 mb = 32; double maxc = -1, mhz = 20; int cpus = 0, quantum = 0, parallel = 0, stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0;
   const char *shot = 0, *wav = 0;
   drive *drives[16]; int nd = 0;
   const char *cds[4]; int ncd = 0;
+  const char *disks[8]; int ndisk = 0;
   int i = 1;
   for (; i < argc && argv[i][0] == '-'; i++) {
     const char *f = argv[i];
@@ -273,6 +286,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(f, "-q") && i + 1 < argc) quantum = atoi(argv[++i]);    /* ... each -q instructions in turn */
     else if (!strcmp(f, "--parallel")) parallel = 1;                         /* ... each on a thread (par.c) */
     else if (!strcmp(f, "--cdrom") && i + 1 < argc && ncd < 4) cds[ncd++] = argv[++i];   /* an ISO image as a CD drive, from drive 2 */
+    else if (!strcmp(f, "--disk") && i + 1 < argc && ndisk < 8) disks[ndisk++] = argv[++i];  /* a disk image as a block device */
     else if (!strcmp(f, "--gui") && i + 1 < argc) { if (sscanf(argv[++i], "%dx%d", &gw, &gh) != 2) usage(); }   /* fit a display (gui.c) */
     else if (!strcmp(f, "--events") && i + 1 < argc) load_events(argv[++i]);
     else if (!strcmp(f, "--shot") && i + 1 < argc) shot = argv[++i];    /* the display as a PNG at the end */
@@ -308,6 +322,17 @@ int main(int argc, char **argv) {
   if (noaccel) m->accel = 0;
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
+  for (int k = 0; k < ndisk; k++) {
+    FILE *f = fopen(disks[k], "r+b");
+    int ro = 0;
+    if (!f) { f = fopen(disks[k], "rb"); ro = 1; }
+    if (!f) { fprintf(stderr, "c4pc: cannot open %s\n", disks[k]); return 1; }
+    fseeko(f, 0, SEEK_END);
+    blkdev *b = calloc(1, sizeof *b);
+    b->sectors = (u32)(ftello(f) / 512); b->flags = ro; b->rw = img_rw; b->flush = img_flush; b->ctx = f;
+    snprintf(b->what, sizeof b->what, "%s", disks[k]);
+    m->blk[m->nblk++] = b;
+  }
   if (cpus > 0) smp_new(m, cpus, quantum);
   if (gw > 0 && gh > 0) m->gui = gui_new(m, gw, gh);
   if (wav) m->snd = snd_new(m, 44100, 0);

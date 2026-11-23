@@ -153,7 +153,7 @@ class ApMachine extends Machine {
 // read: the loader's words start at byte 13.)
 class ApBus {
   constructor(arena) { this.arena = arena; this.m = null; }
-  dev(addr) { return (addr >= 0x100 && addr < 0x200) || (addr >= 0x400 && addr < 0x500); }
+  dev(addr) { return (addr >= 0x100 && addr < 0x200) || (addr >= 0x400 && addr < 0x500) || (addr >= 0x540 && addr < 0x560); }
   read32(addr) {
     addr = addr >>> 0;
     if (this.dev(addr)) { const r = this.m.ask(KIND.RD32, 0, addr & ~3, 0); return r === STOP.HALT ? 0 : r.ra | 0; }

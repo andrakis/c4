@@ -1,10 +1,14 @@
 // C4IX userland: mount -- a host drive's files under a directory.
 //
-//   mount                 what is mounted, and the drives there are
+//   mount                 what is mounted, and the drives and disks there are
 //   mount [DRIVE] [DIR]   DRIVE's files at DIR: a drive's number, or
 //                         cdrom (the default), the first CD drive with a
 //                         disc in it, c4pc's own boot disc last; DIR
 //                         /mnt/cdrom by default
+//   mount [-r] hdN [DIR]  disk N's ext2 filesystem at DIR (/mnt/hdN by
+//                         default), read-only with -r: the kernel's own
+//                         (ext2.c), every change written to the disk as it
+//                         is made, nothing for persist to keep
 //
 // A mount is a host directory (vfs.c vfs_lazydir), as the games' are:
 // nothing of it is made until something looks in it, and then the
@@ -27,10 +31,23 @@
 
 enum { C4I_C4MJS = 8, C4I_MMU = 0x80000 };
 enum { DISK_COUNT = 0x188, DISK_RESCAN = 0x194 };
-enum { BUF = 2048, PATHW = 256 };
+enum { BUF = 2048, PATHW = 256, SYS_MOUNT = 248 };
 
 static char info[BUF];
 static char tab[BUF * 2];
+static char proc[BUF];
+
+static int ksys(int num, int a, int b, int c) { return __c4_opcode(c, b, a, num); }
+// /proc/NAME into proc
+static void proc_read(char *name) {
+    int fd, got, r;
+    proc[0] = 0;
+    if ((fd = uopen(name, O_RD)) < 0) return;
+    got = 0;
+    while (got < BUF - 1 && (r = uread(fd, proc + got, BUF - 1 - got)) > 0) got = got + r;
+    uclose(fd);
+    proc[got] = 0;
+}
 
 // N:.c4pc-drive into info: its length, or -1 where the host has none
 static int drive_info(int n) {
@@ -107,7 +124,7 @@ static int mounted(char *dir, int n) {
 
 static int list() {
     char kind[32], label[64], fs[48], media[8], d[PATHW];
-    char *p;
+    char *p, *dev, *at, *fsn, *how;
     int n, k, any, i;
     uprintf("/ on ram (C4IX's files, in memory)\n");
     tab_read();
@@ -130,6 +147,29 @@ static int list() {
             uprintf("\n");
             while (*p && *p != 10) ++p;
             if (*p) ++p;
+        }
+    }
+    // the disks' (/proc/mounts: "hd0 /mnt/disk ext2 rw")
+    proc_read("/proc/mounts");
+    p = proc;
+    while (*p) {
+        dev = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
+        at = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
+        fsn = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
+        how = p; while (*p && *p != 10) ++p; if (*p) { *p = 0; ++p; }
+        uprintf("%s on %s (%s, %s)\n", at, dev, fsn, how);
+    }
+    proc_read("/proc/disks");
+    if (proc[0]) {
+        uprintf("disks:\n");
+        p = proc;
+        while (*p) {
+            dev = p; while (*p && *p != ' ') ++p; if (*p) { *p = 0; ++p; }
+            uprintf("  %s: %d MB", dev, num(p) / 2048);
+            while (*p && *p != ' ' && *p != 10) ++p;
+            if (*p == ' ' && p[1] == 'r' && p[2] == 'o') uprintf(", read-only");
+            while (*p && *p != 10) ++p; if (*p) ++p;
+            uprintf("\n");
         }
     }
     if (!(__c4_info() & C4I_C4MJS)) return 0;
@@ -192,10 +232,26 @@ static int pick_cdrom(int n) {
 int main(int argc, char **argv) {
     char *dir, *what;
     char host[8], kind[32], label[64], size[16], line[PATHW + 96];
-    int n, k, fd, st[4];
+    int n, k, fd, ro, st[4];
     // the drives' registers: under the MMU a task has them only when it asks
     if (__c4_info() & C4I_MMU) uioperm(UIOPERM_DEV);
     if (argc < 2) return list();
+    // a disk: the kernel's ext2
+    k = 1; ro = 0;
+    if (!ustrcmp(argv[k], "-r")) { ro = 1; ++k; }
+    if (k < argc && argv[k][0] == 'h' && argv[k][1] == 'd' && argv[k][2] >= '0' && argv[k][2] <= '9') {
+        n = num(argv[k] + 2);
+        if (k + 1 < argc) dir = argv[k + 1];
+        else { ustrcpy(line, "/mnt/"); ustrcpy(line + 5, argv[k]); dir = line; }
+        if (dir[0] != '/') { ufprintf(STDERR, "mount: %s: the directory must be a whole path, from /\n", dir); return 1; }
+        mkdirs(dir);
+        if (ksys(SYS_MOUNT, n, (int)dir, ro) < 0) {
+            ufprintf(STDERR, "mount: hd%d on %s: not an ext2 filesystem, or %s is not an empty directory (dmesg says which; mkfs hd%d makes one)\n", n, dir, dir, n);
+            return 1;
+        }
+        uprintf("mount: hd%d on %s%s\n", n, dir, ro ? ", read-only" : "");
+        return 0;
+    }
     if (!(__c4_info() & C4I_C4MJS)) { ufprintf(STDERR, "mount: this host has no drives to mount\n"); return 1; }
     what = argv[1];
     dir = "/mnt/cdrom";
@@ -214,7 +270,7 @@ int main(int argc, char **argv) {
         if (k < 2) { ufprintf(STDERR, "mount: drive %d is the system's own (the boot disk, or persist's)\n", k); return 1; }
         if (mounted("", k)) { ufprintf(STDERR, "mount: drive %d is mounted already\n", k); return 1; }
         *(int *)DISK_RESCAN = k;
-    } else { ufprintf(STDERR, "usage: mount [cdrom | DRIVE] [DIR]\n"); return 1; }
+    } else { ufprintf(STDERR, "usage: mount [cdrom | DRIVE] [DIR], or mount [-r] hdN [DIR]\n"); return 1; }
     kind[0] = 0; label[0] = 0; size[0] = 0;
     if (drive_info(k) > 0) {
         field("kind", kind, 32); field("label", label, 64); field("size", size, 16);

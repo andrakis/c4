@@ -166,6 +166,8 @@ libjs/images/
 /c4pc-host
 /c4pc.elf
 /c4pc64.elf
+/c4pc-host64w
+/c4pcw64.elf
 /.c4pc/
 /C4PC.COM
 /c4pc.iso

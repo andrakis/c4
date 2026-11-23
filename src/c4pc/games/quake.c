@@ -5,6 +5,7 @@
  * doubles, a conversion to int toward zero with what does not fit the most
  * negative int (toint). */
 #include "../accel.h"
+#if WB == 4                            /* the 32-bit machine's games (c4pc.h) */
 
 /* a span list's espan_t: u, v, count, pnext */
 #define SPAN_U 0
@@ -460,3 +461,4 @@ static i32 sincos_(machine *m) {
 const acc_fn acc_quake[] = {spans8, zspans, turb8, lblock, sspan, polyspans, particles, lmfill, dlight, lmfin,
                             aliasverts, polytri, sincos_};
 const int acc_quake_n = sizeof acc_quake / sizeof acc_quake[0];
+#endif

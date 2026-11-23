@@ -302,11 +302,13 @@ void snd_write32(snd *s, u32 addr, i32 v) {
     case PCM_VOL: s->pcm_vol = v & 0xffff; return;
     case PCM_PLAY: play(s, v, s->pcm_addr, s->pcm_len, s->pcm_rate, s->pcm_vol); return;
     case PCM_START: {
-      /* the block, then its sample: both the writer's, or its page fault */
-      u8 d[20];
-      if (dev_dma_read(s->m, (u32)v, 20, d) != 20) return;
+      /* the block, then its sample: both the writer's, or its page fault.
+       * Five of the guest's words: on the 64-bit machine 8 bytes each,
+       * their values in the low 32 bits */
+      u8 d[5 * WB];
+      if (dev_dma_read(s->m, (u32)v, sizeof d, d) != sizeof d) return;
       i32 w[5];
-      for (int k = 0; k < 5; k++) w[k] = (i32)(d[k * 4] | d[k * 4 + 1] << 8 | d[k * 4 + 2] << 16 | (u32)d[k * 4 + 3] << 24);
+      for (int k = 0; k < 5; k++) w[k] = (i32)(d[k * WB] | d[k * WB + 1] << 8 | d[k * WB + 2] << 16 | (u32)d[k * WB + 3] << 24);
       play(s, w[0], (u32)w[1], w[2], clamp_rate(w[3]), w[4] & 0xffff);
       return;
     }

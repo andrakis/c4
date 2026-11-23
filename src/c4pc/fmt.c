@@ -4,6 +4,11 @@
  * bits and print it as JavaScript's toFixed, toExponential and
  * toPrecision would: from the number's exact decimal expansion, rounded
  * half up, which is what those three do.
+ *
+ * On the 64-bit machine (C4PC_W64) an argument is a 64-bit word, and the
+ * conversions take what native c4m's printf (the host's, given the words)
+ * takes: %d %u %x %o %c the low 32 bits, with l, ll, j, z, t or q the
+ * whole word; %p and %s the whole word; %f a binary32's bits as before.
  */
 #include "c4pc.h"
 #include "clib.h"
@@ -170,17 +175,18 @@ static int js_general(double v, int p, char *s) {
   return n;
 }
 
-static int digits(char *s, u32 v, int base, int upper, int prec) {
+/* in the word's arithmetic: the 32-bit PC has no 64-bit division of its own */
+static int digits(char *s, uword v, int base, int upper, int prec) {
   char t[40]; int k = 0, n = 0;
   if (prec == 0 && v == 0) return 0;
-  do { int d = (int)(v % (u32)base); t[k++] = (char)(d < 10 ? '0' + d : (upper ? 'A' : 'a') + d - 10); v /= (u32)base; } while (v);
+  do { int d = (int)(v % (uword)base); t[k++] = (char)(d < 10 ? '0' + d : (upper ? 'A' : 'a') + d - 10); v /= (uword)base; } while (v);
   for (int z = prec - k; z > 0 && n < 512; z--) s[n++] = '0';
   while (k) s[n++] = t[--k];
   return n;
 }
 
-void fmt_format(obuf *out, const u8 *fmt, u32 n, const i32 *args, int nargs,
-                u32 (*str)(void *ctx, u32 addr, const u8 **p), void *ctx) {
+void fmt_format(obuf *out, const u8 *fmt, u32 n, const word *args, int nargs,
+                u32 (*str)(void *ctx, uword addr, const u8 **p), void *ctx) {
   int ai = 0;
 #define NEXT() (ai < nargs ? args[ai++] : 0)
 #define AT(j) ((j) < n ? fmt[j] : 0)
@@ -198,37 +204,41 @@ void fmt_format(obuf *out, const u8 *fmt, u32 n, const i32 *args, int nargs,
       i++;
     }
     i32 width = 0;
-    if (AT(i) == '*') { width = NEXT(); i++; if (width < 0) { left = 1; width = -width; } }
+    if (AT(i) == '*') { width = (i32)NEXT(); i++; if (width < 0) { left = 1; width = -width; } }
     else while (AT(i) >= '0' && AT(i) <= '9') width = width * 10 + (AT(i++) - '0');
     i32 prec = -1;
     if (AT(i) == '.') {
       i++; prec = 0;
-      if (AT(i) == '*') { prec = NEXT(); i++; if (prec < 0) prec = -1; }
+      if (AT(i) == '*') { prec = (i32)NEXT(); i++; if (prec < 0) prec = -1; }
       else while (AT(i) >= '0' && AT(i) <= '9') prec = prec * 10 + (AT(i++) - '0');
     }
-    int len = 0;
+    int len = 0, lng = 0;
     for (;;) {
       int l = AT(i);
       if (l == 'h') { len = len == 1 ? 2 : 1; i++; }
-      else if (l == 'l' || l == 'L' || l == 'q' || l == 'j' || l == 'z' || l == 't') i++;
+      else if (l == 'l' || l == 'L' || l == 'q' || l == 'j' || l == 'z' || l == 't') { lng = 1; i++; }
       else break;
     }
+    /* a word as the conversion takes it: all of it with l (or on the 32-bit
+     * machine, where that is the same), else its low 32 bits */
+#define SIGNED(w) ((lng || WB == 4) ? (i64)(w) : (i64)(i32)(w))
+#define UNSIGNED(w) ((lng || WB == 4) ? (uint64_t)(uword)(w) : (uint64_t)(u32)(w))
     int conv = i < n ? fmt[i] : -1; i++;
     int nb = 0, numeric = 0;
     const u8 *bp = (const u8 *)body;
     char prefix[4]; int np = 0;
     switch (conv) {
       case 'd': case 'i': {
-        i32 v = NEXT();
+        i64 v = SIGNED(NEXT());
         if (len == 1) v = (int16_t)v; else if (len == 2) v = (int8_t)v;
         int neg = v < 0;
-        nb = digits(body, neg ? (u32)0 - (u32)v : (u32)v, 10, 0, prec);
+        nb = digits(body, (uword)(neg ? (uint64_t)0 - (uint64_t)v : (uint64_t)v), 10, 0, prec);
         if (neg) prefix[np++] = '-'; else if (plus) prefix[np++] = '+'; else if (space) prefix[np++] = ' ';
         numeric = 1;
         break;
       }
       case 'u': case 'x': case 'X': case 'o': {
-        u32 v = (u32)NEXT();
+        uword v = (uword)UNSIGNED(NEXT());
         if (len == 1) v &= 0xffff; else if (len == 2) v &= 0xff;
         int base = conv == 'o' ? 8 : conv == 'u' ? 10 : 16;
         nb = digits(body + 1, v, base, conv == 'X', prec);
@@ -241,7 +251,7 @@ void fmt_format(obuf *out, const u8 *fmt, u32 n, const i32 *args, int nargs,
       }
       case 'c': body[0] = (char)(NEXT() & 0xff); nb = 1; break;
       case 's': {
-        u32 p = (u32)NEXT();
+        uword p = (uword)NEXT();
         if (!p) { if (prec >= 0 && prec < 6) nb = 0; else { memcpy(body, "(null)", 6); nb = 6; } }
         else {
           const u8 *sp; u32 sl = str(ctx, p, &sp);
@@ -251,13 +261,13 @@ void fmt_format(obuf *out, const u8 *fmt, u32 n, const i32 *args, int nargs,
         break;
       }
       case 'p': {
-        u32 p = (u32)NEXT();
+        uword p = (uword)NEXT();
         if (p) { prefix[np++] = '0'; prefix[np++] = 'x'; nb = digits(body, p, 16, 0, prec); numeric = 1; }
         else { memcpy(body, "(nil)", 5); nb = 5; }
         break;
       }
       case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
-        float fv = f32_of(NEXT());
+        float fv = f32_of((i32)NEXT());
         double v = fv;
         int p = prec < 0 ? 6 : prec;
         if (p > 100) p = 100;
@@ -294,4 +304,6 @@ void fmt_format(obuf *out, const u8 *fmt, u32 n, const i32 *args, int nargs,
   }
 #undef NEXT
 #undef AT
+#undef SIGNED
+#undef UNSIGNED
 }

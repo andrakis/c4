@@ -19,6 +19,30 @@
 #include "c4pc.h"
 #include "clib.h"
 
+#if !C4PC_HAS_MMU
+/* The 64-bit machine has no MMU yet (docs/c4pc-64.md, stage two): none is
+ * fitted (mmu_new gives none), and nothing below is reached */
+i64 pte_word(machine *m, u32 dir, u32 va) { return -1; }
+i32 kernel_pte(machine *m, u32 udir, u32 x) { return 0; }
+i64 kernel_phys(machine *m, u32 udir, u32 x, int pin) { return -1; }
+void mmu_rethrow(mmu *u) { plat_fatal("c4pc: an MMU fault on a machine without one"); }
+void mmu_reset(mmu *u) {}
+mmu *mmu_new(machine *m) { return 0; }
+i32 mmu_read32(mmu *u, word x) { return 0; }
+void mmu_write32(mmu *u, word x, word v) {}
+i64 mmu_dma_check(mmu *u, u32 addr, i32 len, int write, int pin) { return -1; }
+i32 mmu_ld8(mmu *u, word x) { return 0; }
+word mmu_ld32(mmu *u, word x) { return 0; }
+void mmu_st8(mmu *u, word x, word v) {}
+void mmu_st32(mmu *u, word x, word v) {}
+int mmu_block(mmu *u, word op) { return STOP_BUDGET; }
+word mmu_peek(mmu *u, word pc) { return 0; }
+int mmu_run(mmu *u, i64 max_cycles) { return eng_run_plain(u->m, max_cycles); }
+i32 mmu_frame(mmu *u, word va, int write) { return 0; }
+i64 mmu_dma_space(machine *m, u32 ptbr, u32 addr, i32 len, int write) { return -1; }
+i32 mmu_ptbr(mmu *u) { return 0; }
+#else
+
 enum {
   MMU_CTL = 0x500, MMU_PTBR = 0x504, MMU_KSP = 0x508, MMU_FADDR = 0x50c, MMU_FINFO = 0x510,
   MMU_FPC = 0x514, MMU_INVLPG = 0x518, MMU_FLUSH = 0x51c, MMU_IOPM = 0x520, MMU_MISSES = 0x524,
@@ -759,22 +783,22 @@ static int fpu_user(mmu *u, i32 op, i32 pa, i32 pb, i32 pr) {
     if ((pa & 3) != 0 || (pa & 4095) > 4088) return 0;
     v = (u32)pa >> 12; p = v < LIMIT ? rd[v] : -1;
     if (p < 0) return 0;
-    a = (i32)(((u32)p | ((u32)pa & 4095)) >> 2);
+    a = (i32)((u32)p | ((u32)pa & 4095));
   }
   if (FPU_B & bit) {
     if ((pb & 3) != 0 || (pb & 4095) > 4088) return 0;
     v = (u32)pb >> 12; p = v < LIMIT ? rd[v] : -1;
     if (p < 0) return 0;
-    ib = (i32)(((u32)p | ((u32)pb & 4095)) >> 2);
+    ib = (i32)((u32)p | ((u32)pb & 4095));
   }
   if (FPU_R & bit) {
     if ((pr & 3) != 0 || (pr & 4095) > 4088) return 0;
     v = (u32)pr >> 12; p = v < LIMIT ? wr[v] : -1;
     if (p < 0) return 0;
-    ir = (i32)(((u32)p | ((u32)pr & 4095)) >> 2);
+    ir = (i32)((u32)p | ((u32)pr & 4095));
   }
   i32 res;
-  fpu_double_plain(u->m->w, op, a, ib, ir, &res);
+  fpu_double_plain(u->m->u8, op, a, (u32)ib, (u32)ir, &res);
   u->fpu_v = res;
   return 1;
 }
@@ -1137,3 +1161,4 @@ i32 mmu_frame(mmu *u, i32 va, int write) {
  * fault (the display's ring drained by the host, gui-device.js ringDma) */
 i64 mmu_dma_space(machine *m, u32 ptbr, u32 addr, i32 len, int write) { return dma_phys(m, ptbr, addr, len, write, 0); }
 i32 mmu_ptbr(mmu *u) { return u->ptbr; }
+#endif /* C4PC_HAS_MMU */

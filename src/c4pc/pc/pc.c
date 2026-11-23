@@ -508,7 +508,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   com1_init();
   vga_clear(0, 2000);
   cpu_init();
-  con_puts("c4pc: the c4 machine on a PC\n");
+  con_puts(WB == 8 ? "c4pc: the 64-bit c4 machine on a PC\n" : "c4pc: the c4 machine on a PC\n");
   if (magic != 0x2BADB002) { con_puts("c4pc: not started by a multiboot loader\n"); power_off(72); }
 
   /* memory: everything above the kernel and its modules, to the top of
@@ -685,6 +685,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   m->no_fpu = nofpu;
   if (noaccel) m->accel = 0;
   if (noosaccel) m->osaccel = 0;
+  if (mmu_on && !C4PC_HAS_MMU) { con_puts("c4pc: the 64-bit machine has no MMU yet: running without\n"); mmu_on = 0; }
   if (mmu_on) mmu_new(m);
   for (int i = 0; i < nblk; i++) m->blk[m->nblk++] = blks[i];
   /* the display: GRUB's framebuffer, or the BGA's at --gui's size */

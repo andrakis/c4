@@ -2,6 +2,7 @@
  * in C: the walls' and sprites' scalers, the screen's scaled blit, the
  * timedemo's checksum and FixedMul. c4/c4accel.h is the game's side (WA_*). */
 #include "../accel.h"
+#if WB == 4                            /* the 32-bit machine's games (c4pc.h) */
 
 /* WA_POST (wh, vbuf, pitch, postx, centery, vh, src, tsize): ScalePost */
 static i32 post(machine *m) {
@@ -116,3 +117,4 @@ static i32 blit(machine *m) {
 
 const acc_fn acc_wolf3d[] = {post, line, sum, fixmul, blit};
 const int acc_wolf3d_n = sizeof acc_wolf3d / sizeof acc_wolf3d[0];
+#endif

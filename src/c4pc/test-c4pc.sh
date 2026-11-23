@@ -236,4 +236,12 @@ fi
 progs=$(IMAGES=$IMAGES bash src/c4pc/test-c4pc-progs.sh); r=$?
 echo "$progs" | grep -v '^test-c4pc-progs: '
 [ $r = 0 ] || fail=1
+# the 64-bit machine (docs/c4pc-64.md): against native c4m and c4mp, on a
+# PC, and the devices
+if [ -z "${NO_W64:-}" ]; then
+  echo "  ---   the 64-bit machine (test-c4pc64.sh)"
+  out=$(bash src/c4pc/test-c4pc64.sh); r=$?
+  echo "$out" | grep -v '^test-c4pc64: '
+  [ $r = 0 ] || fail=1
+fi
 [ $fail = 0 ] && echo "test-c4pc: OK" || { echo "test-c4pc: FAILED"; exit 1; }

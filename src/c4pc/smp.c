@@ -78,7 +78,7 @@ i64 machine_clock(machine *m) {
 
 /* __c4_cpu_start(id, entry, stacktop): the guest's function on the
  * guest's stack; 1, or 0 if the id is out of range or that CPU runs */
-static i32 start(smp *s, i32 id, i32 entry, i32 stacktop) {
+static i32 start(smp *s, word id, word entry, word stacktop) {
   if (id < 0 || id >= s->n) return 0;
   machine *m = s->cpu[id], *m0 = s->cpu[0];
   if (m->cpu_state == CPU_RUN || m->cpu_state == CPU_WAIT || m->cpu_state == CPU_SLEEP) return 0;
@@ -87,8 +87,8 @@ static i32 start(smp *s, i32 id, i32 entry, i32 stacktop) {
   m->accel = m0->accel; m->osaccel = m0->osaccel; m->no_fpu = m0->no_fpu;
   m->gui = m0->gui; m->snd = m0->snd; m->heap = m0->heap;
   smp_cpu_reset(m);
-  m->sp = stacktop - 4;
-  if ((u32)m->sp + 4 <= m->size) m->w[(u32)m->sp >> 2] = CPU_HALT_ADDR;   /* where the entry function's LEV lands */
+  m->sp = stacktop - WB;
+  if ((uword)m->sp <= m->size - WB) m->w[(uword)m->sp >> WSH] = CPU_HALT_ADDR;   /* where the entry function's LEV lands */
   m->bp = m->sp;
   m->pc = entry;
   m->a = 0;
@@ -99,7 +99,7 @@ static i32 start(smp *s, i32 id, i32 entry, i32 stacktop) {
 }
 
 /* __c4_wake(addr, n): release up to n CPUs parked on addr (n <= 0: all) */
-static i32 wake(smp *s, i32 addr, i32 n) {
+static i32 wake(smp *s, word addr, word n) {
   if (!addr) return 0;
   i32 woken = 0;
   for (int k = 0; k < s->n; k++) {
@@ -115,7 +115,7 @@ static i32 wake(smp *s, i32 addr, i32 n) {
 
 /* __c4_ipi(id): HIRQ_IPI on that CPU; a parked or sleeping one is woken
  * to take it */
-static i32 ipi(smp *s, i32 id) {
+static i32 ipi(smp *s, word id) {
   if (id < 0 || id >= s->n) return 0;
   machine *m = s->cpu[id];
   if (m->cpu_state == CPU_HALT || m->cpu_state == CPU_OFF) return 0;
@@ -127,52 +127,52 @@ static i32 ipi(smp *s, i32 id) {
 
 /* c4mp's processor opcodes (66-75): their arguments on the stack as a
  * syscall's are, the last pushed on top (c4m.js smpOp) */
-int smp_op(machine *m, i32 op) {
+int smp_op(machine *m, word op) {
   smp *s = m->smp;
-  i32 sp = m->sp;
+  word sp = m->sp;
   /* the parallel engine: real CPUs, real atomics */
   if (s->par) return par_op(m, op);
   switch (op) {
     case OP_CPUI: m->a = m->cpu_id; return STOP_BUDGET;
     case OP_CPUN: m->a = s->n; return STOP_BUDGET;
-    case OP_CPUS: m->a = start(s, m_ld32(m, sp + 8), m_ld32(m, sp + 4), m_ld32(m, sp)); return STOP_BUDGET;
+    case OP_CPUS: m->a = start(s, m_ldw(m, sp + 2 * WB), m_ldw(m, sp + WB), m_ldw(m, sp)); return STOP_BUDGET;
     case OP_CPUH: m->cpu_state = CPU_HALT; return STOP_CPUHALT;
     case OP_CAS: {
-      i32 t = m_ld32(m, sp + 8), v = m_ld32(m, t);
-      if (v == m_ld32(m, sp + 4)) m_st32(m, t, m_ld32(m, sp));
+      word t = m_ldw(m, sp + 2 * WB), v = m_ldw(m, t);
+      if (v == m_ldw(m, sp + WB)) m_stw(m, t, m_ldw(m, sp));
       m->a = v;
       return STOP_BUDGET;
     }
     case OP_XCHG: {
-      i32 t = m_ld32(m, sp + 4), v = m_ld32(m, t);
-      m_st32(m, t, m_ld32(m, sp));
+      word t = m_ldw(m, sp + WB), v = m_ldw(m, t);
+      m_stw(m, t, m_ldw(m, sp));
       m->a = v;
       return STOP_BUDGET;
     }
     case OP_FADD: {
-      i32 t = m_ld32(m, sp + 4), v = m_ld32(m, t);
-      m_st32(m, t, (i32)((u32)v + (u32)m_ld32(m, sp)));
+      word t = m_ldw(m, sp + WB), v = m_ldw(m, t);
+      m_stw(m, t, (word)((uword)v + (uword)m_ldw(m, sp)));
       m->a = v;
       return STOP_BUDGET;
     }
     case OP_CWAI: {
       /* park while *addr is still val: 1 if it already is not, 0 once woken */
-      i32 t = m_ld32(m, sp + 4), val = m_ld32(m, sp);
-      if (!t || m_ld32(m, t) != val) { m->a = 1; return STOP_BUDGET; }
+      word t = m_ldw(m, sp + WB), val = m_ldw(m, sp);
+      if (!t || m_ldw(m, t) != val) { m->a = 1; return STOP_BUDGET; }
       m->a = 0;
       m->wait_addr = t; m->wait_val = val;
       m->cpu_state = CPU_WAIT;
       return STOP_PARK;
     }
-    case OP_CWAK: m->a = wake(s, m_ld32(m, sp + 4), m_ld32(m, sp)); return STOP_BUDGET;
-    case OP_IPI: m->a = ipi(s, m_ld32(m, sp)); return STOP_BUDGET;
+    case OP_CWAK: m->a = wake(s, m_ldw(m, sp + WB), m_ldw(m, sp)); return STOP_BUDGET;
+    case OP_IPI: m->a = ipi(s, m_ldw(m, sp)); return STOP_BUDGET;
   }
   return STOP_BUDGET;
 }
 
 /* ---- the deadlock report ---- */
-static void put_hex(machine *m, u32 v) {
-  char b[12]; int n = 0; char t[8]; int k = 0;
+static void put_hex(machine *m, uword v) {
+  char b[24]; int n = 0; char t[20]; int k = 0;
   do { t[k++] = "0123456789ABCDEF"[v & 15]; v >>= 4; } while (v);
   b[n++] = '0'; b[n++] = 'x';
   while (k) b[n++] = t[--k];
@@ -199,13 +199,13 @@ static void deadlock(smp *s) {
       case CPU_OFF: machine_emits(m0, "off"); break;
       case CPU_RUN: machine_emits(m0, "running"); break;
       case CPU_WAIT:
-        machine_emits(m0, "waiting on "); put_hex(m0, (u32)m->wait_addr);
+        machine_emits(m0, "waiting on "); put_hex(m0, (uword)m->wait_addr);
         machine_emits(m0, " for it to stop being "); put_dec(m0, m->wait_val);
         break;
       case CPU_SLEEP: machine_emits(m0, "asleep"); break;
       default: machine_emits(m0, "halted, status "); put_dec(m0, m->cpu_status);
     }
-    machine_emits(m0, ", pc "); put_hex(m0, (u32)m->pc);
+    machine_emits(m0, ", pc "); put_hex(m0, (uword)m->pc);
     machine_emits(m0, ", "); put_dec(m0, m->cycle); machine_emits(m0, " cycles\n");
   }
   m0->halted = 1;

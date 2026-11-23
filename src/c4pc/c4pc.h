@@ -532,6 +532,7 @@ int gui_attached(gui *g);
 u32 *gui_front(gui *g, int *w, int *h);
 int gui_take_dirty(gui *g, int *x0, int *y0, int *x1, int *y1);
 void gui_redraw_all(gui *g);
+int gui_thumb(gui *g, u32 *out, int w, int h);   /* the canvas shown, scaled (hv.c THUMB) */
 int gui_pointer(gui *g, int *x, int *y);
 void gui_stats(gui *g, u32 *commands, u32 *presents, u32 *events, u32 *flips);
 /* memory as a device reaches it (dev.c), and a space's own (mmu.c) */

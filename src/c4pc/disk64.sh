@@ -85,7 +85,7 @@ $LC -c -I src/c4ix/include src/c4ix/user/vfsload.c $T/u_vfsload.c4o > /dev/null
 $LINK $T/u_vfsload.c4o $T/libc4ix.c4l -o "$OUT/c4ix-vfsload.c4r" > /dev/null
 
 # ---- the desktop: its modules and the window kit's, linked together ----
-DESKTOP="shell tools host term files taskmgr apps edit hl explore wall"
+DESKTOP="shell tools host term files taskmgr apps edit hl explore wall machines"
 WINKIT="draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock"
 say "the desktop"
 DFLAGS="-c -D C4IX_SHARED -I src/c4ix/include -I src/c4ix/user/desktop -I src/winkit"

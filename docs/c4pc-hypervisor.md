@@ -4,7 +4,7 @@ The user's idea (2026-11-23): a GRUB entry boots c4pc into a mode that
 runs several c4 virtual machines of different configurations, with disk
 files assigned to them, boots them, attaches to one so that it has the
 screen and the keyboard, and detaches again -- an S/390's LPARs, without
-the S/390's interface. Stages 1 and 2 are built (2026-11-24); 3 and on
+the S/390's interface. Stages 1 to 3 are built (2026-11-24); 4 and on
 are the plan.
 
 ## The shape
@@ -36,6 +36,7 @@ are the plan.
 | 9 STATE, 10 INFO (text into A1, A2 bytes) | | VM 0 |
 | 12 DISK, 14 CDROM | extents (A1 the table, A2 how many, A3 sectors); CDROM with none: VM 0's CD drive | VM 0 |
 | 15 SEND | bytes (A1, A2) typed at a guest's console | VM 0 |
+| 16 THUMB | a running guest's screen scaled to A2 x A3 (at most 640x480), a word a pixel at A1 | VM 0 |
 
 - **The guests run on CPU 0's thread**, in turn with VM 0: a slice of
   4 ms of each runnable guest after each of VM 0's, and while VM 0 naps;
@@ -91,6 +92,33 @@ mount, a file written; attach (Ctrl+Shift+Esc opened the guest's System
 Monitor: 126 MB, the guest's), Ctrl+Alt+Home (VM 0's desktop, whole);
 stop, start again, mount: the file read back from the image.
 
+## Machines
+
+The control C4IX's desktop has **Machines** in its Go menu (only where
+the hypervisor is), after Proxmox's look: a tree on the left -- the PC,
+and under it each machine, from /vm/NAME/vm.cfg and from what the
+hypervisor has made, its id and a monitor lit while it runs -- and for
+the one chosen a toolbar (Start, Shutdown, Stop, Restart, Console) and
+four tabs:
+
+- **Summary**: state, id, memory, the instructions it runs a second and
+  a minute's history of them, its disk, CD and start at boot, and its
+  screen small (THUMB, once a second).
+- **Console**: its screen larger; Attach (or a double-click in the tree)
+  gives it the PC's screen, keyboard and mouse; Ctrl+Alt+Home comes back.
+- **Hardware** (memory, hard disk, CD/DVD) and **Options** (kernel, boot
+  archive, kernel arguments, start at boot): vm.cfg's lines; a click on
+  a row edits it, for the machine's next start.
+
+Start runs `vm up NAME` in the background (it reads the kernel and the
+boot archive, and mounts the C4PC disc first when the kernel is on it);
+Start on a machine made before deletes what was made, so a changed
+vm.cfg counts. Shutdown is SIGTERM, Stop at once, Restart Stop and
+Start. **Create VM** asks a name, the memory, a new disk image's size (0
+for none) and the CD -- `pc`, the C4PC disc in the PC's drive, or an ISO
+file -- and runs `vm create NAME MB DISK_MB [ISO]` in a Terminal, which
+shows the image being written.
+
 ## Stages
 
 1. **Done**: the manager, machines made from VM 0's files, attach and
@@ -99,10 +127,10 @@ stop, start again, mount: the file read back from the image.
    VM 0's CD shared, vm.cfg, `vm create`, `vm up`, `vmd`, the GRUB
    entries.
 3. **The Machines app**, Proxmox-like (Q8: the user finds VMware's
-   library annoying): a tree of the machines on the left, each one's
-   summary (state, CPU and memory graphs, its disks), a console tab that
-   shows its screen live (a thumbnail of its framebuffer, attach on a
-   click), and its settings as a form; New, Start, Shutdown, Stop.
+   library annoying). **Built (2026-11-24)**, above. Not yet: a guest's
+   memory in use (the hypervisor knows only what it was given), a disk
+   image added to a machine after it was made (edit Hardware's row), a
+   Delete that removes /vm/NAME, and pausing.
 4. **Host-only networking between guests (Q9)**: a virtual NIC in each
    machine (a ring of frames in its page 0 window, as the display's
    ring), and a switch in c4pc that passes frames between them; then a

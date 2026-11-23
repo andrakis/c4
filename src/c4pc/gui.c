@@ -596,6 +596,16 @@ u32 gui_flips(gui *g) { return g->flips; }
 u32 *gui_front(gui *g, int *w, int *h) { *w = g->cw; *h = g->ch; return g->front; }
 /* the whole display to be shown again (pc.c: back from the text console) */
 void gui_redraw_all(gui *g) { dirty(g, 0, 0, g->cw, g->ch); }
+/* the canvas as last shown, scaled to W x H by the nearest pixel, into OUT
+ * (0x00RRGGBB): a guest's screen in Machines (hv.c THUMB); -1 if none */
+int gui_thumb(gui *g, u32 *out, int w, int h) {
+  if (!g->front || g->cw <= 0 || g->ch <= 0 || w <= 0 || h <= 0) return -1;
+  for (int y = 0; y < h; y++) {
+    const u32 *row = g->front + (size_t)((i64)y * g->ch / h) * g->cw;
+    for (int x = 0; x < w; x++) out[(size_t)y * w + x] = row[(i64)x * g->cw / w] & 0xffffff;
+  }
+  return 0;
+}
 int gui_take_dirty(gui *g, int *x0, int *y0, int *x1, int *y1) {
   if (g->fx1 <= g->fx0 || g->fy1 <= g->fy0) return 0;
   *x0 = g->fx0; *y0 = g->fy0; *x1 = g->fx1; *y1 = g->fy1;

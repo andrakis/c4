@@ -26,7 +26,8 @@ extern u32 pc_heap_free_bytes;
 enum { HV_MAX = 8 };
 enum { R_ID = 0x560, R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
 enum { C_NAME = 1, C_MB = 2, C_ARGS = 3, C_NEW = 4, C_START = 5, C_STOP = 6, C_ATTACH = 7, C_DETACH = 8,
-       C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_DISK = 12, C_ATTACHED = 13, C_CDROM = 14, C_SEND = 15 };
+       C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_DISK = 12, C_ATTACHED = 13, C_CDROM = 14, C_SEND = 15,
+       C_THUMB = 16 };
 enum { S_FREE, S_MADE, S_RUN, S_HALT };
 static const char *STATE_NAME[] = { "free", "made", "running", "halted" };
 
@@ -264,6 +265,26 @@ static i32 command(machine *m, i32 c) {
     case C_ATTACH: hv_attach(a[0]); return attached == a[0] ? 0 : -1;
     case C_STATE: return a[0] >= 0 && a[0] < HV_MAX ? (a[0] ? vms[a[0]].state : S_RUN) : -1;
     case C_INFO: return info(a[0], (u32)a[1], (u32)a[2]);
+    /* a running guest's screen scaled to A2 x A3, a word a pixel at A1 in
+     * VM 0's memory (C4IX's Machines shows it) */
+    case C_THUMB: {
+      if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state != S_RUN || !vms[a[0]].m || !vms[a[0]].m->gui) return -1;
+      if (a[2] <= 0 || a[3] <= 0 || a[2] > 640 || a[3] > 480) return -1;
+      u32 n = (u32)a[2] * (u32)a[3];
+      u32 *px = xmalloc((size_t)n * 4);
+      if (gui_thumb(vms[a[0]].m->gui, px, a[2], a[3]) < 0) { xfree(px); return -1; }
+#if WB == 4
+      u32 got = dev_dma_write(ctl, (u32)a[1], (const u8 *)px, n * 4);
+#else
+      u8 *wb = xmalloc((size_t)n * WB);
+      memset(wb, 0, (size_t)n * WB);
+      for (u32 k = 0; k < n; k++) memcpy(wb + (size_t)k * WB, &px[k], 4);
+      u32 got = dev_dma_write(ctl, (u32)a[1], wb, n * WB) / (WB / 4);
+      xfree(wb);
+#endif
+      xfree(px);
+      return got == n * 4 ? 0 : -1;
+    }
     case C_DELETE: {
       if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state == S_RUN) return -1;
       vm *g = &vms[a[0]];

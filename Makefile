@@ -3281,7 +3281,7 @@ C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin
 # the desktop as this tree has it (its Install C4IX), built as
 # build-images.sh builds it: its modules and the window kit's, libc's fp.c,
 # against the images' libgui and libarc and this tree's libc4ix
-C4PC_DESK_MODS := shell tools host term files taskmgr apps edit hl explore wall draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
+C4PC_DESK_MODS := shell tools host term files taskmgr apps edit hl explore wall machines draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
 .c4pc/bin/c4ix-desktop.c4r: $(wildcard $(SRCS)/c4ix/user/desktop/*.c $(SRCS)/c4ix/user/desktop/*.h $(SRCS)/winkit/*.c $(SRCS)/winkit/*.h) .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP)
 	mkdir -p .c4pc/bin .c4pc/desk
 	for m in $(C4PC_DESK_MODS); do src=$(SRCS)/c4ix/user/desktop/$$m.c; [ -f $$src ] || src=$(SRCS)/winkit/$$m.c; \
@@ -3479,7 +3479,7 @@ $(C4IX_ARC_PROGS): c4ix-%.c4r: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) libarc.c4l li
 # The desktop is several modules (docs/c4ix-desktop.md): each is compiled
 # on its own, then all are linked with libc4ix, like the kernel. WINKIT's
 # are the window kit's (src/winkit), which grin shares.
-C4IX_DESKTOP := shell tools host term files taskmgr apps edit hl explore wall
+C4IX_DESKTOP := shell tools host term files taskmgr apps edit hl explore wall machines
 WINKIT := draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
 C4IX_DESKTOP_SRC := $(C4IX_DESKTOP:%=$(C4IX_SRC)/user/desktop/%.c) $(C4IX_SRC)/user/desktop/*.h libjs/guest/gui.h \
                     $(WINKIT:%=src/winkit/%.c) $(wildcard src/winkit/*.h) $(C4IX_SRC)/include/cpustat.h $(C4IX_SRC)/include/c4ix_accel.h $(C4IX_SRC)/libc/fp.c

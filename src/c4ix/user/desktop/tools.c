@@ -38,6 +38,8 @@ static struct tool tools[N_KINDS] = {
     [K_EDIT]     = { .draw = edit_draw, .mouse = edit_mouse, .key = edit_key, .command = edit_command,
                      .answer = edit_answer, .tick = edit_tick, .close = edit_close, .pointer = edit_pointer },
     [K_SETTINGS] = { .draw = settings_draw, .mouse = settings_mouse, .key = settings_key },
+    [K_VMS]      = { .draw = machines_draw, .mouse = machines_mouse, .key = machines_key,
+                     .answer = machines_answer, .second = machines_tick },
     [K_ABOUT]    = { .draw = about_draw }
 };
 static struct wk_class classes[N_KINDS];
@@ -241,4 +243,5 @@ void launch(int kind) {
     else if (kind == K_CLOCK) clock_open();
     else if (kind == K_SETTINGS) settings_open();
     else if (kind == K_ABOUT) about_open();
+    else if (kind == K_VMS) machines_open();
 }

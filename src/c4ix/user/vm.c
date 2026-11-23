@@ -16,8 +16,9 @@
 //   vm send ID TEXT...                 TEXT and a newline typed at ID's console
 //   vm mkdisk FILE MB                  a disk image of MB, all of its blocks
 //                                      written (a guest's disk must have them)
-//   vm create NAME MB DISK_MB          /vm/NAME: a disk image and vm.cfg, set
-//                                      for a first boot from the CD (install)
+//   vm create NAME MB DISK_MB [ISO]    /vm/NAME: a disk image (none for 0) and
+//                                      vm.cfg, set for a first boot from the CD
+//                                      (install): the C4PC disc, or ISO as its CD
 //   vm up NAME                         make and start the machine /vm/NAME/vm.cfg
 //                                      says; `vmd` (or vm autostart) every one
 //                                      whose vm.cfg says "autostart yes"
@@ -208,7 +209,7 @@ static int find(char *s) {
 
 // the machine NAME's vm.cfg made and started: 0, or 1
 static int up(char *name) {
-    char kernel[128], boot[128], mb[16], disk[128], cd[128], *img, *tar;
+    char kernel[128], boot[128], mb[16], disk[128], cd[128], *img, *tar, *av[3];
     int ilen, tlen, id, k, n, sectors, *t;
     upathjoin(path_buf, 256, "/vm", name);
     upathjoin(path_buf, 256, path_buf, "vm.cfg");
@@ -216,6 +217,11 @@ static int up(char *name) {
     cfg[k] = 0;
     if (find(name) > 0) { ufprintf(STDERR, "vm: %s is made already (vm start, or vm delete)\n", name); return 1; }
     if (!cfg_get("kernel", kernel, 128)) ustrcpy(kernel, "/boot/c4ix32.c4r");
+    // its kernel on the C4PC disc, not mounted yet: mount cdrom
+    if (!ustrncmp(kernel, "/mnt/cdrom/", 11) && file_size(kernel) <= 0) {
+        av[0] = "mount"; av[1] = "cdrom"; av[2] = 0;
+        if ((k = spawn("/bin/mount", 2, av)) >= 0) uwait(k);
+    }
     if (!cfg_get("boot", boot, 128)) ustrcpy(boot, "-");
     if (!cfg_get("mb", mb, 16)) ustrcpy(mb, "256");
     if (!cfg_get("args", args_buf, ARGW)) ustrcpy(args_buf, "--desktop --no-top");
@@ -257,20 +263,23 @@ static int autostart() {
 }
 
 // /vm/NAME: its disk image and a vm.cfg for a first boot from the CD
-static int create(char *name, int mb, int dmb) {
+static int create(char *name, int mb, int dmb, char *iso) {
     int fd;
     char disk[128];
     umkdir("/vm");
     upathjoin(path_buf, 256, "/vm", name);
     umkdir(path_buf);
     upathjoin(disk, 128, path_buf, "disk0.img");
-    if (mkdisk(disk, dmb)) return 1;
+    if (dmb > 0 && mkdisk(disk, dmb)) return 1;
+    if (iso && file_size(iso) <= 0) { ufprintf(STDERR, "vm: no ISO file %s\n", iso); return 1; }
     upathjoin(path_buf, 256, path_buf, "vm.cfg");
     if ((fd = uopen(path_buf, O_WR + O_CREATE + O_TRUNCATE)) < 0) { ufprintf(STDERR, "vm: cannot write %s\n", path_buf); return 1; }
     ufprintf(fd, "# %s: vm up %s starts it (docs/c4pc-hypervisor.md)\n", name, name);
     ufprintf(fd, "# First boot: from the CD (VM 0's drive, the C4PC disc), to run install\n");
     ufprintf(fd, "# onto hd0. Then: boot -, args --root hd0p1 --desktop --no-top.\n");
-    ufprintf(fd, "kernel /mnt/cdrom/boot/c4ix32.c4r\nboot /mnt/cdrom/boot/disk.tar\nmb %d\ndisk %s\ncdrom pc\n", mb, disk);
+    ufprintf(fd, "kernel /mnt/cdrom/boot/c4ix32.c4r\nboot /mnt/cdrom/boot/disk.tar\nmb %d\n", mb);
+    if (dmb > 0) ufprintf(fd, "disk %s\n", disk);
+    ufprintf(fd, "cdrom %s\n", iso ? iso : "pc");
     ufprintf(fd, "args --desktop --no-top\nautostart no\n");
     uclose(fd);
     uprintf("vm: %s made: mount cdrom (the C4PC disc at /mnt/cdrom), then vm up %s\n", path_buf, name);
@@ -280,7 +289,7 @@ static int create(char *name, int mb, int dmb) {
 static int usage() {
     ufprintf(STDERR, "usage: vm [new NAME KERNEL BOOT.tar MB [ARGS...] | disk ID IMAGE | cdrom ID ISO |\n");
     ufprintf(STDERR, "          start ID | stop ID [-f] | attach ID | detach | delete ID | info ID | send ID TEXT |\n");
-    ufprintf(STDERR, "          mkdisk FILE MB | create NAME MB DISK_MB | up NAME | autostart]\n");
+    ufprintf(STDERR, "          mkdisk FILE MB | create NAME MB DISK_MB [ISO] | up NAME | autostart]\n");
     return 2;
 }
 
@@ -293,7 +302,7 @@ int main(int argc, char **argv) {
     k = ustrlen(argv[0]);
     if (k >= 3 && !ustrcmp(argv[0] + k - 3, "vmd")) return there() ? autostart() : 0;
     if (k >= 7 && !ustrcmp(argv[0] + k - 7, "vmd.c4r")) return there() ? autostart() : 0;
-    if (argc > 1 && !ustrcmp(argv[1], "create")) return argc == 5 ? create(argv[2], uatoi(argv[3]), uatoi(argv[4])) : usage();
+    if (argc > 1 && !ustrcmp(argv[1], "create")) return argc == 5 || argc == 6 ? create(argv[2], uatoi(argv[3]), uatoi(argv[4]), argc == 6 ? argv[5] : 0) : usage();
     if (!there()) { ufprintf(STDERR, "vm: no hypervisor (c4pc --hv: GRUB's \"C4PC hypervisor\")\n"); return 1; }
     if (argc < 2) { list(); return 0; }
     cmd = argv[1];

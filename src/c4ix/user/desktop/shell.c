@@ -376,7 +376,7 @@ enum { M_GO, M_GAMES, M_GROUPS, N_MENUS = 12, N_GAMES = 128, APPS_MAX = 8192, GO
 struct go_item { char *label; int kind; int opens; char *cmd; int menu; };
 static struct go_item start_items[] = {
     { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "IDE", K_EDIT },
-    { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Settings", K_SETTINGS },
+    { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Machines", K_VMS }, { "Settings", K_SETTINGS },
     { "About C4IX", K_ABOUT }, { "-", 0 },
     { "Games", 0, M_GAMES }, { "Install C4IX...", GO_CMD, 0, "install" }, { "Run...", GO_RUN }, { "-", 0 },
     { "Restart", GO_CMD, 0, "reboot" }, { "Shut Down", GO_CMD, 0, "shutdown" }, { "Exit Desktop", GO_OFF }
@@ -510,17 +510,19 @@ static void games_load() {
     while (k > 0) { --k; menu_first[game_items[k].menu] = k; ++menu_n[game_items[k].menu]; }
 }
 
-// Games is in the menu only where there is one to list
+// Games is in the menu only where there is one to list, and Machines
+// only on c4pc's hypervisor. A row moves whole: its command came with it
+// (the 64-bit desktop, with no games, had Shut Down rebooting and Restart
+// doing nothing, 2026-11-24)
 static void start_games() {
     int k, n;
     games_load();
     k = 0;
     n = 0;
     while (k < n_start) {
-        if (!start_items[k].opens || menu_n[start_items[k].opens]) {
-            start_items[n].label = start_items[k].label;
-            start_items[n].kind = start_items[k].kind;
-            start_items[n].opens = start_items[k].opens;
+        if ((!start_items[k].opens || menu_n[start_items[k].opens]) &&
+            (start_items[k].kind != K_VMS || (__c4_info() & C4I_HV_BIT))) {
+            if (n != k) memcpy((char *)&start_items[n], (char *)&start_items[k], sizeof(struct go_item));
             ++n;
         }
         ++k;

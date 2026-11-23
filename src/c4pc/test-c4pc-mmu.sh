@@ -108,7 +108,11 @@ Q=${QEMU:-$(command -v $QB || echo ~/opt/pctools/bin/$QB)}
 if [ -n "${NO_QEMU:-}" ] || [ ! -x "$Q" ] || [ ! -f $ELF ]; then
   echo "  skip  the cases on c4pc.elf in QEMU"
 else
-  [ $W/disk.tar -nt $W/disk/wild.c ] || tar --format=ustar -h -C $W/disk -cf $W/disk.tar .
+  # the disk's tar again whenever a file it links to changed (a rebuilt
+  # disk64's programs left it 6 KB short of what -d read, 2026-11-24)
+  if [ ! -f $W/disk.tar ] || [ -n "$(find -L $W/disk -newer $W/disk.tar -print -quit)" ]; then
+    tar --format=ustar -h -C $W/disk -cf $W/disk.tar .
+  fi
   rm -f $W/serial.txt
   timeout 1800 "$Q" $QACC -machine vmport=off -m 512 -display none -no-reboot -serial file:$W/serial.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel $ELF \

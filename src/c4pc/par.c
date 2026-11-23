@@ -39,6 +39,10 @@ static int posted(u32 a) {
   switch (a) {
     case 0x484: case 0x488: case 0x490: case 0x494: case 0x498: case 0x49c:
     case 0x4a0: case 0x4a8: case 0x4ac: case 0x4b4: case 0x4b8: case 0x4cc: return 1;
+    /* the block devices' select, LBA, count and address: the command after
+     * them is asked, and CPU 0 applies these first (service). Each was a
+     * round trip: install on CPU 1 took 5 minutes, on CPU 0 91 s (2026-11-24) */
+    case 0x544: case 0x550: case 0x554: case 0x558: return 1;
   }
   return 0;
 }

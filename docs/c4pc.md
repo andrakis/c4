@@ -592,6 +592,15 @@ console is the web page's, where the console shows; here it is the
 serial line, which no one sees, and it filled its log. `top` at the
 serial prompt runs it.
 
+### The hypervisor
+
+`--hv` (GRUB's "C4PC hypervisor" entries) makes the machine c4pc boots
+VM 0, a control C4IX that makes and runs others -- each a c4 machine with
+its own memory, display and drives, its disk a file on VM 0's ext2 read
+and written where it lies -- and attaches to one, which has the screen,
+keyboard and mouse until Ctrl+Alt+Home (or `detach`). C4IX's `vm` does
+it: docs/c4pc-hypervisor.md.
+
 ### VMware, without VMware Tools
 
 pc/vmware.c does what open-vm-tools and Linux's vmmouse driver do, over

@@ -117,7 +117,12 @@ enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OP
  * 0x540 the kernel's alone (dev.c; docs/c4ix-ext2.md 1) ---- */
 #define BLK_BASE 0x540
 #define BLK_END  0x560
+/* ---- the hypervisor's machine manager (pc/hv.c), with --hv: a window
+ * every machine has, user mode's where its IOPM allows the devices ---- */
+#define HV_BASE  0x560
+#define HV_END   0x580
 #define C4I_BLK  0x200000
+#define C4I_HV   0x400000                /* the hypervisor's window (pc/hv.c, --hv) */
 typedef struct blkdev {
   u32 sectors; int flags;              /* 512-byte sectors; 1 read-only, 2 removable */
   /* n sectors at lba to or from buf: 0, or -1 */
@@ -296,6 +301,9 @@ struct machine {
   int reset_requested;
   /* the console sink */
   void (*on_byte)(machine *, int b);
+  /* the hypervisor's window (pc/hv.c, HV_BASE), where c4pc runs --hv:
+   * its registers' reader and writer, and this machine's id (0 VM 0) */
+  i32 (*hv_rd)(machine *, u32); void (*hv_wr)(machine *, u32, i32); int hv_id;
   /* the MMU when one is fitted (mmu_new); vm while the user loop runs,
    * which makes the loads and stores translate. The user window (c4m.js
    * kpa): where user addresses start, 0 for none, and udir the kernel's
@@ -529,6 +537,7 @@ void gui_stats(gui *g, u32 *commands, u32 *presents, u32 *events, u32 *flips);
 /* memory as a device reaches it (dev.c), and a space's own (mmu.c) */
 i64 dev_dma(machine *m, u32 addr, i32 len, int write, int pin);
 u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out);
+u32 dev_dma_write(machine *m, u32 addr, const u8 *b, u32 len);
 i64 mmu_dma_space(machine *m, u32 ptbr, u32 addr, i32 len, int write);
 word mmu_ptbr(mmu *u);
 void plat_fatal(const char *msg);      /* never returns */

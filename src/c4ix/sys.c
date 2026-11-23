@@ -514,6 +514,7 @@ static int sys_args_ok(int num, int *args) {
     case SYS_BLKIO:    return uaccess(args[2], (((args[0] >> 16) & 255) + 1) * 512, (args[0] & 256) ? 0 : 1);
     case SYS_STATFS:   return ustrlen((char *)args[0]) >= 0 && uaccess(args[1], 7 * sizeof(int), 1);
     case SYS_LSEEK64:  return uaccess(args[1], 2 * sizeof(int), 1);
+    case SYS_FMAP:     return uaccess(args[2], 3 * sizeof(int), 1);
     }
     return 1;
 }
@@ -523,6 +524,7 @@ int sys_dispatch(int num, int *args) {
     struct file *f;
     c4off off;
     int *w;
+    int fm_spb, fm_b, fm_dev, fm_d;     // SYS_FMAP's
 
     if ((t = sched_current())) ++t->nsyscalls;
     if (!sys_args_ok(num, args)) return -1;
@@ -608,6 +610,16 @@ int sys_dispatch(int num, int *args) {
         if (off < 0 || (sizeof(int) == 4 && off > 0x7FFFFFFF)) return -1;
         f->pos = off;
         return (int)off;
+    // where a disk's file keeps a block (c4ix.h SYS_FMAP)
+    case SYS_FMAP:
+        if (!t || !(f = fd_get(t, args[0])) || !f->vn->e2) return -1;
+        fm_b = ext2_fmap(f->vn->e2, f->vn->e2ino, args[1], &fm_spb);
+        if (fm_b < 0) return -1;
+        fm_dev = ext2_dev(f->vn->e2);
+        if ((fm_d = blk_disk(fm_dev)) < 0) return -1;
+        w = (int *)args[2];
+        w[0] = fm_d; w[1] = fm_b ? blk_start(fm_dev) + fm_b * fm_spb : 0; w[2] = fm_spb;
+        return fm_b ? 1 : 0;
     // the same, its offset in two words (docs/c4ix-lfs.md): a disk's file
     // past 2 GB, with C4IX_LFS; without, an offset a word holds
     case SYS_LSEEK64:

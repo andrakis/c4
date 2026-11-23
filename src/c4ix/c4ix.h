@@ -139,7 +139,12 @@ enum {
     // offset's low 32 bits, then its high), whence; the new position
     // written back into the two. 0, or -1
     SYS_LSEEK64 = 256,
-    SYS_TOP = 257          // one past the last: sched_trap's range check
+    // fd, block, out[3]: where a file on a disk keeps its BLOCKth block --
+    // out[0] the disk (hdN), out[1] its first sector there, out[2] sectors
+    // a block -- 1, 0 for a hole, -1 if not a disk's file (the hypervisor's
+    // `vm`: a guest's disk image read and written where it lies)
+    SYS_FMAP = 257,
+    SYS_TOP = 258          // one past the last: sched_trap's range check
 };
 // Shutdown (sched.c): what the kernel task's end does once every task has
 // gone, 0 the machine off, 1 restarted -- the kernel's exit code is then
@@ -446,6 +451,7 @@ int  ext2_stat(struct e2fs *fs, int ino, int *out);   // mode, size, links, uid,
 void ext2_statfs(struct e2fs *fs, int *out);          // block size, blocks, free, inodes, free, read-only
 char *ext2_label(struct e2fs *fs);
 int  ext2_dev(struct e2fs *fs);
+int  ext2_fmap(struct e2fs *fs, int ino, int lbn, int *spb);   // the fs block of a file's LBNth, 0 a hole
 int  ext2_ro(struct e2fs *fs);
 // the VFS's side (vfs.c)
 int  vfs_mount(int dev, char *path, int ro);

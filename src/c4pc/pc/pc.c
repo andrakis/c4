@@ -344,7 +344,13 @@ static volatile int kbd_to_gui;
  *   Ctrl+Alt+F1    the text console on the screen, the keys to it
  *   Ctrl+Alt+F2    the display again */
 static volatile int want_reboot, vt_text, vt_back;
-static volatile int show_fps;           /* Ctrl+Alt+F11: frames a second, on the screen (screen_fps) */
+static volatile int show_fps;
+static int hv;                          /* --hv: VM 0 of the hypervisor (hv.c) */
+static volatile int hv_detach;          /* Ctrl+Alt+Home: the screen VM 0's again */
+void hv_init(machine *m, double mhz, int mmu_on, int w, int h);
+int hv_run(void);
+machine *hv_shown(machine *m0);
+void hv_attach(int id);           /* Ctrl+Alt+F11: frames a second, on the screen (screen_fps) */
 static int reboot_after;              /* Ctrl+Alt+Del asked: the PC restarts when C4IX ends */
 static volatile u8 scq[256];
 static volatile u32 scq_head, scq_tail;
@@ -428,6 +434,7 @@ static void key_event(gui *g, u8 sc) {
     if (sc == 0x3B) { vt_text = 1; return; }                     /* F1: the text console */
     if (sc == 0x3C) return;                                      /* F2: the display already */
     if (sc == 0x57) { show_fps = !show_fps; vt_back = 1; return; }  /* F11: frames a second */
+    if (sc == 0x47 && hv) { hv_detach = 1; return; }               /* Home: back to VM 0 (hv.c) */
   }
   if (code == 20 && !up) g_caps = !g_caps;
   int ch = 0;
@@ -648,6 +655,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--store")) store_create = 1;      /* a blank ATA disk may become the store */
     else if (!strcmp(args[a], "--no-store")) store = 0;
     else if (!strcmp(args[a], "--no-cdrom")) cdrom = 0;      /* the CD drives left be (cdrom.c): a session libjs can match */
+    else if (!strcmp(args[a], "--hv")) hv = 1;                  /* the hypervisor: this machine VM 0 (hv.c) */
     else if (!strcmp(args[a], "--no-vmware")) vmware = 0;    /* VMware's backdoor left be (vmware.c) */
     else if (!strcmp(args[a], "--vmware-lb")) vmware = 2;    /* ... its messages 4 bytes at a time, no high-bandwidth port */
     else if (!strcmp(args[a], "--no-acpi")) acpi = 0;        /* ACPI left be (acpi.c): off by the fixed ports, no power button */
@@ -805,6 +813,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
     /* the 64-bit word's MMU reaches 1 GB of addresses, the window's end
      * among them: 512 MB of memory there (c4ix.h MMU_UWIN_LAST) */
     while (mb_arena * 2 <= room && mb_arena < (WB == 8 ? 512u : 1024u)) mb_arena *= 2;
+    /* the hypervisor's VM 0: a quarter of it, at most 256 MB, the rest the guests' */
+    if (hv) { u32 c = room / 4 > 256 ? 256 : room / 4; while (mb_arena > 64 && mb_arena > c) mb_arena /= 2; }
   }
   machine *m = machine_new(mb_arena << 20, drives, nd, mhz);
   m->on_byte = on_byte;
@@ -856,6 +866,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     con_puts(vmouse ? ", and VMware's absolute mouse (the pointer leaves at the edge)\n" : mouse ? ", and a mouse\n" : ", and no mouse\n");
     vga_real = 0;                       /* graphics: the VGA's text is not shown */
     screen_console(vtext, vy * 80 + vx);
+    if (hv) hv_init(m, (double)m->cycles_per_ms / 1000, mmu_on, w, h);
   }
   /* the sound card (snd.c), at the keyboard, on a Sound Blaster 16 (sb16.c):
    * scripted or --fast, the machine's clock is not the one it would play to */
@@ -962,7 +973,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
     i64 slice = paced ? (i64)m->cycles_per_ms * 4 : 20000000;
     int r = machine_run(m, left < slice ? left : slice);
     if (m->snd) audio_poll();
-    if (m->gui) display_tick(m);
+    if (m->gui) display_tick(hv ? hv_shown(m) : m);
+    if (hv) { if (hv_detach) { hv_detach = 0; hv_attach(0); } hv_run(); }
     /* -s at the keyboard: every 10 s, on COM1 alone, how the PC kept up */
     if (stats && paced) {
       static i64 rep_at, rep_cyc, rep_disp, rep_idle;
@@ -1009,6 +1021,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
         if (until > now + 100) until = now + 100;
         while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
           if (m->snd) audio_poll();
+          /* the hypervisor's guests run while VM 0 naps; their screen is kept */
+          if (hv) { int ran = hv_run(); if (m->gui) display_tick(hv_shown(m)); if (hv_detach) { hv_detach = 0; hv_attach(0); } if (ran) continue; }
           idle0(m);
         }
         idle_ms += plat_now_ms() - now;
@@ -1051,3 +1065,5 @@ void pc_main(u32 magic, struct mb_info *mb) {
 }
 
 void ram_sink(drive *d, const char *name, blob *b) { (void)d; (void)name; (void)b; }
+/* the hypervisor's messages and its guests' consoles (hv.c): the serial line alone */
+void hv_out(const char *s) { com1_only = 1; con_puts(s); com1_only = 0; }

@@ -362,6 +362,9 @@ static void pointer_draw(int x, int y) {
   }
 }
 
+/* the next look copies all of the display, not what changed: another
+ * machine's is on the screen now (hv.c) */
+void screen_full(void) { cw = ch = 0; }
 /* what changed since the last look, and the pointer */
 void screen_show(gui *g) {
   if (!fb) return;

@@ -105,6 +105,9 @@ static u32 dma_write(machine *m, u32 addr, const u8 *b, u32 len) {
   }
   return len;
 }
+/* LEN bytes into a machine's memory at ADDR, as a device writes them
+ * (pc/hv.c: VM 0's answers): how many were */
+u32 dev_dma_write(machine *m, u32 addr, const u8 *b, u32 len) { return dma_write(m, addr, b, len); }
 u32 dma_cstring(machine *m, u32 addr, char *out, u32 max) {
   u32 n = 0;
   i64 p = -1;

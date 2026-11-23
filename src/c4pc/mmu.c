@@ -385,6 +385,7 @@ static int low_ok(mmu *u, word x0, int kind) {
   if (x < 0x400) return (io & IOPM_ROM) != 0 && kind == FK_READ;
   if (x < 0x480) return (io & IOPM_GUI) != 0;
   if (x < 0x500) return (io & IOPM_SND) != 0;
+  if (x >= HV_BASE && x < HV_END) return (io & IOPM_DEV) != 0;   /* the hypervisor's (pc/hv.c) */
   if (x >= LOCAL_BASE && x < LOCAL_END) return (io & (kind == FK_READ ? IOPM_LOCAL : IOPM_LOCALW)) != 0;
   return 0;
 }

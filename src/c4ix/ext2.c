@@ -835,6 +835,14 @@ void ext2_statfs(struct e2fs *fs, int *out) {
 }
 char *ext2_label(struct e2fs *fs) { return fs->sb + 120; }
 int ext2_dev(struct e2fs *fs) { return fs->dev; }
+// the filesystem block of INO's LBNth, 0 for a hole or past its end, -1 if
+// INO cannot be read; *SPB its sectors a block (sys.c SYS_FMAP)
+int ext2_fmap(struct e2fs *fs, int ino, int lbn, int *spb) {
+    char ib[256];
+    *spb = fs->spb;
+    if (lbn < 0 || iget(fs, ino, ib) < 0) return 0 - 1;
+    return bmap(fs, ino, ib, lbn, 0);
+}
 int ext2_ro(struct e2fs *fs) { return fs->ro; }
 
 // ---- mounting ----

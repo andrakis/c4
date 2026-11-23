@@ -248,6 +248,14 @@ enum {
 // there for nothing; on a 32-bit build (libjs, c4pc) a long long is two
 // words and a helper call an operation, so the default there is the
 // word: files to 2 GB, and a disk's bigger one is 2 GB less a byte.
+// C4IX_WORD8 says the word is 64 bits (b4ke's $(WORD), src/c4ix/BUILD.B4K):
+// then it is on, as the Makefile has it, so that C4IX rebuilding itself on
+// the 64-bit word makes the kernel make made (docs/c4pc-64.md).
+#ifdef C4IX_WORD8
+#ifndef C4IX_LFS
+#define C4IX_LFS 1
+#endif
+#endif
 #ifdef C4IX_LFS
 #define c4off long long
 #else

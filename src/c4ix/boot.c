@@ -53,8 +53,9 @@ static void boot_frac(char *buf, int num, int den) {
 // The host's capability bits, by name: what the VM does (the devices
 // fitted to it have lines of their own, below)
 static void boot_caps(int info) {
-    klog("host: c4m%s%s%s%s%s%s%s%s\n",
+    klog("host: c4m%s, %d-bit words%s%s%s%s%s%s%s\n",
         (info & C4IX_I_C4MJS) ? " (libjs)" : "",
+        (int)sizeof(int) * 8,
         (info & C4IX_I_HRT) ? ", high-resolution timer" : "",
         (info & C4IX_I_SIG) ? ", signals" : "",
         (info & C4IX_I_FLT) ? ", float" : "",

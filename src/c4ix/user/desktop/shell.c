@@ -378,7 +378,8 @@ static struct go_item start_items[] = {
     { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "IDE", K_EDIT },
     { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Settings", K_SETTINGS },
     { "About C4IX", K_ABOUT }, { "-", 0 },
-    { "Games", 0, M_GAMES }, { "Install C4IX...", GO_CMD, 0, "install" }, { "Run...", GO_RUN }, { "-", 0 }, { "Power Off...", GO_OFF }
+    { "Games", 0, M_GAMES }, { "Install C4IX...", GO_CMD, 0, "install" }, { "Run...", GO_RUN }, { "-", 0 },
+    { "Restart", GO_CMD, 0, "reboot" }, { "Shut Down", GO_CMD, 0, "shutdown" }, { "Exit Desktop", GO_OFF }
 };
 static int n_start;
 // The rows of every menu but Go, each menu's together (games_load)
@@ -1051,7 +1052,7 @@ int main(int argc, char **argv) {
     wk_init(&shell);
     wall_load("/usr/share/splash/c4ix.c4p.gz");
     icon_k = 0 - 1;
-    printf("desktop: running on the display. Go > Power Off to come back here.\n");
+    printf("desktop: running on the display. Go > Exit Desktop to come back here.\n");
 
     term_open(0);
     running = 1; wk_redraw_all();

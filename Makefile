@@ -3269,7 +3269,7 @@ C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com
 # C4IX's programs this tree has that a C4PC_IMAGES built from another may
 # not (mount, umount, df, cp: the CD's), built as build-images.sh builds
 # them, and laid on the boot disk over its own, named in its manifest's BIN_ALL
-C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin hostcp
+C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin hostcp top
 .c4pc/bin/c4ix-%.c4r: $(SRCS)/c4ix/user/%.c .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP)
 	mkdir -p .c4pc/bin
 	./c4sc-host32 -c 400000 compile -O -c -D C4IX_SHARED -I $(SRCS)/c4ix/include $< .c4pc/u_$*.c4o > /dev/null

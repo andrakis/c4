@@ -114,6 +114,7 @@ static void vfs_ramuse(struct vnode *d, int *c) {
 
 enum { VFS_MOUNTS = 4 };            // disks mounted at once (vfs_mount)
 static int vfs_mounts_text(char *out, int max);
+static int vfs_puts(char *p, int n, char *s) { while (*s) { p[n] = *s; ++n; ++s; } return n; }
 static void vfs_proc(struct vnode *vn) {
     int ms, n, size, k, r[2], c[12];
     // /proc/kmsg: the kernel log (console.c), as dmesg prints it
@@ -202,6 +203,40 @@ static void vfs_proc(struct vnode *vn) {
         vn->size = n;
         return;
     }
+    // /proc/cpuinfo: a block a processor, as Linux's: its number, the
+    // machine (c4m, its word size, libjs's or a native one) and what the
+    // host gives (host_info's bits, by name)
+    if (vn->name[0] == 'c' && vn->name[1] == 'p') {
+        k = host_info();
+        if (!vn_grow(vn, (smp_ncpu > 0 ? smp_ncpu : 1) * 320 + 64)) return;
+        n = 0; size = 0;
+        while (size < (smp_ncpu > 0 ? smp_ncpu : 1)) {
+            n = vfs_puts(vn->data, n, "processor\t: ");
+            n = n + vfs_dec(vn->data + n, size);
+            n = vfs_puts(vn->data, n, "\nmodel name\t: c4m");
+            if (k & C4IX_I_C4MJS) n = vfs_puts(vn->data, n, " (libjs)");
+            n = vfs_puts(vn->data, n, ", ");
+            n = n + vfs_dec(vn->data + n, (int)sizeof(int) * 8);
+            n = vfs_puts(vn->data, n, "-bit words\nword size\t: ");
+            n = n + vfs_dec(vn->data + n, (int)sizeof(int) * 8);
+            n = vfs_puts(vn->data, n, "\nprocessors\t: ");
+            n = n + vfs_dec(vn->data + n, smp_ncpu > 0 ? smp_ncpu : 1);
+            n = vfs_puts(vn->data, n, "\nflags\t\t:");
+            if (k & C4IX_I_HRT) n = vfs_puts(vn->data, n, " hrt");
+            if (k & C4IX_I_SIG) n = vfs_puts(vn->data, n, " signals");
+            if (k & C4IX_I_FLT) n = vfs_puts(vn->data, n, " float");
+            if (k & C4IX_I_FPU) n = vfs_puts(vn->data, n, " fpu");
+            if (k & C4IX_I_PROT) n = vfs_puts(vn->data, n, " protected");
+            if (k & C4IX_I_SMP) n = vfs_puts(vn->data, n, (k & C4IX_I_PAR) ? " smp threads" : " smp");
+            if (k & C4IX_I_MMU) n = vfs_puts(vn->data, n, " mmu");
+            if (k & C4IX_I_BLK) n = vfs_puts(vn->data, n, " disks");
+            n = vfs_puts(vn->data, n, "\n\n");
+            ++size;
+        }
+        vn->data[n] = 0;
+        vn->size = n;
+        return;
+    }
     if (!vn_grow(vn, 128)) return;
     // /proc/cache: what files' bytes are where (the cache, below): files
     // still on the host and their bytes, files read in and kept and their
@@ -269,6 +304,8 @@ void vfs_init() {
     if ((vn = vfs_ramfile("/proc/cache"))) vn->type = VN_PROC;
     // /proc/meminfo: where memory is, which free prints (vfs_proc)
     if ((vn = vfs_ramfile("/proc/meminfo"))) vn->type = VN_PROC;
+    // /proc/cpuinfo: the processors, the machine's word (vfs_proc)
+    if ((vn = vfs_ramfile("/proc/cpuinfo"))) vn->type = VN_PROC;
     // /proc/mounts: the disks mounted (vfs_mount)
     if ((vn = vfs_ramfile("/proc/mounts"))) vn->type = VN_PROC;
     // /proc/disks: the block devices (blk.c)

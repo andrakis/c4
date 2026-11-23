@@ -51,6 +51,30 @@ static int ln_count, ln_len, ln_on;   // lines so far; this one's length
 static char kb[KEYBUF];          // keys read, not yet taken
 static int kb_n, in_eof;
 
+
+// /proc/meminfo's "swap N" and "swapfree N" (KB); 0 where there is none
+static int swap_kb, swapfree_kb;
+static char swap_buf[2048];
+static int swap_val(char *p, char *name) {
+    int k;
+    while (*p) {
+        k = 0;
+        while (name[k] && p[k] == name[k]) ++k;
+        if (!name[k]) return uatoi(p + k);
+        while (*p && *p != 10) ++p;
+        if (*p) ++p;
+    }
+    return 0;
+}
+static void swap_read() {
+    int n;
+    swap_kb = 0; swapfree_kb = 0;
+    if ((n = uslurp("/proc/meminfo", swap_buf, 2047)) <= 0) return;
+    swap_buf[n] = 0;
+    swap_kb = swap_val(swap_buf, "swap ");
+    swapfree_kb = swap_val(swap_buf, "swapfree ");
+}
+
 static int atoi_(char *s) {
     int n, neg;
     n = 0; neg = 0;
@@ -423,6 +447,15 @@ static void d_header(struct cpusample *a, struct cpusample *b) {
         ln_s("KiB Mem:"); ln_c(' '); ln_d(b->h.heap / 1024, 1); ln_s(" total, ");
         ln_d(b->h.heapused / 1024, 1); ln_s(" used, ");
         ln_d((b->h.heap - b->h.heapused) / 1024, 1); ln_s(" free");
+        ln_end();
+    }
+    // swap, from /proc/meminfo (KB), where the MMU has it
+    swap_read();
+    if (swap_kb > 0) {
+        ln_begin();
+        ln_s("KiB Swap:"); ln_c(' '); ln_d(swap_kb, 1); ln_s(" total, ");
+        ln_d(swap_kb - swapfree_kb, 1); ln_s(" used, ");
+        ln_d(swapfree_kb, 1); ln_s(" free");
         ln_end();
     }
 }

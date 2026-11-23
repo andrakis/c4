@@ -513,6 +513,7 @@ static int sys_args_ok(int num, int *args) {
     case SYS_MKFS:     return !args[2] || ustrlen((char *)args[2]) >= 0;
     case SYS_BLKIO:    return uaccess(args[2], (((args[0] >> 16) & 255) + 1) * 512, (args[0] & 256) ? 0 : 1);
     case SYS_STATFS:   return ustrlen((char *)args[0]) >= 0 && uaccess(args[1], 7 * sizeof(int), 1);
+    case SYS_LSEEK64:  return uaccess(args[1], 2 * sizeof(int), 1);
     }
     return 1;
 }
@@ -520,6 +521,8 @@ static int sys_args_ok(int num, int *args) {
 int sys_dispatch(int num, int *args) {
     struct task *t, *s;
     struct file *f;
+    c4off off;
+    int *w;
 
     if ((t = sched_current())) ++t->nsyscalls;
     if (!sys_args_ok(num, args)) return -1;
@@ -597,13 +600,36 @@ int sys_dispatch(int num, int *args) {
     // end is allowed, and a write there leaves zeros in the gap.
     case SYS_LSEEK:
         if (!t || !(f = fd_get(t, args[0])) || (f->vn->type != VN_RAMFILE && f->vn->type != VN_PROC)) return -1;
-        if (args[2] == 0) num = args[1];
-        else if (args[2] == 1) num = f->pos + args[1];
-        else if (args[2] == 2) num = f->vn->size + args[1];
+        if (args[2] == 0) off = args[1];
+        else if (args[2] == 1) off = f->pos + args[1];
+        else if (args[2] == 2) off = VN_END(f->vn) + args[1];
         else return -1;
-        if (num < 0) return -1;
-        f->pos = num;
-        return num;
+        // past what a word holds (a 32-bit build's 2 GB): lseek64's to say
+        if (off < 0 || (sizeof(int) == 4 && off > 0x7FFFFFFF)) return -1;
+        f->pos = off;
+        return (int)off;
+    // the same, its offset in two words (docs/c4ix-lfs.md): a disk's file
+    // past 2 GB, with C4IX_LFS; without, an offset a word holds
+    case SYS_LSEEK64:
+        if (!t || !(f = fd_get(t, args[0])) || (f->vn->type != VN_RAMFILE && f->vn->type != VN_PROC)) return -1;
+        w = (int *)args[1];
+#ifdef C4IX_LFS
+        off = ((c4off)w[1] << 32) | ((c4off)w[0] & 0xFFFFFFFFll);
+#else
+        if (w[1] != (w[0] < 0 ? 0 - 1 : 0)) return -1;
+        off = w[0];
+#endif
+        if (args[2] == 1) off = off + f->pos;
+        else if (args[2] == 2) off = off + VN_END(f->vn);
+        else if (args[2] != 0) return -1;
+        if (off < 0) return -1;
+        f->pos = off;
+#ifdef C4IX_LFS
+        w[0] = (int)(off & 0xFFFFFFFFll); w[1] = (int)(off >> 32);
+#else
+        w[0] = off; w[1] = 0;
+#endif
+        return 0;
     case SYS_FTRUNCATE:
         if (!t || !(f = fd_get(t, args[0])) || (f->flags & 3) == C4IX_O_RDONLY) return -1;
         return vfs_truncate(f->vn, args[1]);

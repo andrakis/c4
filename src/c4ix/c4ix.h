@@ -135,7 +135,11 @@ enum {
     // the device, + 256 to write, + 65536 * (the count - 1: to 256); the
     // first sector; a buffer of the count * 512 bytes
     SYS_BLKIO = 255,
-    SYS_TOP = 256          // one past the last: sched_trap's range check
+    // a position past 2 GB (C4IX_LFS): the descriptor, two words (the
+    // offset's low 32 bits, then its high), whence; the new position
+    // written back into the two. 0, or -1
+    SYS_LSEEK64 = 256,
+    SYS_TOP = 257          // one past the last: sched_trap's range check
 };
 // Shutdown (sched.c): what the kernel task's end does once every task has
 // gone, 0 the machine off, 1 restarted -- the kernel's exit code is then
@@ -159,7 +163,10 @@ enum {
     ST_DEV = 7,            // 1 for the RAM filesystem, 2 for a host file, 0 for the console or a pipe,
                            // 3 for a directory whose entries are still the host's (vfs.c, vfs_lazydir),
                            // 4 for a file or directory on a disk (ext2.c)
-    ST_WORDS = 8
+    // the size whole, in two words of 32 bits, low then high: a disk's
+    // file past 2 GB (C4IX_LFS); ask for ST_WORDS to have them
+    ST_SIZE_LO = 8, ST_SIZE_HI = 9,
+    ST_WORDS = 10
 };
 // SYS_WAITPID: options, and the two words it writes (exit code, signal)
 enum { C4IX_WNOHANG = 1 };
@@ -235,11 +242,27 @@ enum {
     C4IX_O_APPEND = 4096, C4IX_O_EXCL = 8192
 };
 
+// File positions and sizes (docs/c4ix-lfs.md): 64 bits where C4IX_LFS is
+// defined, the word where it is not. Where the word is 64 bits (the
+// native c4m build) long long IS the word, and the Makefile defines it
+// there for nothing; on a 32-bit build (libjs, c4pc) a long long is two
+// words and a helper call an operation, so the default there is the
+// word: files to 2 GB, and a disk's bigger one is 2 GB less a byte.
+#ifdef C4IX_LFS
+#define c4off long long
+#else
+#define c4off int
+#endif
+// a position as a word, where a word holds it: 2 GB less a byte at most
+// on a 32-bit build (stat's ST_SIZE, a RAM file's size)
+#define C4OFF_WORD(v) ((sizeof(int) == 4 && (v) > 0x7FFFFFFF) ? 0x7FFFFFFF : (int)(v))
+
 struct vnode {
     int type;                  // VN_*
     int refs;                  // open descriptions pointing here
     char *data;                // RAMFILE/PIPE storage
     int size;                  // bytes of data valid
+    c4off e2size;              // a disk's file's whole size (ext2): size is what a word holds of it
     int cap;                   // bytes allocated
     int rpos;                  // PIPE: read cursor into data
     int host;                  // HOSTFILE: the host descriptor
@@ -296,7 +319,7 @@ struct vnode {
 struct file {
     struct vnode *vn;
     int flags;
-    int pos;                   // seek position (shared across dup2)
+    c4off pos;                 // seek position (shared across dup2): 64 bits with C4IX_LFS
     int refs;                  // fds pointing at this description
 };
 
@@ -304,6 +327,7 @@ void         vfs_init();
 // Names are resolved a component at a time from CWD (or from the
 // root when the path starts with '/'), which is what makes "." and
 // ".." mean anything and what a flat namespace could never support.
+#define VN_END(vn) (((vn)->lazy && (vn)->e2) ? (vn)->e2size : (c4off)(vn)->size)
 struct vnode *vfs_lookup(char *path);
 struct vnode *vfs_ramfile(char *path);   // find or create the file
 struct vnode *vfs_mkdir(char *path);
@@ -318,7 +342,7 @@ int          vfs_lazyfile(char *path, char *host, int size);
 int          vfs_relazy(char *path, char *host, int stamp);
 void         mmu_counts(int *c);   // /proc/meminfo's, ten: user frames, swap, the heap's biggest block (mmu.c)
 int          vfs_fill(struct vnode *vn);         // read a lazy file's bytes in; 1 if it has them
-int          vfs_pread(struct vnode *vn, char *buf, int pos, int len);   // a RAM file's bytes at POS, wherever they are
+int          vfs_pread(struct vnode *vn, char *buf, c4off pos, int len);   // a RAM file's bytes at POS, wherever they are
 extern int   vfs_spans;                          // the host reads a span of a file: "NAME@OFF+LEN"
 // Memory for the kernel: malloc, and when it has none, files' cached
 // bytes dropped (vfs_reclaim) until it has. vfs_trim drops them while
@@ -398,7 +422,8 @@ int  ext2_umount(struct e2fs *fs);
 int  ext2_sync(struct e2fs *fs);
 int  ext2_commit(struct e2fs *fs);    // the superblock, where its counts changed
 int  ext2_mkfs(int dev, int bsize, char *label);
-int  ext2_read(struct e2fs *fs, int ino, char *buf, int pos, int len);
+int  ext2_read(struct e2fs *fs, int ino, char *buf, c4off pos, int len);
+c4off ext2_size(struct e2fs *fs, int ino);   // a file's whole size: past 4 GB with C4IX_LFS
 int  ext2_write(struct e2fs *fs, int ino, char *buf, int len);      // the whole file
 int  ext2_dir_next(struct e2fs *fs, int dir, int *pos, char *name, int *ino, int *isdir);
 int  ext2_lookup(struct e2fs *fs, int dir, char *name);

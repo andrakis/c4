@@ -112,6 +112,7 @@ int vfork() { return __c4_opcode(0, 0, 0, SYS_VFORK); }
 int uexecve(char *p, char **v, char **e) { return __c4ix_syscall(SYS_EXECVE, (int)p, (int)v, (int)e); }
 int uwaitpid(int pid, int *st, int o)  { return __c4ix_syscall(SYS_WAITPID, pid, (int)st, o); }
 int ulseek(int fd, int off, int whence) { return __c4ix_syscall(SYS_LSEEK, fd, off, whence); }
+int ulseek64(int fd, int *pos, int whence) { return __c4ix_syscall(SYS_LSEEK64, fd, (int)pos, whence); }
 int ustat2(char *path, int *out, int n) { return __c4ix_syscall(SYS_STAT, (int)path, (int)out, n); }
 int ufstat(int fd, int *out, int n)   { return __c4ix_syscall(SYS_FSTAT, fd, (int)out, n); }
 int ulink(char *path, char *np)       { return __c4ix_syscall(SYS_LINK, (int)path, (int)np, 0); }

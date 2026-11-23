@@ -752,7 +752,10 @@ static void e2_backed(struct vnode *vn, struct e2fs *fs, int ino) {
     if (ext2_stat(fs, ino, st) < 0) return;
     vn->mode = (st[0] & 4095) | 4096;     // its own: even 0000
     if (vn->type == VN_DIR) { vn->e2unlisted = 1; return; }
-    vn->size = st[1];
+    // its whole size, and what a word holds of it (2 GB less a byte, on a
+    // 32-bit build): a bigger one is read where it is, a range at a time
+    vn->e2size = ext2_size(fs, ino);
+    vn->size = C4OFF_WORD(vn->e2size);
     vn->lazy = 1;
     vn->backed = 1;
     ++vfs_nlazy;
@@ -947,6 +950,7 @@ int vfs_fill(struct vnode *vn) {
     char *nd;
     if (!vn || !vn->lazy) return 1;
     size = vn->size;
+    if (vn->e2 && vn->e2size > size) return 0;    // more than a word's worth: never in RAM whole
     if (!(nd = vfs_malloc(size + 1))) return 0;
     if (vn->e2) {
         got = ext2_read(vn->e2, vn->e2ino, nd, 0, size);
@@ -978,20 +982,22 @@ int vfs_fill(struct vnode *vn) {
 // LEN bytes of a RAM file from POS, into BUF: from RAM, or from the host
 // where it is still there and the host reads spans. Fewer at the end;
 // -1 when they cannot be had.
-int vfs_pread(struct vnode *vn, char *buf, int pos, int len) {
+int vfs_pread(struct vnode *vn, char *buf, c4off pos, int len) {
     int n;
     if (pos < 0 || len < 0) return -1;
     sched_lock();
-    n = vn->size - pos;
-    if (n > len) n = len;
+    // a disk's file (ext2) to its whole size, past 2 GB with C4IX_LFS
+    if (pos >= VN_END(vn)) { sched_unlock(); return 0; }
+    n = len;
+    if (VN_END(vn) - pos < n) n = (int)(VN_END(vn) - pos);
     if (n <= 0) { sched_unlock(); return 0; }
     if (vn->lazy && vn->e2) n = ext2_read(vn->e2, vn->e2ino, buf, pos, n);
-    else if (vn->lazy && vfs_spans) n = vfs_span_read(vn, buf, pos, n);
+    else if (vn->lazy && vfs_spans) n = vfs_span_read(vn, buf, (int)pos, n);
     else if (vn->lazy && !vfs_fill(vn)) n = -1;
     else {
-        if (n > vn->size - pos) n = vn->size - pos;   // a host file that went
-        if (n < 0) n = 0;
-        memcpy(buf, vn->data + pos, n);
+        if (pos >= vn->size) n = 0;                  // a host file that went
+        else if (n > vn->size - (int)pos) n = vn->size - (int)pos;
+        if (n > 0) memcpy(buf, vn->data + (int)pos, n);
         cache_use(vn);
     }
     sched_unlock();
@@ -1032,11 +1038,13 @@ static int vn_is_program(struct vnode *vn) {
 void vn_stat(struct vnode *vn, int *out, int n) {
     int st[ST_WORDS];
     int i;
+    c4off sz;
     if (vn->type == VN_PROC) {
         // a file to anything that asks, read-only, as long as it is now
         vfs_proc(vn);
         st[ST_TYPE] = 2; st[ST_SIZE] = vn->size; st[ST_PROG] = 0; st[ST_MTIME] = vn->mtime;
         st[ST_INO] = vn->ino; st[ST_NLINK] = 1; st[ST_MODE] = 33060; st[ST_DEV] = 1;   // S_IFREG|0444
+        st[ST_SIZE_LO] = vn->size; st[ST_SIZE_HI] = 0;
         if (n <= 0) n = 4;
         if (n > ST_WORDS) n = ST_WORDS;
         i = 0;
@@ -1045,6 +1053,13 @@ void vn_stat(struct vnode *vn, int *out, int n) {
     }
     st[ST_TYPE] = vn->type == VN_DIR ? 1 : (vn->type == VN_RAMFILE ? 2 : 3);
     st[ST_SIZE] = vn->type == VN_RAMFILE ? vn->size : 0;
+    // the size whole, two words of 32 bits: a disk's file past 2 GB
+    sz = vn->type == VN_RAMFILE ? VN_END(vn) : 0;
+#ifdef C4IX_LFS
+    st[ST_SIZE_LO] = (int)(sz & 0xFFFFFFFFll); st[ST_SIZE_HI] = (int)(sz >> 32);
+#else
+    st[ST_SIZE_LO] = sz; st[ST_SIZE_HI] = 0;
+#endif
     st[ST_PROG] = vn_is_program(vn);
     st[ST_MTIME] = vn->mtime;
     st[ST_INO] = vn->ino;
@@ -1568,7 +1583,7 @@ int vfs_readable(struct vnode *vn, int pos) {
 
 int vfs_read(struct file *f, char *buf, int len) {
     struct vnode *vn;
-    int n, i;
+    int n, i, p;
 
     sched_lock();
     vn = f->vn;
@@ -1601,11 +1616,12 @@ int vfs_read(struct file *f, char *buf, int len) {
         sched_unlock();
         return n;
     }
-    n = vn->size - f->pos;
-    if (n <= 0) { sched_unlock(); return 0; }
+    if (f->pos >= vn->size) { sched_unlock(); return 0; }
+    p = (int)f->pos;
+    n = vn->size - p;
     if (n > len) n = len;
-    memcpy(buf, vn->data + f->pos, n);
-    f->pos = f->pos + n;
+    memcpy(buf, vn->data + p, n);
+    f->pos = p + n;
     cache_use(vn);
     sched_unlock();
     return n;
@@ -1643,11 +1659,15 @@ int vfs_write(struct file *f, char *buf, int len) {
     if (vn->lazy && !vfs_fill(vn)) { sched_unlock(); return -1; }
     if (vn->backed) vn_unback(vn);
     if (f->flags & C4IX_O_APPEND) f->pos = vn->size;
-    end = f->pos + len;
+    // a RAM file's bytes are a word's worth at most (lseek64 can go past
+    // 2 GB on a 32-bit build)
+    if (sizeof(int) == 4 && f->pos > 0x7FFFFFFF - len) { sched_unlock(); return -1; }
+    i = (int)f->pos;
+    end = i + len;
     if (!vn_grow(vn, end)) { sched_unlock(); return -1; }
     // past the end (lseek): the gap reads as zeros, whatever a truncate left in the buffer
-    if (f->pos > vn->size) memset(vn->data + vn->size, 0, f->pos - vn->size);
-    memcpy(vn->data + f->pos, buf, len);
+    if (i > vn->size) memset(vn->data + vn->size, 0, i - vn->size);
+    memcpy(vn->data + i, buf, len);
     vfs_touch(vn);
     f->pos = end;
     if (end > vn->size) vn->size = end;

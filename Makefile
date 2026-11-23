@@ -2039,17 +2039,18 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	     || { echo "test-c4fc: c4or1k/$$m.c4o differs from c4lc -mcisc -O -c"; exit 1; }; \
 	   echo "  mcisc obj ok: $$m"; \
 	done
-	# F10, object mode: the whole of C4IX. Thirteen .c4o objects, each
+	# F10, object mode: the whole of C4IX. Fifteen .c4o objects, each
 	# byte-identical to the one c4lc -O -c writes, linked by c4rlink into
-	# a kernel that must equal the committed image and then boot. An
+	# a kernel that must equal the committed image and then boot (built,
+	# as c4ix.c4r is, with C4IX_LFS: docs/c4ix-lfs.md). An
 	# object is where a compiler's bookkeeping shows: what it could not
 	# resolve it has to NAME, in the order c4lc names them, and the
 	# patches that reference those names carry a symbol id where a
 	# whole-program image would carry -1 or -2.
 	@for m in $(C4IX_MODS); do \
-	   ./c4sp src/c4sp/lisp/c4lc.lisp -O -c -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4fc_lc.c4o >/dev/null 2>&1 \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp -O -c -D C4IX_LFS -I $(C4IX_SRC) $(C4IX_SRC)/$$m.c .c4fc_lc.c4o >/dev/null 2>&1 \
 	     || { echo "test-c4fc: c4lc could not compile $$m"; exit 1; }; \
-	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! -c C4FC-INIT -P S\" include\" -I S\" .\" -I S\" $(C4IX_SRC)\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" $(C4IX_SRC)/$$m.c\" C4FC ; GO" > .c4fc_ix_$$m.c4o 2>&1; \
+	   ./c4th $(C4FC_ALL) -e ": GO 1 OPTIMIZE ! -c C4FC-INIT -P S\" include\" -I S\" .\" -I S\" $(C4IX_SRC)\" -I S\" C4CC=1\" -D S\" __c4__=1\" -D S\" __C4CC__=1\" -D S\" __c4cc__=1\" -D S\" C4IX_LFS=1\" -D S\" $(C4IX_SRC)/$$m.c\" C4FC ; GO" > .c4fc_ix_$$m.c4o 2>&1; \
 	   cmp -s .c4fc_lc.c4o .c4fc_ix_$$m.c4o \
 	     || { echo "test-c4fc: $$m.c4o differs from c4lc -O -c"; exit 1; }; \
 	   echo "  obj ok: $$m"; \
@@ -3332,7 +3333,9 @@ c4ix.c4r: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(
 	@# The thirteen modules are independent .c -> .c4o compiles, so run
 	@# them in parallel exactly as the c4or1k rules do. c4lc_compile_par
 	@# propagates any module's failure through xargs.
-	$(call c4lc_compile_par,-O,$(C4IX_MODS),$(C4IX_SRC),.c4ix_)
+	@# C4IX_LFS: 64-bit file positions, which on the 64-bit word cost nothing
+	@# (long long is the word: docs/c4ix-lfs.md)
+	$(call c4lc_compile_par,-O -D C4IX_LFS,$(C4IX_MODS),$(C4IX_SRC),.c4ix_)
 	$(C4RLINK) $(patsubst %,.c4ix_%.c4o,$(C4IX_MODS)) -o c4ix.c4r
 	@# its own objects only: .c4ix_* is every C4IX rule's prefix, and
 	@# under -j a wildcard here deleted the userland's mid-build

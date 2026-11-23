@@ -25,7 +25,7 @@ enum {
     SYS_VFORK = 232, SYS_EXECVE = 233, SYS_WAITPID = 234, SYS_LSEEK = 235,
     SYS_FSTAT = 236, SYS_LINK = 237, SYS_FTRUNCATE = 238, SYS_ENVIRON = 239,
     SYS_DISPLAY = 240, SYS_AFFINITY = 242, SYS_NICE = 243, SYS_IOPERM = 244, SYS_MAPFROM = 245, SYS_RELAZY = 246,
-    SYS_FDGIVE = 247
+    SYS_FDGIVE = 247, SYS_LSEEK64 = 256
 };
 // libjs's display, taken from the desktop and given back (include/display.h)
 #ifndef __C4IX_DISPLAY_H
@@ -36,8 +36,11 @@ int  udisplay_take(int flags);
 void udisplay_give();
 #endif
 // What ustat2 and ufstat fill, a word each (the kernel's ST_* record)
+// ST_SIZE_LO and ST_SIZE_HI: the size whole, 32 bits each, for a disk's
+// file past 2 GB (a kernel built with C4IX_LFS: docs/c4ix-lfs.md); ask
+// for ST_WORDS to have them
 enum { ST_TYPE = 0, ST_SIZE = 1, ST_PROG = 2, ST_MTIME = 3, ST_INO = 4,
-       ST_NLINK = 5, ST_MODE = 6, ST_DEV = 7, ST_WORDS = 8 };
+       ST_NLINK = 5, ST_MODE = 6, ST_DEV = 7, ST_SIZE_LO = 8, ST_SIZE_HI = 9, ST_WORDS = 10 };
 enum { UWNOHANG = 1 };
 // taskinfo record, in order: id, parent, state, privs, nsyscalls,
 // ntraps, cycles, then a 16-byte name
@@ -142,7 +145,10 @@ int  ustack(int bytes);           // stack size for tasks this one spawns from n
 int  vfork();
 int  uexecve(char *path, char **argv, char **envp);   // -1 if it would not load
 int  uwaitpid(int pid, int *st, int opts);  // st[0] exit code, st[1] signal; 0 none yet with UWNOHANG
-int  ulseek(int fd, int off, int whence);  // RAM files only; the new position
+int  ulseek(int fd, int off, int whence);
+// a position past 2 GB: POS the offset's two words, low then high (32 bits
+// each), the new position written back there; 0, or -1 (docs/c4ix-lfs.md)
+int  ulseek64(int fd, int *pos, int whence);  // RAM files only; the new position
 int  ustat2(char *path, int *out, int n);  // the first n words of ST_*
 int  ufstat(int fd, int *out, int n);
 int  ulink(char *path, char *newpath);     // a second name for a file

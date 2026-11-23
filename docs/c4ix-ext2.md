@@ -119,9 +119,10 @@ copies.
 ## 4. Devices as files
 
 /dev/hd0, /dev/hd1 ...: a block device read and written as a file, for
-dd. Not yet: C4IX's file positions are 32-bit, so a device file would
-stop at 2 GB; mkfs is the kernel's instead (SYS_MKFS), and /proc/disks
-lists the devices.
+dd. Not yet: mkfs is the kernel's instead (SYS_MKFS), and /proc/disks
+lists the devices. A device file past 2 GB wants 64-bit positions, which
+a kernel built with C4IX_LFS has (docs/c4ix-lfs.md): the native 64-bit
+build's, and a 32-bit one's where it is asked for.
 
 ## 5. Modes
 

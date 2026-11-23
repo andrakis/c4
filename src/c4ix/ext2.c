@@ -195,6 +195,17 @@ static int iput(struct e2fs *fs, int ino, char *buf) {
 }
 static int i_mode(char *ib) { return rd16(ib); }
 static int i_size(char *ib) { return rd32(ib + 4); }
+// a regular file's whole size: with C4IX_LFS its high word too (large_file);
+// without, one of 2 GB or more is 2 GB less a byte
+static c4off i_fsize(char *ib) {
+#ifdef C4IX_LFS
+    if ((i_mode(ib) & S_IFMT) == S_IFREG) return ((c4off)rd32(ib + 108) << 32) | ((c4off)rd32(ib + 4) & 0xFFFFFFFFll);
+    return (c4off)rd32(ib + 4) & 0xFFFFFFFFll;
+#else
+    if (rd32(ib + 4) < 0 || ((i_mode(ib) & S_IFMT) == S_IFREG && rd32(ib + 108))) return 0x7FFFFFFF;
+    return rd32(ib + 4);
+#endif
+}
 static int i_links(char *ib) { return rd16(ib + 26); }
 
 // ---- allocation ----
@@ -377,12 +388,12 @@ static void trunc_blocks(struct e2fs *fs, char *ib, int from) {
 
 // ---- reading and writing a file's bytes ----
 
-static int ext2_read_via(struct e2fs *fs, int ino, char *ib, char *buf, int pos, int len, char *blk);
+static int ext2_read_via(struct e2fs *fs, int ino, char *ib, char *buf, c4off pos, int len, char *blk);
 // LEN bytes of inode INO from POS into BUF; the count, or -1. BUF may be a
 // user task's (a read, under the MMU: its address is not memory's), so the
 // disk is read into the kernel's own buffer, a run of up to 16 blocks at a
 // time, and copied from there
-int ext2_read(struct e2fs *fs, int ino, char *buf, int pos, int len) {
+int ext2_read(struct e2fs *fs, int ino, char *buf, c4off pos, int len) {
     char ib[256];
     char *blk;
     int k;
@@ -392,22 +403,24 @@ int ext2_read(struct e2fs *fs, int ino, char *buf, int pos, int len) {
     free(blk);
     return k;
 }
-static int ext2_read_via(struct e2fs *fs, int ino, char *ib, char *buf, int pos, int len, char *blk) {
-    int size, done, lbn, off, n, b, run, b0;
-    size = i_size(ib);
+static int ext2_read_via(struct e2fs *fs, int ino, char *ib, char *buf, c4off pos, int len, char *blk) {
+    c4off size;
+    int done, lbn, off, n, b, run, b0;
+    size = i_fsize(ib);
     if ((i_mode(ib) & S_IFMT) == S_IFLNK && size < 60 && !rd32(ib + 28)) {
         // a fast symlink: its target is in the block pointers
         if (pos >= size) return 0;
-        if (len > size - pos) len = size - pos;
-        memcpy(buf, ib + 40 + pos, len);
+        if (len > size - pos) len = (int)(size - pos);
+        memcpy(buf, ib + 40 + (int)pos, len);
         return len;
     }
     if (pos >= size) return 0;
-    if (len > size - pos) len = size - pos;
+    if (len > size - pos) len = (int)(size - pos);
     done = 0;
     while (done < len) {
-        lbn = (pos + done) / fs->bsize;
-        off = (pos + done) % fs->bsize;
+        // the block and the offset in it (from a 64-bit position, with C4IX_LFS)
+        lbn = (int)((pos + done) / fs->bsize);
+        off = (int)((pos + done) % fs->bsize);
         b = bmap(fs, ino, ib, lbn, 0);
         n = fs->bsize - off;
         if (n > len - done) n = len - done;
@@ -744,10 +757,16 @@ int ext2_chmod(struct e2fs *fs, int ino, int mode) {
 }
 // what stat says of inode INO: out[0] mode, [1] size, [2] links, [3] uid,
 // [4] gid, [5] mtime. 0, or -1
+// a file's whole size (i_fsize): -1 if its inode cannot be read
+c4off ext2_size(struct e2fs *fs, int ino) {
+    char ib[256];
+    if (iget(fs, ino, ib) < 0) return 0 - 1;
+    return i_fsize(ib);
+}
 int ext2_stat(struct e2fs *fs, int ino, int *out) {
     char ib[256];
     if (iget(fs, ino, ib) < 0) return 0 - 1;
-    out[0] = i_mode(ib); out[1] = i_size(ib); out[2] = i_links(ib);
+    out[0] = i_mode(ib); out[1] = C4OFF_WORD(i_fsize(ib)); out[2] = i_links(ib);
     out[3] = rd16(ib + 2); out[4] = rd16(ib + 24); out[5] = rd32(ib + 16);
     return 0;
 }

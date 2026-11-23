@@ -248,6 +248,14 @@ enum {
 // there for nothing; on a 32-bit build (libjs, c4pc) a long long is two
 // words and a helper call an operation, so the default there is the
 // word: files to 2 GB, and a disk's bigger one is 2 GB less a byte.
+// C4IX_WORD8 says the word is 64 bits (b4ke's $(WORD), src/c4ix/BUILD.B4K):
+// then it is on, as the Makefile has it, so that C4IX rebuilding itself on
+// the 64-bit word makes the kernel make made (docs/c4pc-64.md).
+#ifdef C4IX_WORD8
+#ifndef C4IX_LFS
+#define C4IX_LFS 1
+#endif
+#endif
 #ifdef C4IX_LFS
 #define c4off long long
 #else
@@ -1039,7 +1047,11 @@ enum {
 // Where user addresses start: a user page is mapped at its physical
 // address plus this, and kernel mode reaches it at either (libjs's user
 // window). Memory larger than it keeps the identity map.
-enum { MMU_UWIN_BASE = 0x10000000, MMU_UWIN_LAST = 0x70000000 };   // the window's lowest start; memory a window fits above
+enum { MMU_UWIN_BASE = 0x10000000 };   // the window's lowest start
+// The most memory a window fits above (mmu.c mmu_wbase): its end by 2 GB,
+// as addresses are ints, at 32 bits; by 1 GB at 64, where two levels of
+// 512-entry tables reach no further. A sizeof c4lc folds, as MMU_DSHIFT
+#define MMU_UWIN_LAST (0x70000000 - (sizeof(int) >> 3) * 0x40000000)
 // A page table entry's bit the host sets in the kernel's map (UDIR) on a
 // page the kernel or a device has used: it never goes to swap
 enum { PTE_PIN = 0x200 };

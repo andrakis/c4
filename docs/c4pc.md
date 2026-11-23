@@ -35,6 +35,8 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | in QEMU with KVM: from the ISO's menu the system installs onto a blank 2 GB disk in 89 s (4,716 files, 220 MB); e2fsck finds it clean and /boot's files are the build's byte for byte; the disk boots alone through its own GRUB, its text entry and its desktop, a file saved is there at the next boot, and the power button shuts it down clean |
 | done | the ISO's boot disk compressed (pc/packdisk.py: each file gzipped alone, as NAME.c4pcz), inflated by c4pc's drive when a file is first read (drive.c, inflate.c), what is inflated kept to 96 MB; `c4pc-host --tar FILE` loads such an archive |
 | *measured* | the boot disk 152 MB to 48.5 MB (3,235 of its 3,721 files compressed); every file inflated is the original byte for byte; test-c4pc holds the session from the packed archive to the plain one's, byte for byte and in its cycles |
+| done | the 64-bit system (docs/c4pc-64.md): the engine at either word size from one source (`C4PC_W64`: c4pc-host64w, c4pcw64.elf), and C4IX compiled 64-bit -- kernel, libraries, programs, desktop, compilers -- on a disk of its own (disk64.sh); three ISO entries beside the 32-bit ones; the MMU at 64 bits (512 eight-byte entries a table). The games stay on the 32-bit system |
+| *measured* | test-c4ix's session and 18 test programs byte for byte native c4m's (`c4pc-host64w --c4m`), c4mp's SMP transcripts on 4 CPUs; c4pcw64.elf in QEMU byte and cycle for cycle c4pc-host64w; the 64-bit desktop, a CD, ext2, 4 CPUs; from the ISO under KVM, the desktop (on 1 and 4 processors) and the text entry; `cc` and `c4cc` compile and run a program inside |
 | not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk, or a SATA CD drive |
 
 ## One engine, two front ends
@@ -248,6 +250,24 @@ session, two runs each, alternating):
 Both print libjs's output byte for byte in its 1,474,118,389 and
 1,500,630,450 cycles. The MMU's user loop is where the registers tell:
 C4IX's desktop and every game run with it.
+
+### The 64-bit system
+
+c4pc64.elf's guest is still the 32-bit machine. The 64-bit machine is the
+same sources built with `-DC4PC_W64` (c4pc.h's `word` is then int64_t,
+native c4m's word): `make c4pc-host64w c4pcw64.elf .c4pc/disk64.tar`, and
+the ISO's "C4IX 64-bit" entries boot c4pcw64.elf with the 64-bit kernel and
+its own disk. docs/c4pc-64.md has the design (the word, the memory map and
+the devices at 64 bits, the disk), the tests (test-c4pc64.sh, run by
+test-c4pc; `NO_W64=1` leaves it out) and stage two: the 64-bit MMU and the
+games.
+
+    make c4pc-host64w .c4pc/disk64.tar
+    ./c4pc-host64w -s -m 64 -d .c4pc/disk64 .c4pc/disk64/c4ix.c4r
+    make c4pcw64.elf
+    qemu-system-x86_64 -accel kvm -cpu host -m 512 -display none -serial file:serial.txt \
+        -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pcw64.elf \
+        -append "-s -m 64" -initrd ".c4pc/disk64/c4ix.c4r,.c4pc/disk64.tar drive,in.txt stdin"
 
 ### A drive that outlasts the machine
 
@@ -506,7 +526,8 @@ C4IX gets all of the PC's memory unless `-m N` says otherwise: the arena
 is the largest power of two (the engine's word index wraps at its size)
 that leaves c4pc 160 MB of its own -- the drives' unpacked files, 96 MB
 at most, the display's buffers, swap's pages where there is no swap
-partition -- and at most 1 GB, the user window going above it (c4ix-mmu.md
+partition -- and at most 1 GB (512 MB on the 64-bit word), the user
+window going above it (c4ix-mmu.md
 section 11): 512 MB on a VM of 1 GB, 1 GB on one of 2 GB or more. The
 boot says `c4pc: 512 MB arena with an MMU (the PC's memory but c4pc's
 own; -m N for less)`. `-m` stays for later, for a machine that shares

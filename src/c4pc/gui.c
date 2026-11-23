@@ -72,9 +72,16 @@ struct gui {
   i32 *frames; u32 fcap;               /* frames taken from the ring, to draw */
 };
 
-/* ---- memory ---- */
-static inline i32 rdw(gui *g, u32 idx) { return idx < (g->m->size >> 2) ? g->m->w[idx] : 0; }
-static inline void wrw(gui *g, u32 idx, i32 v) { if (idx < (g->m->size >> 2)) g->m->w[idx] = v; }
+/* ---- memory ----
+ * The rings, the pixels and the palettes are the guest's words (libjs/
+ * guest/gui.c): on the 64-bit machine 8 bytes each, a value in the low 32
+ * bits, and text still four characters to a word. Indexes are words. */
+static inline i32 rdw(gui *g, u32 idx) { return idx < (g->m->size >> WSH) ? (i32)g->m->w[idx] : 0; }
+static inline void wrw(gui *g, u32 idx, i32 v) { if (idx < (g->m->size >> WSH)) g->m->w[idx] = (word)v; }
+/* n words' low 32 bits, from the bytes of n words as read */
+static __attribute__((unused)) void words32(u32 *out, const u8 *in, u32 n) {
+  for (u32 k = 0; k < n; k++) out[k] = (u32)in[k * WB] | (u32)in[k * WB + 1] << 8 | (u32)in[k * WB + 2] << 16 | (u32)in[k * WB + 3] << 24;
+}
 
 /* ---- the canvas ---- */
 static void dirty(gui *g, int x0, int y0, int x1, int y1) {
@@ -288,9 +295,13 @@ static int guest_read(gui *g, u32 addr, u32 len, u8 *out) {
  * palette, scaled to dw x dh by the nearest pixel */
 static void blit8(gui *g, const i32 *p) {
   i32 x = p[0], y = p[1], w = p[2], h = p[3], src = p[4], pitch = p[5], pal = p[6], dw = p[7], dh = p[8];
-  if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || pitch < w || (pal & 3)) return;
+  if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || pitch < w || (pal & (WB - 1))) return;
   u32 lut[256];
+#if WB == 4
   if (!guest_read(g, (u32)pal, 1024, (u8 *)lut)) { g->lost++; return; }
+#else
+  { u8 raw[256 * WB]; if (!guest_read(g, (u32)pal, sizeof raw, raw)) { g->lost++; return; } words32(lut, raw, 256); }
+#endif
   u8 *px = xmalloc((size_t)w * h);
   for (i32 j = 0; j < h; j++)
     if (!guest_read(g, (u32)src + (u32)j * (u32)pitch, (u32)w, px + (size_t)j * w)) { xfree(px); g->lost++; return; }
@@ -314,11 +325,20 @@ static void blit8(gui *g, const i32 *p) {
 static void flip(gui *g, int w, int h) {
   if (!w || !h || !g->fb_base) return;
   int mode = g->fb_mode, lines = mode ? w : h, run = mode ? h : w;
-  i32 pitch = g->fb_pitch ? g->fb_pitch : run * 4;
-  if ((g->fb_base & 3) || (pitch & 3)) return;
+  i32 pitch = g->fb_pitch ? g->fb_pitch : run * WB;
+  if ((g->fb_base & (WB - 1)) || (pitch & (WB - 1))) return;
   u32 *buf = xmalloc((size_t)w * h * 4);
+#if WB == 4
   for (int l = 0; l < lines; l++)
     if (dev_dma_read(g->m, (u32)g->fb_base + (u32)l * (u32)pitch, (u32)run * 4, (u8 *)(buf + (size_t)l * run)) != (u32)run * 4) { xfree(buf); return; }
+#else
+  u8 *raw = xmalloc((size_t)run * WB);
+  for (int l = 0; l < lines; l++) {
+    if (dev_dma_read(g->m, (u32)g->fb_base + (u32)l * (u32)pitch, (u32)run * WB, raw) != (u32)run * WB) { xfree(raw); xfree(buf); return; }
+    words32(buf + (size_t)l * run, raw, (u32)run);
+  }
+  xfree(raw);
+#endif
   for (int yy = 0; yy < g->ch; yy++) {
     int sy = (int)(((i64)yy * 2 + 1) * h / (2 * (i64)g->ch));
     u32 *d = g->back + (size_t)yy * g->cw;
@@ -486,16 +506,16 @@ void gui_write32(gui *g, u32 a, i32 v) {
     case RINGLEN: g->ring_len = v; return;
     case RING: {
       if (!v) { g->ring_base = 0; g->mb = 0; return; }
-      i32 len = g->ring_len & ~7;
-      if ((v & 3) || len < 256) { g->ring_base = 0; g->mb = 0; return; }
+      i32 len = g->ring_len & ~(2 * WB - 1);
+      if ((v & (WB - 1)) || len < 256) { g->ring_base = 0; g->mb = 0; return; }
       /* the task's own memory to write, or its page fault */
       i64 pa = dev_dma(g->m, (u32)v, len, 1, 1);
       if (pa < 0x1000 || pa + len > g->m->size) { g->ring_base = 0; g->mb = 0; return; }
       g->ring_base = v;
       g->ring_space = g->m->dma_ctx ? (u32)mmu_ptbr(g->m->dma_ctx) : 0;
       u32 half = (u32)len >> 1;
-      g->tg_at = (u32)pa >> 2; g->tg_cap = (half >> 2) - 3;
-      g->th_at = ((u32)pa + half) >> 2; g->th_cap = (half >> 2) - 3;
+      g->tg_at = (u32)pa >> WSH; g->tg_cap = (half >> WSH) - 3;
+      g->th_at = ((u32)pa + half) >> WSH; g->th_cap = (half >> WSH) - 3;
       g->seq = 0;
       g->mb = 1;
       mb_layout(g);

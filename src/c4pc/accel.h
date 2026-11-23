@@ -25,15 +25,18 @@
 
 typedef uint64_t u64;
 
-/* ---- readers and writers, each with a page of its own ---- */
-typedef struct { machine *m; u32 vp; u32 base; i32 hi; } rw_t;
+/* ---- readers and writers, each with a page of its own ----
+ * The kit is the 64-bit machine's too (C4IX's own module, accel.c), with
+ * addresses in words; the MMU paths are the 32-bit machine's alone, and
+ * so are the games' modules (#if WB == 4 below) */
+typedef struct { machine *m; u32 vp; u32 base; word hi; } rw_t;
 
 static inline void rw_init(rw_t *r, machine *m) {
   r->m = m; r->vp = 0xffffffffu; r->base = 0;
-  i32 g = eng_guard_lo(m);
-  r->hi = (u32)g < m->size ? g : (i32)m->size;
+  word g = eng_guard_lo(m);
+  r->hi = (uword)g < m->size ? g : (word)m->size;
 }
-static inline i32 rd8(rw_t *r, i32 x) {
+static inline i32 rd8(rw_t *r, word x) {
   machine *m = r->m;
   if (m->vm) {
     u32 v = (u32)x >> 12;
@@ -47,7 +50,7 @@ static inline i32 rd8(rw_t *r, i32 x) {
   if (!m->uwin && x >= 0x1000 && x < r->hi) return m->u8[x];
   return eng_ld8(m, x) & 255;
 }
-static inline void wr8(rw_t *r, i32 x, i32 b) {
+static inline void wr8(rw_t *r, word x, i32 b) {
   machine *m = r->m;
   if (m->vm) {
     u32 v = (u32)x >> 12;
@@ -62,23 +65,27 @@ static inline void wr8(rw_t *r, i32 x, i32 b) {
   if (!m->uwin && x >= 0x1000 && x < r->hi) { m->u8[x] = (u8)b; return; }
   eng_st8(m, x, b);
 }
-static inline i32 rd32(rw_t *r, i32 x) {
+/* a word: 4 bytes on the 32-bit machine (rd32 and wr32, the games'
+ * name for it), 8 on the 64-bit */
+static inline word rdw(rw_t *r, word x) {
   machine *m = r->m;
-  if (!m->vm && !m->uwin && (x & 3) == 0 && x >= 0x1000 && x < r->hi - 3) return m->w[(u32)x >> 2];
-  return m_ld32(m, x);
+  if (!m->vm && !m->uwin && (x & (WB - 1)) == 0 && x >= 0x1000 && x < r->hi - (WB - 1)) return m->w[(uword)x >> WSH];
+  return m_ldw(m, x);
 }
-static inline void wr32(rw_t *r, i32 x, i32 v) {
+static inline void wrw(rw_t *r, word x, word v) {
   machine *m = r->m;
-  if (!m->vm && !m->uwin && (x & 3) == 0 && x >= 0x1000 && x < r->hi - 3) { m->w[(u32)x >> 2] = v; return; }
-  m_st32(m, x, v);
+  if (!m->vm && !m->uwin && (x & (WB - 1)) == 0 && x >= 0x1000 && x < r->hi - (WB - 1)) { m->w[(uword)x >> WSH] = v; return; }
+  m_stw(m, x, v);
 }
+#define rd32 rdw
+#define wr32 wrw
 /* a reader or writer of its own, as accel.mjs's `const rs = reader(m)` */
 #define RW(name) rw_t name; rw_init(&name, m)
 
 /* that the task may use [addr, addr + len), before anything is written */
-void acc_probe(machine *m, i32 addr, i32 len, int write);
+void acc_probe(machine *m, word addr, word len, int write);
 /* the n arguments, in the order the program wrote them */
-void acc_args(machine *m, int n, i32 *a);
+void acc_args(machine *m, int n, word *a);
 /* [addr, addr + len) as the machine's own bytes when they are one run of
  * them (plain memory, or under the MMU a stretch within one page the task
  * may read, or write), else 0 and the operation goes byte by byte */
@@ -107,6 +114,11 @@ static inline i32 toint(double v) {
 double fpu_sin(double x);
 double fpu_cos(double x);
 
+/* an operation: what the program gets back */
+typedef word (*acc_fn)(machine *m);
+
+#if WB == 4                             /* the games' kit: the 32-bit machine's */
+
 /* ---- writes held back ----
  * An operation that reads the screen it writes (a blend, a shadow) works
  * out every pixel first, then makes sure of every page it will write, and
@@ -134,9 +146,8 @@ void hold_write32(machine *m, hold_t *h);
 i32 *acc_scratch_k(int cpu, int which, u32 n);
 #define acc_scratch(which, n) acc_scratch_k(m->cpu_id, (which), (n))   /* ... the running CPU's */
 
-/* an operation: what the program gets back */
-typedef i32 (*acc_fn)(machine *m);
 #define ACC_MODULE(name) extern const acc_fn acc_##name[]; extern const int acc_##name##_n
 ACC_MODULE(doom); ACC_MODULE(duke3d); ACC_MODULE(quake); ACC_MODULE(rott);
 ACC_MODULE(sbk); ACC_MODULE(tyrian); ACC_MODULE(wolf3d);
+#endif /* WB == 4 */
 #endif

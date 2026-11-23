@@ -4,6 +4,7 @@
  * with each operation's number (DA_*); each does exactly what the game's C
  * does, as accel.mjs has it line for line. */
 #include "../accel.h"
+#if WB == 4                            /* the 32-bit machine's games (c4pc.h) */
 
 /* DA_COL (n, frac, step, mask, src, cmap, trans, dest, stride, d2): a
  * column, R_DrawColumn and its low and translated kinds */
@@ -122,3 +123,4 @@ static i32 patch(machine *m) {
 
 const acc_fn acc_doom[] = {col, fuzz, spanop, sum, fixmul, fixdiv, patch};
 const int acc_doom_n = sizeof acc_doom / sizeof acc_doom[0];
+#endif

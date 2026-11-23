@@ -2,6 +2,7 @@
  * C: the engine's innermost loops and its 64-bit helpers. c4/c4accel.h is
  * the game's side (DA_*). */
 #include "../accel.h"
+#if WB == 4                            /* the 32-bit machine's games (c4pc.h) */
 
 /* DA_TCOL, DA_TCOLM (count, v, inc, sh, tex, pal, dest, stride): a wall's
  * column, vlineasm1/4; gives v. The masked one leaves texel 255 out. */
@@ -345,3 +346,4 @@ static i32 mhline(machine *m) {
 const acc_fn acc_duke3d[] = {tcol0, tcol1, hline, rhline, slope, mulscale, udiv64, qinterp16, clearb, copyb,
                              tvline1, tvline2, tsprite, thline, scale, dmulscale, copyr, mhline};
 const int acc_duke3d_n = sizeof acc_duke3d / sizeof acc_duke3d[0];
+#endif

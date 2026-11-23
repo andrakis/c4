@@ -45,7 +45,7 @@ static int posted(u32 a) {
 
 typedef struct pcpu {
   volatile int state, ipi, req, kick, woke;
-  volatile i32 entry, stack, wait_addr, wait_val, pc, cycles;
+  volatile word entry, stack, wait_addr, wait_val, pc; volatile i32 cycles;
   void (*fn)(machine *, void *); void *arg;
   /* its posted writes: CPU 0's head, the next to apply; its own tail */
   volatile u32 pq_head, pq_tail; int pq_new;
@@ -169,12 +169,12 @@ static void service(par *p) {
 }
 
 /* an opcode of CPU 0's: the devices', the console's */
-struct sys_q { i32 op; int r; };
+struct sys_q { word op; int r; };
 static void sys_fn(machine *m, void *a) { struct sys_q *q = a; q->r = eng_sys(m, q->op); }
 /* a device register; a user task's load or store there has its space
  * checked by the device (mmu.c dma_ctx), and a fault comes back here to
  * be raised on the asker's own CPU */
-struct bus_q { int kind; u32 addr; i32 val; i32 r; int fault; };
+struct bus_q { int kind; u32 addr; i32 val; word r; int fault; };
 static void bus_fn(machine *m, void *a) {
   struct bus_q *q = a;
   mmu *u = m->dma_ctx;
@@ -194,17 +194,17 @@ static void emit_fn(machine *m, void *a) { struct emit_q *q = a; machine_emit(m,
 
 /* the opcodes whose work is CPU 0's (ap.js ASK), and those guarded in
  * protected mode, where a protected task's takes the local trap */
-static int is_ask(i32 op) {
+static int is_ask(word op) {
   return op == OP_OPEN || op == OP_READ || op == OP_CLOS || op == OP_PRTF || op == OP_PUTC ||
          op == OP_PUTS || op == OP_STRC || op == OP__OPC;
 }
-static int guarded(i32 op) {
+static int guarded(word op) {
   return op == OP_OPEN || op == OP_READ || op == OP_CLOS || op == OP_PRTF || op == OP_MALC || op == OP_FREE ||
          op == OP_RALC || op == OP_PUTC || op == OP_PUTS || op == OP_EXIT || op == OP_USLP || op == OP_INFO;
 }
 
 /* sys() on a CPU other than 0: a STOP, or -1 for sys's own way */
-int par_sys(machine *m, i32 op) {
+int par_sys(machine *m, word op) {
   if (m->mode && guarded(op)) return -1;
   if (is_ask(op)) {
     struct sys_q q = { op, STOP_BUDGET };
@@ -216,7 +216,7 @@ int par_sys(machine *m, i32 op) {
     /* this CPU sleeps; the others carry on. An IPI ends it early */
     par *p = m->smp->par; pcpu *me = &p->c[m->cpu_id];
     flush_posted(p, m);
-    i32 us = m_ld32(m, m->sp);
+    word us = m_ldw(m, m->sp);
     i64 ms = us / 1000 > 1 ? us / 1000 : 1, t0 = plat_now_ms();
     for (;;) {
       int seen = LD(me->kick);
@@ -229,7 +229,7 @@ int par_sys(machine *m, i32 op) {
   }
   return -1;
 }
-i32 par_rd32(machine *m, u32 a) {
+word par_rd32(machine *m, u32 a) {
   /* The sound card's AHEAD (how far the music is written past what is
    * playing), worked out here: the cursor, and this CPU's own OPL and WAIT
    * writes CPU 0 has not applied yet (snd_ahead) -- the queue's head read
@@ -268,7 +268,7 @@ void par_emit(machine *m, const u8 *b, u32 n) { struct emit_q q = { b, n }; ask(
 
 /* ---- the processor opcodes ---- */
 static int state(par *p, int k) { return LD(p->c[k].state); }
-static i32 start(par *p, i32 id, i32 entry, i32 stacktop) {
+static i32 start(par *p, word id, word entry, word stacktop) {
   if (id < 0 || id >= p->s->n || !entry || !stacktop) return 0;
   pcpu *c = &p->c[id];
   int was = LD(c->state);
@@ -280,7 +280,7 @@ static i32 start(par *p, i32 id, i32 entry, i32 stacktop) {
   kick(p, id);
   return 1;
 }
-static i32 ipi(par *p, i32 id) {
+static i32 ipi(par *p, word id) {
   if (id < 0 || id >= p->s->n) return 0;
   int s = state(p, id);
   if (s != S_RUN && s != S_WAIT) return 0;
@@ -288,41 +288,41 @@ static i32 ipi(par *p, i32 id) {
   if (id == 0) ring0(p); else kick(p, id);
   return 1;
 }
-int par_op(machine *m, i32 op) {
+int par_op(machine *m, word op) {
   par *p = m->smp->par; pcpu *me = &p->c[m->cpu_id];
-  i32 sp = m->sp;
+  word sp = m->sp;
   /* an arena word the host's atomics can take */
-#define ALIGNED(t) (((t) & 3) == 0 && (t) >= 0x1000 && (u32)(t) + 4 <= m->size)
+#define ALIGNED(t) (((t) & (WB - 1)) == 0 && (t) >= 0x1000 && (uword)(t) <= m->size - WB)
   switch (op) {
     case OP_CPUI: m->a = m->cpu_id; return STOP_BUDGET;
     case OP_CPUN: m->a = m->smp->n; return STOP_BUDGET;
-    case OP_CPUS: m->a = start(p, m_ld32(m, sp + 8), m_ld32(m, sp + 4), m_ld32(m, sp)); return STOP_BUDGET;
+    case OP_CPUS: m->a = start(p, m_ldw(m, sp + 2 * WB), m_ldw(m, sp + WB), m_ldw(m, sp)); return STOP_BUDGET;
     case OP_CPUH:
       m->cpu_state = CPU_HALT;
       ST(me->state, S_HALT);
       ring0(p);
       return STOP_CPUHALT;
     case OP_CAS: {
-      i32 t = m_ld32(m, sp + 8), e = m_ld32(m, sp + 4), v = m_ld32(m, sp);
-      if (ALIGNED(t)) { i32 x = e; __atomic_compare_exchange_n(&m->w[(u32)t >> 2], &x, v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); m->a = x; }
-      else { i32 o = m_ld32(m, t); if (o == e) m_st32(m, t, v); m->a = o; }
+      word t = m_ldw(m, sp + 2 * WB), e = m_ldw(m, sp + WB), v = m_ldw(m, sp);
+      if (ALIGNED(t)) { word x = e; __atomic_compare_exchange_n(&m->w[(uword)t >> WSH], &x, v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); m->a = x; }
+      else { word o = m_ldw(m, t); if (o == e) m_stw(m, t, v); m->a = o; }
       return STOP_BUDGET;
     }
     case OP_XCHG: {
-      i32 t = m_ld32(m, sp + 4), v = m_ld32(m, sp);
-      if (ALIGNED(t)) m->a = __atomic_exchange_n(&m->w[(u32)t >> 2], v, __ATOMIC_SEQ_CST);
-      else { i32 o = m_ld32(m, t); m_st32(m, t, v); m->a = o; }
+      word t = m_ldw(m, sp + WB), v = m_ldw(m, sp);
+      if (ALIGNED(t)) m->a = __atomic_exchange_n(&m->w[(uword)t >> WSH], v, __ATOMIC_SEQ_CST);
+      else { word o = m_ldw(m, t); m_stw(m, t, v); m->a = o; }
       return STOP_BUDGET;
     }
     case OP_FADD: {
-      i32 t = m_ld32(m, sp + 4), d = m_ld32(m, sp);
-      if (ALIGNED(t)) m->a = __atomic_fetch_add(&m->w[(u32)t >> 2], d, __ATOMIC_SEQ_CST);
-      else { i32 o = m_ld32(m, t); m_st32(m, t, (i32)((u32)o + (u32)d)); m->a = o; }
+      word t = m_ldw(m, sp + WB), d = m_ldw(m, sp);
+      if (ALIGNED(t)) m->a = (word)__atomic_fetch_add((uword *)&m->w[(uword)t >> WSH], (uword)d, __ATOMIC_SEQ_CST);
+      else { word o = m_ldw(m, t); m_stw(m, t, (word)((uword)o + (uword)d)); m->a = o; }
       return STOP_BUDGET;
     }
     case OP_CWAI: {
-      i32 t = m_ld32(m, sp + 4), val = m_ld32(m, sp);
-      if (!t || !ALIGNED(t) || LD(m->w[(u32)t >> 2]) != val) { m->a = 1; return STOP_BUDGET; }
+      word t = m_ldw(m, sp + WB), val = m_ldw(m, sp);
+      if (!t || !ALIGNED(t) || LD(m->w[(uword)t >> WSH]) != val) { m->a = 1; return STOP_BUDGET; }
       m->a = 0;
       m->wait_addr = t; m->wait_val = val;
       m->cpu_state = CPU_WAIT;
@@ -335,7 +335,7 @@ int par_op(machine *m, i32 op) {
     }
     case OP_CWAK: {
       /* every CPU parked on the word, up to n of them, told and woken */
-      i32 t = m_ld32(m, sp + 4), n = m_ld32(m, sp), woken = 0;
+      word t = m_ldw(m, sp + WB), n = m_ldw(m, sp); i32 woken = 0;
       if (t && ALIGNED(t))
         for (int k = 0; k < m->smp->n; k++) {
           if (k == m->cpu_id || LD(p->c[k].wait_addr) != t) continue;
@@ -347,7 +347,7 @@ int par_op(machine *m, i32 op) {
       m->a = woken;
       return STOP_BUDGET;
     }
-    case OP_IPI: m->a = ipi(p, m_ld32(m, sp)); return STOP_BUDGET;
+    case OP_IPI: m->a = ipi(p, m_ldw(m, sp)); return STOP_BUDGET;
   }
 #undef ALIGNED
   return STOP_BUDGET;
@@ -378,8 +378,8 @@ static void ap_main(int k) {
     m->accel = m0->accel; m->osaccel = m0->osaccel; m->no_fpu = m0->no_fpu;
     m->gui = m0->gui; m->snd = m0->snd; m->heap = m0->heap;
     smp_cpu_reset(m);
-    m->sp = LD(me->stack) - 4;
-    if ((u32)m->sp + 4 <= m->size) m->w[(u32)m->sp >> 2] = CPU_HALT_ADDR;
+    m->sp = LD(me->stack) - WB;
+    if ((uword)m->sp <= m->size - WB) m->w[(uword)m->sp >> WSH] = CPU_HALT_ADDR;
     m->bp = m->sp; m->pc = LD(me->entry); m->a = 0;
     m->ipi_pending = 0;
     m->cpu_state = CPU_RUN;
@@ -401,7 +401,7 @@ static void ap_main(int k) {
         /* the word, a CWAK, an IPI or the end; CWAI's caller looks again */
         i64 t0 = plat_now_ms();
         double tu = plat_now_us();
-        u32 wi = (u32)m->wait_addr >> 2;
+        uword wi = (uword)m->wait_addr >> WSH;
         int tmo = 0;
         count(&p->n_park);
         for (;;) {
@@ -482,8 +482,8 @@ static int others_running(par *p) {
     int st = state(p, k);
     if (st == S_RUN || LD(p->c[k].ipi)) return 1;
     if (st == S_WAIT) {
-      i32 wa = LD(p->c[k].wait_addr);
-      if (wa && LD(m0->w[(u32)wa >> 2]) != LD(p->c[k].wait_val)) return 1;
+      word wa = LD(p->c[k].wait_addr);
+      if (wa && LD(m0->w[(uword)wa >> WSH]) != LD(p->c[k].wait_val)) return 1;
     }
   }
   return 0;
@@ -524,7 +524,7 @@ static void park_sync(par *p, int ms) {
   i64 t0 = plat_now_ms();
   double tu = plat_now_us();
 #define WOKEN() (LD(c->woke) || LD(c->ipi) || LD(p->halt) || \
-                 (m0->cpu_state == CPU_WAIT && LD(m0->w[(u32)m0->wait_addr >> 2]) != m0->wait_val))
+                 (m0->cpu_state == CPU_WAIT && LD(m0->w[(uword)m0->wait_addr >> WSH]) != m0->wait_val))
   int w = 0;
   for (;;) {
     int seen = LD(c->kick);
@@ -546,8 +546,8 @@ static void park_sync(par *p, int ms) {
   }
 }
 
-static void put_hex(machine *m, u32 v) {
-  char b[12], t[8]; int n = 0, k = 0;
+static void put_hex(machine *m, uword v) {
+  char b[24], t[20]; int n = 0, k = 0;
   do { t[k++] = "0123456789ABCDEF"[v & 15]; v >>= 4; } while (v);
   b[n++] = '0'; b[n++] = 'x';
   while (k) b[n++] = t[--k];
@@ -574,10 +574,10 @@ static void deadlock(par *p) {
     if (st == S_OFF) machine_emits(m0, "off");
     else if (st == S_RUN) machine_emits(m0, "running");
     else if (st == S_WAIT) {
-      machine_emits(m0, "waiting on "); put_hex(m0, (u32)LD(p->c[k].wait_addr));
+      machine_emits(m0, "waiting on "); put_hex(m0, (uword)LD(p->c[k].wait_addr));
       machine_emits(m0, " for it to stop being "); put_dec(m0, LD(p->c[k].wait_val));
     } else machine_emits(m0, "halted");
-    machine_emits(m0, ", pc "); put_hex(m0, (u32)(k == 0 ? m0->pc : p->c[k].pc));
+    machine_emits(m0, ", pc "); put_hex(m0, (uword)(k == 0 ? m0->pc : p->c[k].pc));
     machine_emits(m0, ", "); put_dec(m0, k == 0 ? m0->cycle : p->c[k].cycles); machine_emits(m0, " cycles\n");
   }
   m0->halted = 1;

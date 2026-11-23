@@ -231,7 +231,7 @@ static FILE *texts;
 static void text_hook(int x, int y, const char *s, int n) { fprintf(texts, "%d %d %.*s\n", x, y, n, s); }
 
 static void usage(void) {
-  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--disk FILE.img] [--tar FILE.tar] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
+  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--disk FILE.img] [--tar FILE.tar] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] [--c4m] program.c4r [args...]\n");
   exit(1);
 }
 
@@ -263,7 +263,7 @@ static volatile sig_atomic_t host_terms;
 static void on_term(int s) { (void)s; host_terms++; }
 
 int main(int argc, char **argv) {
-  u32 mb = 32; double maxc = -1, mhz = 20; int cpus = 0, quantum = 0, parallel = 0, stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0;
+  u32 mb = 32; double maxc = -1, mhz = 20; int cpus = 0, quantum = 0, parallel = 0, stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0, c4m_info = 0;
   const char *shot = 0, *wav = 0;
   drive *drives[16]; int nd = 0;
   const char *cds[4]; int ncd = 0;
@@ -316,6 +316,7 @@ int main(int argc, char **argv) {
       gui_text_hook = text_hook;
     }
     else if (!strcmp(f, "--no-mmu")) mmu_on = 0;
+    else if (!strcmp(f, "--c4m")) c4m_info = 1;          /* INFO as native c4m's: no devices (engine.c machine_info) */
     else if (!strcmp(f, "--fast") || !strcmp(f, "--no-accel") || !strcmp(f, "--no-osaccel")) ;
     else if (!strcmp(f, "--")) { i++; break; }
     else { fprintf(stderr, "c4pc: unknown option %s\n", f); usage(); }
@@ -338,6 +339,7 @@ int main(int argc, char **argv) {
   machine *m = machine_new(mb * 1024 * 1024, drives, nd, mhz);
   m->on_byte = on_byte;
   m->no_fpu = nofpu;
+  m->c4m_info = c4m_info;
   if (noaccel) m->accel = 0;
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);

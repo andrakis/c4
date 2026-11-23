@@ -3,6 +3,7 @@
  * tiles, the screen's hue and brightness filters and the timedemo's
  * checksum. c4/c4accel.h is the game's side (TA_*). */
 #include "../accel.h"
+#if WB == 4                            /* the 32-bit machine's games (c4pc.h) */
 
 /* the kinds that read the screen: their writes are held (sink) */
 static int reads(i32 kind) { return kind == 1 || kind == 4 || kind == 5 || kind == 11 || kind == 12; }
@@ -191,3 +192,4 @@ static i32 filter(machine *m) {
 
 const acc_fn acc_tyrian[] = {sum, sprite, sprite2, sprite2c, bgrow, filter};
 const int acc_tyrian_n = sizeof acc_tyrian / sizeof acc_tyrian[0];
+#endif

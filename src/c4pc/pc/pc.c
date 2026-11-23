@@ -539,7 +539,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   com1_init();
   vga_clear(0, 2000);
   cpu_init();
-  con_puts("c4pc: the c4 machine on a PC\n");
+  con_puts(WB == 8 ? "c4pc: the 64-bit c4 machine on a PC\n" : "c4pc: the c4 machine on a PC\n");
   if (magic != 0x2BADB002) { con_puts("c4pc: not started by a multiboot loader\n"); power_off(72); }
 
   /* memory: everything above the kernel and its modules, to the top of
@@ -733,7 +733,9 @@ void pc_main(u32 magic, struct mb_info *mb) {
     u32 room = pc_heap_free_bytes >> 20;
     room = room > 160 + 32 ? room - 160 : 32;
     mb_arena = 32;
-    while (mb_arena * 2 <= room && mb_arena < 1024) mb_arena *= 2;
+    /* the 64-bit word's MMU reaches 1 GB of addresses, the window's end
+     * among them: 512 MB of memory there (c4ix.h MMU_UWIN_LAST) */
+    while (mb_arena * 2 <= room && mb_arena < (WB == 8 ? 512u : 1024u)) mb_arena *= 2;
   }
   machine *m = machine_new(mb_arena << 20, drives, nd, mhz);
   m->on_byte = on_byte;

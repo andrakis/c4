@@ -26,6 +26,38 @@ typedef uint8_t u8;
 typedef uint16_t u16;
 typedef int16_t i16;
 
+/* ---- the machine's word (docs/c4pc-64.md) ----
+ * 32 bits, libjs's, as c4pc has always been; or built with C4PC_W64, 64
+ * bits, native c4m's (c4m.c): the 64-bit C4IX's machine. A word is what
+ * an int is to the guest: its registers, the stack's slots, an address.
+ * The arena stays under 4 GB at either size, so an address inside it is a
+ * u32 once it is known to be inside. Device registers stay where they
+ * are and 32 bits wide: a word read of one is its value sign-extended, a
+ * word store keeps the low 32 bits (dev.c, gui.c, snd.c). The MMU (mmu.c)
+ * walks tables of words: 1,024 entries of 4 bytes, or 512 of 8. The games'
+ * accelerators (games/) are the 32-bit machine's only, so far. */
+#ifdef C4PC_W64
+typedef int64_t word;
+typedef uint64_t uword;
+#define WB 8                           /* bytes */
+#define WSH 3                          /* log2 WB */
+#define WBITS 64
+#define C4PC_HAS_MMU 1
+#else
+typedef int32_t word;
+typedef uint32_t uword;
+#define WB 4
+#define WSH 2
+#define WBITS 32
+#define C4PC_HAS_MMU 1
+#endif
+/* a word's bytes, low first, at p */
+static inline word word_le(const uint8_t *p) {
+  uword v = 0;
+  for (int k = 0; k < WB; k++) v |= (uword)p[k] << (8 * k);
+  return (word)v;
+}
+
 /* ---- opcodes (c4m.js OP) ---- */
 enum {
   OP_LEA, OP_IMM, OP_JMP, OP_JSR, OP_BZ, OP_BNZ, OP_ENT, OP_ADJ,
@@ -185,33 +217,35 @@ typedef struct mmu {
   i32 cwins[12]; int ncwins;           /* lo, len, off of each code window kept */
   i32 misses, faults;
   int on, general;
-  i32 ptbr, ksp, iopm, faddr, finfo, fpc;
-  i32 s_lo, s_len, s_off, c_lo, c_len, c_off;   /* the stack and code windows */
-  i32 pte_at;                          /* probe's: the word the entry was read from */
-  i32 fpu_v;
+  word ptbr, ksp, iopm, faddr, finfo, fpc;
+  word s_lo, s_len, s_off, c_lo, c_len, c_off;   /* the stack and code windows */
+  word pte_at;                         /* probe's: the word the entry was read from */
+  word fpu_v;
   /* a block opcode a fault stopped part way (block) */
-  struct { int has; i32 op, pc, sp, ptbr, d, s, n, k; } part;
+  struct { int has; word op, pc, sp, ptbr, d, s, n, k; } part;
   void *jb;                            /* where a fault goes (a c4_jmp_buf), or 0 */
 } mmu;
 
 struct machine {
   /* the arena: size is a power of two, and wmask makes every word index
    * one inside it (libjs's typed arrays read 0 past the end instead) */
-  u8 *u8; i32 *w; u32 size, wmask, stack_top;
+  u8 *u8; word *w; u32 size, wmask, stack_top;
   /* registers */
-  i32 pc, sp, bp, a, mode;
+  word pc, sp, bp, a, mode;
   i64 cycle, skipped;
-  i32 trap_handler, cycle_interval, cycle_handler, trap_pc, trap_restores_interval;
+  word trap_handler, cycle_interval, cycle_handler, trap_pc, trap_restores_interval;
   int b_fired; i64 b_next_irq;
-  i32 sigh[64];                    /* signal handlers, 0..63 */
-  i32 pending_signal;
+  word sigh[64];                   /* signal handlers, 0..63 */
+  word pending_signal;
   i64 missed_traps;
-  i32 tt, tp, hnd, jmode, jinterval;
+  word tt, tp, hnd, jmode, jinterval;
   i32 irq_hold;
   int no_fpu;
   /* the accelerators' loader (INFO's C4I_ACCEL; --no-accel) and the OS
    * modules' switch (--no-osaccel, ACC_OS): accel.c */
   int accel, osaccel;
+  /* INFO as native c4m's, no devices announced (c4pc-host --c4m) */
+  int c4m_info;
   /* the display, when one is fitted (gui.c): the registers at 0x400-0x47F */
   gui *gui;
   /* the sound card, when one is fitted (snd.c): the registers at 0x480-0x4FF */
@@ -278,10 +312,10 @@ struct machine {
   machine *dv;
   struct smp *smp;
   int cpu_id, cpu_state;               /* CPU_OFF ... (smp.c) */
-  i32 local[64];                       /* the CPU-local window, 0x800-0x8FF */
+  word local[64];                      /* the CPU-local window, 64 words from 0x800 */
   volatile int ipi_pending;
   int ipi_at_trap;                     /* for tests: an IPI only as a trap enters its handler */
-  i32 wait_addr, wait_val, cpu_status;
+  word wait_addr, wait_val; i32 cpu_status;
   i64 wake_at;
   /* the parallel engine's (par.c): a CPU other than 0, which asks CPU 0
    * for the devices and takes none of their interrupts; and serving,
@@ -302,7 +336,7 @@ static inline void swap_unlock(machine *m) { __atomic_store_n(&m->dv->swap_lk, 0
 #define C4I_SMP 0x100
 #define C4I_PAR 0x20000                  /* libjs's: the CPUs run at once, a thread each */
 #define LOCAL_BASE 0x800
-#define LOCAL_END  0x900
+#define LOCAL_END  (0x800 + 64 * WB)       /* 0x900, or at 64 bits 0xA00 */
 enum { CPU_OFF, CPU_RUN, CPU_WAIT, CPU_SLEEP, CPU_HALT };
 typedef struct smp {
   int n; i32 quantum;
@@ -316,16 +350,16 @@ typedef struct par par;
 /* n CPUs on m0's machine, a quantum of instructions each in turn */
 smp *smp_new(machine *m0, int n, i32 quantum);
 int smp_run(smp *s, i64 max_cycles);
-int smp_op(machine *m, i32 op);        /* CPUI ... IPI, on the CPU that runs it */
+int smp_op(machine *m, word op);        /* CPUI ... IPI, on the CPU that runs it */
 i64 machine_clock(machine *m);         /* the machine's cycles: the round robin's with CPUs */
 void smp_cpu_reset(machine *m);        /* as at power-on, and when a CPU is started */
 /* the parallel engine (par.c): the CPUs other than 0 on the host's own,
  * how many the machine then has */
 int par_start(smp *s);
 int par_run0(smp *s, i64 max_cycles);
-int par_op(machine *m, i32 op);
-int par_sys(machine *m, i32 op);       /* a STOP, or -1 for sys's own way */
-i32 par_rd32(machine *m, u32 a);
+int par_op(machine *m, word op);
+int par_sys(machine *m, word op);       /* a STOP, or -1 for sys's own way */
+word par_rd32(machine *m, u32 a);
 void par_wr(machine *m, u32 a, i32 v, int w8);
 void par_emit(machine *m, const u8 *b, u32 n);
 i64 par_clock(smp *s);
@@ -376,53 +410,56 @@ mmu *mmu_new(machine *m);              /* fitted, off until the guest turns it o
 void mmu_reset(mmu *u);
 void mmu_rethrow(mmu *u);              /* the fault u has recorded, raised (par.c) */
 int mmu_run(mmu *u, i64 max_cycles);
-i32 mmu_read32(mmu *u, i32 x);         /* its registers, kernel mode's */
-void mmu_write32(mmu *u, i32 x, i32 v);
+word mmu_read32(mmu *u, word x);       /* its registers, kernel mode's */
+void mmu_write32(mmu *u, word x, word v);
 /* user mode's loads and stores for sys(), the FPU, OPCD: a fault goes to
  * the innermost catch (u->jb) */
-i32 mmu_ld32(mmu *u, i32 x);
-i32 mmu_ld8(mmu *u, i32 x);
+word mmu_ld32(mmu *u, word x);
+word mmu_ld8(mmu *u, word x);
 /* the physical page at va for a read or a write, or the fault (accel.c) */
-i32 mmu_frame(mmu *u, i32 va, int write);
-void mmu_st32(mmu *u, i32 x, i32 v);
-void mmu_st8(mmu *u, i32 x, i32 v);
-int mmu_block(mmu *u, i32 op);         /* MSET, MCMP, MCPY in user mode */
-i32 mmu_peek(mmu *u, i32 pc);
+word mmu_frame(mmu *u, word va, int write);
+void mmu_st32(mmu *u, word x, word v);
+void mmu_st8(mmu *u, word x, word v);
+int mmu_block(mmu *u, word op);         /* MSET, MCMP, MCPY in user mode */
+word mmu_peek(mmu *u, word pc);
 i64 mmu_dma_check(mmu *u, u32 addr, i32 len, int write, int pin);
 /* the kernel's map of user addresses (arena.js pteWord, kernelPte, kernelPhys) */
 i64 pte_word(machine *m, u32 dir, u32 va);
-i32 kernel_pte(machine *m, u32 udir, u32 x);
+word kernel_pte(machine *m, u32 udir, u32 x);
 i64 kernel_phys(machine *m, u32 udir, u32 x, int pin);
 
-/* the engine's, for mmu.c */
-i32 m_ld32(machine *m, i32 x);
-void m_st32(machine *m, i32 x, i32 v);
-int eng_trap(machine *m, i32 type, i32 param, i32 handler);
+/* the engine's, for mmu.c and the devices: a word's load and store at
+ * any address (m_ld32 and m_st32 are their names on the 32-bit machine) */
+word m_ldw(machine *m, word x);
+void m_stw(machine *m, word x, word v);
+#define m_ld32 m_ldw
+#define m_st32 m_stw
+int eng_trap(machine *m, word type, word param, word handler);
 int eng_halt(machine *m, i32 status);
-i32 eng_ld8(machine *m, i32 x);
-void eng_st8(machine *m, i32 x, i32 v);
-i32 eng_guard_lo(machine *m);
+i32 eng_ld8(machine *m, word x);
+void eng_st8(machine *m, word x, word v);
+word eng_guard_lo(machine *m);
 /* an accelerator (accel.c): a STOP, or -1 for a number nobody has */
-int accel_op(machine *m, i32 op);
-int eng_sys(machine *m, i32 op);
+int accel_op(machine *m, word op);
+int eng_sys(machine *m, word op);
 i64 eng_boundary(machine *m, i64 cycle, i64 next_irq);
 int eng_need_checks(machine *m);
-void eng_opv_trap(machine *m, i32 op);
+void eng_opv_trap(machine *m, word op);
 int eng_run_plain(machine *m, i64 max_cycles);
-void eng_rom_store(machine *m, i32 x, i32 v);
-i32 eng_bus_rd32(machine *m, u32 a);
+void eng_rom_store(machine *m, word x, word v);
+word eng_bus_rd32(machine *m, u32 a);
 i32 eng_bus_rd8s(machine *m, u32 a);
-void eng_bus_wr32(machine *m, u32 a, i32 v);
+void eng_bus_wr32(machine *m, u32 a, word v);
 void eng_bus_wr8(machine *m, u32 a, i32 v);
-static inline int has_operand(i32 i) {
+static inline int has_operand(word i) {
   return i <= OP_ADJ || i == OP_JSRI || i == OP_JSRS || (i >= OP_LDL && i <= OP_IMMP) || i == OP_STL;
 }
-static inline int is_plain_op(i32 i) {
+static inline int is_plain_op(word i) {
   return (i >= OP_LEV && i <= OP_MOD) || i == OP__JMP || i == OP__ADJ || i == OP_C4CY ||
          i == OP_JMPA || i == OP_LIP || i == OP_ADDL || i == OP_POPA || (i >= OP_LH && i <= OP_LCU);
 }
 /* the ROM a guest never stores to: below 0x20, and the opcode names */
-static inline int is_rom(i32 x, i32 n) {
+static inline int is_rom(word x, word n) {
   i64 lo = x, hi = lo + n;
   return (lo < 0x20 && hi > 0) || (lo < OPNAMES_ROM + (i64)(INS_SIZE * 5) && hi > OPNAMES_ROM);
 }
@@ -431,14 +468,16 @@ static inline int is_rom(i32 x, i32 n) {
 typedef struct obuf { u8 *b; u32 n, cap; } obuf;
 void ob_put(obuf *o, int c);
 void ob_puts(obuf *o, const char *s);
-void fmt_format(obuf *out, const u8 *fmt, u32 fmtlen, const i32 *args, int nargs,
-                u32 (*str)(void *ctx, u32 addr, const u8 **p), void *ctx);
+void fmt_format(obuf *out, const u8 *fmt, u32 fmtlen, const word *args, int nargs,
+                u32 (*str)(void *ctx, uword addr, const u8 **p), void *ctx);
 
 /* the FPU (fpu.c) */
-i32 fpu_float(i32 op, i32 a, i32 b);
-int fpu_double_plain(i32 *w, i32 op, i32 a, i32 ib, i32 ir, i32 *res);
-int fpu_op(machine *m, u32 sp, i32 *res);   /* 0: no such sub-op */
-i32 flt_op(machine *m, u32 sp);
+word fpu_float(word op, word a, word b);
+/* a double's sub-op on plain memory: a, b and r byte addresses in mem (a
+ * the operand itself for 23 and 25) */
+int fpu_double_plain(u8 *mem, word op, word a, uword b, uword r, word *res);
+int fpu_op(machine *m, uword sp, word *res);   /* 0: no such sub-op */
+word flt_op(machine *m, uword sp);
 float f32_of(i32 bits);
 i32 bits_of_f32(float f);
 
@@ -489,7 +528,7 @@ void gui_stats(gui *g, u32 *commands, u32 *presents, u32 *events, u32 *flips);
 i64 dev_dma(machine *m, u32 addr, i32 len, int write, int pin);
 u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out);
 i64 mmu_dma_space(machine *m, u32 ptbr, u32 addr, i32 len, int write);
-i32 mmu_ptbr(mmu *u);
+word mmu_ptbr(mmu *u);
 void plat_fatal(const char *msg);      /* never returns */
 /* CD drives (cdrom.c): the PC's, from base on (pc.c); and an ISO image's (c4pc-host --cdrom) */
 int cdrom_find(drive **drives, int *nd, int max, int base, void (*log)(const char *));

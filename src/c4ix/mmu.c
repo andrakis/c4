@@ -207,18 +207,25 @@ static int mmu_kpage() {
     return p;
 }
 
+// A directory and a table are each a page of words: 1,024 entries on the
+// 32-bit word, the i386's shape, and 512 on the 64-bit (docs/c4pc-64.md),
+// where a directory's entry covers 2 MB, not 4, and the two levels 1 GB.
+// Constants either way: the compiler folds them.
+#define MMU_PTES (MMU_PAGE / sizeof(int))
+#define MMU_DSHIFT (22 - (sizeof(int) >> 3))
+
 // VA's entry in directory DIR, if it has a table for it: 0 if not. D and VA
 // are plain variables, read more than once.
-#define MMU_PTE0(d, va) (((d)[((va) >> 22) & 1023] & PTE_P) ? (int *)((d)[((va) >> 22) & 1023] & ~(MMU_PAGE - 1)) + (((va) >> 12) & 1023) : (int *)0)
+#define MMU_PTE0(d, va) (((d)[((va) >> MMU_DSHIFT) & (MMU_PTES - 1)] & PTE_P) ? (int *)((d)[((va) >> MMU_DSHIFT) & (MMU_PTES - 1)] & ~(MMU_PAGE - 1)) + (((va) >> 12) & (MMU_PTES - 1)) : (int *)0)
 
 // ... and the table itself, for a loop over its pages
-#define MMU_TBL(d, va) (((d)[((va) >> 22) & 1023] & PTE_P) ? (int *)((d)[((va) >> 22) & 1023] & ~(MMU_PAGE - 1)) : (int *)0)
+#define MMU_TBL(d, va) (((d)[((va) >> MMU_DSHIFT) & (MMU_PTES - 1)] & PTE_P) ? (int *)((d)[((va) >> MMU_DSHIFT) & (MMU_PTES - 1)] & ~(MMU_PAGE - 1)) : (int *)0)
 
 // VA's entry in directory DIR, its table made if MAKE; 0 if there is none
 static int *mmu_pte(int *dir, int va, int make) {
     int *pt;
     int pde;
-    pde = dir[(va >> 22) & 1023];
+    pde = dir[(va >> MMU_DSHIFT) & (MMU_PTES - 1)];
     if (!(pde & PTE_P)) {
         if (!make || !(pt = (int *)(dir == mmu_kdir ? mmu_kpage() : mmu_page()))) return 0;
         // Looked at again under the lock: a program's malloc takes no kernel
@@ -227,18 +234,18 @@ static int *mmu_pte(int *dir, int va, int make) {
         // what the first had written there: a block's first pages, "not
         // mapped" when they were touched.
         klock_take(mmu_ulock);
-        pde = dir[(va >> 22) & 1023];
+        pde = dir[(va >> MMU_DSHIFT) & (MMU_PTES - 1)];
         if (pde & PTE_P) {
             if (dir == mmu_kdir) { *pt = mmu_kfreepage; mmu_kfreepage = (int)pt; }
             else mmu_page_free((int)pt);
             pt = (int *)(pde & ~(MMU_PAGE - 1));
         } else {
             ++mmu_ntables;
-            dir[(va >> 22) & 1023] = (int)pt | PTE_P;
+            dir[(va >> MMU_DSHIFT) & (MMU_PTES - 1)] = (int)pt | PTE_P;
         }
         klock_drop(mmu_ulock);
     } else pt = (int *)(pde & ~(MMU_PAGE - 1));
-    return pt + ((va >> 12) & 1023);
+    return pt + ((va >> 12) & (MMU_PTES - 1));
 }
 
 // ... and where the heap has not even two pages in a run, pages put out
@@ -526,7 +533,7 @@ static void mmu_dir_free(int *d) {
     int k;
     if (!d || d == mmu_dir) return;
     k = 0;
-    while (k < 1024) {
+    while (k < MMU_PTES) {
         if (d[k] & PTE_P) {
             mmu_page_free(d[k] & ~(MMU_PAGE - 1));
             --mmu_ntables;
@@ -1328,10 +1335,10 @@ void mmu_init() {
     if ((base = mmu_wbase(mmu_memsize))) {
         n = mmu_npages / 128;
         if (n < MMU_CHUNK) n = MMU_CHUNK;
-        if (n > MMU_WINPAGES / 1024) n = MMU_WINPAGES / 1024;
+        if (n > MMU_WINPAGES / MMU_PTES) n = MMU_WINPAGES / MMU_PTES;
         n = n + 1;
         if (!(mmu_vpg = (int *)malloc(MMU_WINPAGES * sizeof(int))) ||
-            !(mmu_vbits = (int *)malloc(MMU_WINPAGES / 8)) ||
+            !(mmu_vbits = (int *)malloc(MMU_WINPAGES / 32 * sizeof(int))) ||
             !(mmu_kdir = (int *)mmu_page()) || !mmu_kfill(n)) {
             klog("mmu: no memory for its tables; left off\n");
             return;
@@ -1344,7 +1351,7 @@ void mmu_init() {
         memset((char *)mmu_fc, 0, mmu_npages * sizeof(int));
         memset((char *)mmu_fva, 0, mmu_npages * sizeof(int));
         memset((char *)mmu_vpg, 0, MMU_WINPAGES * sizeof(int));
-        memset((char *)mmu_vbits, 0, MMU_WINPAGES / 8);
+        memset((char *)mmu_vbits, 0, MMU_WINPAGES / 32 * sizeof(int));
         mmu_vbits[0] = 1;
         mmu_vnext = 1;
         mmu_uoff = base;
@@ -2054,7 +2061,7 @@ static int mmu_clock(int keep, int want) {
         if (end > MMU_WINPAGES) end = MMU_WINPAGES;
         kt = 0;
         while (i < end && n < want) {
-            k = (va >> 12) & 1023;
+            k = (va >> 12) & (MMU_PTES - 1);
             if (!kt || !k) { kt = MMU_TBL(mmu_kdir, va); ut = MMU_TBL(r->dir, va); }
             mmu_hand = ++i;
             ++seen;
@@ -2678,11 +2685,11 @@ static void mmu_tables_tidy() {
     int k, hi, p, q, e, raw, nofill;
     if (!mmu_tc || !mmu_uoff) return;
     nofill = 0;
-    hi = (mmu_uoff >> 22) + (MMU_WINPAGES >> 10);
+    hi = (mmu_uoff >> MMU_DSHIFT) + MMU_WINPAGES / MMU_PTES;
     t = task_head;
     while (t) {
         if (t->privs == PRIV_USER && !t->vfparent && (d = (int *)t->mmdir)) {
-            k = mmu_uoff >> 22;
+            k = mmu_uoff >> MMU_DSHIFT;
             while (k < hi) {
                 if ((d[k] & PTE_P) && mmu_tc[(p = d[k] & ~(MMU_PAGE - 1)) >> 12]) {
                     q = mmu_tlow();

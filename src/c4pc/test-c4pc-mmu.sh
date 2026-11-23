@@ -13,9 +13,17 @@
 # run, and the second run, which has it, is held against libjs byte for
 # byte. The .mjs's two "ring" cases need the display device, which c4pc
 # has not yet.
+#   W64=1  the 64-bit machine (docs/c4pc-64.md): c4pc-host64w and the 64-bit
+#          disk (.c4pc/disk64), held against c4pcw64.elf in QEMU rather than
+#          libjs, which has no 64-bit word
 set -u
 IMAGES=${IMAGES:-src/c4bb/images}
 W=.c4pc/mmu-cases
+HOSTB=./c4pc-host DISK=$IMAGES/disk KERN=$IMAGES/c4ix32.c4r ELF=c4pc.elf QB=qemu-system-i386 QACC="" REFN="libjs's" NULLA=0x00000004
+if [ -n "${W64:-}" ]; then
+  W=.c4pc/mmu-cases64 HOSTB=./c4pc-host64w DISK=.c4pc/disk64 KERN=.c4pc/disk64/c4ix.c4r ELF=c4pcw64.elf QB=qemu-system-x86_64 REFN="c4pc-host64w's" NULLA=0x00000008   # wild.c reads p[1]: 8 bytes in
+  [ -r /dev/kvm ] && [ -w /dev/kvm ] && QACC="-accel kvm -cpu host"
+fi
 CYC=${CYC:-20000000000}
 fail=0
 ok () { echo "  ok    $*"; }
@@ -24,15 +32,15 @@ mkdir -p $W
 # the boot disk, and wild.c beside it: a tree of links to the files
 if [ ! -f $W/disk/wild.c ]; then
   rm -rf $W/disk
-  cp -rs "$(realpath $IMAGES/disk)" $W/disk
+  cp -rs "$(realpath $DISK)" $W/disk
   node -e '
     const s = require("fs").readFileSync("libjs/tests/test-c4ix-mmu.mjs", "utf8");
     const m = /files\.set\(.wild\.c., new TextEncoder\(\)\.encode\(`([\s\S]*?)`\)\);/.exec(s);
     if (!m) { console.error("no wild.c in test-c4ix-mmu.mjs"); process.exit(1); }
     process.stdout.write(new Function("return `" + m[1] + "`")());' > $W/disk/wild.c || exit 1
 fi
-cp $IMAGES/c4ix32.c4r $W/c4ix32.c4r
-host () { timeout 900 ./c4pc-host -s --mmu --no-accel --no-osaccel -m 64 -c $CYC -d $W/disk $W/c4ix32.c4r < $1 > $2 2> $3; }
+cp $KERN $W/c4ix32.c4r
+host () { timeout 900 $HOSTB -s --mmu --no-accel --no-osaccel -m 64 -c $CYC -d $W/disk $W/c4ix32.c4r < $1 > $2 2> $3; }
 
 # every case, the victim's address and its physical one in the pokes
 cases () {
@@ -57,10 +65,12 @@ host $W/in.txt $W/host.out $W/host.err
 st=$?
 [ "$(victim $W/host.out)" = "$va" ] && ok "the victim's word is where it was" || bad "the victim's word moved, to $(victim $W/host.out)"
 [ $st = 0 ] && ok "c4pc-host: the session ends with status 0" || bad "c4pc-host: status $st"
+if [ -z "${W64:-}" ]; then
 timeout 1800 node libjs/cli.js -s --mmu --no-accel --no-osaccel -m 64 -c $CYC -d $W/disk $W/c4ix32.c4r \
   < $W/in.txt > $W/libjs.out 2> $W/libjs.err
 st=$?
 [ $st = 0 ] && ok "libjs: the session ends with status 0" || bad "libjs: status $st"
+fi
 
 o=$W/host.out
 has () { grep -qE "$2" $o && ok "$1" || bad "$1"; }
@@ -70,7 +80,7 @@ has "wild poke (the victim's word): a page fault" "page fault: write to 0x0*${va
 has "wild stack: a page fault" "page fault: write to 0x[0-9a-f]+ \(the stack guard of task wild\.c4r, not mapped\).*killed"
 has "wild text: a page fault" "page fault: write to 0x[0-9a-f]+ \(task wild\.c4r, not allowed\).*killed"
 has "wild exec: a page fault" "page fault: jump to 0x[0-9a-f]+ \(task wild\.c4r, not allowed\).*killed"
-has "wild null: a page fault" "page fault: read of 0x00000004 \(page 0, not allowed\).*killed"
+has "wild null: a page fault" "page fault: read of $NULLA \(page 0, not allowed\).*killed"
 has "wild disk (a name in the kernel's memory): a device's page fault" "page fault: a device's read of 0x00002000 \(the kernel's image, not mapped\).*killed"
 has "wild poke (the victim's word's physical address): a page fault" "page fault: write to 0x0*${pa#0x} \([^)]*, not mapped\).*killed"
 grep -qE "wild: (wrote it|came back|read )" $o && bad "no wild write, jump or read got through" || ok "no wild write, jump or read got through"
@@ -78,29 +88,36 @@ has "the kernel carries on" "^the kernel is fine$"
 has "dmesg has the MMU coming on" "\] mmu: "
 has "dmesg has the faults" "\] c4ix: task [0-9]+ \(wild\.c4r\): page fault: write to 0x00002000"
 has "the victim's word was never touched" "victim: intact"
+ch=$(sed -n 's/^c4pc: \([0-9]*\) cycles.*/\1/p' $W/host.err)
+if [ -z "${W64:-}" ]; then
 if cmp -s $W/libjs.out $W/host.out; then ok "c4pc-host's output is libjs's, byte for byte"
 else bad "c4pc-host's output differs from libjs's:"; diff $W/libjs.out $W/host.out | head -20; fi
 cl=$(grep -o '^libjs: [0-9]* cycles' $W/libjs.err | grep -o '[0-9]*')
-ch=$(sed -n 's/^c4pc: \([0-9]*\) cycles.*/\1/p' $W/host.err)
 [ -n "$cl" ] && [ "$cl" = "$ch" ] && ok "the same cycles on both ($cl)" || bad "cycles: libjs $cl, c4pc-host $ch"
 grep -h 'inst/s' $W/libjs.err $W/host.err | sed 's/^/        /'
+else
+  # the 64-bit machine: c4pc-host64w is what QEMU is held against
+  cp $W/host.out $W/libjs.out; cl=$ch
+  grep -h 'inst/s' $W/host.err | sed 's/^/        /'
+fi
 
 # the second run's cases on c4pc.elf in QEMU: the bare PC's way out of a
 # fault (pc/boot.S c4_longjmp), which the session alone may never take
-Q=${QEMU:-$(command -v qemu-system-i386 || echo ~/opt/pctools/bin/qemu-system-i386)}
-if [ -n "${NO_QEMU:-}" ] || [ ! -x "$Q" ] || [ ! -f c4pc.elf ]; then
+Q=${QEMU:-$(command -v $QB || echo ~/opt/pctools/bin/$QB)}
+[ -n "${W64:-}" ] && Q=${QEMU64:-$Q}
+if [ -n "${NO_QEMU:-}" ] || [ ! -x "$Q" ] || [ ! -f $ELF ]; then
   echo "  skip  the cases on c4pc.elf in QEMU"
 else
   [ $W/disk.tar -nt $W/disk/wild.c ] || tar --format=ustar -h -C $W/disk -cf $W/disk.tar .
   rm -f $W/serial.txt
-  timeout 1800 "$Q" -machine vmport=off -m 512 -display none -no-reboot -serial file:$W/serial.txt \
-    -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
+  timeout 1800 "$Q" $QACC -machine vmport=off -m 512 -display none -no-reboot -serial file:$W/serial.txt \
+    -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel $ELF \
     -append "--no-cdrom -s --mmu --no-accel --no-osaccel -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
   st=$?
   [ $st = 1 ] && ok "c4pc.elf in QEMU: the session ends with status 0" || bad "c4pc.elf in QEMU: QEMU's status $st"
   tr -d '\r' < $W/serial.txt | grep -v '^c4pc: ' > $W/qemu.out
-  if cmp -s $W/libjs.out $W/qemu.out; then ok "c4pc.elf's output in QEMU is libjs's, byte for byte"
-  else bad "c4pc.elf's output in QEMU differs from libjs's:"; diff $W/libjs.out $W/qemu.out | head -20; fi
+  if cmp -s $W/libjs.out $W/qemu.out; then ok "$ELF's output in QEMU is $REFN, byte for byte"
+  else bad "$ELF's output in QEMU differs:"; diff $W/libjs.out $W/qemu.out | head -20; fi
   cq=$(tr -d '\r' < $W/serial.txt | sed -n 's/^c4pc: \([0-9]*\) cycles.*/\1/p')
   [ "$cl" = "$cq" ] && ok "the same cycles in QEMU ($cq)" || bad "cycles: libjs $cl, QEMU $cq"
   tr -d '\r' < $W/serial.txt | grep 'inst/s' | sed 's/^/        /'

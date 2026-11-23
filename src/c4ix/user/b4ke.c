@@ -23,8 +23,10 @@
 //   # ...                      comment
 //   SET NAME word ...          $(NAME) is replaced by the words in every
 //                              later line; $(DIR) is the build file's directory,
-//                              and $(STACK), if set, is the stack in bytes
-//                              each RUN's program gets
+//                              $(WORD) the machine's word in bytes (4, or 8 on
+//                              the 64-bit C4IX; NAME=VALUE overrides it), and
+//                              $(STACK), if set, is the stack in bytes each
+//                              RUN's program gets
 //   ECHO text                  progress
 //   CD DIR                     later steps run in DIR
 //   MKDIR DIR                  make DIR and any parents it needs
@@ -763,6 +765,9 @@ int main(int argc, char **argv) {
     if (dir && uchdir(dir) < 0) { ufprintf(STDERR, "b4ke: no such directory: %s\n", dir); return 1; }
     if (ugetcwd(b4_dir, B4_PATH) < 0) { b4_dir[0] = '/'; b4_dir[1] = 0; }
     b4_set("DIR", b4_dir, 1);
+    // the word this C4IX runs on: what it builds is for it (src/c4ix/BUILD.B4K
+    // passes -D C4IX_WORD$(WORD), and c4ix.h has 64-bit file positions on 8)
+    if (b4_find("WORD", 4) < 0) b4_set("WORD", sizeof(int) == 8 ? "8" : "4", 1);
 
     if (!(text = b4_slurp(b4_file, &len))) {
         ufprintf(STDERR, "b4ke: cannot read %s in %s\n", b4_file, b4_dir);

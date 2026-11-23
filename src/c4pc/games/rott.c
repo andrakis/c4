@@ -2,6 +2,7 @@
  * C: the renderer's innermost loops and the 64-bit fixed-point helpers.
  * c4/c4accel.h is the game's side (RA_*). */
 #include "../accel.h"
+#if WB == 4                            /* the 32-bit machine's games (c4pc.h) */
 
 /* RA_COL (n, frac, step, sh, sgn, src, shade, dest, stride): a column */
 static i32 col(machine *m) {
@@ -197,3 +198,4 @@ static i32 fixscale(machine *m) {
 
 const acc_fn acc_rott[] = {col, trans, row, rotrow, sky, fixmul, fixmulshift, fixdiv2, fixscale, tile, post};
 const int acc_rott_n = sizeof acc_rott / sizeof acc_rott[0];
+#endif

@@ -2,6 +2,7 @@
  * the track's mode 7 spans, the blits and their blends, and -demo's frame
  * hash. c4/c4accel.h is the game's side (SA_*). */
 #include "../accel.h"
+#if WB == 4                            /* the 32-bit machine's games (c4pc.h) */
 
 /* C's int division as accel.mjs's (a / b) | 0: toward zero, the quotient's
  * low word, 0 for b 0 (b may be -INT_MIN, so a wide one) */
@@ -338,3 +339,4 @@ static i32 text(machine *m) {
 
 const acc_fn acc_sbk[] = {hash, pixels, runs, edge, pen, row, tint, any, stretch1, stretchw, text};
 const int acc_sbk_n = sizeof acc_sbk / sizeof acc_sbk[0];
+#endif

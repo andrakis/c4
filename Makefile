@@ -3236,6 +3236,28 @@ c4pc64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4P
 		-Wl,--no-warn-rwx-segments -o .c4pc/c4pc64.elf64 $(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c \
 		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/vmware.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 	objcopy -I elf64-x86-64 -O elf32-i386 .c4pc/c4pc64.elf64 $@
+# The 64-bit machine (docs/c4pc-64.md): the same source built with
+# C4PC_W64, its word native c4m's, for the 64-bit C4IX (c4ix.c4r, lc64).
+# c4pc-host64w is its Linux front end, held against native c4m; c4pcw64.elf
+# the PC's, an x86-64 kernel as c4pc64.elf is (that one is the 32-bit
+# machine built for x86-64).
+c4pc-host64w: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
+	$(NATIVE_CC) $(C4PC_CFLAGS) -DC4PC_W64 -I$(C4PC_SRC) $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) .c4pc/fontdata.c .c4pc/opltables.c -o $@ -lm -pthread
+c4pcw64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/vmware.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
+	$(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
+	gcc $(C4PC_BARE64_CFLAGS) -DC4PC_W64 -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
+		-Wl,--no-warn-rwx-segments -o .c4pc/c4pcw64.elf64 $(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c \
+		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/vmware.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
+	objcopy -I elf64-x86-64 -O elf32-i386 .c4pc/c4pcw64.elf64 $@
+# ... the ISO's 64-bit system
+C4PC_ISO64 := c4pcw64.elf .c4pc/disk64.tar $(C4PC_SRC)/pc/grub-disk64.cfg
+# The 64-bit system's disk: C4IX, its libraries, programs, desktop and
+# toolchain compiled by lc64 (disk64.sh, build-images.sh's counterpart)
+C4PC_D64_SRCS := $(wildcard src/c4ix/*.c src/c4ix/*.h src/c4ix/lib/*.c src/c4ix/include/* src/c4ix/user/*.c \
+	src/c4ix/user/desktop/* src/c4ix/libc/*.c src/c4ix/libc/include/*.h src/winkit/* libjs/guest/*) src/c4bb/fs/c4ix.vfs.txt
+.c4pc/disk64.tar: c4ix.c4r c4sc.c4r c4cc cpp.c4r c4ke.c4r $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) $(C4PC_SRC)/disk64.sh $(C4PC_D64_SRCS)
+	bash $(C4PC_SRC)/disk64.sh
+	tar --format=ustar --sort=name -C .c4pc/disk64 -cf $@ .
 
 # The DOS loader (src/c4pc/dos): boots c4pc.elf from DOS, for DOSBox.
 # gcc -m16 is 32-bit C run in real mode, in one 64 KB segment.
@@ -3309,10 +3331,14 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 # with the i386-pc modules (~/opt/pctools/bin/grub-mkrescue-pc on helios).
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue-pc || echo grub-mkrescue)
 c4pc.iso: c4pc.elf c4pc64.elf .c4pc/diskz.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg \
-          .c4pc/grub/c4pc-core.img $(C4PC_SRC)/pc/grub-disk.cfg
+          .c4pc/grub/c4pc-core.img $(C4PC_SRC)/pc/grub-disk.cfg $(C4PC_ISO64)
 	rm -rf .c4pc/iso && mkdir -p .c4pc/iso/boot/grub
 	cp c4pc.elf c4pc64.elf .c4pc/kernel/c4ix32.c4r .c4pc/iso/boot/
 	cp .c4pc/diskz.tar .c4pc/iso/boot/disk.tar
+	@# the 64-bit system (docs/c4pc-64.md): its machine, kernel and disk
+	cp c4pcw64.elf .c4pc/disk64.tar .c4pc/iso/boot/ && cp .c4pc/disk64/c4ix.c4r .c4pc/iso/boot/c4ix64.c4r
+	@# ... and the menu install writes for it where the word is 64 bits (install.c)
+	cp $(C4PC_SRC)/pc/grub-disk64.cfg .c4pc/iso/boot/grub/disk64.cfg
 	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
 	cp .c4pc/grub/c4pc-boot.img .c4pc/grub/c4pc-core.img .c4pc/iso/boot/grub/
 	cp $(C4PC_SRC)/pc/grub-disk.cfg .c4pc/iso/boot/grub/disk.cfg
@@ -3347,8 +3373,10 @@ PHONY += c4pc-dos
 # C4IX's boot test from test-libjs (ps, then exit) on three machines:
 # libjs, c4pc-host, and c4pc.elf in QEMU when there is a qemu-system-i386,
 # each output byte for byte the others'. Not in the gate yet.
-test-c4pc: c4pc-host c4pc.elf .c4pc/disk.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP)
-	IMAGES=$(C4PC_IMAGES) bash $(C4PC_SRC)/test-c4pc.sh
+# ... and the 64-bit machine (test-c4pc64.sh: c4pc-host64w, c4pcw64.elf, the
+# 64-bit disk; NO_W64=1 leaves it out)
+test-c4pc: c4pc-host c4pc.elf .c4pc/disk.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP) $(if $(NO_W64),,c4pc64-test-deps)
+	IMAGES=$(C4PC_IMAGES) C4IX_PROGS="$(C4IX_PROGS)" bash $(C4PC_SRC)/test-c4pc.sh
 PHONY += test-c4pc
 
 # C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is
@@ -3473,6 +3501,17 @@ c4ix-%.c4r: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) libc4ix.c4l $(C4IX_SRC)/user/%.c
 # top reads the CPU accounting through cpustat.h, as System Monitor does
 c4ix-top.c4r: $(C4IX_SRC)/include/cpustat.h
 
+# What test-c4pc64.sh holds the 64-bit machine against: native c4m and
+# c4mp's images, test-c4ix's programs, the test programs
+# (test-c4ix's programs by c4pc64-progs, below C4IX_PROGS: a rule's
+# prerequisites are expanded where it is read, and here the list was empty)
+c4pc64-test-deps: c4pc-host64w c4pcw64.elf .c4pc/disk64.tar c4m c4sc-host c4ix.c4r c4pc64-progs \
+                  c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TESTS_C4R)
+PHONY += c4pc64-test-deps
+test-c4pc64: c4pc64-test-deps
+	C4IX_PROGS="$(C4IX_PROGS)" bash $(C4PC_SRC)/test-c4pc64.sh
+PHONY += test-c4pc64
+
 # X3 boot pins: the linked kernel boots natively on c4m (preemptive,
 # user tasks behind protected mode). It once also booted degraded on
 # plain c4 through the c4l loader; C4IX images now use C4CY, PUTC,
@@ -3498,6 +3537,10 @@ C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-b4ke.c4r c4ix-cc.c4r c4ix-dmesg.c4r c4ix-free.c4r c4ix-mount.c4r c4ix-umount.c4r \
               c4ix-df.c4r c4ix-cp.c4r c4ix-mkfs.c4r c4ix-chmod.c4r \
               c4ix-shutdown.c4r c4ix-reboot.c4r c4ix-install.c4r $(C4IX_ARC_PROGS)
+# test-c4pc64.sh's (c4pc64-test-deps, above): the programs, and the
+# library ls loads beside them
+c4pc64-progs: $(C4IX_PROGS) libc4ix.c4s
+PHONY += c4pc64-progs
 # The demonstrations are opt-in (--demo) and take their six images
 # positionally; `c4ix.c4r --help` documents the roles. With no
 # arguments at all the kernel boots to a shell, which is what

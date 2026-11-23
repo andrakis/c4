@@ -105,6 +105,7 @@ node libjs/tests/test-c4r.mjs    || fail=1
 node libjs/tests/test-opdoc.mjs  || fail=1
 node libjs/tests/test-heap.mjs   || fail=1
 node libjs/tests/test-sheap.mjs  || fail=1
+node libjs/tests/test-sswap.mjs  || fail=1   # the swap pages on threads (sswap.js)
 node libjs/tests/test-gui.mjs    || fail=1
 node libjs/tests/test-snd.mjs    || fail=1   # the sound card: a sample in one write (PCM_START), whoever else is playing; the OPL3 mode a program leaves on
 node libjs/tests/test-shared.mjs || fail=1
@@ -150,6 +151,7 @@ part_swap () {
 node libjs/tests/test-c4ix-swap.mjs || fail=1   # swap: more memory than there is, out to the host and back
 CPUS=2 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... with pages going from a task another CPU runs (IPI shootdown)
 CPUS=2 IPI_AT_TRAP=1 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... each IPI landing as a trap enters its handler
+CPUS=2 PARALLEL=1 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... on threads, the pages shared (sswap.js)
 node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # a program's free and another's malloc at once, no kernel lock
 PARALLEL=1 node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # ... on threads
 node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # more programs than memory, on threads: load control, and memory in one piece after

@@ -30,6 +30,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMachine, boot } from '../boot.js';
+import { STOP } from '../c4m.js';
 import { typeBytes } from '../keys.js';
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
@@ -145,7 +146,19 @@ const vm = createMachine({ arenaMb: MB, mhz: 100, mmu: true, cpus: CPUS,
 if (process.env.IPI_AT_TRAP && vm.smp) for (const m of vm.smp.machines) m.ipiAtTrap = true;
 boot(vm, new Uint8Array(readFileSync(process.env.C4IX_IMAGE || join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
 const text = (from = 0) => Buffer.from(out.slice(from)).toString('latin1');
-const until = (cond, budget) => { for (let i = 0; i < budget && !cond() && !vm.dev.halted; i++) vm.run(2e6); return cond(); };
+// On threads (PARALLEL=1) CPU 0 sleeps and parks for real, and answers
+// the others meanwhile, as test-c4ix-par.mjs and cli.js have it do
+const par = vm.smp && vm.smp.parallel ? vm.smp : null;
+const until = (cond, budget) => {
+  for (let i = 0; i < budget && !cond() && !vm.dev.halted; i++) {
+    const r = vm.run(2e6);
+    if (!par || vm.dev.halted) continue;
+    par.service();
+    if (r === STOP.SLEEP && par.othersRunning()) par.sleepSync(vm.dev.napMs);
+    else if (r === STOP.PARK || r === STOP.CPUHALT || vm.cpuState !== 'run') par.parkSync(10);
+  }
+  return cond();
+};
 let fail = 0;
 const check = (ok, what, detail) => {
   console.log(`test-c4ix-swap: ${what} ${ok ? 'OK' : 'FAILED'}`);

@@ -230,7 +230,7 @@ export class Arena {
     let page = io.swapPages.get(slot) || null;
     if (!page && write) {
       if (slot >= io.swapSlots) return null;
-      io.swapPages.set(slot, page = new Uint8Array(4096));
+      page = io.swapPages.set(slot, new Uint8Array(4096)).get(slot);   // (libjs/sswap.js copies)
     }
     return { page };
   }

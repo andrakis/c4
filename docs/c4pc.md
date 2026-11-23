@@ -549,6 +549,21 @@ TIME on a CPU but 0 is its own (engine.c AP_DEV), not a round trip to CPU
 0 as the other devices are: Doom asks the time between frames, and on
 CPU 1 drew a few frames a second at 100%.
 
+**Under VMware** the clock is the host's own time, read through the
+backdoor (vmware.c: GETTIMEFULL, else GETTIME; `c4pc: the clock:
+VMware's host time`): VMware's TSC is the VM's "apparent" time, which it
+runs fast to catch up after the VM fell behind, and Quake, loading, then
+played the first ten or fifteen seconds of its demo fast. A read is a VM
+exit, a microsecond or two. Only where CPUID's hypervisor leaf says
+VMwareVMware, or with `--clock vmware`; where the host gives no time, the
+TSC as before. QEMU's vmport answers neither command (0xffffffff), so it
+is VMware's to try. In QEMU (KVM's steady TSC) Quake's demo1 lasts 75 s
+and demo2 70 s, on one processor and pinned to CPU 1 of four alike.
+
+**Frames a second**: Ctrl+Alt+F11 shows the display's frames a second
+(its presents and flips, a second at a time) in a box in the screen's
+top right corner, over a game or the desktop, and hides it again.
+
 ### Memory, and swap
 
 C4IX gets all of the PC's memory unless `-m N` says otherwise: the arena

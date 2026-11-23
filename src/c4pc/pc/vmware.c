@@ -85,6 +85,32 @@ static u32 hb_in(u32 id, u32 si, u32 bpv, u8 *p, u32 n) {
 }
 
 int vmw_present(void) { return present; }
+/* the host's time, microseconds since 1970 (BDOOR_CMD_GETTIMEFULL, 46:
+ * seconds in ESI:EDX, microseconds in EBX, EAX the magic): 1, or 0 where
+ * the host gives none. VMware's TSC is the guest's "apparent" time, run
+ * fast to catch up after the VM fell behind: Quake played the first
+ * seconds of its demo fast (pc.c's clock_vmw) */
+u32 vmw_time_regs[4];                   /* the last time call's EAX EBX EDX ESI, for the boot's diagnosis */
+static int time_cmd = 46;               /* GETTIMEFULL, else GETTIME (23: QEMU's vmport has only it) */
+int vmw_host_us(uint64_t *us) {
+  if (!present || !time_cmd) return 0;
+  if (time_cmd == 46) {
+    regs r = { 0, 0, 46, 0, 0, 0 };
+    bdoor(&r);
+    vmw_time_regs[0] = r.ax; vmw_time_regs[1] = r.bx; vmw_time_regs[2] = r.dx; vmw_time_regs[3] = r.si;
+    if (r.ax == BDOOR_MAGIC && !(r.si == 0 && r.dx < 1000000000u) && r.bx < 1000000u) {
+      *us = ((uint64_t)r.si << 32 | r.dx) * 1000000u + r.bx;
+      return 1;
+    }
+    time_cmd = 23;
+  }
+  /* GETTIME: seconds in EAX, microseconds in EBX */
+  regs r = { 0, 0, 23, 0, 0, 0 };
+  bdoor(&r);
+  if (r.ax == 0xffffffffu || r.ax == BDOOR_MAGIC || r.ax < 1000000000u || r.bx >= 1000000u) { time_cmd = 0; return 0; }
+  *us = (uint64_t)r.ax * 1000000u + r.bx;
+  return 1;
+}
 /* is this VMware's (or QEMU's vmport): 1 */
 int vmw_detect(int no_hb) {
   regs r = { 0, ~(u32)BDOOR_MAGIC, CMD_GETVERSION, 0, 0, 0 };

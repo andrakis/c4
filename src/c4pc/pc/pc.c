@@ -224,6 +224,15 @@ static i64 ticks_now(void) {
  * behind is no time since, and the clock never goes back across
  * processors (clock_seen) */
 static volatile u32 clock_seen;               /* the latest ms any processor read (since tsc_ms) */
+/* Under VMware the host's own time (vmware.c, the backdoor), from
+ * vmw_ms0 on: VMware's TSC is the guest's apparent time, which runs fast
+ * for a while after the VM fell behind (Quake played the first seconds of
+ * its demo fast, 2026-11-24). A backdoor read is a VM exit, a microsecond
+ * or two: cheaper than a game's clock that races */
+static int clock_vmw;
+static uint64_t vmw_us0;
+static i64 vmw_ms0;
+static volatile u32 vmw_seen;
 static uint64_t tsc_since(void) {
   uint64_t t = rdtsc();
   return t > tsc_at ? t - tsc_at : 0;
@@ -234,7 +243,17 @@ static uint64_t udiv64_32(uint64_t n, u32 d) {
   __asm__("divl %4" : "=a"(qlo), "=d"(r) : "a"(lo), "d"(r), "rm"(d));
   return (uint64_t)qhi << 32 | qlo;
 }
+static uint64_t udiv64_32(uint64_t n, u32 d);
 i64 plat_now_ms(void) {
+  if (clock_vmw) {
+    uint64_t us;
+    if (vmw_host_us(&us)) {
+      u32 ms = us > vmw_us0 ? (u32)udiv64_32(us - vmw_us0, 1000) : 0, seen = __atomic_load_n(&vmw_seen, __ATOMIC_RELAXED);
+      while ((i32)(ms - seen) > 0 && !__atomic_compare_exchange_n(&vmw_seen, &seen, ms, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) { }
+      if ((i32)(ms - seen) < 0) ms = seen;
+      return vmw_ms0 + ms;
+    }
+  }
   if (!tsc_per_ms) return ticks_now();
   u32 ms = (u32)udiv64_32(tsc_since(), tsc_per_ms), seen = __atomic_load_n(&clock_seen, __ATOMIC_RELAXED);
   /* behind what another processor read (its TSC a little ahead): that */
@@ -244,6 +263,10 @@ i64 plat_now_ms(void) {
 }
 /* the same in microseconds, for the sound card (snd.c) */
 double plat_now_us(void) {
+  if (clock_vmw) {
+    uint64_t us;
+    if (vmw_host_us(&us)) return (double)vmw_ms0 * 1000 + (double)(i64)(us > vmw_us0 ? us - vmw_us0 : 0);
+  }
   if (!tsc_per_ms) return (double)ticks_now() * 1000;
   return (double)tsc_ms * 1000 + (double)(i64)tsc_since() * 1000 / tsc_per_ms;
 }
@@ -321,6 +344,7 @@ static volatile int kbd_to_gui;
  *   Ctrl+Alt+F1    the text console on the screen, the keys to it
  *   Ctrl+Alt+F2    the display again */
 static volatile int want_reboot, vt_text, vt_back;
+static volatile int show_fps;           /* Ctrl+Alt+F11: frames a second, on the screen (screen_fps) */
 static int reboot_after;              /* Ctrl+Alt+Del asked: the PC restarts when C4IX ends */
 static volatile u8 scq[256];
 static volatile u32 scq_head, scq_tail;
@@ -403,6 +427,7 @@ static void key_event(gui *g, u8 sc) {
     if (sc == 0x53) { want_reboot++; return; }                   /* Del, or the keypad's */
     if (sc == 0x3B) { vt_text = 1; return; }                     /* F1: the text console */
     if (sc == 0x3C) return;                                      /* F2: the display already */
+    if (sc == 0x57) { show_fps = !show_fps; vt_back = 1; return; }  /* F11: frames a second */
   }
   if (code == 20 && !up) g_caps = !g_caps;
   int ch = 0;
@@ -430,7 +455,17 @@ static void display_tick(machine *m) {
   gui_tick(g);
   static u32 flips; static i64 flip_at = -100000;
   if (gui_flips(g) != flips) { flips = gui_flips(g); flip_at = t; }
-  if (gui_ring(g) || t - flip_at < 1000) screen_show(g);
+  if (gui_ring(g) || t - flip_at < 1000) {
+    screen_show(g);
+    /* the display's frames a second (its presents and flips: a game's,
+     * or the desktop's, which draws the windowed ones'), a second at a time */
+    if (show_fps) {
+      static i64 fps_at; static u32 fps_n0; static int fps;
+      u32 c, pr, ev, fl; gui_stats(g, &c, &pr, &ev, &fl);
+      if (t - fps_at >= 1000) { fps = fps_at ? (int)((pr + fl - fps_n0) * 1000 / (u32)(t - fps_at)) : 0; fps_at = t; fps_n0 = pr + fl; }
+      extern void screen_fps(int); screen_fps(fps);
+    }
+  }
   else screen_console(vtext, vy * 80 + vx);
   display_ms += plat_now_ms() - t;
 }
@@ -617,7 +652,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--vmware-lb")) vmware = 2;    /* ... its messages 4 bytes at a time, no high-bandwidth port */
     else if (!strcmp(args[a], "--no-acpi")) acpi = 0;        /* ACPI left be (acpi.c): off by the fixed ports, no power button */
     else if (!strcmp(args[a], "--debug-sound")) { extern void (*hda_log)(const char *); hda_log = con_puts; }
-    else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : -1; }
+    else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : !strcmp(args[a], "vmware") ? 2 : -1; }
     else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
     /* several processors (smp.c, par.c): the PC's own, one each, or taking
      * turns on this one where it has no more; all, as many as it has */
@@ -633,7 +668,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   }
 
   if (acpi) acpi_init(con_puts);       /* the power button's and off's registers (acpi.c) */
-  { const char *how = clock_init(clock_want);
+  { const char *how = clock_init(clock_want == 2 ? -1 : clock_want);
     con_puts("c4pc: the clock: "); con_puts(how);
     if (tsc_per_ms) { con_puts(", "); con_dec(tsc_per_ms / 1000); con_puts(" MHz"); }
     con_puts("\n"); }
@@ -701,6 +736,20 @@ void pc_main(u32 magic, struct mb_info *mb) {
   /* VMware's (vmware.c): its shared folders and clipboard, a drive after
    * the CDs */
   if (vmware && vmw_detect(vmware == 2)) {
+    /* the clock: the host's, on VMware (or --clock vmware: QEMU's vmport) */
+    uint64_t us;
+    u32 ha, hb, hc, hd;
+    cpuid_(0x40000000u, &ha, &hb, &hc, &hd);
+    int on_vmware = hb == 0x61774d56u && hc == 0x4d566572u && hd == 0x65726177u;   /* "VMwareVMware" */
+    if ((clock_want == 2 || (clock_want < 0 && on_vmware)) && vmw_host_us(&us)) {
+      vmw_ms0 = plat_now_ms(); vmw_us0 = us; clock_vmw = 1;
+      con_puts("c4pc: the clock: VMware's host time (its TSC is the VM's apparent time)\n");
+    } else if (clock_want == 2) {
+      extern u32 vmw_time_regs[4];
+      con_puts("c4pc: the clock: VMware's host time asked for, not given: GETTIMEFULL EAX EBX EDX ESI");
+      for (int k = 0; k < 4; k++) { con_puts(" "); con_dec(vmw_time_regs[k]); }
+      con_puts("\n");
+    }
     if (nd < 2) { drive *e = drive_new(0); e->kind = "none"; drives[nd++] = e; }
     if (nd < 16) {
       drives[nd++] = vmw_drive();

@@ -517,6 +517,7 @@ int vmw_mouse(void);
 int vmw_mouse_poll(gui *g, int locked);
 struct drive *vmw_drive(void);
 int vmw_poll(void);
+int vmw_host_us(uint64_t *us);
 void gui_key(gui *g, int down, int code, int ch, int mods);
 void gui_focus(gui *g, int on);
 int gui_attached(gui *g);

@@ -383,6 +383,33 @@ void screen_show(gui *g) {
   if (shape >= 0) { pointer_draw(sx, sy); px_ = sx; py_ = sy; shown = 1; }
 }
 
+/* N frames a second, in a box in the screen's top right corner, over
+ * whatever is there (pc.c: Ctrl+Alt+F11) */
+void screen_fps(int fps) {
+  if (!fb || con_on) return;
+  char t[16]; int n = 0, d[8], k = 0, v = fps < 0 ? 0 : fps;
+  do d[k++] = v % 10; while ((v /= 10) && k < 8);
+  while (k) t[n++] = (char)('0' + d[--k]);
+  const char *u = " fps";
+  while (*u) t[n++] = *u++;
+  int size16 = 16 * 16, em = 16, adv = 0;
+  for (int i = 0; i < n; i++) adv += font_advance(0, size16, t[i]);
+  int w = adv / 64 + 12, h = em + 10, x0 = sw - w - 6, y0 = 6, base = 5 + font_top(0, size16);
+  if (x0 < 0) return;
+  for (int y = y0; y < y0 + h; y++) for (int x = x0; x < x0 + w; x++) put(x, y, pix(0x202020));
+  int pen = (x0 + 6) * 64;
+  for (int i = 0; i < n; i++) {
+    const glyph *gl = font_glyph(0, size16, t[i]);
+    if (gl) for (int j = 0; j < gl->h; j++) for (int q = 0; q < gl->w; q++) {
+      int a = gl->a[j * gl->w + q];
+      if (a < 96) continue;
+      int x = pen / 64 + gl->x0 + q, y = y0 + base + gl->y0 + j;
+      if (x >= 0 && x < sw && y >= 0 && y < sh) put(x, y, pix(a > 200 ? 0x40ff40 : 0x30a030));
+    }
+    pen += font_advance(0, size16, t[i]);
+  }
+}
+
 /* ---- the mouse ---- */
 /* whole packets, for the run loop: a press and its release between two
  * looks are two changes, not none */

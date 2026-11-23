@@ -130,6 +130,8 @@ $CC -o $OUT/bb_mbox.c4r include/c4bb_mbox.h src/c4bb/tests/src/bb_mbox.c > /dev/
 # machine without the display, so it is safe in every corpus.
 $CC -o $OUT/gui-demo.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/gui-demo.c > /dev/null
 $CC -o $OUT/fb-demo.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/fb-demo.c > /dev/null
+# commands over half the ring, sent with its head mid-ring (test-gui.mjs)
+$CC -o $OUT/gui-wrap.c4r libjs/guest/gui.h libjs/guest/gui.c libjs/guest/gui-wrap.c > /dev/null
 # and its sound card's: "no sound card" without one
 $CC -o $OUT/snd-demo.c4r libjs/guest/snd.h libjs/guest/snd.c libjs/guest/snd-demo.c > /dev/null
 $CC -o $OUT/libjs-strc.c4r libjs/tests/src/strc.c > /dev/null

@@ -3250,7 +3250,7 @@ c4pcw64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4
 		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 	objcopy -I elf64-x86-64 -O elf32-i386 .c4pc/c4pcw64.elf64 $@
 # ... the ISO's 64-bit system
-C4PC_ISO64 := c4pcw64.elf .c4pc/disk64.tar
+C4PC_ISO64 := c4pcw64.elf .c4pc/disk64.tar $(C4PC_SRC)/pc/grub-disk64.cfg
 # The 64-bit system's disk: C4IX, its libraries, programs, desktop and
 # toolchain compiled by lc64 (disk64.sh, build-images.sh's counterpart)
 C4PC_D64_SRCS := $(wildcard src/c4ix/*.c src/c4ix/*.h src/c4ix/lib/*.c src/c4ix/include/* src/c4ix/user/*.c \
@@ -3308,6 +3308,8 @@ c4pc.iso: c4pc.elf c4pc64.elf .c4pc/disk.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAG
 	cp c4pc.elf c4pc64.elf .c4pc/kernel/c4ix32.c4r .c4pc/disk.tar .c4pc/iso/boot/
 	@# the 64-bit system (docs/c4pc-64.md): its machine, kernel and disk
 	cp c4pcw64.elf .c4pc/disk64.tar .c4pc/iso/boot/ && cp .c4pc/disk64/c4ix.c4r .c4pc/iso/boot/c4ix64.c4r
+	@# ... and the menu install writes for it where the word is 64 bits (install.c)
+	cp $(C4PC_SRC)/pc/grub-disk64.cfg .c4pc/iso/boot/grub/disk64.cfg
 	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
 	cp .c4pc/grub/c4pc-boot.img .c4pc/grub/c4pc-core.img .c4pc/iso/boot/grub/
 	cp $(C4PC_SRC)/pc/grub-disk.cfg .c4pc/iso/boot/grub/disk.cfg

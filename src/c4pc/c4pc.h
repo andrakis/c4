@@ -252,6 +252,9 @@ struct machine {
   u8 *tap_in; u32 tap_in_len, tap_in_pos; int tap_in_on;
   /* swap */
   imap *swap_pages; u32 swap_slots; u32 swap_addr; i32 swap_result;
+  /* swap on a disk's partition (dev_swap_disk): its device, first sector,
+   * and a bit a slot for those written there since the boot's reset */
+  blkdev *swap_dev; u32 swap_lba; u32 *swap_on;
   volatile int swap_lk;                /* the swap's pages, which every CPU reaches (par.c) */
   /* the block devices (BLK_*): fitted, selected, the next command's */
   blkdev *blk[8]; int nblk, blk_sel;
@@ -439,6 +442,11 @@ float f32_of(i32 bits);
 i32 bits_of_f32(float f);
 
 /* the drives (drive.c) */
+/* swap on a disk (dev.c): NSECT sectors at LBA of B, 8 a page, instead
+ * of the host's memory; and a page put out, as the kernel reaches it
+ * while it is out (0: a slot never written, unless CREATE) */
+void dev_swap_disk(machine *m, blkdev *b, u32 lba, u32 nsect);
+u8 *swap_page(machine *m, u32 slot, int create);
 drive *drive_new(int writable);
 void drive_put(drive *d, const char *name, blob *b);       /* takes the reference */
 /* a ustar archive's files onto a drive, by their paths (the PC's ramdisk) */

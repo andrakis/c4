@@ -1039,7 +1039,7 @@ enum {
 // Where user addresses start: a user page is mapped at its physical
 // address plus this, and kernel mode reaches it at either (libjs's user
 // window). Memory larger than it keeps the identity map.
-enum { MMU_UWIN_BASE = 0x10000000 };
+enum { MMU_UWIN_BASE = 0x10000000, MMU_UWIN_LAST = 0x70000000 };   // the window's lowest start; memory a window fits above
 // A page table entry's bit the host sets in the kernel's map (UDIR) on a
 // page the kernel or a device has used: it never goes to swap
 enum { PTE_PIN = 0x200 };

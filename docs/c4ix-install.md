@@ -36,6 +36,14 @@ disk up (DISK_EJECT on drive 1: pc/store.c hands its channel and
 position to ata.c, and it becomes block device 0); it is hd0 from then
 on, and the install goes on as above.
 
+A swap partition follows the system's: install asks its size, 512 MB
+(Enter, on a disk of 2 GB or more; else 256), 256 or 0 for none, and
+`install -s 0|256|512` says it without asking. It is partition 2, type
+82h. c4pc finds it at every boot (the first IDE disk with one: `c4pc: swap
+on block device 0's partition 2, 512 MB`), and the pages C4IX's MMU puts
+out go there, 8 sectors a page, instead of into c4pc's own memory; a
+smaller size, or none, where the system would not fit beside it.
+
 The disk must hold the system's files (230 MB now) and an eighth more for
 ext2's own blocks, and 16 MB more: a VM's default disk is far bigger.
 

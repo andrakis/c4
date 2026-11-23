@@ -31,8 +31,14 @@ enum { FK_READ = 1, FK_WRITE = 2, FK_FETCH = 4, FK_PRESENT = 8, FK_DMA = 32 };
 /* page 0's windows a user task may use (IOPM). At reset all of them */
 enum { IOPM_ROM = 1, IOPM_DEV = 2, IOPM_GUI = 4, IOPM_SND = 8, IOPM_LOCAL = 16, IOPM_LOCALW = 32, IOPM_ALL = 63 };
 
-/* virtual pages the arrays cache: 512 MB, the user window and below */
-#define LIMIT 131072u
+/* virtual pages the arrays cache: the user window and below -- 512 MB
+ * for an arena of 256 MB or less, whose window is at 256 MB; past that,
+ * C4IX puts the window at the next 256 MB past memory (src/c4ix/mmu.c
+ * mmu_wbase), and the arrays reach its end. Set by the first mmu_new,
+ * and every MMU after it has arrays as long: a page past it is not
+ * cached, only slower */
+static u32 mmu_limit;
+#define LIMIT mmu_limit
 /* pages the stack window grows by each way, and the code window */
 #define STACK_GROW 16
 #define CODE_GROW 256
@@ -140,6 +146,12 @@ void mmu_reset(mmu *u) { reset(u); }
 mmu *mmu_new(machine *m) {
   mmu *u = xmalloc(sizeof *u);
   u->m = m;
+  if (!mmu_limit) {
+    u32 win = 0x10000000u;
+    if (m->size > win) win = (u32)(((uint64_t)m->size + 0x0FFFFFFFu) & ~(uint64_t)0x0FFFFFFFu);
+    if (win > 0x70000000u) win = 0x70000000u;
+    mmu_limit = (win + 0x10000000u) >> 12;
+  }
   u->rd = xmalloc(LIMIT * 4); u->wr = xmalloc(LIMIT * 4); u->ex = xmalloc(LIMIT * 4);
   for (u32 v = 0; v < LIMIT; v++) u->rd[v] = u->wr[v] = u->ex[v] = -1;
   u->nx = xmalloc(LIMIT);

@@ -247,6 +247,66 @@ else
     ok "c4pc.elf on 4 processors: C4IX boots on all four, runs ps, and shuts down with every task freed"
   else bad "c4pc.elf on 4 processors: the C4IX session"; echo "$out" | grep -E "processors|thread|panic|illegal|shutdown" | head -6; fi
 fi
+# Windowed games in the desktop as the ISO has it (its boot disk and this
+# tree's kernel and desktop): an Ace card game and a Puzzles game typed
+# into the desktop's Terminal (the Go menu's games run in such a window,
+# term_run), and duke3d --window in the background (a window of its own,
+# the O op). Each must draw its window: the screen's middle, where the
+# window is over the Terminal's black, mostly not black. The user saw
+# them black in VMware (2026-11-23); this is what would say so here. Duke's
+# menu is dark: 37% of its middle lit, a black window 18%; 30% passes.
+for game in "solitaire" "blackbox" "duke3d --window &"; do
+  nm=${game%% *}
+  # Duke loads for over a minute of the machine's time before its menu
+  printf '40000 type %s|\n150000 shot %s\n150100 quit\n' "$game" "$W/win-$nm.png" > $W/win-events.txt
+  timeout 600 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --events $W/win-events.txt --tar $W/disk.tar \
+    $W/kernel/c4ix32.c4r --desktop --no-top > $W/win-$nm.out 2> $W/win-$nm.err
+  lit=$(python3 - $W/win-$nm.png << 'PNG'
+import sys, zlib, struct
+d = open(sys.argv[1], "rb").read()
+w, h = struct.unpack(">II", d[16:24])
+i, z = 8, b""
+while i < len(d):
+    n, t = struct.unpack(">I4s", d[i:i + 8])
+    if t == b"IDAT": z += d[i + 8:i + 8 + n]
+    i += 12 + n
+raw = zlib.decompress(z)
+lit = tot = 0
+for y in range(250, 520, 4):
+    row = raw[y * (1 + w * 3) + 1:(y + 1) * (1 + w * 3)]
+    for x in range(300, 700, 4):
+        tot += 1
+        if sum(row[x * 3:x * 3 + 3]) > 90: lit += 1
+print(lit * 100 // tot)
+PNG
+)
+  [ "${lit:-0}" -ge 30 ] && ok "the desktop's windowed $nm draws its window ($lit% of its middle lit)" ||
+    bad "the desktop's windowed $nm: its window is black (${lit:-?}% lit; $W/win-$nm.png)"
+done
+# C4IX with more than 256 MB (a VM of 512 MB and more): the MMU's user
+# window above memory (src/c4ix/mmu.c mmu_wbase), so swap is on, where it
+# once kept the identity map and System Monitor said the MMU was off; and
+# with no -m, all of the PC's memory (pc.c), the window above that. This
+# tree's kernel (the images' may not have mmu_wbase yet)
+if [ -n "${NO_QEMU:-}" ] || [ ! -x "$Q" ]; then
+  echo "  skip  c4pc.elf with 512 MB (no qemu-system-i386)"
+else
+  accel=""; [ -r /dev/kvm ] && [ -w /dev/kvm ] && accel="-accel kvm -cpu host"
+  for mem in "-m 512:0x20000000:1024" ":0x40000000:2048"; do
+    arg=${mem%%:*}; rest=${mem#*:}; want=${rest%%:*}; pcmb=${rest#*:}
+    printf 'cat /proc/meminfo\nshutdown\n' > $W/in512.txt
+    rm -f $W/serial512.txt
+    timeout 300 "$Q" $accel -machine vmport=off -m $pcmb -display none -no-reboot -serial file:$W/serial512.txt \
+      -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf -append "--no-cdrom --mmu $arg" \
+      -initrd "$W/kernel/c4ix32.c4r,$W/test-disk.tar drive,$W/in512.txt stdin" > /dev/null 2>&1
+    out=$(tr -d '\r' < $W/serial512.txt)
+    what="c4pc.elf ${arg:-with all of a $pcmb MB PC}"
+    if echo "$out" | grep -qF "mmu: user addresses are 256 MB from $want" && echo "$out" | grep -qE "^swap [1-9]" &&
+       echo "$out" | grep -qF "shutdown complete"; then
+      ok "$what: the user window at $want, swap on"
+    else bad "$what: the window or swap"; echo "$out" | grep -E "arena|mmu: user|^swap|swap:|panic" | head -6; fi
+  done
+fi
 # test-libjs's programs with a native oracle, on both
 progs=$(IMAGES=$IMAGES bash src/c4pc/test-c4pc-progs.sh); r=$?
 echo "$progs" | grep -v '^test-c4pc-progs: '

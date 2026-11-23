@@ -436,9 +436,14 @@ and a walk reads them with plain loads.
 
 ## 11. Addresses that are not physical, devices, and swap
 
-**User addresses** (stage 6, 7). Where memory fits below 256 MB, user
-mode's addresses are a window from 0x10000000, 256 MB of them (UWIN), and
-none is physical. An allocator of its own hands them out a run of pages
+**User addresses** (stage 6, 7). User mode's addresses are a window of
+256 MB (UWIN) above memory, and none is physical: from 0x10000000 where
+memory fits below 256 MB, else from the next 256 MB boundary past its end
+(`mmu_wbase`: 512 MB of memory, 0x20000000; 1 GB, 0x40000000), up to
+memory of 1792 MB, the window ending by 0x80000000, since an address is
+an int and the kernel tells a user address by its being at or above the
+window (on the 64-bit word, 768 MB, the end at 1 GB, which two levels of
+tables cover). An allocator of its own hands them out a run of pages
 at a time (`mmu_valloc`), so a region keeps its user address while its
 memory moves. Every task's pages are at their own user addresses in the
 task's space, and at the same ones in **the kernel's map** (`mmu_kdir`,
@@ -458,8 +463,10 @@ relocates a user task's image to them (`loader_uva`), and so its entry,
 constructors, destructors, libraries' data and slots; argv and the
 environment's pointers; the forged frame, which `mmu_adopt` rewrites; the
 entry page; a vfork child's stack; what `umem_alloc` gives. A region is
-found by either (`mmu_rgn`). Memory larger than 256 MB keeps the identity
-map, and no swap.
+found by either (`mmu_rgn`). Memory too big for a window above it keeps
+the identity map, and no swap. (Until c4pc gave C4IX all of a PC's memory
+that was anything over 256 MB, and a VM booted with 512 MB showed no
+swap, and System Monitor asked for the MMU to be enabled.)
 
 **Devices** (stage 5). Every device that reads or writes guest memory at
 an address it was given goes through `arena.dma`, `dmaRead`, `dmaWrite` or

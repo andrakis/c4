@@ -273,6 +273,7 @@ static void init_usage() {
           "                       unpacks first, with a loading screen,\n"
           "                       then the shell runs \"desktop &\" and\n"
           "                       \"top\", as if they were typed\n"
+          "  c4ix.c4r --desktop --no-top   ... and no top (c4pc's serial)\n"
           "  c4ix.c4r -e CMD      the shell runs CMD first, as if it were\n"
           "                       typed (up to four, after --desktop's own\n"
           "                       if both are given)\n");
@@ -341,11 +342,12 @@ int init_main(int argc, int argv) {
     char *vav[3];
     char *cmds[4];
     char *home, *root;
-    int i, desktop, shargc, ncmd, k, vrc, hd;
+    int i, desktop, notop, shargc, ncmd, k, vrc, hd;
 
     av = (char **)argv;
     i = 1;
     desktop = 0;
+    notop = 0;
     ncmd = 0;
     home = 0;
     root = 0;
@@ -374,6 +376,10 @@ int init_main(int argc, int argv) {
         while (k) {
             k = 0;
             if (i < argc && init_is(av[i], "--desktop")) { desktop = 1; ++i; k = 1; }
+            // --no-top: --desktop's console without top, where no one sees
+            // the console (c4pc's serial line: GRUB's entries); `top` at
+            // its prompt still runs it
+            else if (i < argc && init_is(av[i], "--no-top")) { notop = 1; ++i; k = 1; }
             else if (i + 1 < argc && init_is(av[i], "--home")) { home = av[i + 1]; i = i + 2; k = 1; }
             else if (i + 1 < argc && init_is(av[i], "--root")) { root = av[i + 1]; i = i + 2; k = 1; }
         }
@@ -440,7 +446,7 @@ int init_main(int argc, int argv) {
         if (desktop) {
             shargv[1] = "-e"; shargv[2] = "persist -d 60 &";
             shargv[3] = "-e"; shargv[4] = "desktop &"; shargv[5] = "-e"; shargv[6] = "top"; shargv[7] = 0;
-            shargc = 7;
+            shargc = notop ? 5 : 7;
         }
         for (k = 0; k < ncmd; ++k) { shargv[shargc++] = "-e"; shargv[shargc++] = cmds[k]; }
         shargv[shargc] = 0;

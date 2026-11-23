@@ -212,20 +212,40 @@ static i64 ticks_now(void) {
   do { t = ticks; } while (t != ticks);       /* two words: read until they agree */
   return t;
 }
+/* The TSC's cycles since tsc_at, which no one changes after clock_init:
+ * every processor reads the clock (the machine's TIME is the real one on
+ * each), and this once folded tsc_at and tsc_ms on as it went, unlocked.
+ * Two processors folding at once gave a time 256 ms out, a 64-bit tsc_at
+ * read half-changed (32-bit) was any time at all, and a processor whose
+ * TSC is a little behind the first's (a VM's vCPUs) made the difference
+ * negative, which folded on for ever: a game's clock leapt ahead (Quake
+ * on CPU 1 played 20 s of its demo in a few). Now the cycles since are
+ * divided whole (divl twice: no 64-bit divide in the bare build), a TSC
+ * behind is no time since, and the clock never goes back across
+ * processors (clock_seen) */
+static volatile u32 clock_seen;               /* the latest ms any processor read (since tsc_ms) */
+static uint64_t tsc_since(void) {
+  uint64_t t = rdtsc();
+  return t > tsc_at ? t - tsc_at : 0;
+}
+/* N / D, N up to 2^64 and D 32 bits, as two 32-bit divides */
+static uint64_t udiv64_32(uint64_t n, u32 d) {
+  u32 hi = (u32)(n >> 32), lo = (u32)n, qhi = hi / d, r = hi % d, qlo;
+  __asm__("divl %4" : "=a"(qlo), "=d"(r) : "a"(lo), "d"(r), "rm"(d));
+  return (uint64_t)qhi << 32 | qlo;
+}
 i64 plat_now_ms(void) {
   if (!tsc_per_ms) return ticks_now();
-  uint64_t d = rdtsc() - tsc_at;
-  /* kept under 2^31 cycles since tsc_at, so that a 32-bit divide does */
-  uint64_t step = (uint64_t)tsc_per_ms * 256;
-  while (d >= 0x80000000u) { tsc_at += step; tsc_ms += 256; d -= step; }
-  return tsc_ms + (u32)d / tsc_per_ms;
+  u32 ms = (u32)udiv64_32(tsc_since(), tsc_per_ms), seen = __atomic_load_n(&clock_seen, __ATOMIC_RELAXED);
+  /* behind what another processor read (its TSC a little ahead): that */
+  while ((i32)(ms - seen) > 0 && !__atomic_compare_exchange_n(&clock_seen, &seen, ms, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) { }
+  if ((i32)(ms - seen) < 0) ms = seen;
+  return tsc_ms + ms;
 }
 /* the same in microseconds, for the sound card (snd.c) */
 double plat_now_us(void) {
   if (!tsc_per_ms) return (double)ticks_now() * 1000;
-  (void)plat_now_ms();                        /* tsc_at folded on: what is left is under 2^31 */
-  u32 d = (u32)(rdtsc() - tsc_at);
-  return (double)tsc_ms * 1000 + (double)d * 1000 / tsc_per_ms;
+  return (double)tsc_ms * 1000 + (double)(i64)tsc_since() * 1000 / tsc_per_ms;
 }
 static inline void cpuid_(u32 l, u32 *a, u32 *b, u32 *c, u32 *d) { __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(l), "c"(0)); }
 /* the TSC's cycles in 30 ms of the PIT's channel 2 (1193182 Hz) */
@@ -546,7 +566,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, acpi = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0, vmware = 1;
+  u32 mb_arena = 0 /* all: below */; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, acpi = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0, vmware = 1;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -702,6 +722,19 @@ void pc_main(u32 magic, struct mb_info *mb) {
     con_puts("c4pc: "); con_dec(k / 1000); con_puts("M c4 instructions a second here, so a ");
     con_dec(hz); con_puts(" MHz clock (-hz N to choose)\n");
   }
+  /* the arena: -m's, or as much of the PC's memory as a power of two
+   * fits in, leaving c4pc 160 MB of its own (the drives' unpacked files, 96
+   * MB at most; the display's buffers; swap's pages where there is no
+   * swap partition), at most 1 GB: C4IX's user window goes above it, and
+   * ends by 2 GB (src/c4ix/mmu.c mmu_wbase) */
+  int mem_all = !mb_arena;
+  if (mem_all) {
+    extern u32 pc_heap_free_bytes;
+    u32 room = pc_heap_free_bytes >> 20;
+    room = room > 160 + 32 ? room - 160 : 32;
+    mb_arena = 32;
+    while (mb_arena * 2 <= room && mb_arena < 1024) mb_arena *= 2;
+  }
   machine *m = machine_new(mb_arena << 20, drives, nd, mhz);
   m->on_byte = on_byte;
   m->no_fpu = nofpu;
@@ -709,6 +742,34 @@ void pc_main(u32 magic, struct mb_info *mb) {
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
   for (int i = 0; i < nblk; i++) m->blk[m->nblk++] = blks[i];
+  /* swap: the first IDE disk's partition of type 82h (install makes one),
+   * else the host's memory, 256 MB of it, or with all the memory
+   * C4IX's, as much as c4pc can spare */
+  {
+    static u8 mbr[512];
+    int got = 0;
+    for (int i = 0; i < nblk && !got; i++) {
+      blkdev *b = blks[i];
+      if (b->rw(b, 0, 0, 1, mbr) || mbr[510] != 0x55 || mbr[511] != 0xAA) continue;
+      for (int k = 0; k < 4 && !got; k++) {
+        u8 *e = mbr + 446 + 16 * k;
+        u32 lba = e[8] | (u32)e[9] << 8 | (u32)e[10] << 16 | (u32)e[11] << 24;
+        u32 n = e[12] | (u32)e[13] << 8 | (u32)e[14] << 16 | (u32)e[15] << 24;
+        if (e[4] != 0x82 || n < 2048 || lba >= b->sectors || n > b->sectors - lba) continue;
+        dev_swap_disk(m, b, lba, n);
+        got = 1;
+        con_puts("c4pc: swap on block device "); con_dec(i); con_puts("'s partition "); con_dec(k + 1);
+        con_puts(", "); con_dec(n / 2048); con_puts(" MB\n");
+      }
+    }
+    /* -m N: 256 MB, as libjs's (the tests hold c4pc's boot to its, byte
+     * for byte); all the memory C4IX's: what c4pc can spare */
+    if (!got && mem_all) {
+      extern u32 pc_heap_free_bytes;
+      u32 spare = pc_heap_free_bytes > (128u << 20) ? (pc_heap_free_bytes - (128u << 20)) / 4096 : 0;
+      m->dv->swap_slots = spare < 65536 ? spare : 65536;
+    }
+  }
   pc_m = m;
   /* the display: GRUB's framebuffer, or the BGA's at --gui's size */
   if (screen_from_multiboot(mb) || (gui_w > 0 && gui_h > 0 && screen_bga(gui_w, gui_h))) {
@@ -755,7 +816,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
     }
   }
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
-  con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU, running " : " MB arena, running ");
+  con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU" : " MB arena");
+  con_puts(mem_all ? " (the PC's memory but c4pc's own; -m N for less), running " : ", running ");
   con_puts(img_name); con_puts("\n");
   if (machine_boot(m, img, img_len, pargc, pargv)) power_off(75);
   if (par) par_start(m->smp);

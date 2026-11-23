@@ -1292,9 +1292,20 @@ void mmu_cpu(int k) {
 
 static void mmu_swapinit();
 
+// Where the window of user addresses starts: 256 MB, or past memory that
+// reaches further, at the next 256 MB from its end (c4pc with all of a PC's
+// memory). The window must end by 0x80000000: addresses are ints, and the
+// kernel tells a user address by its being at or above mmu_uoff. 0: memory
+// is too big for a window above it (user addresses are physical)
+static int mmu_wbase(int memsize) {
+    if (memsize <= MMU_UWIN_BASE) return MMU_UWIN_BASE;
+    if (memsize > MMU_UWIN_LAST) return 0;
+    return (memsize + MMU_UWIN_BASE - 1) / MMU_UWIN_BASE * MMU_UWIN_BASE;
+}
+
 // At boot, before anything runs in user mode
 void mmu_init() {
-    int n;
+    int n, base;
     if (!host_has(C4IX_I_MMU)) return;
     mmu_memsize = *(int *)MMU_MEMSIZE;
     mmu_npages = mmu_memsize / MMU_PAGE;
@@ -1311,10 +1322,10 @@ void mmu_init() {
         return;
     }
     memset((char *)mmu_pg, 0, mmu_npages * sizeof(int));
-    // user addresses from 256 MB, where memory fits below them: the
+    // user addresses from 256 MB, or the next 256 MB past memory: the
     // window's books and the kernel's map of it, with tables for a 128th of
     // memory (and a page more: the block is not page-aligned)
-    if (mmu_memsize <= MMU_UWIN_BASE) {
+    if ((base = mmu_wbase(mmu_memsize))) {
         n = mmu_npages / 128;
         if (n < MMU_CHUNK) n = MMU_CHUNK;
         if (n > MMU_WINPAGES / 1024) n = MMU_WINPAGES / 1024;
@@ -1336,13 +1347,13 @@ void mmu_init() {
         memset((char *)mmu_vbits, 0, MMU_WINPAGES / 8);
         mmu_vbits[0] = 1;
         mmu_vnext = 1;
-        mmu_uoff = MMU_UWIN_BASE;
+        mmu_uoff = base;
     }
     mmu_on = 1;
     klog("mmu: 4 KB pages, %d of them; each user task has a space of its own, its own pages and the shared code\n",
         mmu_npages);
     if (mmu_uoff) klog("mmu: user addresses are 256 MB from 0x%08x, none of them the kernel's or physical\n", mmu_uoff);
-    else klog("mmu: memory reaches 0x%08x: user addresses are physical ones\n", MMU_UWIN_BASE);
+    else klog("mmu: memory reaches past 0x%08x: user addresses are physical ones\n", MMU_UWIN_LAST);
     mmu_cpu(0);
     mmu_swapinit();
 }

@@ -485,6 +485,48 @@ package (c4pc-dos) is the packed archive too. `c4pc-host --tar FILE`
 loads an archive as a drive, packed or not, as a PC's loader hands one
 over.
 
+### The clock on several processors
+
+At the keyboard the machine's TIME is the real clock (`m->wall`), and on
+processors on threads every CPU reads it for itself: `plat_now_ms`, the
+TSC's cycles since a base clock_init sets once, divided whole (two 32-bit
+divides), a TSC a little behind the first processor's (a VM's vCPUs)
+taken as no time since, and never earlier than any processor last read
+(`clock_seen`). It once folded its base on as it read, unlocked: two
+processors at it at once were 256 ms out, and a TSC behind made it fold
+on for ever, so a game's clock leapt ahead -- Quake pinned to CPU 1 (`pin
+1 quake --window`) played twenty seconds of its demo in a few. A read of
+TIME on a CPU but 0 is its own (engine.c AP_DEV), not a round trip to CPU
+0 as the other devices are: Doom asks the time between frames, and on
+CPU 1 drew a few frames a second at 100%.
+
+### Memory, and swap
+
+C4IX gets all of the PC's memory unless `-m N` says otherwise: the arena
+is the largest power of two (the engine's word index wraps at its size)
+that leaves c4pc 160 MB of its own -- the drives' unpacked files, 96 MB
+at most, the display's buffers, swap's pages where there is no swap
+partition -- and at most 1 GB, the user window going above it (c4ix-mmu.md
+section 11): 512 MB on a VM of 1 GB, 1 GB on one of 2 GB or more. The
+boot says `c4pc: 512 MB arena with an MMU (the PC's memory but c4pc's
+own; -m N for less)`. `-m` stays for later, for a machine that shares
+the PC.
+
+Swap is the host's (SWAP_CMD, dev.c): a page C4IX's MMU puts out is kept
+by c4pc, which put it in its own memory, up to 256 MB (as libjs does in
+the page's). With all the memory C4IX's, that is little or none; the swap
+partition install makes (type 82h, c4ix-install.md) is where pages go
+when there is one, 8 sectors a slot, a bit a slot saying which were
+written since the boot's reset, and a page the kernel reaches while it is
+out (a device's DMA, its own loads) read into memory until it comes in.
+The disks' block I/O, C4IX's and swap's, is one at a time, the processors
+sharing the disks.
+
+GRUB's desktop entries pass init `--no-top`: --desktop's top on the
+console is the web page's, where the console shows; here it is the
+serial line, which no one sees, and it filled its log. `top` at the
+serial prompt runs it.
+
 ### VMware, without VMware Tools
 
 pc/vmware.c does what open-vm-tools and Linux's vmmouse driver do, over

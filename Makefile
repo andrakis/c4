@@ -3347,7 +3347,7 @@ PHONY += c4pc-dos
 # C4IX's boot test from test-libjs (ps, then exit) on three machines:
 # libjs, c4pc-host, and c4pc.elf in QEMU when there is a qemu-system-i386,
 # each output byte for byte the others'. Not in the gate yet.
-test-c4pc: c4pc-host c4pc.elf .c4pc/disk.tar $(C4PC_IMAGES_DEP)
+test-c4pc: c4pc-host c4pc.elf .c4pc/disk.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP)
 	IMAGES=$(C4PC_IMAGES) bash $(C4PC_SRC)/test-c4pc.sh
 PHONY += test-c4pc
 

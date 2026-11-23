@@ -91,7 +91,11 @@ static void rom_store(machine *m, i32 x, i32 v);
 #define SWAP_CMD_REG 0x158
 #define AP_DEV(m, a) ((m)->par_ap && !(m)->serving && (((a) >= DEV_BASE && (a) < DEV_END) || ((a) >= 0x400 && (a) < 0x500) || \
                       ((a) >= BLK_BASE && (a) < BLK_END && (m)->dv->nblk)) && \
-                      ((a) & ~3u) != SWAP_ADDR_REG && ((a) & ~3u) != SWAP_CMD_REG)
+                      ((a) & ~3u) != SWAP_ADDR_REG && ((a) & ~3u) != SWAP_CMD_REG && ((a) & ~3u) != TIME_MS_REG)
+/* TIME read on another CPU: its own (machine_sim_ms: the real clock, or as
+ * CPU 0 last published it), not asked of CPU 0 -- Doom asks for the time
+ * between every frame, and on CPU 1, a round trip to CPU 0 each, it drew
+ * a few frames a second at 100% (2026-11-23) */
 static i32 arena_rd32(machine *m, u32 a) {
   if (AP_DEV(m, a)) return par_rd32(m, a & ~3u);
   if (a >= DEV_BASE && a < DEV_END) return dev_read32(m, a);
@@ -221,15 +225,14 @@ static i64 kaddr(machine *m, u32 x) { return m->uwin && x >= m->uwin ? kpa(m, x)
 /* the host's copy of a page put out (devices.js swapRd8, swapWr8) */
 static int swap_rd8(machine *m, i32 slot, u32 off) {
   swap_lock(m);
-  u8 *p = imap_get(m->dv->swap_pages, (u32)slot);
+  u8 *p = swap_page(m, (u32)slot, 0);
   int v = p ? p[off & 4095] : 0;
   swap_unlock(m);
   return v;
 }
 static void swap_wr8(machine *m, i32 slot, u32 off, int v) {
   swap_lock(m);
-  u8 *p = imap_get(m->dv->swap_pages, (u32)slot);
-  if (!p && (u32)slot < m->dv->swap_slots) { p = xmalloc(4096); imap_set(m->dv->swap_pages, (u32)slot, p); }
+  u8 *p = swap_page(m, (u32)slot, 1);
   if (p) p[off & 4095] = (u8)v;
   swap_unlock(m);
 }

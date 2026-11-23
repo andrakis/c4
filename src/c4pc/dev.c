@@ -58,13 +58,8 @@ static int dma_swapped(machine *m, u32 va, int write, u8 **page) {
   i32 pte = kernel_pte(m, m->udir, va);
   if ((pte & 1) || !(pte & PTE_SWAP)) return 0;
   u32 slot = (u32)pte >> 12;
-  u8 *p = imap_get(m->dv->swap_pages, slot);
-  if (!p && write) {
-    if (slot >= m->dv->swap_slots) return 0;
-    p = xmalloc(SWAP_PAGE);
-    imap_set(m->dv->swap_pages, slot, p);
-  }
-  *page = p;
+  if (slot >= m->dv->swap_slots) return 0;
+  *page = swap_page(m, slot, write);
   return 1;
 }
 static int dma_plain(machine *m, u32 addr) { return !m->dma_ctx && !(m->uwin && addr >= m->uwin); }
@@ -199,16 +194,67 @@ static i32 kbd_read(machine *m, u32 addr, i32 len, int nonblock, int raw) {
   return n;
 }
 
-/* ---- swap ---- */
+/* ---- swap ----
+ * The host's copies of the pages C4IX's MMU puts out (SWAP_CMD): in the
+ * host's memory, a page a slot in swap_pages; or, with a swap partition
+ * (dev_swap_disk: pc.c, an MBR partition of type 82h on an IDE disk),
+ * on the disk, 8 sectors a slot, swap_on saying which slots were written
+ * there. A page the kernel reaches while it is out (a device's DMA, its
+ * own reads: swap_page) is read into swap_pages, and is the page from
+ * then until it comes in or is dropped. Block I/O, the kernel's
+ * (BLK_CMD) and swap's, one at a time: the processors share the disks */
+static volatile int blk_lk;
+static void blk_take(void) { while (__atomic_exchange_n(&blk_lk, 1, __ATOMIC_ACQUIRE)) { } }
+static void blk_drop(void) { __atomic_store_n(&blk_lk, 0, __ATOMIC_RELEASE); }
+static int sw_disk_rw(machine *m, int write, u32 slot, u8 *p) {
+  blk_take();
+  int r = m->dv->swap_dev->rw(m->dv->swap_dev, write, m->dv->swap_lba + slot * 8, 8, p);
+  blk_drop();
+  return r;
+}
+static int sw_on(machine *m, u32 slot) { return m->dv->swap_on && (m->dv->swap_on[slot >> 5] >> (slot & 31) & 1); }
+static void sw_mark(machine *m, u32 slot, int on) {
+  if (!m->dv->swap_on) return;
+  if (on) m->dv->swap_on[slot >> 5] |= 1u << (slot & 31); else m->dv->swap_on[slot >> 5] &= ~(1u << (slot & 31));
+}
+void dev_swap_disk(machine *m, blkdev *b, u32 lba, u32 nsect) {
+  u32 slots = nsect / 8;
+  m->dv->swap_dev = b; m->dv->swap_lba = lba; m->dv->swap_slots = slots;
+  m->dv->swap_on = xmalloc((slots + 31) / 32 * 4);
+  memset(m->dv->swap_on, 0, (slots + 31) / 32 * 4);
+}
+u8 *swap_page(machine *m, u32 slot, int create) {
+  u8 *p = imap_get(m->dv->swap_pages, slot);
+  if (p || slot >= m->dv->swap_slots) return p;
+  if (sw_on(m, slot)) {
+    p = xmalloc(SWAP_PAGE);
+    if (sw_disk_rw(m, 0, slot, p)) memset(p, 0, SWAP_PAGE);
+  } else if (create) {
+    p = xmalloc(SWAP_PAGE);
+    memset(p, 0, SWAP_PAGE);
+  } else return 0;
+  imap_set(m->dv->swap_pages, slot, p);
+  return p;
+}
 static i32 swap_op(machine *m, i32 v) {
   int op = v & 15; u32 slot = (u32)v >> 4, a = m->dv->swap_addr;
-  if (op == 4) { imap_clear(m->dv->swap_pages, xfree); return (i32)m->dv->swap_slots; }
+  if (op == 4) {
+    imap_clear(m->dv->swap_pages, xfree);
+    if (m->dv->swap_on) memset(m->dv->swap_on, 0, (m->dv->swap_slots + 31) / 32 * 4);
+    return (i32)m->dv->swap_slots;
+  }
   if (op == 5) { heap_set_high(m->heap, slot & 1); return 0; }
   if (op == 6) return (i32)heap_largest(m->heap);
   if (slot >= m->dv->swap_slots) return -1;
-  if (op == 3) { xfree(imap_del(m->dv->swap_pages, slot)); return 0; }
+  if (op == 3) { xfree(imap_del(m->dv->swap_pages, slot)); sw_mark(m, slot, 0); return 0; }
   if (a < 0x1000 || (i64)a + SWAP_PAGE > m->size) return -1;
   if (op == 1) {
+    if (m->dv->swap_dev) {
+      xfree(imap_del(m->dv->swap_pages, slot));
+      if (sw_disk_rw(m, 1, slot, m->u8 + a)) return -1;
+      sw_mark(m, slot, 1);
+      return 0;
+    }
     u8 *p = imap_get(m->dv->swap_pages, slot);
     if (!p) { p = xmalloc(SWAP_PAGE); imap_set(m->dv->swap_pages, slot, p); }
     memcpy(p, m->u8 + a, SWAP_PAGE);
@@ -216,9 +262,10 @@ static i32 swap_op(machine *m, i32 v) {
   }
   if (op == 2) {
     u8 *p = imap_del(m->dv->swap_pages, slot);
-    if (!p) { memset(m->u8 + a, 0, SWAP_PAGE); return 0; }
-    memcpy(m->u8 + a, p, SWAP_PAGE);
-    xfree(p);
+    if (p) { memcpy(m->u8 + a, p, SWAP_PAGE); xfree(p); }
+    else if (sw_on(m, slot)) { if (sw_disk_rw(m, 0, slot, m->u8 + a)) return -1; }
+    else memset(m->u8 + a, 0, SWAP_PAGE);
+    sw_mark(m, slot, 0);
     return 0;
   }
   return -1;
@@ -751,11 +798,13 @@ void blk_write32(machine *m, u32 a, i32 v) {
   static u8 *buf; static u32 cap;
   if (n * 512 > cap) { cap = n * 512; buf = xrealloc(buf, cap); }
   if (v == 1) {
-    if (b->rw(b, 0, lba, n, buf)) return;
+    blk_take(); int r = b->rw(b, 0, lba, n, buf); blk_drop();
+    if (r) return;
     if (dma_write(m, addr, buf, n * 512) != n * 512) return;
   } else {
     if (dma_read(m, addr, n * 512, buf) != n * 512) return;
-    if (b->rw(b, 1, lba, n, buf)) return;
+    blk_take(); int r = b->rw(b, 1, lba, n, buf); blk_drop();
+    if (r) return;
   }
   d->blk_result = 0;
 }

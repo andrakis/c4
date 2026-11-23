@@ -262,17 +262,26 @@ static int copy_boot(char *cfg) {
     return 0;
 }
 
+// the swap partition's MB that leaves the system room on a disk of
+// SECTORS: WANT, or half of it, or none
+static int swap_fit(int sectors, int want) {
+    while (want > 0 && ((sectors - START - want * 2048) / 2048 * 2048) / 2 < kb_all + kb_all / 8 + 16384)
+        want = want == 512 ? 256 : 0;
+    return want;
+}
+
 int main(int argc, char **argv) {
     char *disk, *p, *menu;
     char dev1[8];
-    int k, yes, d, sectors, ro, p1, n, fd, lba, coresz, cfgn, i, files, store;
+    int k, yes, d, sectors, ro, p1, n, fd, lba, coresz, cfgn, i, files, store, swmb;
     if (__c4_info() & C4I_MMU) uioperm(UIOPERM_DEV);
-    yes = 0; disk = "hd0";
+    yes = 0; disk = "hd0"; swmb = 0 - 1;
     k = 1;
     while (k < argc) {
         if (!ustrcmp(argv[k], "-y")) yes = 1;
+        else if (!ustrcmp(argv[k], "-s") && k + 1 < argc) { ++k; swmb = uatoi(argv[k]); }
         else if (argv[k][0] == 'h' && argv[k][1] == 'd' && argv[k][2] >= '0' && argv[k][2] <= '7' && !argv[k][3]) disk = argv[k];
-        else { ufprintf(STDERR, "usage: install [-y] [hdN]   (hd0 by default: cat /proc/disks)\n"); return 1; }
+        else { ufprintf(STDERR, "usage: install [-y] [-s 0|256|512] [hdN]   (hd0 by default: cat /proc/disks; -s the swap partition's MB)\n"); return 1; }
         ++k;
     }
     d = disk[2] - '0';
@@ -294,7 +303,14 @@ int main(int argc, char **argv) {
     wait_unpack();
     files = 0;
     kb_all = size_tree("/", 1, &files) + 8192;            // and c4pc, the kernel
-    p1 = (sectors - START) / 2048 * 2048;
+    // a swap partition after the system's (c4pc keeps the pages C4IX's
+    // MMU puts out there: docs/c4ix-install.md): 512 MB on a disk of 2 GB
+    // or more, else 256, -s's otherwise -- smaller, or none, where the
+    // system would not fit beside it
+    if (swmb < 0) swmb = sectors / 2048 >= 2048 ? 512 : 256;
+    if (swmb != 0 && swmb != 256 && swmb != 512) { ufprintf(STDERR, "install: -s takes 0, 256 or 512 (MB of swap)\n"); return 1; }
+    swmb = swap_fit(sectors, swmb);
+    p1 = (sectors - START - swmb * 2048) / 2048 * 2048;
     if (p1 / 2 < kb_all + kb_all / 8 + 16384) {
         ufprintf(STDERR, "install: %s is %d MB: too small for the system's %d MB (and room for an ext2's own blocks and yours)\n",
             disk, sectors / 2048, kb_all / 1024);
@@ -313,9 +329,26 @@ int main(int argc, char **argv) {
     }
     uprintf("\n");
     uprintf("  It becomes GRUB to boot from and one ext2 partition, %d MB, holding\n", p1 / 2048);
-    uprintf("  the whole system (%d files, %d MB) and your files.\n", files, kb_all / 1024);
+    uprintf("  the whole system (%d files, %d MB) and your files", files, kb_all / 1024);
+    if (swmb) uprintf(",\n  and a swap partition of %d MB.\n", swmb); else uprintf(", and no swap.\n");
     uprintf("\n");
     if (!yes) {
+        uprintf("  Swap partition, MB (where pages go when memory is short): Enter for %d,\n", swmb);
+        uprintf("  or 512, 256 or 0: ");
+        n = uread(0, line, PATHW - 1);
+        if (n < 0) n = 0;
+        line[n] = 0;
+        p = line;
+        while (*p == ' ') ++p;
+        if (*p >= '0' && *p <= '9') {
+            k = uatoi(p);
+            if (k != 0 && k != 256 && k != 512) { uprintf("install: stopped: 0, 256 or 512; %s is as it was\n", disk); return 1; }
+            if (swap_fit(sectors, k) != k) { uprintf("install: %d MB of swap leaves too little room for the system; %s is as it was\n", k, disk); return 1; }
+            swmb = k;
+            p1 = (sectors - START - swmb * 2048) / 2048 * 2048;
+            uprintf("  ext2 %d MB, swap %d MB.\n", p1 / 2048, swmb);
+        }
+        uprintf("\n");
         uprintf("  Type yes to erase %s and install, anything else to stop: ", disk);
         n = uread(0, line, PATHW - 1);
         if (n < 0) n = 0;
@@ -332,7 +365,7 @@ int main(int argc, char **argv) {
         *(int *)DISK_EJECT = 1;
         if ((k = disk_size(disk, &ro)) < 0) { ufprintf(STDERR, "install: the store's disk was not given up as %s (dmesg, and c4pc's log, say why)\n", disk); return 1; }
         sectors = k;
-        p1 = (sectors - START) / 2048 * 2048;
+        p1 = (sectors - START - swmb * 2048) / 2048 * 2048;
         uprintf("install: the store's disk is %s now, %d MB\n", disk, sectors / 2048);
         // disk_size read /proc/disks into TEXT: the menu again
         if ((cfgn = read_all(menu, text, 12000)) <= 0) { ufprintf(STDERR, "install: the boot disc has no %s\n", menu); return 1; }
@@ -361,6 +394,12 @@ int main(int argc, char **argv) {
     p = buf + 446;
     p[0] = 0x80; p[1] = 0xFE; p[2] = 0xFF; p[3] = 0xFF; p[4] = 0x83; p[5] = 0xFE; p[6] = 0xFF; p[7] = 0xFF;
     put32(p + 8, START); put32(p + 12, p1);
+    // partition 2, swap (0x82), after it, where there is one
+    if (swmb) {
+        p = buf + 462;
+        p[0] = 0; p[1] = 0xFE; p[2] = 0xFF; p[3] = 0xFF; p[4] = 0x82; p[5] = 0xFE; p[6] = 0xFF; p[7] = 0xFF;
+        put32(p + 8, START + p1); put32(p + 12, swmb * 2048);
+    }
     buf[510] = 0x55; buf[511] = 0xAA;
     if (blkio(d, 0, 1, buf, 1) < 0) { ufprintf(STDERR, "install: %s's first sector could not be written\n", disk); return 1; }
     ustrcpy(dev1, disk); ustrcpy(dev1 + 3, "p1");

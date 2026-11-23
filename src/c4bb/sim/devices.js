@@ -428,7 +428,7 @@ export class Devices {
   swapRd8 (slot, off) { const p = this.swapPages.get(slot); return p ? p[off & 4095] : 0; }
   swapWr8 (slot, off, v) {
     let p = this.swapPages.get(slot);
-    if (!p) { if (slot >= this.swapSlots) return; this.swapPages.set(slot, p = new Uint8Array(SWAP_PAGE)); }
+    if (!p) { if (slot >= this.swapSlots) return; p = this.swapPages.set(slot, new Uint8Array(SWAP_PAGE)).get(slot); }
     p[off & 4095] = v;
   }
 

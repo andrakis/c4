@@ -504,7 +504,8 @@ coming back, files' cached bytes go first, since they are on the host
 already (docs/c4ix-design.md, "The root archive, read where it is kept":
 `vfs_reclaim`), and then pages of idle tasks go out to **the host's swap** (stage 8,
 devices.js `SWAP_ADDR`, `SWAP_CMD`: a page to a numbered slot, up to 256
-MB, memory beyond the arena, forgotten with the machine), and their
+MB, memory beyond the arena, forgotten with the machine; on threads in
+shared memory, which every CPU reaches itself, libjs/sswap.js), and their
 frames are free. A page put out stays in the kernel's map, not present,
 its slot in the entry (`PTE_SWAP`, 0x400): libjs's window reads and
 writes the host's copy there, so the kernel finds the page's bytes even

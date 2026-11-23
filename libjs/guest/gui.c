@@ -52,23 +52,36 @@ void gui_flush () { *(int *)GUI_BELL = 1; }
 // desktop redraw -- so the common case is kept short: gui_at is where
 // the head is in the ring (head % capacity), kept as the head moves, and
 // a command that fits before the end with room to spare is one test.
+//
+// One that does not fit before the end skips to the start as soon as
+// the skip itself has room, and then waits there for room of its own.
+// Waiting for room for both at once never ended for a command over half
+// the ring with the head in its middle (the skip and the command more
+// than the whole ring): it was dropped, the head stayed, and so was
+// every one after it -- the desktop's 64 picture tiles at 1024x768 with
+// 8-byte words (12294 of 16381), which left the last size's tiles on
+// the display, a grid with gaps (2026-11-24).
 int *gui_frame (int type, int n) {
-	int cap, head, len, tries;
+	int cap, head, len, tries, room;
 	len = 3 + n;
 	cap = gui_out[0];
 	if (len > cap) return 0;
 	tries = 0;
 	while (tries < 3) {
 		head = gui_out[1];
-		if (gui_at + len <= cap && cap - (head - gui_out[2]) >= len) {
-			gui_f = gui_out + 3 + gui_at;
-			gui_f[1] = type;
-			gui_f[2] = gui_seq;
-			gui_seq = gui_seq + 1;
-			gui_flen = len;
-			return gui_f + 3;
-		}
-		if (gui_at + len > cap && cap - (head - gui_out[2]) >= (cap - gui_at) + len) {
+		room = cap - (head - gui_out[2]);
+		if (gui_at + len <= cap) {
+			if (room >= len) {
+				gui_f = gui_out + 3 + gui_at;
+				gui_f[1] = type;
+				gui_f[2] = gui_seq;
+				gui_seq = gui_seq + 1;
+				gui_flen = len;
+				return gui_f + 3;
+			}
+			*(int *)GUI_BELL = 1;
+			tries = tries + 1;
+		} else if (room >= cap - gui_at) {
 			gui_out[3 + gui_at] = -1;          // skip to the start of the ring
 			gui_out[1] = head + (cap - gui_at);
 			gui_at = 0;

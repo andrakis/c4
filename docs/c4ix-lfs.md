@@ -96,6 +96,10 @@ a 64-bit word could do faster, or assumes 32 bits:
 - **The MMU's and sl4b's bitmaps** use 32 bits of each word (`i >> 5`):
   correct on 64 bits but half used, and two whole-word shortcuts never
   fire there. Only with an MMU, which native c4m has not.
-- **Possibly wrong on 64 bits, untested:** libc/fp.c's strtod keeps big
-  integers in base-2^32 limbs of `unsigned int`, unmasked: where that is
-  64 bits the carries would count twice.
+- libc/fp.c's strtod keeps big integers in base-2^32 limbs of `unsigned
+  int`, unmasked. That is right at both sizes: c4lc's `unsigned int` holds
+  0..2^32-1 on a 64-bit word too (docs/c4lc-design.md). Tested
+  2026-11-23: test-c4fp's vectors, and long decimals to 120 digits,
+  halfway cases and the subnormal edges, all glibc's at 64 and 32 bits
+  (fpconvgen.c has them now). With a 64-bit limb it could do half the
+  steps on a 64-bit word.

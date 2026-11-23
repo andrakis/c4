@@ -148,6 +148,18 @@ DEPS $(OUT)/user/chmod.c4o : src/c4ix/user/chmod.c $(U)
 RUN $(LC) src/c4ix/user/chmod.c $(OUT)/user/chmod.c4o
 DEPS $(OUT)/bin/c4ix-chmod.c4r : $(OUT)/user/chmod.c4o $(LIBC)
 RUN c4rlink $(OUT)/user/chmod.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-chmod.c4r
+DEPS $(OUT)/user/shutdown.c4o : src/c4ix/user/shutdown.c $(U)
+RUN $(LC) src/c4ix/user/shutdown.c $(OUT)/user/shutdown.c4o
+DEPS $(OUT)/bin/c4ix-shutdown.c4r : $(OUT)/user/shutdown.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/shutdown.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-shutdown.c4r
+DEPS $(OUT)/user/reboot.c4o : src/c4ix/user/reboot.c $(U)
+RUN $(LC) src/c4ix/user/reboot.c $(OUT)/user/reboot.c4o
+DEPS $(OUT)/bin/c4ix-reboot.c4r : $(OUT)/user/reboot.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/reboot.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-reboot.c4r
+DEPS $(OUT)/user/install.c4o : src/c4ix/user/install.c $(U)
+RUN $(LC) src/c4ix/user/install.c $(OUT)/user/install.c4o
+DEPS $(OUT)/bin/c4ix-install.c4r : $(OUT)/user/install.c4o $(LIBC)
+RUN c4rlink $(OUT)/user/install.c4o -l $(LIBC) -o $(OUT)/bin/c4ix-install.c4r
 DEPS $(OUT)/user/crc32.c4o : src/c4ix/user/crc32.c $(U) src/c4ix/include/archive.h
 RUN $(LC) src/c4ix/user/crc32.c $(OUT)/user/crc32.c4o
 DEPS $(OUT)/bin/c4ix-crc32.c4r : $(OUT)/user/crc32.c4o $(LIBARC) $(LIBC)

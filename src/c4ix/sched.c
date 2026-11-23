@@ -345,12 +345,24 @@ void sched_pipewake(struct vnode *vn) {
     sched_unlock();
 }
 
+// a shutdown (sched_halt, below): when it began, its stragglers' last sweep
+int sched_halt_how;
+int sched_halting;
+static int sched_halt_ms;
+enum { SCHED_HALT_GRACE = 3000, SCHED_HALT_SWEEP = 100 };
+static void sched_halt_sweep(struct task *spare, int kill);
+
 // Each ms of the machine's clock, by whoever has the lock first
 static void sched_tick(int now) {
     struct task *n, *x;
     int s;
     sched_tickms = now;
     SCHED_DUE(now);
+    // a shutdown's stragglers (sched_halt)
+    if (sched_halting && now - sched_halting >= SCHED_HALT_GRACE && now - sched_halt_ms >= SCHED_HALT_SWEEP) {
+        sched_halt_ms = now;
+        sched_halt_sweep(0, 1);
+    }
     n = pl_head;
     while (n) {
         x = n->qnext;
@@ -1122,7 +1134,10 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     } else if (trap == C4IX_TRAP_PM) {
         sys_pmviolation(param, (int *)sp, (int *)returnpc, &a);
     } else if (trap == C4IX_TRAP_SIGNAL) {
-        sched_interrupt();
+        // the host's SIGTERM is the machine's power button (c4pc's ACPI
+        // one; cli.js's own SIGTERM): shut down, as shutdown does
+        if (param == CK_SIGTERM) sched_halt(0, "the power button");
+        else sched_interrupt();
     } else if (trap == C4IX_TRAP_SEGV) {
         // a page fault: only user mode is translated (mmu.c)
         if (sched_cur && sched_cur->privs == PRIV_USER) mmu_fault(sched_cur, param);
@@ -1417,6 +1432,50 @@ static void sched_interrupt() {
     t->killsig = CK_SIGINT;
     TF_SET(t, TF_SIG);
     task_zombify(t, C4IX_EXIT_INTERRUPTED);
+}
+
+// ---- shutdown ----
+//
+// SYS_SHUTDOWN (shutdown.c: shutdown, poweroff, reboot) and the host's
+// SIGTERM (a PC's power button, c4pc's pc.c) end the machine as the
+// session's last exit does: every program's task goes, init's wait for
+// the shell returns, sched_run ends with no task still to finish, and the
+// kernel task's end (boot.c) unmounts the disks clean and says the
+// machine is done -- off, or restarted (C4IX_EXIT_REBOOT). A program
+// that handles SIGTERM is asked first; what is left after
+// SCHED_HALT_GRACE ms is killed, and so is anything started since.
+
+// every program's task but SPARE: SIGTERM to each (its handler's, or
+// its end), or (KILL) its end
+static void sched_halt_sweep(struct task *spare, int kill) {
+    struct task *t;
+    t = task_head;
+    while (t) {
+        if (t != spare && t->privs == PRIV_USER && t->state != TS_ZOMBIE) {
+            if (!kill) ck_kill(t->id, CK_SIGTERM);
+            else {
+                t->killsig = CK_SIGKILL;
+                TF_SET(t, TF_SIG);
+                task_zombify(t, C4IX_EXIT_INTERRUPTED);
+            }
+        }
+        t = t->next;
+    }
+    sched_wake = 1;
+}
+
+// HOW 0 off, 1 restarted. The caller's own task is spared, to say so and
+// exit; WHY goes in the log. 0, or -1 if a shutdown has begun already.
+int sched_halt(int how, char *why) {
+    int now;
+    if (sched_halting) return 0 - 1;
+    now = __time();
+    sched_halting = now ? now : 1;
+    sched_halt_ms = now;
+    sched_halt_how = how;
+    kprintf("\nc4ix: %s: %s\n", why, how ? "restarting" : "shutting down");
+    sched_halt_sweep(sched_cur && sched_cur->privs == PRIV_USER ? sched_cur : 0, 0);
+    return 0;
 }
 
 // ---- the common face ----
@@ -1861,8 +1920,10 @@ void sched_init(int interval) {
     acct_out = __c4_cycles();
 
     install_trap_handler((int)&sched_trap);
-    // Ctrl-C arrives as a trap through the same handler.
+    // Ctrl-C arrives as a trap through the same handler, and so does the
+    // host's SIGTERM: the power button (sched_halt)
     __c4_signal(__c4_sigint(), (int)&sched_trap);
+    __c4_signal(CK_SIGTERM, (int)&sched_trap);
     if (interval) {
         // Ask c4m to treat the interrupt mask as part of the
         // trapped context, restored by TLEV. That is what lets

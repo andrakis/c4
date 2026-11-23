@@ -473,7 +473,7 @@ C4KE_KIT_SRCS := $(foreach p,$(C4KE_KIT),$(firstword $(subst :, ,$(p))))
 # src/c4ix spelled out rather than $(C4IX_SRC): both it and C4IX_MODS
 # are defined further down, and := expands now. The Makefile already
 # carries one bug of exactly this shape (see c4rlink.c's note on $(U0)).
-C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader mmu init,\
+C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader mmu blk ext2 init,\
               src/c4ix/$(m).c:src/c4ix/$(m).c) \
             src/c4ix/c4ix.h:src/c4ix/c4ix.h \
             $(foreach h,$(wildcard include/*.h),$(h):$(h)) \
@@ -3218,10 +3218,10 @@ C4PC_CFLAGS := -O2 -g -Wall -Wno-unused-parameter -fwrapv -fno-strict-aliasing -
 C4PC_BARE_CFLAGS := -m32 -march=i486 -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
 c4pc-host: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	$(NATIVE_CC) $(C4PC_CFLAGS) -I$(C4PC_SRC) $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) .c4pc/fontdata.c .c4pc/opltables.c -o $@ -lm -pthread
-c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
+c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 		$(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	gcc $(C4PC_BARE_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
-		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
+		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 		$(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 # c4pc64.elf (M8): the same machine built for x86-64, its twice as many
 # registers and 64-bit arithmetic; pc/boot64.S enters long mode from the
@@ -3229,11 +3229,11 @@ c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_
 # ELF32, which multiboot loaders take (its addresses are all below 4 GB).
 # -mno-red-zone: an interrupt pushes its frame where the code is.
 C4PC_BARE64_CFLAGS := -m64 -mno-red-zone -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
-c4pc64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
+c4pc64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 	$(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	gcc $(C4PC_BARE64_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
 		-Wl,--no-warn-rwx-segments -o .c4pc/c4pc64.elf64 $(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c \
-		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
+		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 	objcopy -I elf64-x86-64 -O elf32-i386 .c4pc/c4pc64.elf64 $@
 
 # The DOS loader (src/c4pc/dos): boots c4pc.elf from DOS, for DOSBox.
@@ -3246,7 +3246,7 @@ C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com
 # C4IX's programs this tree has that a C4PC_IMAGES built from another may
 # not (mount, umount, df, cp: the CD's), built as build-images.sh builds
 # them, and laid on the boot disk over its own, named in its manifest's BIN_ALL
-C4PC_IX_NEW := mount umount df cp mkfs chmod
+C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install
 .c4pc/bin/c4ix-%.c4r: $(SRCS)/c4ix/user/%.c $(C4PC_IMAGES_DEP)
 	mkdir -p .c4pc/bin
 	./c4sc-host32 -c 400000 compile -O -c -D C4IX_SHARED -I $(SRCS)/c4ix/include $< .c4pc/u_$*.c4o > /dev/null
@@ -3279,11 +3279,27 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 # Hyper-V (generation 1) and real PCs with a BIOS. GRUB_MKRESCUE: one
 # with the i386-pc modules (~/opt/pctools/bin/grub-mkrescue-pc on helios).
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue-pc || echo grub-mkrescue)
-c4pc.iso: c4pc.elf c4pc64.elf .c4pc/disk.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg
+c4pc.iso: c4pc.elf c4pc64.elf .c4pc/disk.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg \
+          .c4pc/grub/c4pc-core.img $(C4PC_SRC)/pc/grub-disk.cfg
 	rm -rf .c4pc/iso && mkdir -p .c4pc/iso/boot/grub
 	cp c4pc.elf c4pc64.elf .c4pc/kernel/c4ix32.c4r .c4pc/disk.tar .c4pc/iso/boot/
 	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
+	cp .c4pc/grub/c4pc-boot.img .c4pc/grub/c4pc-core.img .c4pc/iso/boot/grub/
+	cp $(C4PC_SRC)/pc/grub-disk.cfg .c4pc/iso/boot/grub/disk.cfg
 	$(GRUB_MKRESCUE) -o $@ .c4pc/iso -volid C4PC
+# GRUB for a disk C4IX is installed on (src/c4ix/user/install.c,
+# docs/c4ix-install.md), on the ISO for install to write: boot.img for
+# the MBR, and core.img for the sectors from 1, with the BIOS's disks,
+# the MBR's partitions, ext2 and what the menu (grub-disk.cfg) wants in
+# it, nothing to load from the disk; its prefix partition 1's /boot/grub.
+# pc/grubdisk.py sets them as grub-bios-setup would. GRUB_PC_DIR: GRUB's
+# i386-pc modules, grub-mkimage's of the same version.
+GRUB_PC_DIR ?= $(if $(PCTOOLS),$(PCTOOLS)/root/usr/lib/grub/i386-pc,/usr/lib/grub/i386-pc)
+GRUB_DISK_MODS := biosdisk part_msdos ext2 normal configfile multiboot boot serial terminal all_video gfxterm echo test
+.c4pc/grub/c4pc-core.img: $(C4PC_SRC)/pc/grubdisk.py
+	mkdir -p .c4pc/grub
+	grub-mkimage -O i386-pc -d $(GRUB_PC_DIR) -p '(hd0,msdos1)/boot/grub' -o .c4pc/grub/core.raw $(GRUB_DISK_MODS)
+	python3 $(C4PC_SRC)/pc/grubdisk.py $(GRUB_PC_DIR)/boot.img .c4pc/grub/core.raw .c4pc/grub
 # The DOS package, for DOSBox-X: the whole disk (the desktop's files are
 # among the big ones small.tar leaves out); copy the folder to a DOSBox
 # drive and run C4PC, or C4PC DESKTOP.CFG.
@@ -3309,7 +3325,7 @@ PHONY += test-c4pc
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu init
+C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk ext2 init
 c4ix.c4r: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.
@@ -3448,7 +3464,8 @@ C4IX_PROGS := c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r c4ix-wc.c4r \
               c4ix-cycles.c4r c4ix-ls.c4r c4ix-mkdir.c4r c4ix-top.c4r \
               c4ix-spin.c4r c4ix-pin.c4r c4ix-nice.c4r c4ix-fmt.c4r c4ix-gui.c4r c4ix-desktop.c4r \
               c4ix-b4ke.c4r c4ix-cc.c4r c4ix-dmesg.c4r c4ix-free.c4r c4ix-mount.c4r c4ix-umount.c4r \
-              c4ix-df.c4r c4ix-cp.c4r c4ix-mkfs.c4r c4ix-chmod.c4r $(C4IX_ARC_PROGS)
+              c4ix-df.c4r c4ix-cp.c4r c4ix-mkfs.c4r c4ix-chmod.c4r \
+              c4ix-shutdown.c4r c4ix-reboot.c4r c4ix-install.c4r $(C4IX_ARC_PROGS)
 # The demonstrations are opt-in (--demo) and take their six images
 # positionally; `c4ix.c4r --help` documents the roles. With no
 # arguments at all the kernel boots to a shell, which is what

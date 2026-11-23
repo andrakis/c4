@@ -115,7 +115,7 @@ static void vfs_ramuse(struct vnode *d, int *c) {
 enum { VFS_MOUNTS = 4 };            // disks mounted at once (vfs_mount)
 static int vfs_mounts_text(char *out, int max);
 static void vfs_proc(struct vnode *vn) {
-    int ms, n, size, r[2], c[12];
+    int ms, n, size, k, r[2], c[12];
     // /proc/kmsg: the kernel log (console.c), as dmesg prints it
     if (vn->name[0] == 'k') {
         if (!vn_grow(vn, KLOG_MAX + 1)) return;
@@ -130,19 +130,29 @@ static void vfs_proc(struct vnode *vn) {
     // block of frames, how many, the frames in use in them and the blocks
     // less than an eighth in use (mmu_counts), and swap: its slots, the pages out
     // and in since boot, the tasks load control holds, the pages moved in memory
-    // /proc/disks: the block devices, "hd0 SECTORS rw" a line (blk.c)
+    // /proc/disks: the block devices, "hd0 SECTORS rw" a line, and each
+    // partition after its disk, "hd0p1 SECTORS rw START TYPE" (blk.c)
     if (vn->name[0] == 'd') {
-        if (!vn_grow(vn, 16 * 32 + 1)) return;
-        n = 0; ms = 0; size = blk_count();
-        while (ms < size && ms < 16) {
-            vn->data[n++] = 'h'; vn->data[n++] = 'd';
-            n = n + vfs_dec(vn->data + n, ms);
-            vn->data[n++] = ' ';
-            n = n + vfs_dec(vn->data + n, blk_sectors(ms));
-            if (blk_flags(ms) & 1) { memcpy(vn->data + n, " ro", 3); } else { memcpy(vn->data + n, " rw", 3); }
-            n = n + 3;
-            vn->data[n++] = '
-';
+        size = blk_count();
+        if (!vn_grow(vn, size * 5 * 48 + 1)) return;
+        n = 0; ms = 0;
+        while (ms < size * 5) {
+            k = ms % 5 ? blk_part(ms / 5, ms % 5) : ms / 5;
+            if (blk_valid(k)) {
+                blk_name(k, vn->data + n);
+                while (vn->data[n]) ++n;
+                vn->data[n++] = ' ';
+                n = n + vfs_dec(vn->data + n, blk_sectors(k));
+                if (blk_flags(k) & 1) { memcpy(vn->data + n, " ro", 3); } else { memcpy(vn->data + n, " rw", 3); }
+                n = n + 3;
+                if (ms % 5) {
+                    vn->data[n++] = ' ';
+                    n = n + vfs_dec(vn->data + n, blk_start(k));
+                    vn->data[n++] = ' ';
+                    n = n + vfs_dec(vn->data + n, blk_type(k));
+                }
+                vn->data[n++] = '\n';
+            }
             ++ms;
         }
         vn->size = n;
@@ -1333,25 +1343,41 @@ static struct e2fs *vfs_mfs[VFS_MOUNTS];
 
 // block device DEV's ext2 filesystem at PATH, an empty directory (made if
 // there is none): 0, or -1
-int vfs_mount(int dev, char *path, int ro) {
+int vfs_mount(int dev, char *path, int ro) { return vfs_mount_sub(dev, 0, path, ro); }
+// ... SUB, a directory on it (0: its root), there instead: --home hd0p1
+// is the disk's /home at /home (init.c). A host's directory with nothing
+// in it may be mounted over (the boot disk's empty home/, where there
+// are no uploads).
+int vfs_mount_sub(int dev, char *sub, char *path, int ro) {
     struct vnode *dir;
     struct e2fs *fs;
-    int i;
+    int i, ino, st[6];
     sched_lock();
     i = 0;
     while (i < VFS_MOUNTS && vfs_mpt[i]) ++i;
     if (i == VFS_MOUNTS) { sched_unlock(); return 0 - 1; }
     if (!(dir = vfs_walk(path, 0, 0))) dir = vfs_walk(path, 1, 1);
-    if (!dir || dir->type != VN_DIR || dir == rootdir || dir->e2 || dir->hostname) { sched_unlock(); return 0 - 1; }
+    if (!dir || dir->type != VN_DIR || dir == rootdir || dir->e2) { sched_unlock(); return 0 - 1; }
     vfs_dirfill(dir);
     if (dir->child) { sched_unlock(); return 0 - 1; }
     if (!(fs = ext2_mount(dev, ro))) { sched_unlock(); return 0 - 1; }
+    ino = 2;
+    if (sub && sub[0]) {
+        while (*sub == '/') ++sub;
+        if ((ino = ext2_lookup(fs, 2, sub)) <= 0 || ext2_stat(fs, ino, st) < 0 || ((st[0] >> 12) & 15) != 4) {
+            klog("ext2: %s has no directory /%s\n", blk_nm(dev), sub);
+            ext2_umount(fs);
+            sched_unlock();
+            return 0 - 1;
+        }
+    }
+    if (dir->hostname) { free(dir->hostname); dir->hostname = 0; }
     dir->e2 = fs;
-    dir->e2ino = 2;
+    dir->e2ino = ino;
     dir->e2unlisted = 1;
     vfs_mpt[i] = dir;
     vfs_mfs[i] = fs;
-    klog("ext2: hd%d mounted on %s%s\n", dev, path, ext2_ro(fs) ? ", read-only" : "");
+    klog("ext2: %s%s%s mounted on %s%s\n", blk_nm(dev), sub ? ":/" : "", sub ? sub : "", path, ext2_ro(fs) ? ", read-only" : "");
     sched_unlock();
     return 0;
 }
@@ -1411,8 +1437,8 @@ static int vfs_mounts_text(char *out, int max) {
     i = 0;
     while (i < VFS_MOUNTS) {
         if (vfs_mpt[i] && n + PATH_MAX + 32 < max) {
-            out[n++] = 'h'; out[n++] = 'd';
-            n = n + vfs_dec(out + n, ext2_dev(vfs_mfs[i]));
+            blk_name(ext2_dev(vfs_mfs[i]), out + n);
+            while (out[n]) ++n;
             out[n++] = ' ';
             // its path, from the root: the directories up to it, then down
             depth = 0;
@@ -1470,6 +1496,9 @@ int vfs_sync() {
         if (vfs_mpt[i]) { bad = bad + e2_flush_tree(vfs_mpt[i]); ext2_sync(vfs_mfs[i]); }
         ++i;
     }
+    // and every disk's cache, for what was written to it raw (SYS_BLKIO)
+    i = 0;
+    while (i < blk_count()) { blk_flush(i); ++i; }
     sched_unlock();
     return bad;
 }

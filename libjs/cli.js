@@ -167,6 +167,19 @@ async function main(argv) {
   // Input. -i streams it; otherwise piped stdin is fed up front with EOF.
   let wake = null;                       // resolves a parked run loop
   const poke = () => { if (wake) { const w = wake; wake = null; w(); } };
+  // SIGTERM: the machine's power button, SIGTERM to the program (C4IX
+  // shuts down, src/c4ix/sched.c); a second, or a program that takes
+  // none, ends it here
+  // (a second a second later: the one a signal to the process group
+  // also sends, as timeout(1)'s does, is the same)
+  let termAt = 0;
+  process.on('SIGTERM', () => {
+    if (!machine.signalHandlers.get(15) || (termAt && Date.now() - termAt >= 1000)) { flush(); process.exit(143); }
+    if (termAt) return;
+    termAt = Date.now();
+    machine.pendingSignal = 15;
+    poke();
+  });
   if (o.interactive) {
     if (process.stdin.isTTY) process.stdin.setRawMode(true);
     process.stdin.resume();
@@ -282,7 +295,7 @@ async function main(argv) {
         }
       }
       await new Promise(res => setImmediate(res));
-    }
+    } else if (termAt === 0) await new Promise(res => setImmediate(res));   // SIGTERM's turn (above)
   }
   flush();
   if (par) par.shutdown();
@@ -342,4 +355,6 @@ if (process.send && process.env.LIBJS_CHILD) {
   child.on('exit', (code, sig) => process.exit(status !== null ? status : code !== null ? code : 128 + (constants.signals[sig] || 9)));
   // the child has the terminal's Ctrl-C to itself
   process.on('SIGINT', () => {});
+  // and SIGTERM is the machine's power button (main): the child's to take
+  process.on('SIGTERM', () => child.kill('SIGTERM'));
 }

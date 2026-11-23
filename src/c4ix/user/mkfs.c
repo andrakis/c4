@@ -1,6 +1,6 @@
 // C4IX userland: mkfs -- an empty ext2 filesystem on a disk.
 //
-//   mkfs [-b 1024|2048|4096] [-L LABEL] hdN
+//   mkfs [-b 1024|2048|4096] [-L LABEL] hdN    (or a partition: hdNpP)
 //
 // The kernel makes it (ext2.c ext2_mkfs; docs/c4ix-ext2.md): its block
 // groups, bitmaps and inode tables, a root directory and lost+found. What
@@ -21,6 +21,14 @@ static int num(char *s) {
     return v;
 }
 
+// a disk or partition by name, hdD or hdDpP (blk.c's numbers): -1 if not one
+static int disk_id(char *s) {
+    if (s[0] != 'h' || s[1] != 'd' || s[2] < '0' || s[2] > '7') return 0 - 1;
+    if (!s[3]) return s[2] - '0';
+    if (s[3] != 'p' || s[4] < '1' || s[4] > '4' || s[5]) return 0 - 1;
+    return 8 + (s[2] - '0') * 4 + s[4] - '1';
+}
+
 int main(int argc, char **argv) {
     char *label, *dev;
     int a, bsize, d;
@@ -33,17 +41,16 @@ int main(int argc, char **argv) {
         else { dev = 0; break; }
         ++a;
     }
-    if (!dev || dev[0] != 'h' || dev[1] != 'd' || dev[2] < '0' || dev[2] > '9') {
-        ufprintf(STDERR, "usage: mkfs [-b 1024|2048|4096] [-L LABEL] hdN   (cat /proc/disks lists them)\n");
+    if (!dev || (d = disk_id(dev)) < 0) {
+        ufprintf(STDERR, "usage: mkfs [-b 1024|2048|4096] [-L LABEL] hdN | hdNpP   (cat /proc/disks lists them)\n");
         return 1;
     }
-    d = num(dev + 2);
     if (bsize && bsize != 1024 && bsize != 2048 && bsize != 4096) { ufprintf(STDERR, "mkfs: blocks of 1024, 2048 or 4096 bytes\n"); return 1; }
-    uprintf("mkfs: making an ext2 filesystem on hd%d: what is on it now is gone\n", d);
+    uprintf("mkfs: making an ext2 filesystem on %s: what is on it now is gone\n", dev);
     if (ksys(SYS_MKFS, d, bsize, (int)label) < 0) {
-        ufprintf(STDERR, "mkfs: hd%d could not be made one (dmesg says why)\n", d);
+        ufprintf(STDERR, "mkfs: %s could not be made one (dmesg says why)\n", dev);
         return 1;
     }
-    uprintf("mkfs: done: mount hd%d DIR\n", d);
+    uprintf("mkfs: done: mount %s DIR\n", dev);
     return 0;
 }

@@ -6,6 +6,7 @@
 //                         disc in it, c4pc's own boot disc last; DIR
 //                         /mnt/cdrom by default
 //   mount [-r] hdN [DIR]  disk N's ext2 filesystem at DIR (/mnt/hdN by
+//                         default), or partition P's: hdNpP
 //                         default), read-only with -r: the kernel's own
 //                         (ext2.c), every change written to the disk as it
 //                         is made, nothing for persist to keep
@@ -84,6 +85,13 @@ static char *field(char *key, char *out, int max) {
         if (*p) ++p;
     }
     return out;
+}
+// a disk or partition by name, hdD or hdDpP (blk.c's numbers): -1 if not one
+static int disk_id(char *s) {
+    if (s[0] != 'h' || s[1] != 'd' || s[2] < '0' || s[2] > '7') return 0 - 1;
+    if (!s[3]) return s[2] - '0';
+    if (s[3] != 'p' || s[4] < '1' || s[4] > '4' || s[5]) return 0 - 1;
+    return 8 + (s[2] - '0') * 4 + s[4] - '1';
 }
 static int num(char *s) {
     int v;
@@ -239,17 +247,17 @@ int main(int argc, char **argv) {
     // a disk: the kernel's ext2
     k = 1; ro = 0;
     if (!ustrcmp(argv[k], "-r")) { ro = 1; ++k; }
-    if (k < argc && argv[k][0] == 'h' && argv[k][1] == 'd' && argv[k][2] >= '0' && argv[k][2] <= '9') {
-        n = num(argv[k] + 2);
+    if (k < argc && argv[k][0] == 'h' && argv[k][1] == 'd') {
+        if ((n = disk_id(argv[k])) < 0) { ufprintf(STDERR, "mount: %s: a disk is hd0 to hd7, a partition hd0p1 to hd7p4 (cat /proc/disks)\n", argv[k]); return 1; }
         if (k + 1 < argc) dir = argv[k + 1];
         else { ustrcpy(line, "/mnt/"); ustrcpy(line + 5, argv[k]); dir = line; }
         if (dir[0] != '/') { ufprintf(STDERR, "mount: %s: the directory must be a whole path, from /\n", dir); return 1; }
         mkdirs(dir);
         if (ksys(SYS_MOUNT, n, (int)dir, ro) < 0) {
-            ufprintf(STDERR, "mount: hd%d on %s: not an ext2 filesystem, or %s is not an empty directory (dmesg says which; mkfs hd%d makes one)\n", n, dir, dir, n);
+            ufprintf(STDERR, "mount: %s on %s: not an ext2 filesystem, mounted already, or %s is not an empty directory (dmesg says which; mkfs %s makes one)\n", argv[k], dir, dir, argv[k]);
             return 1;
         }
-        uprintf("mount: hd%d on %s%s\n", n, dir, ro ? ", read-only" : "");
+        uprintf("mount: %s on %s%s\n", argv[k], dir, ro ? ", read-only" : "");
         return 0;
     }
     if (!(__c4_info() & C4I_C4MJS)) { ufprintf(STDERR, "mount: this host has no drives to mount\n"); return 1; }

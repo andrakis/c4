@@ -27,7 +27,12 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | taking turns: c4mp's transcripts, and the session with the MMU on 4 CPUs byte for byte libjs's `--cpus 4`, in its cycles; libjs's C4IX tests for several CPUs (test-c4ix-smp.sh) pass on c4pc-host at 2 and 4, taking turns and on threads; on c4pc.elf and c4pc64.elf in QEMU with 4 processors, what test-libjs asks of par.js, and C4IX on all four; four compiles at once take a third of the time on 4 processors (section Several processors) |
 | done | a CD to copy from (cdrom.c): the PC's ATAPI drives from drive 2, ISO 9660 with Rock Ridge or Joliet names, read when wanted; C4IX's `mount`, `umount` (and eject), `df` and `cp`; `c4pc-host --cdrom FILE.iso` |
 | *measured* | on c4pc-host with an image and on c4pc.elf in QEMU with KVM, the ISO as one CD and a test disc as the other: the disc's files listed, read and copied byte for byte, kept on the store by `sync` and there at the next boot |
-| done | block devices (dev.c BLK_*): the PC's IDE disks but the store's (pc/ata.c, LBA28 and LBA48), `c4pc-host --disk FILE.img`; C4IX keeps ext2 on them, its own (docs/c4ix-ext2.md) |
+| done | block devices (dev.c BLK_*): the PC's IDE disks but the store's (pc/ata.c, LBA28 and LBA48, by the controller's bus-master DMA, else PIO in multiple mode), `c4pc-host --disk FILE.img`; C4IX keeps ext2 on them, its own (docs/c4ix-ext2.md) |
+| *measured* | in QEMU with KVM, helios (itself a Hyper-V VM): by PIO, writes 38 KB a second and CD reads 90 KB a second -- a request a sector, and the CD's read a word at a time -- so that install's 160 MB would have taken hours; by DMA a 1.9 MB file is written to ext2 in 0.48 s (was 50) and 1.8 MB read from the CD in 0.39 s (was 20) |
+| done | the machine off, the power button and a restart (pc/acpi.c): ACPI's S5 from the FADT and the DSDT's \_S5, the fixed power button polled and handed to C4IX as SIGTERM (a clean shutdown), C4IX's `shutdown` and `reboot` |
+| *measured* | in QEMU with KVM (pc and q35, c4pc.elf and c4pc64.elf): system_powerdown at the prompt, and `shutdown`, are C4IX's shutdown and then the VM off; `reboot` resets the PC; SIGTERM to c4pc-host or cli.js is the same shutdown. VMware not yet tried |
+| done | installed onto an IDE disk from the ISO (C4IX's `install`, docs/c4ix-install.md): GRUB and c4pc on the disk, the system's files in a partition of their own, /home kept on its ext2 |
+| *measured* | in QEMU with KVM: the ISO installs onto a blank 1 GB disk, e2fsck finds its ext2 clean, and the disk boots alone through its own GRUB; a file saved in /home is there at the next boot |
 | not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk, or a SATA CD drive |
 
 ## One engine, two front ends
@@ -358,8 +363,10 @@ runs on one CPU however many there are.
 
 A VM's way to give it files is a second CD drive with an ISO in it.
 c4pc speaks to CD drives on the IDE channels, as store.c does to disks:
-ATAPI's PACKET commands by polled PIO (TEST UNIT READY, REQUEST SENSE,
-READ CAPACITY, READ(10), START STOP UNIT to eject). Each is a host drive
+ATAPI's PACKET commands, polled (TEST UNIT READY, REQUEST SENSE,
+READ CAPACITY, READ(10), START STOP UNIT to eject). READ(10) goes by the IDE
+controller's bus-master DMA where it has one (PCI IDE: the PIIX in
+VMware, QEMU's pc machine, a real PC), the rest by PIO. Each is a host drive
 from drive 2 on (drive 1 is persist's, an empty read-only one where
 there is no store). The disc is ISO 9660, its names Rock Ridge's where
 it has them (Linux's mkisofs -R, xorriso), else Joliet's (Windows'),
@@ -404,6 +411,58 @@ takes the test disc, its files list and read with the CRCs their
 originals have, `cp -r` copies them, `sync` keeps them, and the next boot
 has them. On c4pc-host the same with Rock Ridge, Joliet-only and
 xorriso's default discs.
+
+### Off, the power button, and a restart
+
+C4IX's `shutdown` (and `reboot`, or `shutdown -r`) asks the kernel
+(SYS_SHUTDOWN, sched.c's sched_halt): every disk's changes are written,
+every program gets SIGTERM, and what is still there 3 seconds later is
+killed; init's wait for the shell returns, and the kernel task's end
+unmounts the disks clean (boot.c). Then the machine stops, with status 0
+(off) or 82 (C4IX_EXIT_REBOOT: restart).
+
+On a PC, off is ACPI's sleep state S5 (pc/acpi.c), as an OS without an
+AML interpreter does it: the RSDP, the RSDT or XSDT, the FADT's PM1a and
+PM1b control blocks, and the DSDT's \_S5 package for SLP_TYPa and
+SLP_TYPb; SLP_TYP | SLP_EN into PM1a_CNT turns off VMware's VM, QEMU's or
+a real PC. QEMU's, Bochs's and VirtualBox's fixed ports stay as the
+fallback, after QEMU's isa-debug-exit (the tests' status). A restart is
+the FADT's RESET_REG, then the chipset's 0xCF9, then the keyboard
+controller's pulse, then a triple fault.
+
+The power button -- VMware's "Shut Down Guest" without VMware Tools,
+QEMU's system_powerdown, a real one -- is ACPI's fixed power button. At
+boot c4pc puts the chipset in ACPI mode (ACPI_ENABLE to SMI_CMD) and sets
+PWRBTN_EN, so that a press is PWRBTN_STS in PM1_STS rather than the
+firmware's; the SCI's IRQ stays masked and the run loop looks every 50
+ms. A press is SIGTERM to the program, as Ctrl-C is SIGINT: C4IX takes it
+as `shutdown`. A second press a second or more later, or a program that
+takes no SIGTERM, is the machine off at once, as holding a real button
+is. c4pc-host and cli.js take their own SIGTERM the same way (`kill PID`:
+C4IX shuts down; a second `kill` a second later ends the process).
+
+    shutdown        # or the VM's power button
+    reboot
+
+The boot says which it found: "c4pc: ACPI: off by S5, the power button
+shuts C4IX down (by the SCI)". The press comes by ACPI's interrupt, the
+SCI (the FADT's SCI_INT, IRQ 9 on most), with every GPE's enable cleared
+so that nothing else raises it; polling the button instead is a port read
+each time, a trip out to the hypervisor, which is why it is only the
+fallback (an SCI that is not an ISA IRQ, or one that keeps firing with
+nothing to say). A control method power button (FADT flag PWR_BUTTON) is
+the AML's, which needs an interpreter: c4pc says so, and VMware's, if it
+is one, may then still need `shutdown` typed. `--no-acpi` leaves ACPI be:
+off by the fixed ports alone, and no power button.
+
+### Installed onto a disk
+
+C4IX's `install` puts it on the PC's first IDE disk, from the ISO, and
+the disk then boots without the CD: GRUB in its first sectors, c4pc and
+the kernel in partition 1's /boot (ext2), the system's files in partition
+2 as the ISO's disk.tar is, and /home on partition 1, kept. It erases the
+disk, says so, and asks for "yes" first. The ISO's menu has an entry
+for it. docs/c4ix-install.md has the layout and how GRUB is set up.
 
 ## Running it
 

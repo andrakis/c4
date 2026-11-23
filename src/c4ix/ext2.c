@@ -765,18 +765,31 @@ int ext2_ro(struct e2fs *fs) { return fs->ro; }
 
 // DEV's ext2 filesystem, mounted (read-only where RO, or where it has a
 // feature that wants it): the filesystem, or 0 with why in the log
+// do devices A and B share sectors: the same one, or a disk and a partition of it
+static int e2_overlap(int a, int b) {
+    if (a == b) return 1;
+    if (a < 8 && blk_disk(b) == a) return 1;
+    if (b < 8 && blk_disk(a) == b) return 1;
+    return 0;
+}
+
 struct e2fs *ext2_mount(int dev, int ro) {
     struct e2fs *fs;
     char *sb;
     int i, inc, roc, n;
     i = 0;
+    while (i < E2_MAXFS) {
+        if (e2_mounts[i].used && e2_overlap(e2_mounts[i].dev, dev)) { klog("ext2: %s: mounted already, or a disk or partition it is on\n", blk_nm(dev)); return 0; }
+        ++i;
+    }
+    i = 0;
     while (i < E2_MAXFS && e2_mounts[i].used) ++i;
-    if (i == E2_MAXFS) { klog("ext2: hd%d: no room for another mount\n", dev); return 0; }
+    if (i == E2_MAXFS) { klog("ext2: %s: no room for another mount\n", blk_nm(dev)); return 0; }
     fs = &e2_mounts[i];
     memset((char *)fs, 0, sizeof(struct e2fs));
     if (!(sb = vfs_malloc(1024))) return 0;
     if (blk_read(dev, 2, 2, sb) < 0 || rd16(sb + 56) != E2_MAGIC) {
-        klog("ext2: hd%d: no ext2 filesystem there\n", dev);
+        klog("ext2: %s: no ext2 filesystem there\n", blk_nm(dev));
         free(sb);
         return 0;
     }
@@ -786,20 +799,20 @@ struct e2fs *ext2_mount(int dev, int ro) {
     inc = rd32(sb + 96);
     roc = rd32(sb + 100);
     if (rd32(sb + 76) >= 1 && (inc & ~E2_INCOMPAT_KNOWN)) {
-        klog("ext2: hd%d: features this cannot read (incompat 0x%x: ext4's, or a journal to recover)\n", dev, inc);
+        klog("ext2: %s: features this cannot read (incompat 0x%x: ext4's, or a journal to recover)\n", blk_nm(dev), inc);
         free(sb);
         return 0;
     }
     if (rd32(sb + 76) >= 1 && (roc & ~E2_RO_KNOWN) && !fs->ro) {
-        klog("ext2: hd%d: read-only: features this cannot write (ro_compat 0x%x)\n", dev, roc);
+        klog("ext2: %s: read-only: features this cannot write (ro_compat 0x%x)\n", blk_nm(dev), roc);
         fs->ro = 1;
     }
     if ((rd32(sb + 92) & E2_COMPAT_JOURNAL) && !fs->ro) {
-        klog("ext2: hd%d: read-only: it has a journal (ext3), which this does not keep\n", dev);
+        klog("ext2: %s: read-only: it has a journal (ext3), which this does not keep\n", blk_nm(dev));
         fs->ro = 1;
     }
     fs->bsize = 1024 << rd32(sb + 24);
-    if (fs->bsize < 1024 || fs->bsize > 4096) { klog("ext2: hd%d: blocks of %d bytes\n", dev, fs->bsize); free(sb); return 0; }
+    if (fs->bsize < 1024 || fs->bsize > 4096) { klog("ext2: %s: blocks of %d bytes\n", blk_nm(dev), fs->bsize); free(sb); return 0; }
     fs->spb = fs->bsize / 512;
     fs->ppb = fs->bsize / 4;
     fs->inodes = rd32(sb);
@@ -811,19 +824,19 @@ struct e2fs *ext2_mount(int dev, int ro) {
     if (rd32(sb + 76) >= 1) { fs->isize = rd16(sb + 88); fs->first_ino = rd32(sb + 84); }
     fs->filetype = (inc & E2_INCOMPAT_FILETYPE) != 0;
     fs->sparse = (roc & E2_RO_SPARSE) != 0;
-    if (fs->bpg <= 0 || fs->ipg <= 0 || fs->isize < 128 || fs->isize > fs->bsize) { klog("ext2: hd%d: a superblock that does not add up\n", dev); free(sb); return 0; }
+    if (fs->bpg <= 0 || fs->ipg <= 0 || fs->isize < 128 || fs->isize > fs->bsize) { klog("ext2: %s: a superblock that does not add up\n", blk_nm(dev)); free(sb); return 0; }
     fs->ngroups = (fs->blocks - fs->first_data + fs->bpg - 1) / fs->bpg;
     n = (fs->ngroups * 32 + fs->bsize - 1) / fs->bsize;
     fs->gdt_blocks = n;
     if (!(fs->gdt = vfs_malloc(n * fs->bsize)) || bread_to(fs, fs->first_data + 1, n, fs->gdt) < 0) {
-        klog("ext2: hd%d: its group descriptors cannot be read\n", dev);
+        klog("ext2: %s: its group descriptors cannot be read\n", blk_nm(dev));
         free(sb);
         return 0;
     }
     fs->base_time = rd32(sb + 48);
     if (rd32(sb + 44) > fs->base_time) fs->base_time = rd32(sb + 44);
     fs->base_time = fs->base_time - __time() / 1000;
-    if (!(rd16(sb + 58) & 1)) klog("ext2: hd%d: not unmounted cleanly last time: e2fsck it when you can\n", dev);
+    if (!(rd16(sb + 58) & 1)) klog("ext2: %s: not unmounted cleanly last time: e2fsck it when you can\n", blk_nm(dev));
     fs->used = 1;
     if (!fs->ro) {
         // mounted: not clean until it is unmounted, and counted
@@ -880,10 +893,10 @@ int ext2_mkfs(int dev, int bsize, char *label) {
     int sectors, blocks, spb, first, bpg, ngroups, ipg, ipb, itb, gdtb, g, base, nb, used, k, i, t;
     int free_b, free_i, rootb, lfb, inodes, ok, rsv;
     sectors = blk_sectors(dev);
-    if (sectors <= 0 || (blk_flags(dev) & 1)) { klog("ext2: hd%d: not a disk that can be written\n", dev); return 0 - 1; }
+    if (sectors <= 0 || (blk_flags(dev) & 1)) { klog("ext2: %s: not a disk that can be written\n", blk_nm(dev)); return 0 - 1; }
     i = 0;
     while (i < E2_MAXFS) {
-        if (e2_mounts[i].used && e2_mounts[i].dev == dev) { klog("ext2: hd%d: mounted: unmount it first\n", dev); return 0 - 1; }
+        if (e2_mounts[i].used && e2_overlap(e2_mounts[i].dev, dev)) { klog("ext2: %s: mounted, or a partition of it: unmount it first\n", blk_nm(dev)); return 0 - 1; }
         ++i;
     }
     if (!bsize) bsize = sectors < 1048576 ? 1024 : 4096;
@@ -909,7 +922,7 @@ int ext2_mkfs(int dev, int bsize, char *label) {
         --ngroups;
         blocks = first + ngroups * bpg;
     }
-    if (blocks < 64) { klog("ext2: hd%d: too small\n", dev); return 0 - 1; }
+    if (blocks < 64) { klog("ext2: %s: too small\n", blk_nm(dev)); return 0 - 1; }
     if (!(sb = vfs_malloc(1024)) || !(gdt = vfs_malloc(gdtb * bsize)) || !(bm = vfs_malloc(bsize)) ||
         !(zero = vfs_malloc(bsize * 16)) || !(ib = vfs_malloc(256))) return 0 - 1;
     memset(sb, 0, 1024); memset(gdt, 0, gdtb * bsize); memset(zero, 0, bsize * 16);
@@ -1018,7 +1031,7 @@ int ext2_mkfs(int dev, int bsize, char *label) {
     }
     blk_flush(dev);
     free(sb); free(gdt); free(bm); free(zero); free(ib);
-    if (!ok) { klog("ext2: hd%d: a write failed making it\n", dev); return 0 - 1; }
-    klog("ext2: hd%d: made: %d blocks of %d bytes, %d inodes, %d groups\n", dev, blocks, bsize, ipg * ngroups, ngroups);
+    if (!ok) { klog("ext2: %s: a write failed making it\n", blk_nm(dev)); return 0 - 1; }
+    klog("ext2: %s: made: %d blocks of %d bytes, %d inodes, %d groups\n", blk_nm(dev), blocks, bsize, ipg * ngroups, ngroups);
     return 0;
 }

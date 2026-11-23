@@ -4,7 +4,8 @@
  *
  * The drives are ATAPI ones on the IDE channels, as store.c's disks are
  * ATA ones (1F0h and 170h, master and slave; a SATA drive is not spoken
- * to), driven by polled PIO PACKET commands: TEST UNIT READY, REQUEST
+ * to), driven by polled PACKET commands (READ(10) by the controller's
+ * DMA where it has a bus master, else PIO): TEST UNIT READY, REQUEST
  * SENSE, READ CAPACITY, READ(10), and START STOP UNIT to eject. The disc
  * is ISO 9660, its names Rock Ridge's where it has them (Linux's
  * mkisofs -R), else Joliet's (Windows'), else its own less ";1".
@@ -31,6 +32,46 @@ static inline void outsw(u32 p, const void *b, u32 n) { __asm__ volatile("rep ou
 #define SECT 2048
 #define MAXRUN 16                       /* sectors a READ(10) asks for at once */
 
+/* The IDE controller's bus master (PCI IDE, as the PIIX's: VMware's,
+ * QEMU's pc, a real PC's), for DMA: its registers for each channel (0 if
+ * there is none: PIO), a buffer of 64 KB that crosses no 64 KB line, and
+ * a table of one region. Found by pc/ata.c's ide_pci_init; c4pc-host
+ * has none. One transfer at a time: the devices are CPU 0's. */
+u32 ide_bm[2];
+u8 *ide_dma_buf;
+u32 *ide_prd;
+static inline void outl_(u32 p, u32 v) { __asm__ volatile("outl %0,%w1" : : "a"(v), "Nd"(p)); }
+/* the channel whose ports start at IO */
+static int ide_ch(u32 io) { return io == 0x170 ? 1 : 0; }
+/* ready a transfer of N bytes (to 64 KB) by channel CH's bus master,
+ * TOMEM: from the device into memory */
+void ide_dma_arm(int ch, u32 n, int tomem) {
+  u32 bm = ide_bm[ch];
+  ide_prd[0] = (u32)(uintptr_t)ide_dma_buf;
+  ide_prd[1] = (n & 0xFFFF) | 0x80000000u;              /* 0: 64 KB; the table's end */
+  outb(bm, 0);
+  outl_(bm + 4, (u32)(uintptr_t)ide_prd);
+  outb(bm + 2, (u8)(inb(bm + 2) | 6));                   /* the interrupt and error bits cleared */
+  outb(bm, tomem ? 8 : 0);
+}
+static void io_pause_(void) { for (int i = 0; i < 64; i++) __asm__ volatile("pause"); }
+/* start it, once the device has its command, and wait: 0, or -1 */
+int ide_dma_run(int ch, int tomem, i64 ms) {
+  u32 bm = ide_bm[ch];
+  outb(bm, (u8)((tomem ? 8 : 0) | 1));
+  i64 t0 = plat_now_ms();
+  int r = 0;
+  for (;;) {
+    u8 s = inb(bm + 2);
+    if (s & 2) { r = -1; break; }                        /* the bus master's error */
+    if (!(s & 1) || (s & 4)) break;                      /* no longer active, or the device's done */
+    if (plat_now_ms() - t0 > ms) { r = -1; break; }
+    io_pause_();
+  }
+  outb(bm, tomem ? 8 : 0);
+  return r;
+}
+
 typedef struct cd {
   u32 io, ctl; int slave;
   /* an image instead of a drive (cdrom_image): its sectors, and how many */
@@ -38,6 +79,7 @@ typedef struct cd {
   char model[41], where[24];
   /* the disc, as the last look found it */
   int media; u32 blocks;                /* 2048-byte sectors */
+  int no_dma;                           /* DMA failed once: PIO */
   char label[33];
   int joliet, rr;
   u32 root_lba, root_len;
@@ -47,13 +89,19 @@ typedef struct cd {
   u32 run_lba, run_n; u8 *run_buf;
 } cd;
 
-/* ---- ATAPI, polled ---- */
+/* ---- ATAPI, polled ----
+ * A port read under a hypervisor is a trip out to it: the data is read a
+ * DRQ block at a time (not a word at a time: 1,024 trips a sector, 90 KB
+ * a second in QEMU under nested KVM), and the status polled with a pause
+ * between, the emulator's thread's time to finish the read (pc/ata.c). */
+static void io_pause(void) { for (int i = 0; i < 64; i++) __asm__ volatile("pause"); }
 static int wait_ready(cd *c, i64 ms) {
   i64 t0 = plat_now_ms();
   for (;;) {
     u8 s = inb(c->io + 7);
     if (!(s & 0x80)) return s;
     if (plat_now_ms() - t0 > ms) return -1;
+    io_pause();
   }
 }
 static void sel(cd *c) {
@@ -75,6 +123,7 @@ static i32 packet(cd *c, const u8 *cmd, u8 *buf, u32 max, i64 ms) {
     if (!(s & 0x80) && (s & 0x08)) break;
     if (!(s & 0x80) && (s & 0x01)) return -1;
     if (plat_now_ms() - t0 > 2000) return -1;
+    io_pause();
   }
   u16 w[6]; memcpy(w, cmd, 12);
   outsw(c->io, w, 6);
@@ -87,12 +136,9 @@ static i32 packet(cd *c, const u8 *cmd, u8 *buf, u32 max, i64 ms) {
     u32 n = (u32)inb(c->io + 4) | (u32)inb(c->io + 5) << 8;
     if (!n) break;
     u32 words = (n + 1) / 2;
-    while (words) {
-      u16 x;
-      if (got + 2 <= max) { insw(c->io, buf + got, 1); got += 2; }
-      else { insw(c->io, &x, 1); }
-      words--;
-    }
+    u32 fit = got + words * 2 <= max ? words : (max - got) / 2;
+    if (fit) { insw(c->io, buf + got, fit); got += fit * 2; words -= fit; }
+    while (words) { u16 x; insw(c->io, &x, 1); words--; }   /* past what was wanted: read and dropped */
   }
   return (i32)got;
 }
@@ -116,12 +162,45 @@ static int ready(cd *c) {
   }
   return 0;
 }
+/* READ(10) by DMA (the bus master's, ide_dma_*): K sectors into BUF, 0
+ * or -1. One request, where PIO is one a sector */
+static int read_dma(cd *c, const u8 *cmd, u8 *buf, u32 k) {
+  int ch = ide_ch(c->io);
+  if (wait_ready(c, 2000) < 0) return -1;
+  sel(c);
+  if (wait_ready(c, 2000) < 0) return -1;
+  ide_dma_arm(ch, k * SECT, 1);
+  outb(c->io + 1, 1);                                    /* DMA */
+  outb(c->io + 4, 0); outb(c->io + 5, 0);
+  outb(c->io + 7, 0xA0);
+  i64 t0 = plat_now_ms();
+  for (;;) {
+    u8 s = inb(c->io + 7);
+    if (!(s & 0x80) && (s & 0x08)) break;
+    if (!(s & 0x80) && (s & 0x01)) return -1;
+    if (plat_now_ms() - t0 > 2000) return -1;
+    io_pause();
+  }
+  u16 w[6]; memcpy(w, cmd, 12);
+  outsw(c->io, w, 6);
+  if (ide_dma_run(ch, 1, 10000)) return -1;
+  int s = wait_ready(c, 10000);
+  if (s < 0 || (s & 0x01)) return -1;
+  memcpy(buf, ide_dma_buf, k * SECT);
+  return 0;
+}
 static int read_sectors(cd *c, u32 lba, u32 n, u8 *buf) {
   if (c->rd) return c->rd(c->rctx, lba, n, buf);
   while (n) {
     u32 k = n > MAXRUN ? MAXRUN : n;
     u8 cmd[12] = {0x28, 0, (u8)(lba >> 24), (u8)(lba >> 16), (u8)(lba >> 8), (u8)lba, 0, (u8)(k >> 8), (u8)k, 0, 0, 0};
     int ok = 0;
+    /* by DMA where the controller has a bus master; once that fails, by
+     * PIO from then on */
+    if (ide_bm[ide_ch(c->io)] && !c->no_dma) {
+      if (!read_dma(c, cmd, buf, k)) ok = 1;
+      else { c->no_dma = 1; sense(c, 0); }
+    }
     for (int tries = 0; tries < 3 && !ok; tries++) {
       if (packet(c, cmd, buf, k * SECT, 10000) == (i32)(k * SECT)) ok = 1;
       else sense(c, 0);

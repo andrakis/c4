@@ -24,6 +24,7 @@
 #include <limits.h>
 #include <linux/futex.h>
 #include <sys/syscall.h>
+#include <signal.h>
 #include "snd.h"
 
 /* ---- the parallel engine's CPUs (par.c): a thread each, and a futex ---- */
@@ -256,6 +257,11 @@ static int img_rw(blkdev *b, int write, u32 lba, u32 n, u8 *buf) {
 }
 static int img_flush(blkdev *b) { return fflush((FILE *)b->ctx) ? -1 : 0; }
 
+/* SIGTERM: the machine's power button, SIGTERM to the program (C4IX shuts
+ * down, sched.c); a second, or a program that takes none, ends it here */
+static volatile sig_atomic_t host_terms;
+static void on_term(int s) { (void)s; host_terms++; }
+
 int main(int argc, char **argv) {
   u32 mb = 32; double maxc = -1, mhz = 20; int cpus = 0, quantum = 0, parallel = 0, stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0;
   const char *shot = 0, *wav = 0;
@@ -353,8 +359,17 @@ int main(int argc, char **argv) {
 
   i64 t0 = plat_now_ms();
   i64 limit = maxc < 0 ? INT64_MAX : (i64)maxc;
-  int status;
+  int status, terms_seen = 0;
+  i64 term_at = 0;
+  signal(SIGTERM, on_term);
   for (;;) {
+    if (host_terms != terms_seen) {
+      terms_seen = host_terms;
+      /* a second a second later: the one a signal to the process group
+       * also sends (timeout(1)) is the same press */
+      if (!m->sigh[15] || (term_at && plat_now_ms() - term_at >= 1000)) { flush_out(); fprintf(stderr, "c4pc-host: terminated\n"); status = 143; break; }
+      if (!term_at) { term_at = plat_now_ms(); m->pending_signal = 15; }
+    }
     /* the machine's time: with several CPUs, the round robin's, not CPU 0's */
     i64 left = limit - machine_clock(m);
     if (left <= 0) { flush_out(); fprintf(stderr, "libjs: stopped at cycle budget (%lld cycles)\n", (long long)machine_clock(m)); status = 9; break; }

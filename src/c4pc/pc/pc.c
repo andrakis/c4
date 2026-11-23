@@ -13,7 +13,11 @@
  *   - COM1 at 115200 both ways, VGA text with enough ANSI for a shell,
  *     the 8042 keyboard
  *   - when the machine stops: its status out through QEMU's isa-debug-exit
- *     (port 0xF4), then ACPI power-off for QEMU and Bochs, then a halt.
+ *     (port 0xF4), then ACPI's S5 (acpi.c: VMware's, a real PC's), then
+ *     QEMU's, Bochs's and VirtualBox's fixed ports, then a halt; status 82
+ *     (C4IX's reboot, C4IX_EXIT_REBOOT) restarts the PC instead
+ *   - the ACPI power button, by its SCI: SIGTERM to the program (C4IX
+ *     shuts down, sched.c), a second press the machine off at once
  */
 #include "../c4pc.h"
 #include "../clib.h"
@@ -158,9 +162,18 @@ void pc_logn(i64 v) { con_dec(v); }
 static void con_hex(u32 v) { con_puts("0x"); for (int i = 7; i >= 0; i--) con_put("0123456789abcdef"[(v >> (4 * i)) & 15]); }
 
 /* ---- leaving ---- */
+void acpi_init(void (*log)(const char *));
+int acpi_button(i64 now);
+void acpi_sci(void);
+extern int acpi_irq;
+void acpi_off(void);
+void acpi_reset(void);
+enum { STATUS_REBOOT = 82 };          /* C4IX_EXIT_REBOOT: reboot, shutdown -r */
 static void power_off(int status) {
   con_flush();
+  if (status == STATUS_REBOOT) { con_puts("c4pc: restarting the PC\n"); con_flush(); acpi_reset(); }
   outb(0xF4, (u8)(status & 0x7f));   /* QEMU's isa-debug-exit: exits (v << 1) | 1 */
+  acpi_off();                        /* S5, by the FADT and the DSDT (acpi.c) */
   outw(0x604, 0x2000);               /* QEMU's ACPI power-off */
   outw(0xB004, 0x2000);              /* Bochs's, and older QEMU's */
   outw(0x4004, 0x3400);              /* VirtualBox's */
@@ -405,6 +418,7 @@ void isr(struct regs *r) {
   else if (irq == 1) kbd_irq();
   else if (irq == 12) { u8 st = inb(0x64); if (st & 1) { u8 b = inb(0x60); if (st & 0x20) mouse_byte(b); } }
   else if (irq == 4) { while (inb(0x3FD) & 1) { int c = inb(0x3F8); inq_push(c == '\r' ? '\n' : c); } }
+  else if ((int)irq == acpi_irq) acpi_sci();   /* ACPI's: the power button (acpi.c) */
   else if (irq == 7 || irq == 15) {       /* spurious: no EOI for the one that did not happen */
     if (irq == 7) { outb(0x20, 0x0B); if (!(inb(0x20) & 0x80)) return; }
     else { outb(0xA0, 0x0B); if (!(inb(0xA0) & 0x80)) { outb(0x20, 0x20); return; } }
@@ -521,7 +535,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, acpi = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -548,6 +562,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--store")) store_create = 1;      /* a blank ATA disk may become the store */
     else if (!strcmp(args[a], "--no-store")) store = 0;
     else if (!strcmp(args[a], "--no-cdrom")) cdrom = 0;      /* the CD drives left be (cdrom.c): a session libjs can match */
+    else if (!strcmp(args[a], "--no-acpi")) acpi = 0;        /* ACPI left be (acpi.c): off by the fixed ports, no power button */
     else if (!strcmp(args[a], "--debug-sound")) { extern void (*hda_log)(const char *); hda_log = con_puts; }
     else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : -1; }
     else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
@@ -564,6 +579,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else break;
   }
 
+  if (acpi) acpi_init(con_puts);       /* the power button's and off's registers (acpi.c) */
   { const char *how = clock_init(clock_want);
     con_puts("c4pc: the clock: "); con_puts(how);
     if (tsc_per_ms) { con_puts(", "); con_dec(tsc_per_ms / 1000); con_puts(" MHz"); }
@@ -618,6 +634,9 @@ void pc_main(u32 magic, struct mb_info *mb) {
       con_puts("c4pc: drive 1: "); con_puts(what); con_puts("\n");
     }
   }
+  /* the IDE controller's DMA (pc/ata.c), for the CD drives and disks below */
+  { extern const char *ide_pci_init(void); const char *dma = ide_pci_init();
+    if (dma) { con_puts("c4pc: disks and CDs by "); con_puts(dma); con_puts("\n"); } }
   /* the CD drives (cdrom.c), from drive 2 on: drive 1 is the store's
    * place (persist's), an empty read-only one where there is no store */
   {
@@ -676,7 +695,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     m->gui = gui_new(m, w, h);
     dbg_m = m;
     int mouse = mouse_init();
-    if (mouse) outb(0xA1, 0xEF);           /* IRQ 12 */
+    if (mouse) outb(0xA1, (u8)(inb(0xA1) & 0xEF));   /* IRQ 12 (the SCI's may be unmasked: acpi.c) */
     con_puts("c4pc: a display of "); con_dec(w); con_puts(" x "); con_dec(h);
     con_puts(mouse ? ", and a mouse\n" : ", and no mouse\n");
     vga_real = 0;                       /* graphics: the VGA's text is not shown */
@@ -742,6 +761,17 @@ void pc_main(u32 magic, struct mb_info *mb) {
       }
       kbd_push(m, c);
       con_put(c);
+    }
+    /* the power button (acpi.c: its SCI counted it): SIGTERM to the
+     * program, which C4IX takes as a shutdown (sched.c); a second press a
+     * second later, or a program that takes no SIGTERM, the machine off */
+    {
+      static i64 pressed;
+      i64 now = plat_now_ms();
+      if (acpi_button(now)) {
+        if (!m->sigh[15] || (pressed && now - pressed >= 1000)) { con_puts("\nc4pc: the power button: off\n"); status = 0; break; }
+        if (!pressed) { pressed = now ? now : 1; m->pending_signal = 15; }
+      }
     }
     con_flush();
     i64 left = limit - machine_clock(m);

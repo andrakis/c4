@@ -163,6 +163,12 @@ static int kernel_main(int argc, int argv) {
     vfs_umount_all();          // the disks written and marked clean (docs/c4ix-ext2.md)
     sl4b_stats();
     kprintf("c4ix: shutdown complete, %d tasks remain\n", task_count());
+    // restarted, where SYS_SHUTDOWN asked (sched_halt): the host's to do
+    if (sched_halting && sched_halt_how) {
+        kputs("c4ix: restarting the machine\n");
+        return C4IX_EXIT_REBOOT;
+    }
+    if (sched_halting) kputs("c4ix: the machine can be switched off\n");
     return 0;
 }
 

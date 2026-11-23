@@ -511,6 +511,7 @@ static int sys_args_ok(int num, int *args) {
     case SYS_UMOUNT: case SYS_CHMOD:
                        return ustrlen((char *)args[0]) >= 0;
     case SYS_MKFS:     return !args[2] || ustrlen((char *)args[2]) >= 0;
+    case SYS_BLKIO:    return uaccess(args[2], (((args[0] >> 16) & 255) + 1) * 512, (args[0] & 256) ? 0 : 1);
     case SYS_STATFS:   return ustrlen((char *)args[0]) >= 0 && uaccess(args[1], 7 * sizeof(int), 1);
     }
     return 1;
@@ -535,6 +536,12 @@ int sys_dispatch(int num, int *args) {
     case SYS_STATFS:   return vfs_statfs((char *)args[0], (int *)args[1]);
     case SYS_SYNC:     return vfs_sync();
     case SYS_CHMOD:    return vfs_chmod((char *)args[0], args[1]);
+    // the machine off (0) or restarted (1), once every task has gone
+    // (sched.c, sched_halt): every disk's changes written first
+    case SYS_SHUTDOWN: vfs_sync(); return sched_halt(args[0] ? 1 : 0, "shutdown");
+    // sectors of a device to (args[0] + 256) or from a buffer: install.c's
+    // MBR, boot loader and system partition
+    case SYS_BLKIO:    return blk_user(args[0] & 255, args[1], ((args[0] >> 16) & 255) + 1, (char *)args[2], (args[0] & 256) ? 1 : 0);
     case SYS_OPEN:     return sys_open((char *)args[0], args[1]);
     case SYS_CLOSE:    return sys_close(args[0]);
     case SYS_DUP:      return sys_dup(args[0]);

@@ -129,8 +129,22 @@ enum {
     // filesystem, make one, its counts, every change written, a mode
     SYS_MOUNT = 248, SYS_UMOUNT = 249, SYS_MKFS = 250, SYS_STATFS = 251, SYS_SYNC = 252,
     SYS_CHMOD = 253,
-    SYS_TOP = 254          // one past the last: sched_trap's range check
+    // the machine off, or restarted (sched.c, sched_halt; shutdown.c)
+    SYS_SHUTDOWN = 254,
+    // sectors of a disk or partition read or written (blk.c, blk_user):
+    // the device, + 256 to write, + 65536 * (the count - 1: to 256); the
+    // first sector; a buffer of the count * 512 bytes
+    SYS_BLKIO = 255,
+    SYS_TOP = 256          // one past the last: sched_trap's range check
 };
+// Shutdown (sched.c): what the kernel task's end does once every task has
+// gone, 0 the machine off, 1 restarted -- the kernel's exit code is then
+// C4IX_EXIT_REBOOT, which c4pc restarts the PC for (docs/c4pc.md) -- and
+// when it began (the machine's ms), 0 while it has not.
+enum { C4IX_EXIT_REBOOT = 82 };
+extern int sched_halt_how;
+extern int sched_halting;
+int sched_halt(int how, char *why);
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
 enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_YIELDS = 1 };
 // What SYS_STAT and SYS_FSTAT write, a word each, as many as the caller
@@ -359,12 +373,23 @@ int   host_has(int bit);
 // ---- disks (docs/c4ix-ext2.md) ----
 // The block devices: libjs/blk.js and c4pc's, the window at 0x540 (blk.c)
 enum { C4IX_I_BLK = 0x200000 };
-int  blk_count();
+// A device: a disk (0 to 7: hd0 ... hd7) or a partition of one (8 + 4 * D
+// + P - 1: hdDpP, its MBR's primary P), numbered from its own first sector
+int  blk_count();                     // the disks
+int  blk_valid(int dev);
+int  blk_disk(int dev);               // the disk it is, or is on; -1 if none
+int  blk_part(int disk, int p);       // partition P (1 to 4) of DISK's number
 int  blk_sectors(int dev);
+int  blk_start(int dev);              // a partition's first sector on its disk
+int  blk_type(int dev);               // a partition's MBR type
 int  blk_flags(int dev);              // 1 read-only, 2 removable
 int  blk_read(int dev, int lba, int n, char *buf);    // 0, or -1
 int  blk_write(int dev, int lba, int n, char *buf);
 int  blk_flush(int dev);
+int  blk_user(int dev, int lba, int count, char *buf, int write);   // SYS_BLKIO
+char *blk_name(int dev, char *out);   // hd0, hd0p1
+char *blk_nm(int dev);                // ... in a buffer of its own
+int  blk_parse(char *name);           // hd0, hd0p1: the number, or -1
 void blk_banner();
 // ext2, on one (ext2.c). Inodes by number; names one component
 struct e2fs;
@@ -390,6 +415,7 @@ int  ext2_dev(struct e2fs *fs);
 int  ext2_ro(struct e2fs *fs);
 // the VFS's side (vfs.c)
 int  vfs_mount(int dev, char *path, int ro);
+int  vfs_mount_sub(int dev, char *sub, char *path, int ro);   // SUB, a directory on DEV, at PATH
 int  vfs_umount(char *path);
 int  vfs_statfs(char *path, int *out);    // ext2_statfs's, and the device; -1 if not on a disk
 int  vfs_sync();

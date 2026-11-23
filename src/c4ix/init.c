@@ -340,12 +340,14 @@ int init_main(int argc, int argv) {
     char *shargv[16];
     char *vav[3];
     char *cmds[4];
-    int i, desktop, shargc, ncmd, k, vrc;
+    char *home;
+    int i, desktop, shargc, ncmd, k, vrc, hd;
 
     av = (char **)argv;
     i = 1;
     desktop = 0;
     ncmd = 0;
+    home = 0;
 
     if (i < argc) {
         if (init_is(av[i], "-h") || init_is(av[i], "--help")) {
@@ -363,6 +365,9 @@ int init_main(int argc, int argv) {
         // background on the console, then the desktop on the display,
         // as typing "top &" and "desktop" at the first prompt would
         if (i < argc && init_is(av[i], "--desktop")) { desktop = 1; ++i; }
+        // --home hd0p1: the disk C4IX was installed on (install.c), its
+        // /home at /home once the system's files are there
+        if (i + 1 < argc && init_is(av[i], "--home")) { home = av[i + 1]; i = i + 2; }
         // -e CMD: the shell runs CMD as if it were typed (the web page's
         // "Wolfenstein 3D on C4IX" boots the console with -e "wolf3d --direct")
         while (i + 1 < argc && ncmd < 4 && init_is(av[i], "-e")) { cmds[ncmd++] = av[i + 1]; i += 2; }
@@ -396,6 +401,11 @@ int init_main(int argc, int argv) {
             kprintf("c4ix: the boot stops here.\n");
             return 4;
         }
+        if (home) {
+            hd = blk_parse(home);
+            if (hd < 0 || vfs_mount_sub(hd, "home", "/home", 0) < 0)
+                kprintf("init: --home %s: its /home could not be mounted at /home (dmesg says why)\n", home);
+        }
         boot_done();
         con_booted();
 
@@ -416,6 +426,8 @@ int init_main(int argc, int argv) {
         }
         for (k = 0; k < ncmd; ++k) { shargv[shargc++] = "-e"; shargv[shargc++] = cmds[k]; }
         shargv[shargc] = 0;
+        // shut down while the boot went on (the power button): no shell
+        if (sched_halting) return 0;
         if (!(a = task_spawn(shargv[0], shargc, (int)shargv))) {
             kprintf("init: cannot start '%s'\n", shargv[0]);
             return 1;

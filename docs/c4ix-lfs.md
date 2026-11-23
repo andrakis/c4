@@ -75,14 +75,12 @@ SYS_LSEEK64 to a position, a read, a relative seek back):
 Surveyed 2026-11-23 for where C4IX does 32 bits' (or a byte's) work that
 a 64-bit word could do faster, or assumes 32 bits:
 
-- **The PC runs only the 32-bit build.** c4pc's engine (src/c4pc/
-  engine.c, mmu.c) is libjs's, a 32-bit word: memory is `i32`, the stack
-  and pc step by 4, the page tables are 32-bit, and the loader refuses an
-  image of another word size. c4pc64.elf is that machine compiled for an
-  x86-64 host, faster, but its guest is still 32-bit. Running the 64-bit
-  C4IX (c4ix.c4r, as native c4m and C4KE once did) on a PC would be a new
-  engine with an 8-byte word and its own page-table format: a large job,
-  and the one that would make 64-bit positions and the rest free there.
+- **The PC runs the 64-bit build too** (docs/c4pc-64.md, 2026-11-23):
+  c4pc's engine is built at either word size (C4PC_W64: c4pc-host64w,
+  c4pcw64.elf), and its MMU walks tables of 512 eight-byte entries on the
+  64-bit word, which src/c4ix/mmu.c builds (MMU_PTES, MMU_DSHIFT; its
+  mmu_vbits was allocated in bytes and indexed by word, 8 KB short on 64
+  bits, and is now sized by the word).
 - **CRC-32 and inflate** (lib/archive.c): most of a boot's instructions
   where nothing accelerates them, as on native c4m. A byte a step, the
   bit buffer kept to 23 bits; a 64-bit word could take slicing-by-8 and a

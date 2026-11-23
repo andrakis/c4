@@ -91,6 +91,10 @@ session64 () {
 }
 session64 "" ""
 session64 -noacc "--no-accel --no-osaccel"
+# with the MMU (mmu.c's 512-entry tables of words; src/c4ix/mmu.c's)
+session64 -mmu "--mmu"
+if grep -qF "each user task has a space of its own" $W/h64-mmu.out; then ok "C4IX finds the MMU and gives each task a space of its own"
+else bad "C4IX and the MMU, 64-bit"; fi
 
 # ---- the desktop, on a display (test-c4pc's, on the 64-bit system) ----
 echo "  ---   the 64-bit desktop, on a display"
@@ -103,7 +107,7 @@ cat > $W/gui64-events.txt <<EV
 13000 shot $W/desktop64.png
 13100 quit
 EV
-timeout 600 ./c4pc-host64w -s -m 128 --gui 1024x768 --events $W/gui64-events.txt --texts $W/gui64-texts.txt \
+timeout 600 ./c4pc-host64w -s --mmu -m 128 --gui 1024x768 --events $W/gui64-events.txt --texts $W/gui64-texts.txt \
   -d $D $D/c4ix.c4r --desktop > $W/gui64.out 2> $W/gui64.err
 st=$?
 [ $st = 0 ] && ok "c4pc-host64w with a display: quits at the script's end" || bad "c4pc-host64w with a display: status $st"
@@ -137,22 +141,22 @@ par64 () { local n=$1; shift; timeout 120 ./c4pc-host64w --cpus $n --parallel "$
 smp_checks64 "--cpus (taking turns)" turns64
 smp_checks64 "--parallel" par64
 for how in "" "--parallel"; do
-  timeout 600 ./c4pc-host64w -s --cpus 4 $how -m 64 -c $CYC -d $D $D/c4ix.c4r < $W/in64.txt > $W/h64smp.out 2> $W/h64smp.err
+  timeout 600 ./c4pc-host64w -s --mmu --cpus 4 $how -m 64 -c $CYC -d $D $D/c4ix.c4r < $W/in64.txt > $W/h64smp.out 2> $W/h64smp.err
   st=$?
   if [ $st = 0 ] && grep -qxF "c4ix: 4 processors" $W/h64smp.out && grep -qF "shutdown complete, 0 tasks remain" $W/h64smp.out &&
      ! grep -qE "cache .task. .*live [1-9]|panic|illegal" $W/h64smp.out; then
-    ok "C4IX on 4 CPUs ${how:-taking turns}: boots on all four, runs ps, shuts down with every task freed"
+    ok "C4IX on 4 CPUs ${how:-taking turns}, with the MMU: boots on all four, runs ps, shuts down with every task freed"
   else bad "C4IX on 4 CPUs ${how:-taking turns} (status $st)"; grep -E "processors|panic|illegal|shutdown" $W/h64smp.out | head -5; fi
 done
 if [ -z "${NO_QEMU:-}" ]; then
   rm -f $W/q64smp.txt
   timeout 900 "$Q" $KVM -smp 4 -m 512 -display none -no-reboot -serial file:$W/q64smp.txt \
-    -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pcw64.elf -append "--no-cdrom --cpus 4 -m 64" \
+    -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pcw64.elf -append "--no-cdrom --mmu --cpus 4 -m 64" \
     -initrd "$D/c4ix.c4r,$W/disk64.tar drive,$W/in64.txt stdin" > /dev/null 2>&1
   out=$(tr -d '\r' < $W/q64smp.txt)
   if echo "$out" | grep -qxF "c4ix: 4 processors" && echo "$out" | grep -qxF "  a thread each, all at once" &&
      echo "$out" | grep -qF "shutdown complete, 0 tasks remain" && ! echo "$out" | grep -qE "cache .task. .*live [1-9]|panic|illegal"; then
-    ok "c4pcw64.elf on 4 processors: the 64-bit C4IX boots on all four, runs ps, and shuts down with every task freed"
+    ok "c4pcw64.elf on 4 processors, with the MMU: the 64-bit C4IX boots on all four, runs ps, and shuts down with every task freed"
   else bad "c4pcw64.elf on 4 processors: the C4IX session"; echo "$out" | grep -E "processors|thread|panic|illegal|shutdown" | head -6; fi
 fi
 
@@ -195,4 +199,11 @@ if command -v mke2fs > /dev/null && command -v debugfs > /dev/null; then
 else
   echo "  skip  a disk of C4IX's own (no e2fsprogs)"
 fi
+# the MMU's faults (test-c4pc-mmu.sh's cases, W64=1): wild.c compiled inside
+# the 64-bit C4IX by its cc, each wild write, jump and read killed by a page
+# fault, the victim untouched; c4pcw64.elf in QEMU byte and cycle for cycle
+echo "  ---   the MMU's faults, 64-bit (test-c4pc-mmu.sh W64=1)"
+out=$(W64=1 bash src/c4pc/test-c4pc-mmu.sh); r=$?
+echo "$out" | grep -v '^test-c4pc-mmu: '
+[ $r = 0 ] || fail=1
 [ $fail = 0 ] && echo "test-c4pc64: OK" || { echo "test-c4pc64: FAILED"; exit 1; }

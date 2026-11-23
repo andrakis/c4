@@ -34,15 +34,15 @@ typedef int16_t i16;
  * u32 once it is known to be inside. Device registers stay where they
  * are and 32 bits wide: a word read of one is its value sign-extended, a
  * word store keeps the low 32 bits (dev.c, gui.c, snd.c). The MMU (mmu.c)
- * and the accelerators (accel.c, games/) are the 32-bit machine's only, so
- * far: a 64-bit machine is built without them. */
+ * walks tables of words: 1,024 entries of 4 bytes, or 512 of 8. The games'
+ * accelerators (games/) are the 32-bit machine's only, so far. */
 #ifdef C4PC_W64
 typedef int64_t word;
 typedef uint64_t uword;
 #define WB 8                           /* bytes */
 #define WSH 3                          /* log2 WB */
 #define WBITS 64
-#define C4PC_HAS_MMU 0
+#define C4PC_HAS_MMU 1
 #else
 typedef int32_t word;
 typedef uint32_t uword;
@@ -210,12 +210,12 @@ typedef struct mmu {
   i32 cwins[12]; int ncwins;           /* lo, len, off of each code window kept */
   i32 misses, faults;
   int on, general;
-  i32 ptbr, ksp, iopm, faddr, finfo, fpc;
-  i32 s_lo, s_len, s_off, c_lo, c_len, c_off;   /* the stack and code windows */
-  i32 pte_at;                          /* probe's: the word the entry was read from */
-  i32 fpu_v;
+  word ptbr, ksp, iopm, faddr, finfo, fpc;
+  word s_lo, s_len, s_off, c_lo, c_len, c_off;   /* the stack and code windows */
+  word pte_at;                         /* probe's: the word the entry was read from */
+  word fpu_v;
   /* a block opcode a fault stopped part way (block) */
-  struct { int has; i32 op, pc, sp, ptbr, d, s, n, k; } part;
+  struct { int has; word op, pc, sp, ptbr, d, s, n, k; } part;
   void *jb;                            /* where a fault goes (a c4_jmp_buf), or 0 */
 } mmu;
 
@@ -399,14 +399,14 @@ mmu *mmu_new(machine *m);              /* fitted, off until the guest turns it o
 void mmu_reset(mmu *u);
 void mmu_rethrow(mmu *u);              /* the fault u has recorded, raised (par.c) */
 int mmu_run(mmu *u, i64 max_cycles);
-i32 mmu_read32(mmu *u, word x);        /* its registers, kernel mode's */
+word mmu_read32(mmu *u, word x);       /* its registers, kernel mode's */
 void mmu_write32(mmu *u, word x, word v);
 /* user mode's loads and stores for sys(), the FPU, OPCD: a fault goes to
  * the innermost catch (u->jb) */
 word mmu_ld32(mmu *u, word x);
-i32 mmu_ld8(mmu *u, word x);
+word mmu_ld8(mmu *u, word x);
 /* the physical page at va for a read or a write, or the fault (accel.c) */
-i32 mmu_frame(mmu *u, word va, int write);
+word mmu_frame(mmu *u, word va, int write);
 void mmu_st32(mmu *u, word x, word v);
 void mmu_st8(mmu *u, word x, word v);
 int mmu_block(mmu *u, word op);         /* MSET, MCMP, MCPY in user mode */
@@ -414,7 +414,7 @@ word mmu_peek(mmu *u, word pc);
 i64 mmu_dma_check(mmu *u, u32 addr, i32 len, int write, int pin);
 /* the kernel's map of user addresses (arena.js pteWord, kernelPte, kernelPhys) */
 i64 pte_word(machine *m, u32 dir, u32 va);
-i32 kernel_pte(machine *m, u32 udir, u32 x);
+word kernel_pte(machine *m, u32 udir, u32 x);
 i64 kernel_phys(machine *m, u32 udir, u32 x, int pin);
 
 /* the engine's, for mmu.c and the devices: a word's load and store at
@@ -501,7 +501,7 @@ void gui_stats(gui *g, u32 *commands, u32 *presents, u32 *events, u32 *flips);
 i64 dev_dma(machine *m, u32 addr, i32 len, int write, int pin);
 u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out);
 i64 mmu_dma_space(machine *m, u32 ptbr, u32 addr, i32 len, int write);
-i32 mmu_ptbr(mmu *u);
+word mmu_ptbr(mmu *u);
 void plat_fatal(const char *msg);      /* never returns */
 /* CD drives (cdrom.c): the PC's, from base on (pc.c); and an ISO image's (c4pc-host --cdrom) */
 int cdrom_find(drive **drives, int *nd, int max, int base, void (*log)(const char *));

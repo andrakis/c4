@@ -685,7 +685,6 @@ void pc_main(u32 magic, struct mb_info *mb) {
   m->no_fpu = nofpu;
   if (noaccel) m->accel = 0;
   if (noosaccel) m->osaccel = 0;
-  if (mmu_on && !C4PC_HAS_MMU) { con_puts("c4pc: the 64-bit machine has no MMU yet: running without\n"); mmu_on = 0; }
   if (mmu_on) mmu_new(m);
   for (int i = 0; i < nblk; i++) m->blk[m->nblk++] = blks[i];
   /* the display: GRUB's framebuffer, or the BGA's at --gui's size */

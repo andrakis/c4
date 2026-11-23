@@ -309,7 +309,6 @@ int main(int argc, char **argv) {
     else { fprintf(stderr, "c4pc: unknown option %s\n", f); usage(); }
   }
   if (i >= argc) usage();
-  if (mmu_on && !C4PC_HAS_MMU) { fprintf(stderr, "c4pc: the 64-bit machine has no MMU yet (docs/c4pc-64.md)\n"); return 1; }
   if (!nd) drives[nd++] = drive_new(0);
   /* CD drives from 2 on, as on a PC (pc.c): drive 1 is persist's, an
    * empty read-only one where -w gave none */

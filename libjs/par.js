@@ -16,6 +16,11 @@
 //
 // The heap is every CPU's too: its books are a third SharedArrayBuffer
 // (sheap.js), and MALC, FREE and RALC run on the CPU that executes them.
+// So does the swap: its two registers, SWAP_ADDR and SWAP_CMD, are each
+// CPU's (ap.js ApBus swapOp), and its pages are a fourth (sswap.js), where
+// the host has growable SharedArrayBuffers; without them the pages are
+// CPU 0's, and a CPU asks for a page's move (KIND.SWAPOP) or a byte of it
+// (KIND.SWAP).
 //
 // CPU 0 owns everything else that is not memory: the devices and the
 // console. Another CPU that runs an opcode reaching those -- OPEN, READ,
@@ -34,6 +39,7 @@
 import { OP, STOP, Machine } from './c4m.js';
 import { DmaSpace, FAULT } from './mmu.js';
 import { accelNames, accelSwitch } from './accel.js';
+import { SharedSwap, sharedSwapOk } from './sswap.js';
 
 // the control block, in words
 export const C = {
@@ -60,7 +66,7 @@ export const K = {              // offsets within a CPU's words
 export const DMA_FAULT = -77;
 export const S = { OFF: 0, RUN: 1, WAIT: 2, HALT: 3 };             // a CPU's state
 export const R = { IDLE: 0, ASK: 1, DONE: 2 };                     // a request slot's
-export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4, GUARD: 5, SWAP: 6 }; // what is asked
+export const KIND = { OP: 1, RD32: 2, WR32: 3, WR8: 4, GUARD: 5, SWAP: 6, SWAPOP: 7 }; // what is asked
 export const MAXCPU = 32;
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
 
@@ -215,6 +221,17 @@ export class ParHost extends ParCore {
     this.seenDoor = 0;
     this.shadows = [];
     this.workers = [];
+    // the swap's pages, shared (sswap.js); any already out moved over
+    let swap = null;
+    if (sharedSwapOk() && this.dev.swapPages) {
+      try { swap = new SharedSwap(this.dev.swapSlots); } catch { swap = null; }
+    }
+    if (swap) {
+      for (const [slot, p] of this.dev.swapPages) swap.set(slot, p);
+      this.dev.swapPages = swap;
+      this.dev.swapRd8 = (slot, off) => swap.rd8(slot, off);
+      this.dev.swapWr8 = (slot, off, v) => swap.wr8(slot, off, v);
+    }
     for (let k = 1; k < n; k++) {
       // the asking CPU's registers, on CPU 0's devices and heap
       const s = new Machine(m0.arena, m0.dev, m0.bus, m0.heap);
@@ -225,6 +242,7 @@ export class ParHost extends ParCore {
       const w = spawn(new URL('./ap.js', import.meta.url));
       w.postMessage({
         type: 'init', arena: m0.arena.buf, ctl: ctl.buffer, pq: this.pq.buffer, heap: m0.heap.books, id: k, n,
+        swap: swap ? swap.bufs : null, swapSlots: swap ? swap.slots : 0,
         info: m0.info(), cyclesPerMs: m0.dev.cyclesPerMs, noFpu: !!m0.noFpu,
         accelNames: m0.accel ? accelNames() : [], accelSwitch: accelSwitch(),
       });
@@ -337,6 +355,14 @@ export class ParHost extends ParCore {
         const slot = ctl[b + K.ADDR], v = ctl[b + K.VAL];
         if (ctl[b + K.OP]) this.dev.swapWr8(slot, v & 4095, (v >>> 16) & 255);
         else ra = this.dev.swapRd8(slot, v & 4095);
+      } else if (kind === KIND.SWAPOP) {
+        // a page between memory and its slot (devices.js swapOp: out, in,
+        // forget, forget all) on a host without shared pages, for a CPU
+        // that keeps SWAP_ADDR and SWAP_CMD itself (ap.js ApBus): the
+        // address comes with the command, and CPU 0's own is left as it was
+        const d = this.dev, keep = d.swapAddr;
+        d.swapAddr = ctl[b + K.ADDR] >>> 0;
+        try { ra = d.swapOp(ctl[b + K.VAL]); } finally { d.swapAddr = keep; }
       } else if (kind === KIND.GUARD) {
         // its guard hit, told and halted here, where the console is
         const s = this.shadows[k];

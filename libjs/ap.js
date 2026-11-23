@@ -15,8 +15,13 @@ import { accel, loadAccel, adoptAccelSwitch } from './accel.js';
 import { Mmu, FAULT } from './mmu.js';
 import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE, DMA_FAULT } from './par.js';
 import { SharedHeap } from './sheap.js';
+import { SharedSwap } from './sswap.js';
+import { Devices } from '../src/c4bb/sim/devices.js';
 
 const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
+// the swap's registers (src/c4bb/sim/devices.js): this CPU's own (ApBus)
+const SWAP_ADDR = 0x11c, SWAP_CMD = 0x158;
+const devSwapOp = Devices.prototype.swapOp;
 
 // the opcodes whose work is CPU 0's: the devices, the console
 const ASK = new Set([OP.OPEN, OP.READ, OP.CLOS, OP.PRTF,
@@ -118,9 +123,16 @@ class ApMachine extends Machine {
     return super.sys(op);
   }
 
-  // A byte of a page put out to swap: CPU 0 keeps them (par.js KIND.SWAP)
-  swapRd8(slot, off) { const r = this.ask(KIND.SWAP, 0, slot, off & 4095); return r === STOP.HALT ? 0 : r.ra & 255; }
-  swapWr8(slot, off, v) { this.ask(KIND.SWAP, 1, slot, (off & 4095) | ((v & 255) << 16)); }
+  // A byte of a page put out to swap: in the shared pages (sswap.js), or,
+  // on a host without them, CPU 0's (par.js KIND.SWAP)
+  swapRd8(slot, off) {
+    if (this.swap) return this.swap.rd8(slot, off);
+    const r = this.ask(KIND.SWAP, 0, slot, off & 4095); return r === STOP.HALT ? 0 : r.ra & 255;
+  }
+  swapWr8(slot, off, v) {
+    if (this.swap) { this.swap.wr8(slot, off, v & 255); return; }
+    this.ask(KIND.SWAP, 1, slot, (off & 4095) | ((v & 255) << 16));
+  }
 
   // A guard hit is told where the console is, and halts the machine
   // there: CPU 0 says it with this CPU's registers (par.js, KIND.GUARD)
@@ -151,17 +163,30 @@ class ApMachine extends Machine {
 // read and written by arena.js, whose io is off here. (Reading unaligned
 // words as 0, as this once did, broke every C4R header a CPU other than 0
 // read: the loader's words start at byte 13.)
+//
+// But the swap's two registers, which are this CPU's (swapOp, below).
 class ApBus {
-  constructor(arena) { this.arena = arena; this.m = null; }
+  constructor(arena) {
+    this.arena = arena; this.m = null;
+    this.swapAddr = 0; this.swapResult = 0;     // devices.js's, this CPU's
+    this.swapPages = null; this.swapSlots = 0;  // the shared pages (sswap.js), if the host has them
+  }
+  get machine() { return this.m; }              // devices.js swapOp's heap
   dev(addr) { return (addr >= 0x100 && addr < 0x200) || (addr >= 0x400 && addr < 0x500); }
   read32(addr) {
     addr = addr >>> 0;
-    if (this.dev(addr)) { const r = this.m.ask(KIND.RD32, 0, addr & ~3, 0); return r === STOP.HALT ? 0 : r.ra | 0; }
+    if (this.dev(addr)) {
+      if ((addr & ~3) === SWAP_CMD) return this.swapResult | 0;
+      const r = this.m.ask(KIND.RD32, 0, addr & ~3, 0); return r === STOP.HALT ? 0 : r.ra | 0;
+    }
     return this.arena.read32(addr) | 0;
   }
   write32(addr, val) {
     addr = addr >>> 0;
     if (this.dev(addr)) {
+      const w = addr & ~3;
+      if (w === SWAP_ADDR) { this.swapAddr = val >>> 0; return; }
+      if (w === SWAP_CMD) { this.swapResult = this.swapOp(val | 0); return; }
       if (POSTED.has(addr & ~3)) { this.m.post(addr & ~3, val | 0, 0); return; }
       this.m.ask(KIND.WR32, 0, addr & ~3, val);
       return;
@@ -172,11 +197,29 @@ class ApBus {
   write8(addr, val) {
     addr = addr >>> 0;
     if (this.dev(addr)) {
+      const w = addr & ~3;
+      if (w === SWAP_ADDR || w === SWAP_CMD) { this.write32(w, val & 0xff); return; }   // as arena.js write8
       if (POSTED.has(addr & ~3)) { this.m.post(addr, val & 0xff, 1); return; }
       this.m.ask(KIND.WR8, 0, addr, val & 0xff);
       return;
     }
     this.arena.write8(addr, val);
+  }
+
+  // SWAP_CMD, on the CPU that writes it: devices.js swapOp itself, on this
+  // CPU's SWAP_ADDR, the shared heap (sheap.js) and the shared pages
+  // (sswap.js). C4IX writes SWAP_ADDR, then SWAP_CMD, then reads SWAP_CMD
+  // back, holding a lock that keeps the task on its CPU (mmu.c mmu_sop,
+  // sched.c klock_take_slow), so the two registers can be each CPU's. As
+  // requests to CPU 0 -- the heap's high flag around every allocation for
+  // a task, a page brought in at every first touch -- they made a boot and
+  // a compile on 4 CPUs 25 s against 9.5 s on one. On a host without
+  // shared pages, out, in and forget (1-4) ask CPU 0, once, with the
+  // address (par.js KIND.SWAPOP).
+  swapOp(v) {
+    if (this.swapPages || (v & 15) >= 5) return devSwapOp.call(this, v);
+    const r = this.m.ask(KIND.SWAPOP, 0, this.swapAddr, v);
+    return r === STOP.HALT ? -1 : r.ra | 0;
   }
 }
 
@@ -198,6 +241,7 @@ function main(msg) {
   // same numbers, wherever it runs
   if (msg.info & C4I_ACCEL) m.accel = accel;
   m.heap = new SharedHeap(arena, msg.heap);
+  if (msg.swap) bus.swapPages = m.swap = new SharedSwap(msg.swapSlots, msg.swap), bus.swapSlots = msg.swapSlots;
   m.smp = core;
   m.cpuId = id;
   m.cpuState = 'off';

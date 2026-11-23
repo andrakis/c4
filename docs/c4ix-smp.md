@@ -523,6 +523,57 @@ desktop on CPU 0. The games ask for a nice of -5 themselves
 still served first. test-c4ix-smp.sh checks that a pinned program runs
 where it was put.
 
+### 2026-11-23: the swap is every CPU's
+
+C4IX gives a task its memory before the task touches it (c4ix-mmu.md
+11). A page comes in from swap at its first touch, and a slot never
+written comes in as zeros. The kernel's stores into a page that is not in
+yet go to the host's copy, a byte at a time (c4m.js `kst8`). On the
+parallel engine the pages were CPU 0's (devices.js `swapPages`, a `Map`),
+and so were `SWAP_ADDR` and `SWAP_CMD`. Another CPU asked CPU 0 for every
+access to those registers and for every byte. In a boot and one compile on
+4 CPUs that meant 6,324 pages brought in, at three requests each, and
+4,096 requests for each page the kernel wrote early. The session took 25 s
+against 9.5 s on one CPU.
+
+Now:
+- **The pages are in shared memory** (libjs/sswap.js). A word per slot
+  names its page in a pool, a growable SharedArrayBuffer that grows a
+  megabyte at a time, up to a page for every slot. Changes to the slot
+  table happen under a spinlock, as in sheap.js; a byte is read and
+  written without it. CPU 0's devices use the store in place of the `Map`
+  (it has the `Map`'s get, set, delete, clear and keys), and every CPU
+  reads and writes a byte of a page itself.
+- **The two registers are each CPU's** (ap.js `ApBus`). C4IX writes
+  `SWAP_ADDR`, writes `SWAP_CMD` and reads `SWAP_CMD` back while it holds
+  `mmu_flock` (mmu.c `mmu_sop`). That is a `klock`, which keeps the task on
+  its CPU (sched.c). So another CPU runs devices.js's own `swapOp` on
+  registers of its own, with the shared heap for `SWAP_HIGH` and
+  `SWAP_LARGEST` (5 and 6, sheap.js).
+- **Without growable SharedArrayBuffers** the pages stay CPU 0's. 5 and 6
+  are still handled locally, and moving a page is one request
+  (`KIND.SWAPOP`, carrying the address) instead of three.
+
+c4pc's parallel engine does the same (src/c4pc/par.c, on the `c4pc`
+branch). Measured on helios, cli.js `--mmu -m 128`, before and after, in
+seconds:
+
+| | 1 CPU | 4 on threads, before | 4 on threads, now |
+|---|---|---|---|
+| a boot and `cc -O mandel.c` | 9.2-10.1 | 24.8-26.8 | 10.4-11.6 |
+| four compiles at once (their own time) | 32.0-33.5 | 54.9, 55.2 | 11.7, 10.6 |
+| `b4ke -B -j` of C4IX's libraries | 80.7-83.3 | 66.6 | 36.4 |
+
+In the page (Chrome 160 on Windows, `?system=c4ix&mmu=1&mem=128`), four
+compiles at once take 39.5-43.3 s on one CPU, and on 4 threads 19.7 and
+20.3 s before against 17.0 and 17.2 s now. The programs are identical to
+cli.js's.
+
+What another CPU still asks for in that boot and compile is the console
+and the files: 565 requests in all. test-sswap.mjs runs four threads at
+once against the store, and test-c4ix-swap.mjs runs on threads too
+(`CPUS=2 PARALLEL=1`, in test-libjs).
+
 ## 6. Risks
 
 - **Isolation.** The parallel engine needs COOP/COEP. `serve.mjs --isolate`

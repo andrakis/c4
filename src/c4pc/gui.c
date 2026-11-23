@@ -594,6 +594,8 @@ int gui_ring(gui *g) { return g->mb; }
 u32 gui_flips(gui *g) { return g->flips; }
 
 u32 *gui_front(gui *g, int *w, int *h) { *w = g->cw; *h = g->ch; return g->front; }
+/* the whole display to be shown again (pc.c: back from the text console) */
+void gui_redraw_all(gui *g) { dirty(g, 0, 0, g->cw, g->ch); }
 int gui_take_dirty(gui *g, int *x0, int *y0, int *x1, int *y1) {
   if (g->fx1 <= g->fx0 || g->fy1 <= g->fy0) return 0;
   *x0 = g->fx0; *y0 = g->fy0; *x1 = g->fx1; *y1 = g->fy1;

@@ -313,8 +313,15 @@ static const char km_hi[128] = {
   'Q','W','E','R','T','Y','U','I','O','P','{','}', '\n', 0, 'A','S',
   'D','F','G','H','J','K','L',':','"','~', 0, '|','Z','X','C','V',
   'B','N','M','<','>','?', 0, '*', 0, ' ', 0 };
-static int k_shift, k_ctrl, k_caps, k_e0;
+static int k_shift, k_ctrl, k_caps, k_e0, k_alt;
 static volatile int kbd_to_gui;
+/* The PC's own keys, whoever has the keyboard:
+ *   Ctrl+Alt+Del   restart: C4IX shuts down (SIGTERM, as the power
+ *                  button), then the PC resets; pressed again, at once
+ *   Ctrl+Alt+F1    the text console on the screen, the keys to it
+ *   Ctrl+Alt+F2    the display again */
+static volatile int want_reboot, vt_text, vt_back;
+static int reboot_after;              /* Ctrl+Alt+Del asked: the PC restarts when C4IX ends */
 static volatile u8 scq[256];
 static volatile u32 scq_head, scq_tail;
 void mouse_byte(u8 b);
@@ -327,6 +334,12 @@ static void kbd_irq(void) {
   int e0 = k_e0; k_e0 = 0;
   if (sc == 0x2A || sc == 0x36) { k_shift = !up; return; }
   if (sc == 0x1D) { k_ctrl = !up; return; }
+  if (sc == 0x38) { k_alt = !up; return; }
+  if (!up && k_ctrl && k_alt) {
+    if (sc == 0x53) { want_reboot++; return; }
+    if (sc == 0x3C && vt_text) { vt_text = 0; vt_back = 1; return; }
+    if (sc == 0x3B) return;
+  }
   if (up) return;
   if (sc == 0x3A) { k_caps = !k_caps; return; }
   if (e0 || (sc >= 0x47 && sc <= 0x53)) {
@@ -386,6 +399,11 @@ static void key_event(gui *g, u8 sc) {
   if (code == 16) g_shift = !up;
   if (code == 17) g_ctrl = !up;
   if (code == 18) g_alt = !up;
+  if (!up && g_ctrl && g_alt) {
+    if (sc == 0x53) { want_reboot++; return; }                   /* Del, or the keypad's */
+    if (sc == 0x3B) { vt_text = 1; return; }                     /* F1: the text console */
+    if (sc == 0x3C) return;                                      /* F2: the display already */
+  }
   if (code == 20 && !up) g_caps = !g_caps;
   int ch = 0;
   if (!e0 && sc < 0x3A && sc != 0x1D && sc != 0x2A && sc != 0x36 && sc != 0x38) {
@@ -404,8 +422,10 @@ static i64 display_ms;                  /* the time this takes, for -s */
 static void display_tick(machine *m) {
   gui *g = m->gui;
   i64 t = plat_now_ms();
-  kbd_to_gui = gui_attached(g);
+  kbd_to_gui = gui_attached(g) && !vt_text;
   while (scq_head != scq_tail) { u8 sc = scq[scq_head % sizeof scq]; scq_head++; key_event(g, sc); }
+  if (vt_text) { kbd_to_gui = 0; screen_console(vtext, vy * 80 + vx); display_ms += plat_now_ms() - t; return; }
+  if (vt_back) { vt_back = 0; g_ctrl = g_alt = 0; gui_redraw_all(g); }
   mouse_poll(g);
   gui_tick(g);
   static u32 flips; static i64 flip_at = -100000;
@@ -868,6 +888,16 @@ void pc_main(u32 magic, struct mb_info *mb) {
       int vmw_halt = 0;
       if (now - vmw_at >= 100) { vmw_at = now; vmw_halt = vmw_poll(); }
       if (vmw_halt) con_puts("\nc4pc: VMware asked the guest to shut down\n");
+      /* Ctrl+Alt+Del: C4IX shuts down, and then the PC restarts */
+      static int reboot_seen;
+      if (want_reboot != reboot_seen) {
+        int first = !reboot_seen;
+        reboot_seen = want_reboot;
+        reboot_after = 1;
+        if (!first || !m->sigh[15]) { con_puts("\nc4pc: Ctrl+Alt+Del: restarting now\n"); status = STATUS_REBOOT; break; }
+        con_puts("\nc4pc: Ctrl+Alt+Del: C4IX shuts down, then the PC restarts\n");
+        m->pending_signal = 15;
+      }
       if (acpi_button(now) || vmw_halt) {
         if (!m->sigh[15] || (pressed && now - pressed >= 1000)) { con_puts("\nc4pc: the power button: off\n"); status = 0; break; }
         if (!pressed) { pressed = now ? now : 1; m->pending_signal = 15; }
@@ -967,6 +997,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     con_puts("c4pc: heap "); con_dec(heap_used(m->heap) / 1024); con_puts(" KB in use at exit, ");
     con_dec(heap_peak(m->heap) / 1024); con_puts(" KB at most; host memory free "); con_dec(pc_heap_free_bytes >> 10); con_puts(" KB\n");
   }
+  if (reboot_after && status == 0) status = STATUS_REBOOT;
   power_off(status);
 }
 

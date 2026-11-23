@@ -502,6 +502,16 @@ the AML's, which needs an interpreter: c4pc says so, and VMware's, if it
 is one, may then still need `shutdown` typed. `--no-acpi` leaves ACPI be:
 off by the fixed ports alone, and no power button.
 
+**The PC's own keys**, read by c4pc whoever has the keyboard (pc.c):
+Ctrl+Alt+Del restarts -- SIGTERM to C4IX, as the power button, which
+shuts down, and then the PC resets (status 82) where it would have
+switched off; pressed again before that, at once. Ctrl+Alt+F1 puts the
+text console on the screen and sends the keys to it (its shell, the
+boot's log), whatever the display was showing; Ctrl+Alt+F2 the display
+again, drawn whole. *Measured* in QEMU: a command typed at the console
+after Ctrl+Alt+F1 ran, Ctrl+Alt+F2 showed the desktop as it was, and
+Ctrl+Alt+Del ended in "shutdown complete" and the PC restarting.
+
 ### The boot disk, compressed
 
 The ISO's boot disk -- the tar GRUB hands c4pc as drive 0, which stays in

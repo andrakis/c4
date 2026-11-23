@@ -888,6 +888,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
         con_dec((idle_ms - rep_idle) * 100 / dt); con_puts("% idle");
         if (m->snd) { con_puts(", "); con_dec(sb16_underruns + hda_underruns); con_puts(" sound underruns"); }
         con_puts("\n");
+        /* the other processors' requests of CPU 0, since the boot (par.c) */
+        if (m->smp && m->smp->par) { static char b[700]; par_stats(m->smp, b, sizeof b); con_puts("c4pc: "); con_puts(b); con_puts("\n"); }
         com1_only = 0;
         rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_idle = idle_ms;
       }

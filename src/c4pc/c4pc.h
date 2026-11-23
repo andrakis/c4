@@ -333,6 +333,7 @@ i64 par_clock(smp *s);
 int par_after(smp *s, int r, i32 *status);
 void par_shutdown(smp *s);
 void par_idle0(smp *s);
+i32 snd_ahead(struct snd *s, const u32 *qa, const i32 *qv, u32 h, u32 t, u32 mask);   /* AHEAD from another CPU, with its posted writes (par.c) */
 void par_stats(smp *s, char *buf, u32 len);   /* -s: a line on the other CPUs' requests and waits */                /* CPU 0 with nothing to do: until a request or an interrupt */
 /* what the platform gives the parallel engine: CPU k started on fn(k)
  * (0 if it cannot be); a wait on CPU k until *kick is not seen, or ms

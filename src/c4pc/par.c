@@ -108,6 +108,10 @@ static void ask_counted(machine *m, void (*fn)(machine *, void *), void *arg) {
   count(&p->n_ask); addf(&p->ask_us, plat_now_us() - t);
 }
 #define ask ask_counted
+/* -s: what was asked, by what: a register's address (its word in the
+ * first 2 KB of page 0), an opcode (+ 512), or 1023 for anything else */
+static volatile u32 asked_what[1024];
+static void asked(u32 what) { __atomic_add_fetch(&asked_what[what < 1024 ? what : 1023], 1, __ATOMIC_RELAXED); }
 
 /* CPU k's posted writes, in the order it made them */
 static void apply_posted(par *p, int k) {
@@ -204,6 +208,7 @@ int par_sys(machine *m, i32 op) {
   if (m->mode && guarded(op)) return -1;
   if (is_ask(op)) {
     struct sys_q q = { op, STOP_BUDGET };
+    asked(512 + ((u32)op & 511));
     ask(m, sys_fn, &q);
     return m->dv->halted ? STOP_HALT : q.r;
   }
@@ -225,7 +230,29 @@ int par_sys(machine *m, i32 op) {
   return -1;
 }
 i32 par_rd32(machine *m, u32 a) {
+  /* The sound card's AHEAD (how far the music is written past what is
+   * playing), worked out here: the cursor, and this CPU's own OPL and WAIT
+   * writes CPU 0 has not applied yet (snd_ahead) -- the queue's head read
+   * before and after, so that a write CPU 0 applied meanwhile is not
+   * counted twice. Doom's music asks it in a loop, and on CPU 1 every ask
+   * was a round trip to CPU 0: three million in a minute, a few frames a
+   * second at 100% (2026-11-23) */
+  /* no sound card: its registers read 0 on CPU 0 (engine.c), and here */
+  if (a >= 0x480 && a < 0x500 && !m->smp->par->s->cpu[0]->snd) return 0;
+  if (a == 0x48c) {
+    par *p = m->smp->par; pcpu *me = &p->c[m->cpu_id]; machine *m0 = p->s->cpu[0];
+    if (m0->snd) {
+      u32 h1, h2; i32 r;
+      do {
+        h1 = LD(me->pq_head);
+        r = snd_ahead(m0->snd, me->pq_addr, me->pq_val, h1, me->pq_tail, PQLEN - 1);
+        h2 = LD(me->pq_head);
+      } while (h1 != h2);
+      return r;
+    }
+  }
   struct bus_q q = { 0, a, 0, 0, 0 };
+  asked(a < 2048 ? a >> 2 : 1023);
   ask(m, bus_fn, &q);
   if (q.fault) mmu_rethrow(m->dma_ctx);
   return q.r;
@@ -233,6 +260,7 @@ i32 par_rd32(machine *m, u32 a) {
 void par_wr(machine *m, u32 a, i32 v, int w8) {
   if (posted(a & ~3u)) { post(m, a, v, w8); return; }
   struct bus_q q = { w8 ? 2 : 1, a, v, 0, 0 };
+  asked(a < 2048 ? a >> 2 : 1023);
   ask(m, bus_fn, &q);
   if (q.fault) mmu_rethrow(m->dma_ctx);
 }
@@ -600,6 +628,26 @@ void par_stats(smp *s, char *buf, u32 len) {
   NUM(p->n_park); PUT(" parks, "); NUM((uint64_t)p->park_us / 1000); PUT(" ms parked (ended by the word "); NUM(p->n_park_word);
   PUT(", a CWAK "); NUM(p->n_park_woke); PUT(", an IPI "); NUM(p->n_park_ipi); PUT("; a 10 ms look again in "); NUM(p->n_park_tmo);
   PUT("); CPU 0 parked "); NUM((uint64_t)p->idle0_us / 1000); PUT(" ms");
+  /* the five asked most: "r0x40c 1234" a register, "op 77 56" an opcode */
+  {
+    static const char hx[] = "0123456789abcdef";
+    int done[5] = { -1, -1, -1, -1, -1 };
+    for (int n = 0; n < 5; n++) {
+      int best = -1; u32 bv = 0;
+      for (int i = 0; i < 1024; i++) {
+        int taken = 0;
+        for (int j = 0; j < n; j++) if (done[j] == i) taken = 1;
+        if (!taken && asked_what[i] > bv) { bv = asked_what[i]; best = i; }
+      }
+      if (best < 0) break;
+      done[n] = best;
+      PUT(n ? ", " : "; most asked: ");
+      if (best == 1023) PUT("other");
+      else if (best >= 512) { PUT("op "); NUM(best - 512); }
+      else { char a_[8]; u32 v_ = (u32)best << 2; a_[0] = 'r'; a_[1] = '0'; a_[2] = 'x'; a_[3] = hx[(v_ >> 8) & 15]; a_[4] = hx[(v_ >> 4) & 15]; a_[5] = hx[v_ & 15]; a_[6] = 0; PUT(a_); }
+      PUT(" "); NUM(bv);
+    }
+  }
 #undef PUT
 #undef NUM
   *o = 0;

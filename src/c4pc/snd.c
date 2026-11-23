@@ -260,6 +260,27 @@ static void play(snd *s, i32 ch, u32 addr, i32 len, i32 rate, i32 vol) {
 }
 static i32 clamp_rate(i32 v) { return v < 100 ? 100 : v > 200000 ? 200000 : v; }
 
+/* AHEAD read on another CPU (par.c), while CPU 0 may be moving the
+ * cursor: the cursor (read until two reads agree: a double is two words
+ * on i386), moved on by that CPU's own writes CPU 0 has yet to apply
+ * (posted: its queue's entries H to T) as they will move it -- an OPL
+ * write brings it to now, a WAIT puts it on, a CLOCK changes WAIT's unit */
+i32 snd_ahead(snd *s, const u32 *qa, const i32 *qv, u32 h, u32 t, u32 mask) {
+  volatile double *cp = &s->cursor;
+  double c0, c1 = *cp;
+  do { c0 = c1; c1 = *cp; } while (c0 != c1);
+  double now = snd_now(s), c = c0;
+  i32 clk = s->clock;
+  for (; h != t; h++) {
+    u32 a = qa[h & mask]; i32 v = qv[h & mask];
+    if (a == OPL) { if (c < now) c = now; }
+    else if (a == CLOCK) clk = v > 1 ? v : 1;
+    else if (a == WAIT && v > 0) { if (c < now) c = now; c += v * 1e6 / clk; }
+  }
+  double d = jround(c - now);
+  return d <= 0 ? 0 : d >= 2147483647.0 ? 0x7fffffff : (i32)d;
+}
+
 i32 snd_read32(snd *s, u32 addr) {
   switch (addr) {
     case CAPS: return 1 | 2 | 4 | 8 | 16 | HAS_START;

@@ -33,6 +33,8 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | in QEMU with KVM (pc and q35, c4pc.elf and c4pc64.elf): system_powerdown at the prompt, and `shutdown`, are C4IX's shutdown and then the VM off; `reboot` resets the PC; SIGTERM to c4pc-host or cli.js is the same shutdown. VMware not yet tried |
 | done | installed onto an IDE disk from the ISO (C4IX's `install`, docs/c4ix-install.md): GRUB and c4pc on the disk, the system's files in a partition of their own, /home kept on its ext2 |
 | *measured* | in QEMU with KVM: the ISO installs onto a blank 1 GB disk, e2fsck finds its ext2 clean, and the disk boots alone through its own GRUB; a file saved in /home is there at the next boot |
+| done | the 64-bit system (docs/c4pc-64.md): the engine at either word size from one source (`C4PC_W64`: c4pc-host64w, c4pcw64.elf), and C4IX compiled 64-bit -- kernel, libraries, programs, desktop, compilers -- on a disk of its own (disk64.sh); three ISO entries beside the 32-bit ones. No MMU yet, and the games stay on the 32-bit system |
+| *measured* | test-c4ix's session and 18 test programs byte for byte native c4m's (`c4pc-host64w --c4m`), c4mp's SMP transcripts on 4 CPUs; c4pcw64.elf in QEMU byte and cycle for cycle c4pc-host64w; the 64-bit desktop, a CD, ext2, 4 CPUs; from the ISO under KVM, the desktop (on 1 and 4 processors) and the text entry; `cc` and `c4cc` compile and run a program inside |
 | not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk, or a SATA CD drive |
 
 ## One engine, two front ends
@@ -246,6 +248,24 @@ session, two runs each, alternating):
 Both print libjs's output byte for byte in its 1,474,118,389 and
 1,500,630,450 cycles. The MMU's user loop is where the registers tell:
 C4IX's desktop and every game run with it.
+
+### The 64-bit system
+
+c4pc64.elf's guest is still the 32-bit machine. The 64-bit machine is the
+same sources built with `-DC4PC_W64` (c4pc.h's `word` is then int64_t,
+native c4m's word): `make c4pc-host64w c4pcw64.elf .c4pc/disk64.tar`, and
+the ISO's "C4IX 64-bit" entries boot c4pcw64.elf with the 64-bit kernel and
+its own disk. docs/c4pc-64.md has the design (the word, the memory map and
+the devices at 64 bits, the disk), the tests (test-c4pc64.sh, run by
+test-c4pc; `NO_W64=1` leaves it out) and stage two: the 64-bit MMU and the
+games.
+
+    make c4pc-host64w .c4pc/disk64.tar
+    ./c4pc-host64w -s -m 64 -d .c4pc/disk64 .c4pc/disk64/c4ix.c4r
+    make c4pcw64.elf
+    qemu-system-x86_64 -accel kvm -cpu host -m 512 -display none -serial file:serial.txt \
+        -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pcw64.elf \
+        -append "-s -m 64" -initrd ".c4pc/disk64/c4ix.c4r,.c4pc/disk64.tar drive,in.txt stdin"
 
 ### A drive that outlasts the machine
 

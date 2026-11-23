@@ -114,12 +114,13 @@ double fpu_cos(double x);
  * every write in order (accel.mjs's wa and wv) and hold_get finds the
  * last one to an address (its Map); hold_set keeps one write an address,
  * in the order they were first made (a Map's keys). One hold, since one
- * operation runs at a time. */
+ * operation runs at a time on a CPU: a hold each (par.c runs them at once). */
 typedef struct {
   i32 *a, *v; u32 n, cap;        /* the writes */
   u32 *hs, *hg; u32 hmask, g;    /* address -> index + 1, by generation */
 } hold_t;
-extern hold_t acc_hold;
+extern hold_t acc_holds[32];
+#define acc_hold (acc_holds[m->cpu_id])   /* the running CPU's: m is the operation's machine */
 void hold_begin(hold_t *h);
 void hold_put(hold_t *h, i32 a, i32 v);
 void hold_set(hold_t *h, i32 a, i32 v);
@@ -130,7 +131,8 @@ void hold_probe(machine *m, hold_t *h, i32 len);
 void hold_write8(machine *m, hold_t *h);
 void hold_write32(machine *m, hold_t *h);
 /* a scratch of n words of the module's own (grown, never shrunk) */
-i32 *acc_scratch(int which, u32 n);
+i32 *acc_scratch_k(int cpu, int which, u32 n);
+#define acc_scratch(which, n) acc_scratch_k(m->cpu_id, (which), (n))   /* ... the running CPU's */
 
 /* an operation: what the program gets back */
 typedef i32 (*acc_fn)(machine *m);

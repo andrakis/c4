@@ -397,8 +397,11 @@ void isr(struct regs *r) {
     con_puts(". Halting.\n");
     power_off(71);
   }
+  /* the other processors' wake-up IPI (ap.c), and the local APIC's spurious one */
+  if (r->vec == 240) { extern void lapic_eoi(void); lapic_eoi(); return; }
+  if (r->vec == 255) return;
   u32 irq = (u32)r->vec - 32;
-  if (irq == 0) ticks++;
+  if (irq == 0) { extern void ap_tick(void); ticks++; ap_tick(); }
   else if (irq == 1) kbd_irq();
   else if (irq == 12) { u8 st = inb(0x64); if (st & 1) { u8 b = inb(0x60); if (st & 0x20) mouse_byte(b); } }
   else if (irq == 4) { while (inb(0x3FD) & 1) { int c = inb(0x3F8); inq_push(c == '\r' ? '\n' : c); } }
@@ -420,7 +423,7 @@ static void idt_set(int n, void (*f)(void)) {
 }
 
 #define STUBS(X) X(0) X(1) X(2) X(3) X(4) X(5) X(6) X(7) X(8) X(9) X(10) X(11) X(12) X(13) X(14) X(15) X(16) X(17) X(18) X(19) \
-  X(32) X(33) X(34) X(35) X(36) X(37) X(38) X(39) X(40) X(41) X(42) X(43) X(44) X(45) X(46) X(47)
+  X(32) X(33) X(34) X(35) X(36) X(37) X(38) X(39) X(40) X(41) X(42) X(43) X(44) X(45) X(46) X(47) X(240) X(255)
 #define DECL(n) void isr##n(void);
 STUBS(DECL)
 
@@ -453,6 +456,20 @@ static void cpu_init(void) {
   __asm__ volatile("fninit; fldcw %0" : : "m"(cw));
   /* the keyboard's buffer, emptied */
   for (int i = 0; i < 16 && (inb(0x64) & 1); i++) (void)inb(0x60);
+}
+
+/* another processor's (ap.c): the kernel's GDT and IDT, the x87 */
+/* CPU 0 with nothing to do: hlt, until an interrupt -- or, on several
+ * processors, another CPU's request (par.c), whose IPI ends it */
+static void idle0(machine *m) {
+  if (m->smp && m->smp->par) par_idle0(m->smp);
+  else __asm__ volatile("sti; hlt");
+}
+void cpu_init_ap(void) {
+  gdt_load(&gdtr);
+  __asm__ volatile("lidt %0" : : "m"(idtr));
+  uint16_t cw = 0x027F;
+  __asm__ volatile("fninit; fldcw %0" : : "m"(cw));
 }
 
 /* ---- multiboot ---- */
@@ -504,7 +521,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -533,6 +550,14 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--debug-sound")) { extern void (*hda_log)(const char *); hda_log = con_puts; }
     else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : -1; }
     else if (!strcmp(args[a], "--mmu")) mmu_on = 1;
+    /* several processors (smp.c, par.c): the PC's own, one each, or taking
+     * turns on this one where it has no more; all, as many as it has */
+    else if (!strcmp(args[a], "--cpus") && a + 1 < nargs) {
+      a++; cpus = 0;
+      if (!strcmp(args[a], "all")) cpus = 32;
+      else for (char *p = args[a]; *p; p++) cpus = cpus * 10 + (*p - '0');
+    }
+    else if (!strcmp(args[a], "-q") && a + 1 < nargs) { quantum = 0; for (char *p = args[++a]; *p; p++) quantum = quantum * 10 + (*p - '0'); }
     else if (!strcmp(args[a], "--no-mmu")) mmu_on = 0;
     else if (!strcmp(args[a], "--")) { a++; break; }
     else break;
@@ -643,10 +668,31 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (how) { m->snd = s; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); }
     else { extern const char *hda_why; con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h; "); con_puts(hda_why); con_puts("\n"); }
   }
+  /* the processors: the PC's others started (ap.c), each the machine's
+   * CPU on a processor of its own (par.c); with none, the machine's CPUs
+   * take turns on this one (smp.c) */
+  int par = 0;
+  if (cpus > 1) {
+    extern int ap_start(int, const char **);
+    const char *why = "";
+    int n = 1;
+    u32 mbl = (u32)(uintptr_t)mb;
+    if (mbl + sizeof *mb > 0x7000 && mbl < 0x8000) why = "the loader's information is where the processors would start";
+    else n = ap_start(cpus, &why);
+    if (n > 1) {
+      smp_new(m, n, quantum);
+      par = 1;
+      con_puts("c4pc: "); con_dec(n); con_puts(" processors, each the machine's CPU on one of the PC's own\n");
+    } else {
+      smp_new(m, cpus, quantum);
+      con_puts("c4pc: "); con_dec(cpus); con_puts(" CPUs taking turns on this processor ("); con_puts(why); con_puts(")\n");
+    }
+  }
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU, running " : " MB arena, running ");
   con_puts(img_name); con_puts("\n");
   if (machine_boot(m, img, img_len, pargc, pargv)) power_off(75);
+  if (par) par_start(m->smp);
 
   i64 t0 = plat_now_ms(), parked = 0, idle_ms = 0;
   /* At the keyboard the machine's clock is the real one (--no-realtime:
@@ -675,7 +721,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
       con_put(c);
     }
     con_flush();
-    i64 left = limit - m->cycle;
+    i64 left = limit - machine_clock(m);
     if (left <= 0) { con_puts("c4pc: stopped at cycle budget\n"); status = 9; break; }
     /* someone at the keyboard: slices of 4 simulated milliseconds (as
      * libjs/worker.js's), paced to the machine's own clock (cli.js -i), so
@@ -702,13 +748,20 @@ void pc_main(u32 magic, struct mb_info *mb) {
         rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_idle = idle_ms;
       }
     }
+    /* the parallel engine: CPU 0 parked or halted waits for the others,
+     * answering them (par.c) */
+    if (par && !m->halted) {
+      int k = par_after(m->smp, r, &status);
+      if (k == 2) break;
+      if (k == 1) continue;
+    }
     if (r == STOP_HALT) { status = m->status; break; }
     if (r == STOP_INPUT) {
       if (have_in) { con_puts("c4pc: blocked on input with nothing left to read\n"); status = 8; break; }
       con_flush();
       i64 t = plat_now_ms();
       if (m->snd) audio_poll();
-      __asm__ volatile("sti; hlt");           /* until a key, or the next tick */
+      idle0(m);                               /* until a key, the next tick, or another CPU asking */
       parked += plat_now_ms() - t;
       continue;
     }
@@ -722,7 +775,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         if (until > now + 100) until = now + 100;
         while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
           if (m->snd) audio_poll();
-          __asm__ volatile("sti; hlt");
+          idle0(m);
         }
         idle_ms += plat_now_ms() - now;
       }
@@ -733,7 +786,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         i64 until = plat_now_ms() + (ahead < 100 ? ahead : 100);
         while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
           if (m->snd) audio_poll();
-          __asm__ volatile("sti; hlt");
+          idle0(m);
         }
         /* input during a nap: the guest wakes now, and its clock gets only
          * what it slept (libjs/worker.js wake). Kept whole, every pointer

@@ -1,7 +1,7 @@
 #!/bin/bash
 # test-c4pc.sh -- C4IX on c4pc against libjs (make test-c4pc).
 #
-# Then test-c4pc-mmu.sh, test-libjs's MMU cases, and test-c4pc-progs.sh,
+# Then several CPUs (smp.c, par.c), and test-c4pc-mmu.sh, test-libjs's MMU cases, and test-c4pc-progs.sh,
 # its native-oracle programs, on both.
 # The session is test-libjs's boot check (ps, then exit), on libjs,
 # c4pc-host and, where QEMU is installed, c4pc.elf on a bare (emulated) PC.
@@ -120,6 +120,65 @@ if [ -f $IMAGES/games/rott.c4r ] && [ -f $IMAGES/games/HUNTBGIN.WAD ]; then
   grep -h 'sound:' $W/snd-pc.err | sed 's/^/        /'
 else
   echo "  skip  the sound card (no rott.c4r and its data in $IMAGES/games)"
+fi
+# Several CPUs (smp.c, par.c). Taking turns (--cpus N): c4mp's own
+# transcripts, and the session with the MMU on 4 CPUs byte for byte libjs's
+# --cpus 4, in its cycles. On threads (--parallel), and on a PC's own
+# processors (c4pc.elf in QEMU -smp 4): what test-libjs asks of par.js --
+# the counters, the atomics, parking and IPIs, a deadlock named, the
+# CPU-local window -- and C4IX on four of them
+echo "  ---   several CPUs"
+for g in smp0 smp1; do
+  if ./c4pc-host --cpus 4 $IMAGES/c4mp-$g.c4r 2>&1 | cmp -s - src/c4mp/tests/$g-4cpu.txt; then ok "--cpus 4 runs c4mp's $g as c4mp does"
+  else bad "--cpus 4 runs c4mp's $g as c4mp does"; fi
+done
+timeout 900 node libjs/cli.js -s --mmu --cpus 4 -m 64 -c $CYC -d $IMAGES/disk $W/c4ix32.c4r < $W/in.txt > $W/libjs-smp.out 2> $W/libjs-smp.err
+timeout 600 ./c4pc-host -s --mmu --cpus 4 -m 64 -c $CYC -d $IMAGES/disk $W/c4ix32.c4r < $W/in.txt > $W/host-smp.out 2> $W/host-smp.err
+cl=$(grep -o '^libjs: [0-9]* cycles' $W/libjs-smp.err | grep -o '[0-9]*')
+ch=$(sed -n 's/^c4pc: \([0-9]*\) cycles.*/\1/p' $W/host-smp.err)
+if grep -qxF "c4ix: 4 processors" $W/host-smp.out && cmp -s $W/libjs-smp.out $W/host-smp.out && [ -n "$cl" ] && [ "$cl" = "$ch" ]; then
+  ok "the session on 4 CPUs taking turns, with the MMU: libjs's, byte for byte, in its cycles ($cl)"
+else bad "the session on 4 CPUs: c4pc-host's differs from libjs's (cycles $cl, $ch)"; diff $W/libjs-smp.out $W/host-smp.out | head -10; fi
+# smp_checks TAG RUN...: the c4mp checks, each program run by RUN N IMAGE
+smp_checks () {
+  local t=$1 out st; shift
+  out=$("$@" 4 $IMAGES/c4mp-smp0.c4r 2>&1)
+  echo "$out" | grep -q "smp0: total 48000 across 4 cpu(s), expected 48000" && ok "$t: smp0's counters add up" || bad "$t: smp0's counters"
+  out=$("$@" 4 $IMAGES/c4mp-smp1.c4r 2>&1)
+  echo "$out" | grep -q "smp1: all OK" && ok "$t: smp1's atomics, parking and IPIs" || { bad "$t: smp1"; echo "$out" | tail -4; }
+  out=$("$@" 4 $IMAGES/c4mp-deadlock.c4r 2>&1)
+  if echo "$out" | grep -qF "deadlock: every processor is parked and none can be woken" &&
+     [ "$(echo "$out" | grep -c "waiting on 0x")" = 4 ]; then ok "$t: a deadlock is diagnosed, each CPU named"
+  else bad "$t: the deadlock"; echo "$out" | tail -6; fi
+  out=$("$@" 2 $IMAGES/libjs-smpwin.c4r 2>&1)
+  echo "$out" | grep -q "smpwin: cpu 1 saw 111, cpu 0 sees 1 and 9" && ok "$t: the CPU-local window" || bad "$t: the CPU-local window"
+  out=$("$@" 4 $IMAGES/libjs-spinmp.c4r 2>&1)
+  echo "$out" | grep -q "spinmp: 4 cpus each summed 70000000" && ok "$t: four CPUs work at once" || bad "$t: four CPUs at once"
+}
+host_par () { local n=$1; shift; timeout 120 ./c4pc-host --cpus $n --parallel "$@"; }
+smp_checks "--parallel" host_par
+if [ -n "${NO_QEMU:-}" ] || [ ! -x "$Q" ]; then
+  echo "  skip  c4pc.elf on 4 processors (no qemu-system-i386)"
+else
+  # KVM where there is one (helios's), else QEMU's own threads for each processor
+  accel=""; [ -r /dev/kvm ] && [ -w /dev/kvm ] && accel="-accel kvm -cpu host"
+  qemu_smp () {
+    local n=$1; shift
+    rm -f $W/serial-smp.txt
+    timeout 600 "$Q" $accel -smp 4 -m 512 -display none -no-reboot -serial file:$W/serial-smp.txt \
+      -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf -append "--cpus $n" -initrd "$1" > /dev/null 2>&1
+    tr -d '\r' < $W/serial-smp.txt
+  }
+  smp_checks "c4pc.elf on 4 processors" qemu_smp
+  rm -f $W/serial-smp.txt
+  timeout 900 "$Q" $accel -smp 4 -m 512 -display none -no-reboot -serial file:$W/serial-smp.txt \
+    -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf -append "--mmu --cpus 4 -m 64" \
+    -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin" > /dev/null 2>&1
+  out=$(tr -d '\r' < $W/serial-smp.txt)
+  if echo "$out" | grep -qxF "c4ix: 4 processors" && echo "$out" | grep -qxF "  a thread each, all at once" &&
+     echo "$out" | grep -qF "shutdown complete, 0 tasks remain" && ! echo "$out" | grep -qE "cache .task. .*live [1-9]|panic|illegal"; then
+    ok "c4pc.elf on 4 processors: C4IX boots on all four, runs ps, and shuts down with every task freed"
+  else bad "c4pc.elf on 4 processors: the C4IX session"; echo "$out" | grep -E "processors|thread|panic|illegal|shutdown" | head -6; fi
 fi
 # test-libjs's programs with a native oracle, on both
 progs=$(IMAGES=$IMAGES bash src/c4pc/test-c4pc-progs.sh); r=$?

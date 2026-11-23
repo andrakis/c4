@@ -54,8 +54,8 @@ extern const char OPNAMES[];   /* 5 bytes an opcode, the ROM at 0x200 */
 #define ARGS_RESERVE  4096
 #define NULL_GUARD_OP 0x4c554e00
 
-/* ---- why run() stopped (c4m.js STOP). PARK and CPUHALT are SMP's,
- * which c4pc has not; SWITCH is the MMU's: the mode changed, and with it
+/* ---- why run() stopped (c4m.js STOP). PARK and CPUHALT are SMP's
+ * (smp.c): one CPU waits on a word, or has stopped; SWITCH is the MMU's: the mode changed, and with it
  * the loop to run (mmu.c run). A host that sees it runs on. ---- */
 enum { STOP_BUDGET, STOP_HALT, STOP_INPUT, STOP_SLEEP, STOP_PARK, STOP_CPUHALT, STOP_SWITCH };
 
@@ -130,6 +130,7 @@ u32 heap_alloc(heap *h, i32 n);
 void heap_free(heap *h, u32 p);
 u32 heap_realloc(heap *h, u8 *mem, u32 p, i32 n);
 void heap_set_high(heap *h, int on);
+void heap_set_locked(heap *h, int on); /* every CPU's at once (par.c): under a lock */
 u32 heap_largest(heap *h);
 i32 heap_release(heap *h, i32 g);
 i32 heap_used(heap *h), heap_peak(heap *h), heap_gen(heap *h), heap_released(heap *h);
@@ -217,6 +218,7 @@ struct machine {
   u8 *tap_in; u32 tap_in_len, tap_in_pos; int tap_in_on;
   /* swap */
   imap *swap_pages; u32 swap_slots; u32 swap_addr; i32 swap_result;
+  volatile int swap_lk;                /* the swap's pages, which every CPU reaches (par.c) */
   int reset_requested;
   /* the console sink */
   void (*on_byte)(machine *, int b);
@@ -226,7 +228,79 @@ struct machine {
    * map of them. dma_ctx: the user task's MMU while its load or store is
    * at a device, which checks the addresses it is given (arena.js dmaCtx) */
   mmu *mmu; int vm; u32 uwin, udir; mmu *dma_ctx;
+
+  /* ---- several CPUs (smp.c: libjs/smp.js, par.js) ----
+   * Every CPU is a machine of its own over the same arena, heap and
+   * devices, as libjs's are Machines over one Devices: dv is the machine
+   * whose device fields (halted to on_byte above, the symbols) are the
+   * machine's -- CPU 0's, and a lone CPU's own. Everything else here is
+   * the CPU's: its registers, trap state, MMU. */
+  machine *dv;
+  struct smp *smp;
+  int cpu_id, cpu_state;               /* CPU_OFF ... (smp.c) */
+  i32 local[64];                       /* the CPU-local window, 0x800-0x8FF */
+  volatile int ipi_pending;
+  int ipi_at_trap;                     /* for tests: an IPI only as a trap enters its handler */
+  i32 wait_addr, wait_val, cpu_status;
+  i64 wake_at;
+  /* the parallel engine's (par.c): a CPU other than 0, which asks CPU 0
+   * for the devices and takes none of their interrupts; and serving,
+   * while CPU 0 runs its request on this machine */
+  int par_ap, serving;
 };
+
+/* the swap's lock: its pages, and its registers, are every CPU's own to
+ * use on the parallel engine (C4IX holds a lock of its own around a
+ * command, src/c4ix/mmu.c mmu_sop) */
+static inline void swap_lock(machine *m) {
+  while (__atomic_exchange_n(&m->dv->swap_lk, 1, __ATOMIC_ACQUIRE))
+    while (__atomic_load_n(&m->dv->swap_lk, __ATOMIC_RELAXED)) __builtin_ia32_pause();
+}
+static inline void swap_unlock(machine *m) { __atomic_store_n(&m->dv->swap_lk, 0, __ATOMIC_RELEASE); }
+
+/* ---- several CPUs (smp.c) ---- */
+#define C4I_SMP 0x100
+#define C4I_PAR 0x20000                  /* libjs's: the CPUs run at once, a thread each */
+#define LOCAL_BASE 0x800
+#define LOCAL_END  0x900
+enum { CPU_OFF, CPU_RUN, CPU_WAIT, CPU_SLEEP, CPU_HALT };
+typedef struct smp {
+  int n; i32 quantum;
+  machine **cpu;                       /* cpu[0] is the boot CPU, the hosts' */
+  i64 cycle;                           /* the machine's time: the round robin's (smp.js) */
+  int running;
+  struct par *par;                     /* the parallel engine (par.c), or 0: simulated */
+  volatile i32 time_ms;                /* par: the machine's time as CPU 0 last published it */
+} smp;
+typedef struct par par;
+/* n CPUs on m0's machine, a quantum of instructions each in turn */
+smp *smp_new(machine *m0, int n, i32 quantum);
+int smp_run(smp *s, i64 max_cycles);
+int smp_op(machine *m, i32 op);        /* CPUI ... IPI, on the CPU that runs it */
+i64 machine_clock(machine *m);         /* the machine's cycles: the round robin's with CPUs */
+void smp_cpu_reset(machine *m);        /* as at power-on, and when a CPU is started */
+/* the parallel engine (par.c): the CPUs other than 0 on the host's own,
+ * how many the machine then has */
+int par_start(smp *s);
+int par_run0(smp *s, i64 max_cycles);
+int par_op(machine *m, i32 op);
+int par_sys(machine *m, i32 op);       /* a STOP, or -1 for sys's own way */
+i32 par_rd32(machine *m, u32 a);
+void par_wr(machine *m, u32 a, i32 v, int w8);
+void par_emit(machine *m, const u8 *b, u32 n);
+i64 par_clock(smp *s);
+/* after CPU 0's run stopped with r: 0 carry on, 1 run again, 2 over (*status) */
+int par_after(smp *s, int r, i32 *status);
+void par_shutdown(smp *s);
+void par_idle0(smp *s);
+void par_stats(smp *s, char *buf, u32 len);   /* -s: a line on the other CPUs' requests and waits */                /* CPU 0 with nothing to do: until a request or an interrupt */
+/* what the platform gives the parallel engine: CPU k started on fn(k)
+ * (0 if it cannot be); a wait on CPU k until *kick is not seen, or ms
+ * pass (ms < 0: no limit); and a kick, which adds one and ends a wait */
+int plat_cpus(void);
+int plat_cpu_start(int k, void (*fn)(int));
+void plat_wait(int k, volatile int *kick, int seen, int ms);
+void plat_kick(int k, volatile int *kick);
 
 machine *machine_new(u32 arena_bytes, drive **drives, int ndrives, double mhz);
 /* the image, its arguments: the trampoline set up, the heap laid out (boot.js) */
@@ -256,6 +330,8 @@ u32 dma_cstring(machine *m, u32 addr, char *out, u32 max);
 
 /* the MMU (mmu.c) */
 mmu *mmu_new(machine *m);              /* fitted, off until the guest turns it on */
+void mmu_reset(mmu *u);
+void mmu_rethrow(mmu *u);              /* the fault u has recorded, raised (par.c) */
 int mmu_run(mmu *u, i64 max_cycles);
 i32 mmu_read32(mmu *u, i32 x);         /* its registers, kernel mode's */
 void mmu_write32(mmu *u, i32 x, i32 v);

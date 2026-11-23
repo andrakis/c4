@@ -142,6 +142,21 @@ static const char *pat_wc(void) {
   return "write-combining (PAT)";
 }
 #endif
+/* a page of devices' registers (the local APIC's, ap.c) uncached, where
+ * paging is on: the 2 MB or 4 MB page it is in (i386: pat_wc's tables, when it ran) */
+#ifdef __x86_64__
+void screen_uncached(u32 addr) {
+  boot_pd[addr >> 21] |= 0x18;                          /* PCD, PWT: the PAT's entry 3, UC */
+  uintptr_t cr3; __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) : : "memory");
+}
+#else
+void screen_uncached(u32 addr) {
+  uintptr_t cr0; __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+  if (!(cr0 & 0x80000000u)) return;                     /* no paging: the MTRRs have it */
+  pdir[addr >> 22] |= 0x18;
+  uintptr_t cr3; __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) : : "memory");
+}
+#endif
 /* what happened, for the console */
 const char *screen_wc(void) {
   if (!fb) return "no framebuffer";

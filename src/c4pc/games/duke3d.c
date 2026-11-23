@@ -201,9 +201,9 @@ typedef struct { machine *m; u32 page; } later_t;
 static void later_init(later_t *l, machine *m) { l->m = m; l->page = 0xffffffffu; hold_begin(&acc_hold); }
 static inline void later_put(later_t *l, i32 a, i32 b) {
   if (((u32)a >> 12) != l->page) { acc_probe(l->m, a, 1, 1); l->page = (u32)a >> 12; }
-  hold_put(&acc_hold, a, b);
+  hold_put(&acc_holds[l->m->cpu_id], a, b);
 }
-static void later_commit(later_t *l) { hold_write8(l->m, &acc_hold); }
+static void later_commit(later_t *l) { hold_write8(l->m, &acc_holds[l->m->cpu_id]); }
 /* a blend's index, the new colour over the old, swapped when transrev */
 static inline i32 blend(i32 c, i32 old, i32 rev) {
   i32 v = (c | (old << 8)) & 0xffff;

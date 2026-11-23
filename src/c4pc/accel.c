@@ -50,7 +50,7 @@ u8 *acc_span(machine *m, i32 addr, i32 len, int write) {
   return 0;
 }
 
-hold_t acc_hold;
+hold_t acc_holds[32];
 static u32 hash32(i32 a, u32 mask) { u32 x = (u32)a; x ^= x >> 16; x *= 0x45d9f3bu; x ^= x >> 16; return x & mask; }
 static void hold_index(hold_t *h, u32 i) {
   u32 k = hash32(h->a[i], h->hmask);
@@ -115,14 +115,14 @@ void hold_write32(machine *m, hold_t *h) {
   RW(w);
   for (u32 i = 0; i < h->n; i++) wr32(&w, h->a[i], h->v[i]);
 }
-static i32 *scr[4]; static u32 scr_n[4];
-i32 *acc_scratch(int which, u32 n) {
-  if (n > scr_n[which]) {
-    u32 k = scr_n[which] ? scr_n[which] : 256;
+static i32 *scr[32][4]; static u32 scr_n[32][4];
+i32 *acc_scratch_k(int cpu, int which, u32 n) {
+  if (n > scr_n[cpu][which]) {
+    u32 k = scr_n[cpu][which] ? scr_n[cpu][which] : 256;
     while (k < n) k *= 2;
-    scr[which] = grow(scr[which], k, 4); scr_n[which] = k;
+    scr[cpu][which] = grow(scr[cpu][which], k, 4); scr_n[cpu][which] = k;
   }
-  return scr[which];
+  return scr[cpu][which];
 }
 
 /* ---- CX_CRC32 (crc, buf, len): arc_crc32. Reads only ---- */

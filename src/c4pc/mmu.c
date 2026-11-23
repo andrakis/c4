@@ -30,8 +30,6 @@ enum { PTE_P = 1, PTE_W = 2, PTE_U = 4, PTE_X = 8, PTE_A = 0x20, PTE_D = 0x40 };
 enum { FK_READ = 1, FK_WRITE = 2, FK_FETCH = 4, FK_PRESENT = 8, FK_DMA = 32 };
 /* page 0's windows a user task may use (IOPM). At reset all of them */
 enum { IOPM_ROM = 1, IOPM_DEV = 2, IOPM_GUI = 4, IOPM_SND = 8, IOPM_LOCAL = 16, IOPM_LOCALW = 32, IOPM_ALL = 63 };
-#define LOCAL_BASE 0x800
-#define LOCAL_END  0x900
 
 /* virtual pages the arrays cache: 512 MB, the user window and below */
 #define LIMIT 131072u
@@ -132,6 +130,12 @@ static void reset(mmu *u) {
   u->ncwins = 0;
   flush(u);
 }
+
+/* a fault a device found for this task on CPU 0, raised here (par.c) */
+void mmu_rethrow(mmu *u) { fault(u); }
+
+/* off, as at power-on and when a CPU is started (smp.c) */
+void mmu_reset(mmu *u) { reset(u); }
 
 mmu *mmu_new(machine *m) {
   mmu *u = xmalloc(sizeof *u);
@@ -325,7 +329,11 @@ i64 mmu_dma_check(mmu *u, u32 addr, i32 len, int write, int pin) {
 
 /* the bus, for user mode: a device it reaches checks the addresses it is
  * given against this task's space while the access lasts */
-static i32 low_rd32(mmu *u, i32 x) { return eng_bus_rd32(u->m, (u32)x); }
+static i32 low_rd32(mmu *u, i32 x) {
+  machine *m = u->m;
+  if (m->smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) == 0) return m->local[(x - LOCAL_BASE) >> 2];
+  return eng_bus_rd32(m, (u32)x);
+}
 static i32 bus_rd32(mmu *u, i32 x) {
   u->m->dma_ctx = u;
   i32 v = low_rd32(u, x);
@@ -361,6 +369,7 @@ static int low_ok(mmu *u, i32 x0, int kind) {
 i32 mmu_ld8(mmu *u, i32 x) {
   if ((u32)x < 0x1000) {
     if (!low_ok(u, x, FK_READ)) { refuse(u, x, FK_READ | FK_PRESENT); fault(u); }
+    if (u->m->smp && x >= LOCAL_BASE && x < LOCAL_END) return (int8_t)((u8 *)u->m->local)[x - LOCAL_BASE];
     return eng_bus_rd8s(u->m, (u32)x);
   }
   i32 p = page(u, x, FK_READ);
@@ -385,6 +394,7 @@ void mmu_st8(mmu *u, i32 x, i32 v) {
   machine *m = u->m;
   if ((u32)x < 0x1000) {
     if (!low_ok(u, x, FK_WRITE)) { refuse(u, x, FK_WRITE | FK_PRESENT); fault(u); }
+    if (m->smp && x >= LOCAL_BASE && x < LOCAL_END) { ((u8 *)m->local)[x - LOCAL_BASE] = (u8)v; return; }
     if (is_rom(x, 1)) { eng_rom_store(m, x, v & 0xff); return; }
     bus_wr8(u, x, v);
     return;
@@ -397,6 +407,7 @@ void mmu_st32(mmu *u, i32 x, i32 v) {
   machine *m = u->m;
   if ((u32)x < 0x1000) {
     if (!low_ok(u, x, FK_WRITE)) { refuse(u, x, FK_WRITE | FK_PRESENT); fault(u); }
+    if (m->smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) == 0) { m->local[(x - LOCAL_BASE) >> 2] = v; return; }
     if (is_rom(x, 4)) { eng_rom_store(m, x, v); return; }
     bus_wr32(u, x, v);
     return;
@@ -792,7 +803,7 @@ static int run_user(mmu *u, i64 max_cycles) {
   const u32 wm = m->wmask;
 #define MW(x) mw[((u32)(x) >> 2) & wm]
   const i32 *const rd = u->rd, *const wr = u->wr;
-  if (m->halted) return STOP_HALT;
+  if (m->dv->halted) return STOP_HALT;
   const int ident = !u->general;
   i32 pc = m->pc, sp = m->sp, bp = m->bp, a = m->a;
   i64 cycle = m->cycle;
@@ -810,7 +821,7 @@ static int run_user(mmu *u, i64 max_cycles) {
 #define LOAD() (pc = m->pc, sp = m->sp, bp = m->bp, a = m->a)
 #define SWITCH_OUT() do { stop = STOP_SWITCH; goto out; } while (0)
 #define FAULTED() do { if (!m->mode) SWITCH_OUT(); } while (0)
-#define FAULTED_H() do { if (!m->mode || m->halted) { stop = m->halted ? STOP_HALT : STOP_SWITCH; goto out; } } while (0)
+#define FAULTED_H() do { if (!m->mode || m->dv->halted) { stop = m->dv->halted ? STOP_HALT : STOP_SWITCH; goto out; } } while (0)
 #define URECHECK() do { interval = m->cycle_interval; \
     next_irq = interval > 0 ? next_multiple(cycle, interval) : 0; \
     chk = eng_need_checks(m); next_chk = 0; lim = -1; } while (0)
@@ -850,7 +861,7 @@ static int run_user(mmu *u, i64 max_cycles) {
         SAVEP(pc);
         if (!s_fix(u, sp)) {
           stack_fault(u, sp);
-          stop = m->halted ? STOP_HALT : STOP_SWITCH;
+          stop = m->dv->halted ? STOP_HALT : STOP_SWITCH;
           goto out;
         }
         s_lo = u->s_lo; s_len = u->s_len; s_off = u->s_off;
@@ -1087,7 +1098,7 @@ static int run_user(mmu *u, i64 max_cycles) {
         cycle = m->cycle;
         URECHECK();
         if (s != STOP_BUDGET) { stop = s; goto out; }
-        if (m->halted) { stop = STOP_HALT; goto out; }
+        if (m->dv->halted) { stop = STOP_HALT; goto out; }
         FAULTED();
       }
     }
@@ -1099,7 +1110,7 @@ out:
   u->s_lo = s_lo; u->s_len = s_len; u->s_off = s_off;
   u->c_lo = c_lo; u->c_len = c_len; u->c_off = c_off;
   m->vm = 0;
-  if (m->halted) stop = STOP_HALT;
+  if (m->dv->halted) stop = STOP_HALT;
   return stop;
 #undef MW
 #undef SAVEP

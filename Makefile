@@ -3192,7 +3192,7 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # flags, so that it can be held against libjs; c4pc.elf is a multiboot
 # kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
 C4PC_SRC  := src/c4pc
-C4PC_MODS := engine mmu accel dev gui font heap fmt fpu drive util snd opl \
+C4PC_MODS := engine mmu smp par accel dev gui font heap fmt fpu drive util snd opl \
 	games/doom games/duke3d games/quake games/rott games/sbk games/tyrian games/wolf3d
 C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h $(C4PC_SRC)/font.h $(C4PC_SRC)/accel.h $(C4PC_SRC)/snd.h
 # The display's faces (font.c), as tables mkfont.py makes from the system's
@@ -3217,11 +3217,11 @@ C4PC_CFLAGS := -O2 -g -Wall -Wno-unused-parameter -fwrapv -fno-strict-aliasing -
 # i486: what DOSBox's cores and every emulator here run; the x87 for floats
 C4PC_BARE_CFLAGS := -m32 -march=i486 -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
 c4pc-host: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
-	$(NATIVE_CC) $(C4PC_CFLAGS) -I$(C4PC_SRC) $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) .c4pc/fontdata.c .c4pc/opltables.c -o $@ -lm
-c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/libc.c \
+	$(NATIVE_CC) $(C4PC_CFLAGS) -I$(C4PC_SRC) $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) .c4pc/fontdata.c .c4pc/opltables.c -o $@ -lm -pthread
+c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 		$(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	gcc $(C4PC_BARE_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
-		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/libc.c \
+		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 		$(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 # c4pc64.elf (M8): the same machine built for x86-64, its twice as many
 # registers and 64-bit arithmetic; pc/boot64.S enters long mode from the
@@ -3229,11 +3229,11 @@ c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_
 # ELF32, which multiboot loaders take (its addresses are all below 4 GB).
 # -mno-red-zone: an interrupt pushes its frame where the code is.
 C4PC_BARE64_CFLAGS := -m64 -mno-red-zone -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
-c4pc64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/libc.c \
+c4pc64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 	$(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	gcc $(C4PC_BARE64_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
 		-Wl,--no-warn-rwx-segments -o .c4pc/c4pc64.elf64 $(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c \
-		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
+		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 	objcopy -I elf64-x86-64 -O elf32-i386 .c4pc/c4pc64.elf64 $@
 
 # The DOS loader (src/c4pc/dos): boots c4pc.elf from DOS, for DOSBox.

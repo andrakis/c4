@@ -23,7 +23,9 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | under KVM the session byte for byte libjs's in its cycles, with the MMU and without; every acceltest; Doom's demo3 with the SB16; the desktop and Doom on it. With the MMU 24% faster than c4pc.elf (194M against 157M c4 instructions a second), without it 3% |
 | done (M6) | drive 1 kept on an IDE disk (pc/store.c), where C4IX's persist saves, as the page keeps it in IndexedDB and cli.js in a `-w` folder |
 | *measured* | under KVM on both builds: a file written and synced in one boot is there in the next, and after a second save both are; the store's drive 1 is what c4pc-host's `-w` folder gets, file for file |
-| not yet | real SMP (M7), General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk for the store |
+| done (M7) | several CPUs: libjs's round robin (smp.c, `--cpus N`) and its parallel engine (par.c): a thread each in c4pc-host (`--parallel`), and on a PC each of its own processors, started by INIT and Startup IPIs (pc/ap.c, pc/aptramp.S) |
+| *measured* | taking turns: c4mp's transcripts, and the session with the MMU on 4 CPUs byte for byte libjs's `--cpus 4`, in its cycles; libjs's C4IX tests for several CPUs (test-c4ix-smp.sh) pass on c4pc-host at 2 and 4, taking turns and on threads; on c4pc.elf and c4pc64.elf in QEMU with 4 processors, what test-libjs asks of par.js, and C4IX on all four; four compiles at once take a third of the time on 4 processors (section Several processors) |
+| not yet | General MIDI (no synth: games play the AdLib), an AHCI (SATA) or NVMe disk for the store |
 
 ## One engine, two front ends
 
@@ -32,6 +34,8 @@ src/c4pc/
   c4pc.h  clib.h        the machine, and the C library calls it makes
   engine.c              libjs/c4m.js's interpreter, traps and syscalls, the user window; boot.js's loader and trampoline
   mmu.c                 libjs/mmu.js: the MMU's registers, translation, the user loop; arena.js's kernel map
+  smp.c                 libjs/smp.js: several CPUs taking turns
+  par.c                 libjs/par.js and ap.js: several CPUs at once, the devices CPU 0's
   dev.c                 src/c4bb/sim/devices.js: the registers at 0x100-0x1FF
   accel.c accel.h       libjs/accel.js's loader and kit; src/c4ix/accel.mjs: C4IX's inflater and CRC-32
   games/                the games' accelerators, games/NAME/c4/accel.mjs each in C
@@ -44,7 +48,8 @@ src/c4pc/
   fpu.c                 src/c4bb/sim/fpu.js (F3) and c4m.js's FLT
   drive.c util.c        drives (and ustar archives as drives), maps, blobs
   host.c                c4pc-host: Linux, with libjs/cli.js's flags
-  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c and hda.c (sound), store.c (drive 1 on a disk), libc.c, link.ld;
+  pc/                   c4pc.elf: boot.S, pc.c (the PC), screen.c (framebuffer, mouse), sb16.c and hda.c (sound), store.c (drive 1 on a disk),
+                        ap.c and aptramp.S (the other processors), libc.c, link.ld;
                         c4pc64.elf: boot64.S in boot.S's place
   dos/                  C4PC.COM: the DOS loader
   test-c4pc.sh          make test-c4pc: C4IX on libjs, c4pc-host and QEMU, without an MMU and with one
@@ -75,8 +80,10 @@ without the windows' offsets while they are all 0 and hands over to the
 general one, a cycle later, when one is not; mmu.c has one loop and
 counts that cycle the same way, so that the two agree to the cycle.
 
-**What differs from libjs.** One CPU; no mailbox, downloads or General
-MIDI synth, so INFO says so and C4IX does without. Past
+**What differs from libjs.** No mailbox, downloads or General MIDI
+synth, so INFO says so and C4IX does without; on several CPUs at once,
+the swap's registers run where they are touched (section Several
+processors). Past
 the arena's end libjs's typed arrays read 0 and drop the write, where
 c4pc's word index wraps inside the arena: only a wild program can tell.
 
@@ -264,6 +271,85 @@ system's, as on libjs, and is not saved.
 To give a VMware VM one: add a hard disk on an IDE controller (a SATA or
 NVMe one is not spoken to yet), new and blank, of 256 MB or more.
 
+### Several processors
+
+C4IX runs on several CPUs (docs/c4ix-smp.md): an idle task and a run
+queue each, a kernel lock, c4mp's ten processor opcodes (CPUI to IPI) and
+a window of 64 words at 0x800 that each CPU sees its own of. libjs has two
+engines for them, and c4pc has both.
+
+**Taking turns** (smp.c, smp.js line for line): `--cpus N` (and `-q`,
+the quantum) makes N machines over one arena, heap and devices, and CPU
+0's run hands over to a round robin that runs each runnable CPU for a
+quantum. Every instruction is atomic, so CAS and the rest are plain
+read-modify-writes, and a run is libjs's to the byte and the cycle. Each
+CPU is a `machine` of its own, its registers, trap state and MMU; its
+`dv` names the machine whose device fields are the machine's (CPU 0's),
+so the devices (dev.c) read `m->dv->...` for themselves and `m->...` for
+the CPU that reached them, as devices.js reads `dev.machine`.
+
+**At once** (par.c, par.js and ap.js): `--parallel` on c4pc-host gives
+each CPU but 0 a thread, and on a PC `--cpus N` (or `all`) gives each one
+of the PC's processors. CAS, XCHG and FADD are the host's own atomic
+instructions on the guest's word; CWAI parks until the word moves, a
+CWAK, an IPI or the end, looking again every 10 ms as ap.js does. CPU 0
+keeps the devices and the console: another CPU that reaches them (OPEN,
+READ, PRTF and the rest, a device register, a message) asks CPU 0, which
+runs the same code on the asking CPU's own machine while it waits; CPU 0
+answers between slices of 16K cycles, and at once when it is idle. The
+sound card's OPL and PCM writes are queued instead (par.js's posted
+writes). The heap every CPU uses itself, under a lock, and so the swap's
+pages.
+
+One thing c4pc does that libjs does not yet: the swap's registers
+(SWAP_ADDR, SWAP_CMD) run on the CPU that touches them, under the swap's
+lock, rather than being asked of CPU 0. C4IX turns the heap's high end on
+and off through them around every allocation a task makes
+(src/c4ix/mmu.c mmu_sop, under a lock of its own), and asked, they were
+nearly all the requests: a boot and a compile on 4 CPUs made 212,550, with
+13.5 s of round trips, and took 19 s against 5.4 s on one CPU. Run where
+they are touched, 565 requests and 5.7 s. libjs's par.js still asks
+(the same session: 9.4 s on one CPU, 26.3 s on four).
+
+**On a PC** (pc/ap.c, pc/aptramp.S): the boot processor's local APIC
+sends INIT and two Startup IPIs to all the others. Each starts in real
+mode at 0x7000, where the trampoline takes it to the boot processor's
+protected mode and paging (and, for c4pc64.elf, long mode), a stack by
+the order it arrived in, and ap_entry, which loads the kernel's GDT and
+IDT and waits in hlt for the engine. How many processors there are is how
+many arrive. A processor with nothing to do waits in hlt; a kick is an IPI
+at vector F0h, sent only to one that is waiting, and a wait with an end
+gets its IPI from the boot processor's 1 kHz tick. Where no other
+processor answers (DOSBox, a VM of one), the CPUs take turns on the one
+there is.
+
+*Measured* (2026-11-23, helios; c4pc-host on the 4 processors c4-lock
+gives; QEMU 10.2 with KVM and `-smp 4`): four compiles of mandel.c at once
+inside C4IX, with the MMU, less the same session without them:
+
+| | 1 CPU | 2 CPUs | 4 CPUs |
+|---|---|---|---|
+| c4pc-host, on threads | 18.6 s | 10.4 s | 5.6 s |
+| c4pc.elf in QEMU | 27.3 s | | 8.5 s |
+| c4pc64.elf in QEMU | 21.4 s | | 7.8 s |
+| libjs, `--parallel` (asking for the swap's registers) | 31.4 s | | 56.6 s |
+
+And the whole of a session that rebuilds C4IX's libraries, `b4ke -B -j`
+(13 steps; the boot and the root archive's unpack included), the
+libraries byte for byte the disk's each time:
+
+| | 1 CPU | 4 CPUs |
+|---|---|---|
+| c4pc-host, on threads | 46.0 s | 19.9 s |
+| c4pc.elf in QEMU | 69.2 s | 29.7 s |
+| c4pc64.elf in QEMU | 53.4 s | 23.8 s |
+| libjs, `--parallel` | 81.7 s | 79.6 s |
+
+The four programs are byte for byte the same each time. libjs's spinmp, 4
+CPUs summing 70 million each with nothing to ask, does four CPUs' work in
+2.06 s on c4pc-host against 1.50 s for one CPU's. A game is one task, and
+runs on one CPU however many there are.
+
 ## Running it
 
 The tools (QEMU, Bochs, DOSBox-X, DOSBox 0.74, mtools, xorriso, GRUB's
@@ -276,8 +362,9 @@ them on PATH (`~/opt/pctools/mkwrap.sh` makes them).
 second word is `drive` is a drive (a ustar archive, `drive rw` writable in
 RAM), and `stdin` is fed to the keyboard up front with end of input, as
 cli.js feeds piped input. `-append` takes cli.js's `-m -c -s -hz` and
-`--mmu`, then the program's arguments after `--`. c4pc writes the status to
-isa-debug-exit, so QEMU exits `(status << 1) | 1`.
+`--mmu`, `--cpus N` (QEMU's `-smp` gives it the processors; `--cpus all`,
+as many as there are), then the program's arguments after `--`. c4pc
+writes the status to isa-debug-exit, so QEMU exits `(status << 1) | 1`.
 
     make c4pc.elf .c4pc/disk.tar
     qemu-system-i386 -m 512 -display none -serial file:serial.txt \
@@ -544,3 +631,9 @@ then needs SIGKILL, ignoring SIGTERM while halted).
 - **Plain DOSBox 0.74**: why C4PC.COM stops copying the disk there.
 - A test in the gate: `test-c4pc` takes about ten minutes, most of it
   QEMU's three runs (`NO_MMU=1`: three minutes; `NO_QEMU=1`: two).
+- **libjs's par.js**: the swap's registers run on the CPU that touches
+  them, as par.c runs them (section Several processors): C4IX on four of
+  its threads is slower than on one until then.
+- **Several processors on real hardware and VMware**: only QEMU's have
+  been started; ACPI's MADT is not read (every processor that answers
+  the broadcast is taken), and x2APIC-only machines are not spoken to.

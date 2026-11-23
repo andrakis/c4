@@ -40,7 +40,8 @@ const char OPNAMES[] =
 _Static_assert(sizeof OPNAMES - 1 == INS_SIZE * 5, "is_rom (c4pc.h) counts the names as INS_SIZE of 5 bytes");
 
 void machine_emit(machine *m, const u8 *b, u32 n) {
-  m->uart_activity += n;
+  if (m->par_ap && !m->serving) { par_emit(m, b, n); return; }   /* the console is CPU 0's */
+  m->dv->uart_activity += n;
   dev_con_bytes(m, b, n);
 }
 void machine_emits(machine *m, const char *s) { machine_emit(m, (const u8 *)s, (u32)strlen(s)); }
@@ -66,10 +67,10 @@ static char *dec(char *buf, i64 v) {
 /* memory, the slow paths (c4m.js ld32 ...): the device window, the ROM,
  * unaligned words, the guarded boot stack */
 static int in_guard(machine *m, i32 x, i32 n) {
-  return m->stack_guard ? (i64)x < m->stack_top_reg && (i64)x + n > m->stack_base : 0;
+  return m->dv->stack_guard ? (i64)x < m->dv->stack_top_reg && (i64)x + n > m->dv->stack_base : 0;
 }
 static i32 guard_lo(machine *m) {
-  i32 g = m->stack_guard ? (i32)m->stack_base : 0x7fffffff;
+  i32 g = m->dv->stack_guard ? (i32)m->dv->stack_base : 0x7fffffff;
   /* the loop's own bound: below the arena's end, so its fast paths need no other */
   i32 e = (i32)m->size - 4;
   if (e < g) g = e;
@@ -80,7 +81,18 @@ static i32 guard_lo(machine *m) {
 static void guard_hit(machine *m, i32 x, i32 n, int write, i32 v, i32 op, i32 from);
 static void rom_store(machine *m, i32 x, i32 v);
 
+/* a device's registers: CPU 0's, which another CPU asks for (par.c) --
+ * but the swap's, SWAP_ADDR and SWAP_CMD, which it runs itself under the
+ * swap's lock: C4IX turns the heap's high end on and off through them
+ * around every allocation a task makes, and as requests they were most of
+ * what another CPU asked (5,863 commands, three requests each, in a boot
+ * and a compile) */
+#define SWAP_ADDR_REG 0x11c
+#define SWAP_CMD_REG 0x158
+#define AP_DEV(m, a) ((m)->par_ap && !(m)->serving && (((a) >= DEV_BASE && (a) < DEV_END) || ((a) >= 0x400 && (a) < 0x500)) && \
+                      ((a) & ~3u) != SWAP_ADDR_REG && ((a) & ~3u) != SWAP_CMD_REG)
 static i32 arena_rd32(machine *m, u32 a) {
+  if (AP_DEV(m, a)) return par_rd32(m, a & ~3u);
   if (a >= DEV_BASE && a < DEV_END) return dev_read32(m, a);
   if (a >= 0x400 && a < 0x480 && m->gui) return gui_read32(m->gui, a & ~3u);     /* bus.js: the display */
   if (a >= 0x480 && a < 0x500 && m->snd) return snd_read32(m->snd, a & ~3u);     /* ... and the sound card */
@@ -89,6 +101,7 @@ static i32 arena_rd32(machine *m, u32 a) {
   return (i32)(m->u8[a] | m->u8[a + 1] << 8 | m->u8[a + 2] << 16 | (u32)m->u8[a + 3] << 24);
 }
 static void arena_wr32(machine *m, u32 a, i32 v) {
+  if (AP_DEV(m, a)) { par_wr(m, a & ~3u, v, 0); return; }
   if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, a, v); return; }
   if (a >= 0x400 && a < 0x480 && m->gui) { gui_write32(m->gui, a & ~3u, v); return; }
   if (a >= 0x480 && a < 0x500 && m->snd) { snd_write32(m->snd, a & ~3u, v); return; }
@@ -100,6 +113,7 @@ static void arena_wr32(machine *m, u32 a, i32 v) {
 static i32 bus_rd32(machine *m, u32 a) { return a < 0x10 ? 0 : arena_rd32(m, a); }
 static i32 bus_rd8s(machine *m, u32 a) { return a < 0x10 || a >= m->size ? 0 : (int8_t)m->u8[a]; }
 static void bus_wr8(machine *m, u32 a, i32 v) {
+  if (AP_DEV(m, a)) { par_wr(m, a, v & 0xff, 1); return; }
   if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, a & ~3u, v & 0xff); return; }
   if (a >= 0x400 && a < 0x480 && m->gui) { gui_write32(m->gui, a & ~3u, v & 0xff); return; }
   if (a >= 0x480 && a < 0x500 && m->snd) { snd_write32(m->snd, a & ~3u, v & 0xff); return; }
@@ -124,6 +138,7 @@ i32 m_ld32(machine *m, i32 x) {
     if (in_guard(m, x, 4)) { guard_hit(m, x, 4, 0, 0, 0, 0); return 0; }
     return (u32)x + 4 <= m->size ? m->w[(u32)x >> 2] : 0;
   }
+  if (m->smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) == 0) return m->local[(x - LOCAL_BASE) >> 2];
   if (m->mmu && x >= MMU_BASE && x < MMU_END) return mmu_read32(m->mmu, x);
   return bus_rd32(m, (u32)x);
 }
@@ -135,6 +150,7 @@ void m_st32(machine *m, i32 x, i32 v) {
     if ((u32)x + 4 <= m->size) m->w[(u32)x >> 2] = v;
     return;
   }
+  if (m->smp && x >= LOCAL_BASE && x < LOCAL_END && (x & 3) == 0) { m->local[(x - LOCAL_BASE) >> 2] = v; return; }
   if (m->mmu && x >= MMU_BASE && x < MMU_END) { mmu_write32(m->mmu, x, v); return; }
   if (is_rom(x, 4)) { rom_store(m, x, v); return; }
   arena_wr32(m, (u32)x, v);
@@ -146,6 +162,7 @@ static i32 m_ld8(machine *m, i32 x) {
     if (in_guard(m, x, 1)) { guard_hit(m, x, 1, 0, 0, 0, 0); return 0; }
     return (u32)x < m->size ? (int8_t)m->u8[x] : 0;
   }
+  if (m->smp && x >= LOCAL_BASE && x < LOCAL_END) return (int8_t)((u8 *)m->local)[x - LOCAL_BASE];
   return bus_rd8s(m, (u32)x);
 }
 static void m_st8(machine *m, i32 x, i32 v) {
@@ -156,6 +173,7 @@ static void m_st8(machine *m, i32 x, i32 v) {
     if ((u32)x < m->size) m->u8[x] = (u8)v;
     return;
   }
+  if (m->smp && x >= LOCAL_BASE && x < LOCAL_END) { ((u8 *)m->local)[x - LOCAL_BASE] = (u8)v; return; }
   if (is_rom(x, 1)) { rom_store(m, x, v & 0xff); return; }
   bus_wr8(m, (u32)x, v & 0xff);
 }
@@ -189,7 +207,7 @@ static i64 kpa(machine *m, u32 x) {
   return off < m->size ? (i64)off : -1;
 }
 static void kmiss(machine *m, u32 x) {
-  if (m->halted) return;
+  if (m->dv->halted) return;
   char a[12], b[12];
   machine_emits(m, "libjs: the kernel used user address "); machine_emits(m, hex8(a, x));
   machine_emits(m, ", which nothing is at (pc "); machine_emits(m, hex8(b, (u32)m->pc));
@@ -199,13 +217,18 @@ static void kmiss(machine *m, u32 x) {
 static i64 kaddr(machine *m, u32 x) { return m->uwin && x >= m->uwin ? kpa(m, x) : (i64)x; }
 /* the host's copy of a page put out (devices.js swapRd8, swapWr8) */
 static int swap_rd8(machine *m, i32 slot, u32 off) {
-  u8 *p = imap_get(m->swap_pages, (u32)slot);
-  return p ? p[off & 4095] : 0;
+  swap_lock(m);
+  u8 *p = imap_get(m->dv->swap_pages, (u32)slot);
+  int v = p ? p[off & 4095] : 0;
+  swap_unlock(m);
+  return v;
 }
 static void swap_wr8(machine *m, i32 slot, u32 off, int v) {
-  u8 *p = imap_get(m->swap_pages, (u32)slot);
-  if (!p) { if ((u32)slot >= m->swap_slots) return; p = xmalloc(4096); imap_set(m->swap_pages, (u32)slot, p); }
-  p[off & 4095] = (u8)v;
+  swap_lock(m);
+  u8 *p = imap_get(m->dv->swap_pages, (u32)slot);
+  if (!p && (u32)slot < m->dv->swap_slots) { p = xmalloc(4096); imap_set(m->dv->swap_pages, (u32)slot, p); }
+  if (p) p[off & 4095] = (u8)v;
+  swap_unlock(m);
 }
 static i32 kld8(machine *m, u32 x) {
   i64 p = kpa(m, x);
@@ -294,9 +317,9 @@ static int kblock(machine *m, i32 op) {
 }
 
 static void rom_store(machine *m, i32 x, i32 v) {
-  m->rom_stores++;
-  if (m->rom_reported) return;
-  m->rom_reported = 1;
+  m->dv->rom_stores++;
+  if (m->dv->rom_reported) return;
+  m->dv->rom_reported = 1;
   char a[12], b[12], c[12], d[12], e[24], f[12];
   machine_emits(m, "libjs: store of "); machine_emits(m, hex8(a, (u32)v));
   machine_emits(m, " to ROM "); machine_emits(m, hex8(b, (u32)x));
@@ -310,8 +333,8 @@ static void rom_store(machine *m, i32 x, i32 v) {
 
 static void guard_hit(machine *m, i32 x, i32 n, int write, i32 v, i32 op, i32 from) {
   char a[12], b[12], c[12], d[24];
-  u32 lo = m->stack_base, hi = m->stack_top_reg;
-  m->stack_guard = 0;
+  u32 lo = m->dv->stack_base, hi = m->dv->stack_top_reg;
+  m->dv->stack_guard = 0;
   machine_emits(m, "libjs: ");
   if (op == OP_TLEV) { machine_emits(m, "TLEV to a stack at "); machine_emits(m, hex8(a, (u32)x)); }
   else if (op) {
@@ -331,13 +354,13 @@ static void guard_hit(machine *m, i32 x, i32 n, int write, i32 v, i32 op, i32 fr
   machine_emits(m, ", a "); machine_emits(m, hex8(c, (u32)m->a));
   machine_emits(m, ", mode "); machine_emits(m, dec(d, m->mode));
   machine_emits(m, ", after "); machine_emits(m, dec(d, m->cycle)); machine_emits(m, " cycles.\n");
-  if (!m->heap_base_reg || (u32)(m->pc - 4) < (u32)m->heap_base_reg) machine_stacktrace(m);
+  if (!m->dv->heap_base_reg || (u32)(m->pc - 4) < (u32)m->dv->heap_base_reg) machine_stacktrace(m);
   else machine_emits(m, "libjs:   pc is in the heap, a program's code: no symbols name it.\n");
-  m->halted = 1;
-  m->status = -103;
+  m->dv->halted = 1;
+  m->dv->status = -103;
 }
 static int guard_range(machine *m, i32 op, i32 x, i32 n, int write) {
-  guard_hit(m, x > (i32)m->stack_base ? x : (i32)m->stack_base, n, write, 0, op, x);
+  guard_hit(m, x > (i32)m->dv->stack_base ? x : (i32)m->dv->stack_base, n, write, 0, op, x);
   return STOP_HALT;
 }
 
@@ -424,9 +447,16 @@ static int pm_trap(machine *m, i32 op) {
   m->mode = 0;
   return STOP_BUDGET;
 }
+/* EXIT. With CPUs, only CPU 0's ends the machine, as main returning ends
+ * a program; another's halts that processor (c4mp's rule, c4m.js halt) */
 static int halt(machine *m, i32 status) {
-  m->halted = 1;
-  m->status = status;
+  if (m->smp && m->cpu_id != 0) {
+    m->cpu_state = CPU_HALT;
+    m->cpu_status = status;
+    return STOP_CPUHALT;
+  }
+  m->dv->halted = 1;
+  m->dv->status = status;
   return STOP_HALT;
 }
 int eng_halt(machine *m, i32 status) { return halt(m, status); }
@@ -434,7 +464,7 @@ int eng_halt(machine *m, i32 status) { return halt(m, status); }
 i32 machine_info(machine *m) {
   return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
          (m->no_fpu ? 0 : C4I_FPU) | (m->mmu ? C4I_MMU : 0) | (m->accel ? C4I_ACCEL : 0) | (m->gui ? C4I_GUI : 0) | (m->snd ? C4I_SND : 0) |
-         (m->trap_handler ? C4I_TRAPH : 0);
+         (m->trap_handler ? C4I_TRAPH : 0) | (m->smp ? C4I_SMP : 0) | (m->smp && m->smp->par ? C4I_PAR : 0);
 }
 
 void machine_stacktrace(machine *m) {
@@ -443,8 +473,8 @@ void machine_stacktrace(machine *m) {
   machine_emits(m, "c4m: stacktrace:\n");
   for (int depth = 0; depth < 64; depth++) {
     struct sym *s = 0;
-    int lo = 0, hi = m->nsyms - 1;
-    while (lo <= hi) { int mid = (lo + hi) >> 1; if (m->syms[mid].addr <= (u32)pc) { s = &m->syms[mid]; lo = mid + 1; } else hi = mid - 1; }
+    int lo = 0, hi = m->dv->nsyms - 1;
+    while (lo <= hi) { int mid = (lo + hi) >> 1; if (m->dv->syms[mid].addr <= (u32)pc) { s = &m->dv->syms[mid]; lo = mid + 1; } else hi = mid - 1; }
     for (int k = 0; k <= depth; k++) machine_emits(m, " ");
     machine_emits(m, s ? s->name : "?");
     machine_emits(m, "() [");
@@ -505,7 +535,7 @@ static int blocked_read(machine *m) {
     if (target > m->cycle) { m->skipped += target - m->cycle; m->cycle = target; }
     return STOP_BUDGET;
   }
-  if (m->pit_ms && plat_now_ms() >= m->pit_next) {
+  if (m->dv->pit_ms && plat_now_ms() >= m->dv->pit_next) {
     i64 target = m->cycle + (4095 - (m->cycle % 4096));
     if (target > m->cycle) { m->skipped += target - m->cycle; m->cycle = target; }
     return STOP_BUDGET;
@@ -536,21 +566,23 @@ static int sys(machine *m, i32 op) {
    * cycle interrupt's configuration (docs/c4ix-mmu.md 6) */
   if (m->vm && (op == OP_C4CF || (op >= OP_CPUS && op <= OP_CPUH) || (op >= OP_CWAI && op <= OP_IPI)))
     return pm_trap(m, op);
+  if (m->par_ap && !m->serving) { int r = par_sys(m, op); if (r >= 0) return r; }
+  if (op >= OP_CPUI && op <= OP_IPI && m->smp) return smp_op(m, op);
   switch (op) {
     case OP_OPEN:
       if (m->mode) return pm_trap(m, op);
-      m->disk_flags = m_ld32(m, sp);
+      m->dv->disk_flags = m_ld32(m, sp);
       m->a = dev_disk_open(m, (u32)m_ld32(m, sp + 4));
       return STOP_BUDGET;
     case OP_READ: {
       if (m->mode) return pm_trap(m, op);
       i32 buf = m_ld32(m, sp + 4), len = m_ld32(m, sp);
       if (len > 0 && in_guard(m, buf, len)) return guard_range(m, OP_READ, buf, len, 1);
-      i32 fd0 = m->disk_fd, addr0 = m->disk_addr;
-      m->disk_fd = m_ld32(m, sp + 8);
-      m->disk_addr = buf;
+      i32 fd0 = m->dv->disk_fd, addr0 = m->dv->disk_addr;
+      m->dv->disk_fd = m_ld32(m, sp + 8);
+      m->dv->disk_addr = buf;
       i32 r = is_rom(buf, len) ? rom_read(m, len) : dev_disk_read(m, len);
-      m->disk_fd = fd0; m->disk_addr = addr0;
+      m->dv->disk_fd = fd0; m->dv->disk_addr = addr0;
       if (r == -2) return blocked_read(m);
       m->a = r;
       return STOP_BUDGET;
@@ -764,7 +796,9 @@ static int sys(machine *m, i32 op) {
 int eng_sys(machine *m, i32 op) { return sys(m, op); }
 
 static int need_checks(machine *m) {
-  return m->cycle_interval || m->pit_ms || m->pending_signal || m->mbox_irq || (m->gui && gui_irq_pending(m->gui));
+  if (m->par_ap) return m->cycle_interval || m->pending_signal || m->ipi_pending;   /* the devices' are CPU 0's */
+  return m->cycle_interval || m->dv->pit_ms || m->pending_signal || m->dv->mbox_irq || m->ipi_pending ||
+         (m->gui && gui_irq_pending(m->gui));
 }
 int eng_need_checks(machine *m) { return need_checks(m); }
 
@@ -777,13 +811,14 @@ static inline __attribute__((always_inline)) i64 boundary(machine *m, i64 cycle,
   int held = tlev || m->irq_hold > 0;
   i32 interval = m->cycle_interval;
   int fired = 1;
-  if (m->pit_ms && (cycle & 4095) == 0 && !held && plat_now_ms() >= m->pit_next) {
-    m->pit_next = plat_now_ms() + m->pit_ms;
+  int dv = !m->par_ap;                 /* the devices' interrupts: CPU 0's alone on threads */
+  if (dv && m->dv->pit_ms && (cycle & 4095) == 0 && !held && plat_now_ms() >= m->dv->pit_next) {
+    m->dv->pit_next = plat_now_ms() + m->dv->pit_ms;
     hirq(m, 1);
-  } else if (m->mbox_irq && m->cycle_handler && !held) {
-    m->mbox_irq = 0;
+  } else if (dv && m->dv->mbox_irq && m->cycle_handler && !held) {
+    m->dv->mbox_irq = 0;
     hirq(m, 2);
-  } else if (m->gui && m->cycle_handler && gui_irq_pending(m->gui) && !tlev) {
+  } else if (dv && m->gui && m->cycle_handler && gui_irq_pending(m->gui) && !tlev) {
     /* the display's events: not held for a handler (c4m.js boundary) */
     gui_irq_taken(m->gui);
     hirq(m, 3);
@@ -791,6 +826,12 @@ static inline __attribute__((always_inline)) i64 boundary(machine *m, i64 cycle,
     int irq = 0;
     if (interval > 0 && cycle >= next_irq) { next_irq = next_multiple(cycle, interval); irq = !tlev; }
     if (irq) hirq(m, 0);
+    else if (m->ipi_pending && !tlev && (!m->ipi_at_trap || m->pc == m->trap_pc)) {
+      /* another CPU's interrupt (c4mp's order: after the tick), not held
+       * back by the preemption mask: a peer asking */
+      m->ipi_pending = 0;
+      hirq(m, 1);                      /* c4mp's HIRQ_IPI */
+    }
     else if (m->pending_signal && !(m->trap_restores_interval && !interval)) deliver_signal(m);
     else fired = 0;
   }
@@ -801,11 +842,11 @@ static inline __attribute__((always_inline)) i64 boundary(machine *m, i64 cycle,
     return 0;
   }
   m->b_next_irq = next_irq;
-  if ((m->mbox_irq && m->cycle_handler && !m->irq_hold) || m->pending_signal ||
-      (m->gui && m->cycle_handler && gui_irq_pending(m->gui))) return 0;
+  if ((dv && m->dv->mbox_irq && m->cycle_handler && !m->irq_hold) || m->ipi_pending || m->pending_signal ||
+      (dv && m->gui && m->cycle_handler && gui_irq_pending(m->gui))) return 0;
   i64 next = INT64_MAX;
   if (interval > 0) next = next_irq;
-  if (m->pit_ms) { i64 pit = (cycle / 4096 + 1) * 4096; if (pit < next) next = pit; }
+  if (dv && m->dv->pit_ms) { i64 pit = (cycle / 4096 + 1) * 4096; if (pit < next) next = pit; }
   return next;
 }
 i64 eng_boundary(machine *m, i64 cycle, i64 next_irq) { return boundary(m, cycle, next_irq); }
@@ -861,6 +902,8 @@ static void opcd(machine *m, i32 op) {
 /* Up to max_cycles. With the MMU on, user mode runs a loop of its own
  * (mmu.c), and the MMU says which loop runs when (c4m.js run) */
 int machine_run(machine *m, i64 max_cycles) {
+  /* with CPUs, the boot CPU's run is the round robin's (smp.c) */
+  if (m->smp && m->cpu_id == 0 && !m->smp->running) return smp_run(m->smp, max_cycles);
   if (m->mmu && m->mmu->on) return mmu_run(m->mmu, max_cycles);
   return eng_run_plain(m, max_cycles);
 }
@@ -868,7 +911,7 @@ int machine_run(machine *m, i64 max_cycles) {
 /* the interpreter's loop: every guest's, and C4IX's kernel mode under the
  * MMU, which leaves it with STOP_SWITCH at a TLEV into user mode */
 int eng_run_plain(machine *m, i64 max_cycles) {
-  if (m->halted) return STOP_HALT;
+  if (m->dv->halted) return STOP_HALT;
   i32 *const mw = m->w;
   u8 *const mu = m->u8;
   const u32 wm = m->wmask;
@@ -919,40 +962,40 @@ int eng_run_plain(machine *m, i64 max_cycles) {
       case OP_LEV: sp = bp; bp = MW(sp); pc = MW(sp + 4); sp += 8; break;
       case OP_LI:
         if ((a & 3) == 0 && a >= 0x1000 && a < glo) a = mw[(u32)a >> 2];
-        else { SAVE(); a = m_ld32(m, a); if (m->halted) { stop = STOP_HALT; goto out; } }
+        else { SAVE(); a = m_ld32(m, a); if (m->dv->halted) { stop = STOP_HALT; goto out; } }
         break;
       case OP_LC:
         if (a >= 0x1000 && a < glo) a = (int8_t)mu[a];
-        else { SAVE(); a = m_ld8(m, a); if (m->halted) { stop = STOP_HALT; goto out; } }
+        else { SAVE(); a = m_ld8(m, a); if (m->dv->halted) { stop = STOP_HALT; goto out; } }
         break;
       case OP_SI:
         x = MW(sp); sp += 4;
         if ((x & 3) == 0 && x >= 0x1000 && x < glo) mw[(u32)x >> 2] = a;
-        else { SAVE(); m_st32(m, x, a); if (m->halted) { stop = STOP_HALT; goto out; } RECHECK(); }
+        else { SAVE(); m_st32(m, x, a); if (m->dv->halted) { stop = STOP_HALT; goto out; } RECHECK(); }
         break;
       case OP_SC:
         x = MW(sp); sp += 4;
         if (x >= 0x1000 && x < glo) mu[x] = (u8)a;
-        else { SAVE(); m_st8(m, x, a); if (m->halted) { stop = STOP_HALT; goto out; } RECHECK(); }
+        else { SAVE(); m_st8(m, x, a); if (m->dv->halted) { stop = STOP_HALT; goto out; } RECHECK(); }
         a = (int8_t)a;
         break;
       case OP_LH:
         if (a >= 0x1000 && a < glo - 1) a = (int16_t)(mu[a] | mu[a + 1] << 8);
-        else { SAVE(); a = m_ld16(m, a); if (m->halted) { stop = STOP_HALT; goto out; } }
+        else { SAVE(); a = m_ld16(m, a); if (m->dv->halted) { stop = STOP_HALT; goto out; } }
         break;
       case OP_LHU:
         if (a >= 0x1000 && a < glo - 1) a = mu[a] | mu[a + 1] << 8;
-        else { SAVE(); a = m_ld16(m, a) & 0xffff; if (m->halted) { stop = STOP_HALT; goto out; } }
+        else { SAVE(); a = m_ld16(m, a) & 0xffff; if (m->dv->halted) { stop = STOP_HALT; goto out; } }
         break;
       case OP_SH:
         x = MW(sp); sp += 4;
         if (x >= 0x1000 && x < glo - 1) { mu[x] = (u8)a; mu[x + 1] = (u8)(a >> 8); }
-        else { SAVE(); m_st16(m, x, a); if (m->halted) { stop = STOP_HALT; goto out; } RECHECK(); }
+        else { SAVE(); m_st16(m, x, a); if (m->dv->halted) { stop = STOP_HALT; goto out; } RECHECK(); }
         break;
       case OP_LSR: a = (i32)((u32)MW(sp) >> (a & 31)); sp += 4; break;
       case OP_LCU:
         if (a >= 0x1000 && a < glo) a = mu[a];
-        else { SAVE(); a = m_ld8(m, a) & 255; if (m->halted) { stop = STOP_HALT; goto out; } }
+        else { SAVE(); a = m_ld8(m, a) & 255; if (m->dv->halted) { stop = STOP_HALT; goto out; } }
         break;
       case OP_PSH: sp -= 4; MW(sp) = a; break;
       case OP_OR: a = MW(sp) | a; sp += 4; break;
@@ -980,13 +1023,13 @@ int eng_run_plain(machine *m, i64 max_cycles) {
       case OP_IMMP: a = MW(pc); pc += 4; sp -= 4; MW(sp) = a; break;
       case OP_LIP:
         if ((a & 3) == 0 && a >= 0x1000 && a < glo) a = mw[(u32)a >> 2];
-        else { SAVE(); a = m_ld32(m, a); if (m->halted) { stop = STOP_HALT; goto out; } }
+        else { SAVE(); a = m_ld32(m, a); if (m->dv->halted) { stop = STOP_HALT; goto out; } }
         sp -= 4; MW(sp) = a;
         break;
       case OP_ADDL:
         x = (i32)((u32)MW(sp) + (u32)a); sp += 4;
         if ((x & 3) == 0 && x >= 0x1000 && x < glo) a = mw[(u32)x >> 2];
-        else { SAVE(); a = m_ld32(m, x); if (m->halted) { stop = STOP_HALT; goto out; } }
+        else { SAVE(); a = m_ld32(m, x); if (m->dv->halted) { stop = STOP_HALT; goto out; } }
         break;
       case OP_STL: MW((u32)bp + ((u32)MW(pc) << 2)) = a; pc += 4; break;
       case OP_POPA: a = MW(sp); sp += 4; break;
@@ -1015,7 +1058,7 @@ int eng_run_plain(machine *m, i64 max_cycles) {
           SAVE();
           opcd(m, op);
           LOAD();
-          if (m->halted) { stop = STOP_HALT; goto out; }
+          if (m->dv->halted) { stop = STOP_HALT; goto out; }
           interval = m->cycle_interval;
           next_irq = interval > 0 ? next_multiple(cycle, interval) : 0;
           chk = need_checks(m); next_chk = 0; lim = -1;
@@ -1053,13 +1096,13 @@ int eng_run_plain(machine *m, i64 max_cycles) {
         cycle = m->cycle;
         RECHECK();
         if (s != STOP_BUDGET) { stop = s; goto out; }
-        if (m->halted) { stop = STOP_HALT; goto out; }
+        if (m->dv->halted) { stop = STOP_HALT; goto out; }
       }
     }
   }
 out:
   SAVE();
-  if (m->halted) stop = STOP_HALT;
+  if (m->dv->halted) stop = STOP_HALT;
   return stop;
 #undef MW
 #undef SAVE
@@ -1070,6 +1113,7 @@ out:
 /* ---------------------------------------------------------------- */
 machine *machine_new(u32 arena_bytes, drive **drives, int ndrives, double mhz) {
   machine *m = xmalloc(sizeof *m);
+  m->dv = m;
   u32 size = 1u << 20;
   while (size < arena_bytes && size < (1u << 31)) size <<= 1;
   m->size = size;
@@ -1078,14 +1122,14 @@ machine *machine_new(u32 arena_bytes, drive **drives, int ndrives, double mhz) {
   m->wmask = (size >> 2) - 1;
   m->stack_top = size - ARGS_RESERVE;
   m->heap = heap_new();
-  m->drives = drives; m->ndrives = ndrives;
-  m->fds = imap_new();
-  m->next_fd = 3;
-  m->swap_pages = imap_new();
-  m->swap_slots = 65536;
+  m->dv->drives = drives; m->dv->ndrives = ndrives;
+  m->dv->fds = imap_new();
+  m->dv->next_fd = 3;
+  m->dv->swap_pages = imap_new();
+  m->dv->swap_slots = 65536;
   i64 cpm = (i64)(mhz * 1000 + 0.5);
-  m->cycles_per_ms = mhz ? (u32)(cpm > 1 ? cpm : 1) : 20000;
-  m->t0 = plat_now_ms();
+  m->dv->cycles_per_ms = mhz ? (u32)(cpm > 1 ? cpm : 1) : 20000;
+  m->dv->t0 = plat_now_ms();
   m->accel = m->osaccel = 1;           /* as libjs: off with --no-accel, --no-osaccel */
   return m;
 }
@@ -1132,8 +1176,8 @@ int machine_boot(machine *m, const u8 *img, u32 len, int argc, char **argv) {
   for (i32 i = 0; i < des_len; i++) des[i] = code_base + (u32)RW() * 4;
   RW();                                            /* 'S' */
   /* the symbols, functions only (class 129), for STRC */
-  m->syms = xmalloc((size_t)(syms_len + 1) * sizeof *m->syms);
-  m->nsyms = 0;
+  m->dv->syms = xmalloc((size_t)(syms_len + 1) * sizeof *m->dv->syms);
+  m->dv->nsyms = 0;
   for (i32 i = 0; i < syms_len && p + 17 <= len; i++) {
     i32 cls = rd32le(img + p + 8);
     u32 n = img[p + 16];
@@ -1141,17 +1185,17 @@ int machine_boot(machine *m, const u8 *img, u32 len, int argc, char **argv) {
     i32 val = rd32le(img + p + 17 + n);
     if (cls == 129) {
       char *s = xmalloc(n + 1); memcpy(s, img + p + 17, n); s[n] = 0;
-      m->syms[m->nsyms].addr = code_base + (u32)val * 4; m->syms[m->nsyms].name = s; m->nsyms++;
+      m->dv->syms[m->dv->nsyms].addr = code_base + (u32)val * 4; m->dv->syms[m->dv->nsyms].name = s; m->dv->nsyms++;
     }
     p += 17 + n + 4;
   }
-  for (int i = 1; i < m->nsyms; i++) {             /* insertion sort: they come nearly in order */
-    struct sym s = m->syms[i]; int j = i - 1;
-    while (j >= 0 && m->syms[j].addr > s.addr) { m->syms[j + 1] = m->syms[j]; j--; }
-    m->syms[j + 1] = s;
+  for (int i = 1; i < m->dv->nsyms; i++) {             /* insertion sort: they come nearly in order */
+    struct sym s = m->dv->syms[i]; int j = i - 1;
+    while (j >= 0 && m->dv->syms[j].addr > s.addr) { m->dv->syms[j + 1] = m->dv->syms[j]; j--; }
+    m->dv->syms[j + 1] = s;
   }
 #undef RW
-  m->img_code = code_base; m->img_data = data_base; m->img_bss = data_base + (u32)data_len; m->img_end = top;
+  m->dv->img_code = code_base; m->dv->img_data = data_base; m->dv->img_bss = data_base + (u32)data_len; m->dv->img_end = top;
 
   /* argv above the stack */
   u32 q = m->stack_top;
@@ -1188,9 +1232,9 @@ int machine_boot(machine *m, const u8 *img, u32 len, int argc, char **argv) {
   heap_reset(m->heap, heap_base, heap_end);
   dev_write32(m, HEAP_BASE_REG, (i32)heap_base);
   dev_write32(m, HEAP_END_REG, (i32)heap_end);
-  m->stack_base = heap_end;
-  m->stack_top_reg = m->stack_top;
-  m->stack_guard = 0;
+  m->dv->stack_base = heap_end;
+  m->dv->stack_top_reg = m->stack_top;
+  m->dv->stack_guard = 0;
   m->sp = m->bp = (i32)m->stack_top;
   m->pc = (i32)tramp;
   m->a = 0;

@@ -57,11 +57,11 @@ static int dma_swapped(machine *m, u32 va, int write, u8 **page) {
   i32 pte = kernel_pte(m, m->udir, va);
   if ((pte & 1) || !(pte & PTE_SWAP)) return 0;
   u32 slot = (u32)pte >> 12;
-  u8 *p = imap_get(m->swap_pages, slot);
+  u8 *p = imap_get(m->dv->swap_pages, slot);
   if (!p && write) {
-    if (slot >= m->swap_slots) return 0;
+    if (slot >= m->dv->swap_slots) return 0;
     p = xmalloc(SWAP_PAGE);
-    imap_set(m->swap_pages, slot, p);
+    imap_set(m->dv->swap_pages, slot, p);
   }
   *page = p;
   return 1;
@@ -131,63 +131,63 @@ static void arena_write8(machine *m, u32 a, int v) {
 
 /* ---- the console ---- */
 static void tap_push(machine *m, int b) {
-  if (m->tap_len == m->tap_cap) {
-    if (m->tap_len >= TAP_MAX) { m->tap_dropped++; return; }
-    m->tap_cap = m->tap_cap ? m->tap_cap * 2 : 4096;
-    if (m->tap_cap > TAP_MAX) m->tap_cap = TAP_MAX;
-    m->tap_buf = xrealloc(m->tap_buf, m->tap_cap);
+  if (m->dv->tap_len == m->dv->tap_cap) {
+    if (m->dv->tap_len >= TAP_MAX) { m->dv->tap_dropped++; return; }
+    m->dv->tap_cap = m->dv->tap_cap ? m->dv->tap_cap * 2 : 4096;
+    if (m->dv->tap_cap > TAP_MAX) m->dv->tap_cap = TAP_MAX;
+    m->dv->tap_buf = xrealloc(m->dv->tap_buf, m->dv->tap_cap);
   }
-  m->tap_buf[m->tap_len++] = (u8)b;
+  m->dv->tap_buf[m->dv->tap_len++] = (u8)b;
 }
 static void con_byte(machine *m, int b) {
-  if (m->tap_on) tap_push(m, b);
-  else if (m->on_byte) m->on_byte(m, b);
+  if (m->dv->tap_on) tap_push(m, b);
+  else if (m->dv->on_byte) m->dv->on_byte(m, b);
 }
 void dev_con_bytes(machine *m, const u8 *b, u32 n) {
-  if (m->tap_on) { for (u32 i = 0; i < n; i++) tap_push(m, b[i]); return; }
-  if (m->on_byte) for (u32 i = 0; i < n; i++) m->on_byte(m, b[i]);
+  if (m->dv->tap_on) { for (u32 i = 0; i < n; i++) tap_push(m, b[i]); return; }
+  if (m->dv->on_byte) for (u32 i = 0; i < n; i++) m->dv->on_byte(m, b[i]);
 }
 static i32 tap_drain(machine *m, i32 n) {
   if (n < 0) n = 0;
-  if ((u32)n > m->tap_len) n = (i32)m->tap_len;
-  u32 a = (u32)m->tap_addr;
+  if ((u32)n > m->dv->tap_len) n = (i32)m->dv->tap_len;
+  u32 a = (u32)m->dv->tap_addr;
   int mine = !m->uwin || a < m->uwin;
   if (a < 0x1000 || (mine && a >= m->size)) return 0;
   if (mine && (u32)n > m->size - a) n = (i32)(m->size - a);
-  dma_write(m, a, m->tap_buf, (u32)n);
-  memmove(m->tap_buf, m->tap_buf + n, m->tap_len - (u32)n);
-  m->tap_len -= (u32)n;
+  dma_write(m, a, m->dv->tap_buf, (u32)n);
+  memmove(m->dv->tap_buf, m->dv->tap_buf + n, m->dv->tap_len - (u32)n);
+  m->dv->tap_len -= (u32)n;
   return n;
 }
 static i32 tap_read(machine *m, u32 addr, i32 len) {
-  i32 left = (i32)(m->tap_in_len - m->tap_in_pos);
+  i32 left = (i32)(m->dv->tap_in_len - m->dv->tap_in_pos);
   i32 n = len < left ? len : left;
   if (n < 0) n = 0;
-  dma_write(m, addr, m->tap_in + m->tap_in_pos, (u32)n);
-  m->tap_in_pos += (u32)n;
+  dma_write(m, addr, m->dv->tap_in + m->dv->tap_in_pos, (u32)n);
+  m->dv->tap_in_pos += (u32)n;
   return n;
 }
 
 /* ---- the keyboard's queue ---- */
 void kbd_push(machine *m, int b) {
-  if (m->rx_tail == m->rx_cap) {
-    if (m->rx_head) { memmove(m->rx, m->rx + m->rx_head, m->rx_tail - m->rx_head); m->rx_tail -= m->rx_head; m->rx_head = 0; }
-    else { m->rx_cap = m->rx_cap ? m->rx_cap * 2 : 4096; m->rx = xrealloc(m->rx, m->rx_cap); }
+  if (m->dv->rx_tail == m->dv->rx_cap) {
+    if (m->dv->rx_head) { memmove(m->dv->rx, m->dv->rx + m->dv->rx_head, m->dv->rx_tail - m->dv->rx_head); m->dv->rx_tail -= m->dv->rx_head; m->dv->rx_head = 0; }
+    else { m->dv->rx_cap = m->dv->rx_cap ? m->dv->rx_cap * 2 : 4096; m->dv->rx = xrealloc(m->dv->rx, m->dv->rx_cap); }
   }
-  m->rx[m->rx_tail++] = (u8)b;
+  m->dv->rx[m->dv->rx_tail++] = (u8)b;
 }
-int kbd_pending(machine *m) { return (int)(m->rx_tail - m->rx_head); }
-static int kbd_shift(machine *m) { return m->rx[m->rx_head++]; }
+int kbd_pending(machine *m) { return (int)(m->dv->rx_tail - m->dv->rx_head); }
+static int kbd_shift(machine *m) { return m->dv->rx[m->dv->rx_head++]; }
 
 static i32 kbd_read(machine *m, u32 addr, i32 len, int nonblock, int raw) {
-  if (m->rx_head == m->rx_tail) { m->rx_starved = 1; return m->rx_eof ? 0 : (nonblock ? -1 : -2); }
+  if (m->dv->rx_head == m->dv->rx_tail) { m->dv->rx_starved = 1; return m->dv->rx_eof ? 0 : (nonblock ? -1 : -2); }
   if (!raw) {
     int nl = 0;
-    for (u32 i = m->rx_head; i < m->rx_tail; i++) if (m->rx[i] == 10) { nl = 1; break; }
-    if (!nl && !m->rx_eof) return nonblock ? -1 : -2;
+    for (u32 i = m->dv->rx_head; i < m->dv->rx_tail; i++) if (m->dv->rx[i] == 10) { nl = 1; break; }
+    if (!nl && !m->dv->rx_eof) return nonblock ? -1 : -2;
   }
   i32 n = 0;
-  while (n < len && m->rx_head < m->rx_tail) {
+  while (n < len && m->dv->rx_head < m->dv->rx_tail) {
     i64 at = dma(m, addr + (u32)n, 1, 1, 1);   /* before the byte leaves the queue */
     if (at < 0) break;
     int b = kbd_shift(m);
@@ -200,21 +200,21 @@ static i32 kbd_read(machine *m, u32 addr, i32 len, int nonblock, int raw) {
 
 /* ---- swap ---- */
 static i32 swap_op(machine *m, i32 v) {
-  int op = v & 15; u32 slot = (u32)v >> 4, a = m->swap_addr;
-  if (op == 4) { imap_clear(m->swap_pages, xfree); return (i32)m->swap_slots; }
+  int op = v & 15; u32 slot = (u32)v >> 4, a = m->dv->swap_addr;
+  if (op == 4) { imap_clear(m->dv->swap_pages, xfree); return (i32)m->dv->swap_slots; }
   if (op == 5) { heap_set_high(m->heap, slot & 1); return 0; }
   if (op == 6) return (i32)heap_largest(m->heap);
-  if (slot >= m->swap_slots) return -1;
-  if (op == 3) { xfree(imap_del(m->swap_pages, slot)); return 0; }
+  if (slot >= m->dv->swap_slots) return -1;
+  if (op == 3) { xfree(imap_del(m->dv->swap_pages, slot)); return 0; }
   if (a < 0x1000 || (i64)a + SWAP_PAGE > m->size) return -1;
   if (op == 1) {
-    u8 *p = imap_get(m->swap_pages, slot);
-    if (!p) { p = xmalloc(SWAP_PAGE); imap_set(m->swap_pages, slot, p); }
+    u8 *p = imap_get(m->dv->swap_pages, slot);
+    if (!p) { p = xmalloc(SWAP_PAGE); imap_set(m->dv->swap_pages, slot, p); }
     memcpy(p, m->u8 + a, SWAP_PAGE);
     return 0;
   }
   if (op == 2) {
-    u8 *p = imap_del(m->swap_pages, slot);
+    u8 *p = imap_del(m->dv->swap_pages, slot);
     if (!p) { memset(m->u8 + a, 0, SWAP_PAGE); return 0; }
     memcpy(m->u8 + a, p, SWAP_PAGE);
     xfree(p);
@@ -232,9 +232,9 @@ static drive *resolve_drive(machine *m, const char *name, const char **rest) {
     else if (d >= 'A' && d <= 'Z') n = d - 'A';
     else if (d >= 'a' && d <= 'z') n = d - 'a';
   }
-  if (n >= 0) { *rest = name + 2; return n < m->ndrives ? m->drives[n] : 0; }
+  if (n >= 0) { *rest = name + 2; return n < m->dv->ndrives ? m->dv->drives[n] : 0; }
   *rest = name;
-  return m->drive < m->ndrives ? m->drives[m->drive] : 0;
+  return m->dv->drive < m->dv->ndrives ? m->dv->drives[m->dv->drive] : 0;
 }
 
 static blob *disk_find(machine *m, const char *name) {
@@ -267,8 +267,8 @@ static blob *disk_find(machine *m, const char *name) {
 static fdent *fd_new(machine *m, int kind, i32 *fd) {
   fdent *f = xmalloc(sizeof *f);
   f->kind = kind;
-  *fd = m->next_fd++;
-  imap_set(m->fds, (u32)*fd, f);
+  *fd = m->dv->next_fd++;
+  imap_set(m->dv->fds, (u32)*fd, f);
   return f;
 }
 static void fd_free(fdent *f) {
@@ -318,8 +318,8 @@ i32 dev_disk_open(machine *m, u32 name_addr) {
   if (!strcmp(name, "/dev/stdin") || !strcmp(name, "/dev/tty")) {
     fdent *f = fd_new(m, FD_KBD, &fd);
     f->raw = !strcmp(name, "/dev/tty");
-    f->nonblock = !!(m->disk_flags & O_NONBLOCK);
-    if (f->raw) m->raw_kbd++;
+    f->nonblock = !!(m->dv->disk_flags & O_NONBLOCK);
+    if (f->raw) m->dv->raw_kbd++;
     return fd;
   }
   if (!strcmp(name, "/proc/uptime")) {
@@ -349,16 +349,16 @@ i32 dev_disk_open(machine *m, u32 name_addr) {
 }
 
 i32 dev_disk_read(machine *m, i32 len) {
-  m->disk_activity++;
-  if (m->disk_fd == FD_KEYBOARD)
-    return m->tap_in_on ? tap_read(m, (u32)m->disk_addr, len) : kbd_read(m, (u32)m->disk_addr, len, 0, 0);
-  fdent *f = imap_get(m->fds, (u32)m->disk_fd);
+  m->dv->disk_activity++;
+  if (m->dv->disk_fd == FD_KEYBOARD)
+    return m->dv->tap_in_on ? tap_read(m, (u32)m->dv->disk_addr, len) : kbd_read(m, (u32)m->dv->disk_addr, len, 0, 0);
+  fdent *f = imap_get(m->dv->fds, (u32)m->dv->disk_fd);
   if (!f) return -1;
-  if (f->kind == FD_KBD) return kbd_read(m, (u32)m->disk_addr, len, f->nonblock, f->raw);
+  if (f->kind == FD_KBD) return kbd_read(m, (u32)m->dv->disk_addr, len, f->nonblock, f->raw);
   if (f->kind != FD_FILE) return -1;
   i64 n = (i64)f->len - f->pos;
   if (len < n) n = len;
-  u32 got = n > 0 ? dma_write(m, (u32)m->disk_addr, f->b->bytes + f->off + f->pos, (u32)n) : 0;
+  u32 got = n > 0 ? dma_write(m, (u32)m->dv->disk_addr, f->b->bytes + f->off + f->pos, (u32)n) : 0;
   f->pos += got;
   return (i32)got;
 }
@@ -391,26 +391,26 @@ static i32 disk_create(machine *m, u32 name_addr) {
 }
 
 static i32 disk_write(machine *m, i32 len) {
-  m->disk_activity++;
-  fdent *f = imap_get(m->fds, (u32)m->disk_fd);
+  m->dv->disk_activity++;
+  fdent *f = imap_get(m->dv->fds, (u32)m->dv->disk_fd);
   if (!f || f->kind != FD_WRITE) return -1;
   u32 n = len > 0 ? (u32)len : 0;
   if (f->wlen + n > f->wcap) {
     while (f->wlen + n > f->wcap) f->wcap = f->wcap ? f->wcap * 2 : 4096;
     f->wbuf = xrealloc(f->wbuf, f->wcap);
   }
-  u32 got = dma_read(m, (u32)m->disk_addr, n, f->wbuf + f->wlen);
+  u32 got = dma_read(m, (u32)m->dv->disk_addr, n, f->wbuf + f->wlen);
   f->wlen += got;
   return (i32)got;
 }
 
 static i32 disk_wclose(machine *m, i32 fd) {
-  fdent *f = imap_get(m->fds, (u32)fd);
+  fdent *f = imap_get(m->dv->fds, (u32)fd);
   if (!f || f->kind != FD_WRITE) return -1;
   blob *b = blob_new(f->wlen);
   memcpy(b->bytes, f->wbuf, f->wlen);
   drive_put(f->wd, f->wname, b);
-  imap_del(m->fds, (u32)fd);
+  imap_del(m->dv->fds, (u32)fd);
   if (f->wd->sink) f->wd->sink(f->wd, f->wname, b);
   fd_free(f);
   return 0;
@@ -433,23 +433,27 @@ static i32 disk_unlink(machine *m, u32 name_addr) {
 
 static i32 uart_write(machine *m, i32 len) {
   if (len <= 0) return 0;
-  u32 a = (u32)m->uart_tx_addr, n = (u32)len;
+  u32 a = (u32)m->dv->uart_tx_addr, n = (u32)len;
   if (dma_plain(m, a)) {
     if (a >= m->size) return 0;
     if (n > m->size - a) n = m->size - a;
-    for (u32 i = 0; i < n; i++) { m->uart_activity++; con_byte(m, m->u8[a + i]); }
+    for (u32 i = 0; i < n; i++) { m->dv->uart_activity++; con_byte(m, m->u8[a + i]); }
     return (i32)n;
   }
   static u8 *buf; static u32 cap;
   if (n > cap) { cap = n; buf = xrealloc(buf, cap); }
   n = dma_read(m, a, n, buf);
-  for (u32 i = 0; i < n; i++) { m->uart_activity++; con_byte(m, buf[i]); }
+  for (u32 i = 0; i < n; i++) { m->dv->uart_activity++; con_byte(m, buf[i]); }
   return (i32)n;
 }
 
 i64 machine_sim_ms(machine *m) {
-  if (m->wall) return (i32)(plat_now_ms() - m->wall_base);
-  return (i32)(m->cycle / m->cycles_per_ms + m->sleep_ms);
+  if (m->dv->wall) return (i32)(plat_now_ms() - m->dv->wall_base);
+  /* on threads, another CPU's: as CPU 0 last published it (par.c) */
+  if (m->par_ap && !m->serving) return __atomic_load_n(&m->smp->time_ms, __ATOMIC_SEQ_CST);
+  /* with several CPUs, the machine's time (the round robin's), not the
+   * running CPU's own count (devices.js simMs) */
+  return (i32)(machine_clock(m) / m->dv->cycles_per_ms + m->dv->sleep_ms);
 }
 
 int dev_opcode_by_name(const char *name) {
@@ -471,24 +475,24 @@ i32 machine_info(machine *m);
 
 i32 dev_read32(machine *m, u32 addr) {
   switch (addr) {
-    case UART_RX: if (m->rx_head < m->rx_tail) return kbd_shift(m); m->rx_starved = 1; return -1;
-    case UART_RXAVL: if (m->rx_head == m->rx_tail) m->rx_starved = 1; return (i32)(m->rx_tail - m->rx_head);
-    case UART_TXADDR: return m->uart_tx_addr;
-    case UART_TXLEN: return m->uart_tx_result;
+    case UART_RX: if (m->dv->rx_head < m->dv->rx_tail) return kbd_shift(m); m->dv->rx_starved = 1; return -1;
+    case UART_RXAVL: if (m->dv->rx_head == m->dv->rx_tail) m->dv->rx_starved = 1; return (i32)(m->dv->rx_tail - m->dv->rx_head);
+    case UART_TXADDR: return m->dv->uart_tx_addr;
+    case UART_TXLEN: return m->dv->uart_tx_result;
     case TIME_MS: return (i32)machine_sim_ms(m);
     case CYCLE_LO: return (i32)m->cycle;
     case CYCLE_HI: return (i32)(m->cycle >> 32);
-    case OPNAME: return m->opname_result;
-    case HEAP_BASE: return m->heap_base_reg;
-    case IMG_CODE: return (i32)m->img_code;
-    case IMG_DATA: return (i32)m->img_data;
-    case IMG_BSS: return (i32)m->img_bss;
-    case IMG_END: return (i32)m->img_end;
-    case HEAP_END: return m->heap_end_reg;
-    case STACK_BASE: return (i32)m->stack_base;
-    case STACK_TOP: return (i32)m->stack_top_reg;
-    case STACK_GUARD: return m->stack_guard;
-    case SWAP_CMD: return m->swap_result;
+    case OPNAME: return m->dv->opname_result;
+    case HEAP_BASE: return m->dv->heap_base_reg;
+    case IMG_CODE: return (i32)m->dv->img_code;
+    case IMG_DATA: return (i32)m->dv->img_data;
+    case IMG_BSS: return (i32)m->dv->img_bss;
+    case IMG_END: return (i32)m->dv->img_end;
+    case HEAP_END: return m->dv->heap_end_reg;
+    case STACK_BASE: return (i32)m->dv->stack_base;
+    case STACK_TOP: return (i32)m->dv->stack_top_reg;
+    case STACK_GUARD: return m->dv->stack_guard;
+    case SWAP_CMD: return m->dv->swap_result;
     case HEAP_USED: return heap_used(m->heap);
     case HEAP_GEN: return heap_gen(m->heap);
     case HEAP_RELEASE: return heap_released(m->heap);
@@ -504,26 +508,26 @@ i32 dev_read32(machine *m, u32 addr) {
     case HND_REG: return m->hnd;
     case JMODE_REG: return m->jmode;
     case JINTERVAL_REG: return m->jinterval;
-    case DISK_NAME: case DISK_LEN: case DISK_CLOSE: return m->disk_result;
-    case RTC_MS: return (i32)(plat_now_ms() - m->t0);
-    case PIT_MS: return m->pit_ms;
-    case DISK_DRIVE: return m->drive;
-    case DISK_COUNT: return m->ndrives;
+    case DISK_NAME: case DISK_LEN: case DISK_CLOSE: return m->dv->disk_result;
+    case RTC_MS: return (i32)(plat_now_ms() - m->dv->t0);
+    case PIT_MS: return m->dv->pit_ms;
+    case DISK_DRIVE: return m->dv->drive;
+    case DISK_COUNT: return m->dv->ndrives;
     case DISK_RO: {
-      drive *d = m->drive < m->ndrives ? m->drives[m->drive] : 0;
+      drive *d = m->dv->drive < m->dv->ndrives ? m->dv->drives[m->dv->drive] : 0;
       return (d && d->writable && d->sink) ? 0 : 1;
     }
-    case DISK_WNAME: case DISK_WLEN: case DISK_WCLOSE: case DISK_UNLINK: return m->disk_result;
+    case DISK_WNAME: case DISK_WLEN: case DISK_WCLOSE: case DISK_UNLINK: return m->dv->disk_result;
     case DISK_DIRS: {
-      drive *d = m->drive < m->ndrives ? m->drives[m->drive] : 0;
+      drive *d = m->dv->drive < m->dv->ndrives ? m->dv->drives[m->dv->drive] : 0;
       return d ? d->ndirs : 0;
     }
-    case CON_TAP: return (i32)m->tap_len;
-    case CON_ADDR: return m->tap_addr;
-    case CON_LEN: return m->tap_result;
-    case CON_IN: return m->tap_in_on ? (i32)(m->tap_in_len - m->tap_in_pos) : -1;
+    case CON_TAP: return (i32)m->dv->tap_len;
+    case CON_ADDR: return m->dv->tap_addr;
+    case CON_LEN: return m->dv->tap_result;
+    case CON_IN: return m->dv->tap_in_on ? (i32)(m->dv->tap_in_len - m->dv->tap_in_pos) : -1;
     case MBOX_BASE: case MBOX_LEN: return 0;
-    case MBOX_BELL: { i32 n = m->mbox_irq; m->mbox_irq = 0; return n; }
+    case MBOX_BELL: { i32 n = m->dv->mbox_irq; m->dv->mbox_irq = 0; return n; }
     default: return 0;
   }
 }
@@ -548,61 +552,61 @@ static void set_dirs(drive *d, const char *s) {
 
 void dev_write32(machine *m, u32 addr, i32 val) {
   switch (addr) {
-    case UART_TX: m->uart_activity++; con_byte(m, val & 0xff); return;
-    case UART_TXADDR: m->uart_tx_addr = val; return;
-    case UART_TXLEN: m->uart_tx_result = uart_write(m, val); return;
+    case UART_TX: m->dv->uart_activity++; con_byte(m, val & 0xff); return;
+    case UART_TXADDR: m->dv->uart_tx_addr = val; return;
+    case UART_TXLEN: m->dv->uart_tx_result = uart_write(m, val); return;
     case USLP_US: {
       i64 ms = (i64)(val / 1000);
-      m->nap_ms = ms > 1 ? ms : 1;
-      m->sleep_ms += m->nap_ms;
-      m->nap_until = machine_sim_ms(m) + m->nap_ms;
+      m->dv->nap_ms = ms > 1 ? ms : 1;
+      m->dv->sleep_ms += m->dv->nap_ms;
+      m->dv->nap_until = machine_sim_ms(m) + m->dv->nap_ms;
       return;
     }
-    case OPNAME: { char s[17]; dma_cstring(m, (u32)val, s, 16); m->opname_result = dev_opcode_by_name(s); return; }
-    case DISK_FLAGS: m->disk_flags = val; return;
-    case DISK_NAME: m->disk_result = dev_disk_open(m, (u32)val); return;
-    case DISK_FD: m->disk_fd = val; return;
-    case DISK_ADDR: m->disk_addr = val; return;
-    case DISK_LEN: m->disk_result = dev_disk_read(m, val); return;
+    case OPNAME: { char s[17]; dma_cstring(m, (u32)val, s, 16); m->dv->opname_result = dev_opcode_by_name(s); return; }
+    case DISK_FLAGS: m->dv->disk_flags = val; return;
+    case DISK_NAME: m->dv->disk_result = dev_disk_open(m, (u32)val); return;
+    case DISK_FD: m->dv->disk_fd = val; return;
+    case DISK_ADDR: m->dv->disk_addr = val; return;
+    case DISK_LEN: m->dv->disk_result = dev_disk_read(m, val); return;
     case DISK_CLOSE: {
-      fdent *f = imap_del(m->fds, (u32)val);
-      if (f) { if (f->kind == FD_KBD && f->raw) m->raw_kbd--; fd_free(f); m->disk_result = 0; }
-      else m->disk_result = -1;
+      fdent *f = imap_del(m->dv->fds, (u32)val);
+      if (f) { if (f->kind == FD_KBD && f->raw) m->dv->raw_kbd--; fd_free(f); m->dv->disk_result = 0; }
+      else m->dv->disk_result = -1;
       return;
     }
     case PIT_MS: {
       i32 ms = val > 0 ? val : 0;
-      if (!ms) { m->pit_ms = 0; return; }
-      if (ms != m->pit_armed || !m->pit_next) m->pit_next = plat_now_ms() + ms;
-      m->pit_ms = m->pit_armed = ms;
+      if (!ms) { m->dv->pit_ms = 0; return; }
+      if (ms != m->dv->pit_armed || !m->dv->pit_next) m->dv->pit_next = plat_now_ms() + ms;
+      m->dv->pit_ms = m->dv->pit_armed = ms;
       return;
     }
-    case DISK_DRIVE: m->drive = val >= 0 ? val : 0; return;
-    case DISK_WNAME: m->disk_result = disk_create(m, (u32)val); return;
-    case DISK_WADDR: m->disk_addr = val; return;
-    case DISK_WLEN: m->disk_result = disk_write(m, val); return;
-    case DISK_WCLOSE: m->disk_result = disk_wclose(m, val); return;
-    case DISK_UNLINK: m->disk_result = disk_unlink(m, (u32)val); return;
+    case DISK_DRIVE: m->dv->drive = val >= 0 ? val : 0; return;
+    case DISK_WNAME: m->dv->disk_result = disk_create(m, (u32)val); return;
+    case DISK_WADDR: m->dv->disk_addr = val; return;
+    case DISK_WLEN: m->dv->disk_result = disk_write(m, val); return;
+    case DISK_WCLOSE: m->dv->disk_result = disk_wclose(m, val); return;
+    case DISK_UNLINK: m->dv->disk_result = disk_unlink(m, (u32)val); return;
     case DISK_DIRS: {
-      drive *d = m->drive < m->ndrives ? m->drives[m->drive] : 0;
+      drive *d = m->dv->drive < m->dv->ndrives ? m->dv->drives[m->dv->drive] : 0;
       if (d) { static char s[1025]; dma_cstring(m, (u32)val, s, 1024); set_dirs(d, s); }
       return;
     }
-    case CON_TAP: m->tap_on = val ? 1 : 0; return;
-    case CON_ADDR: m->tap_addr = val; return;
-    case CON_LEN: m->tap_result = tap_drain(m, val); return;
+    case CON_TAP: m->dv->tap_on = val ? 1 : 0; return;
+    case CON_ADDR: m->dv->tap_addr = val; return;
+    case CON_LEN: m->dv->tap_result = tap_drain(m, val); return;
     case CON_IN: {
-      if (val < 0) { m->tap_in_on = 0; return; }
-      xfree(m->tap_in);
-      m->tap_in = xmalloc((u32)val + 1);
-      m->tap_in_len = dma_read(m, (u32)m->tap_addr, (u32)val, m->tap_in);
-      m->tap_in_pos = 0;
-      m->tap_in_on = 1;
+      if (val < 0) { m->dv->tap_in_on = 0; return; }
+      xfree(m->dv->tap_in);
+      m->dv->tap_in = xmalloc((u32)val + 1);
+      m->dv->tap_in_len = dma_read(m, (u32)m->dv->tap_addr, (u32)val, m->dv->tap_in);
+      m->dv->tap_in_pos = 0;
+      m->dv->tap_in_on = 1;
       return;
     }
     case DISK_EJECT: {
-      if (val >= 0 && val < m->ndrives) {
-        drive *d = m->drives[val];
+      if (val >= 0 && val < m->dv->ndrives) {
+        drive *d = m->dv->drives[val];
         /* the files go: a fresh map (the old blobs are let go) */
         d->files = smap_new();
       }
@@ -610,16 +614,16 @@ void dev_write32(machine *m, u32 addr, i32 val) {
     }
     case DISK_RESCAN: return;
     case RESET:
-      m->pit_ms = m->pit_armed = 0; m->pit_next = 0;
-      m->reset_requested = 1;
-      m->halted = 1; m->status = val;
+      m->dv->pit_ms = m->dv->pit_armed = 0; m->dv->pit_next = 0;
+      m->dv->reset_requested = 1;
+      m->dv->halted = 1; m->dv->status = val;
       return;
-    case POWER: m->halted = 1; m->status = val; return;
-    case HEAP_BASE: m->heap_base_reg = val; return;
-    case HEAP_END: m->heap_end_reg = val; return;
-    case STACK_GUARD: m->stack_guard = (val && m->stack_top_reg > m->stack_base) ? 1 : 0; return;
-    case SWAP_ADDR: m->swap_addr = (u32)val; return;
-    case SWAP_CMD: m->swap_result = swap_op(m, val); return;
+    case POWER: m->dv->halted = 1; m->dv->status = val; return;
+    case HEAP_BASE: m->dv->heap_base_reg = val; return;
+    case HEAP_END: m->dv->heap_end_reg = val; return;
+    case STACK_GUARD: m->dv->stack_guard = (val && m->dv->stack_top_reg > m->dv->stack_base) ? 1 : 0; return;
+    case SWAP_ADDR: m->dv->swap_addr = (u32)val; return;
+    case SWAP_CMD: swap_lock(m); m->dv->swap_result = swap_op(m, val); swap_unlock(m); return;
     case HEAP_GEN: heap_set_gen(m->heap, val); return;
     case HEAP_RELEASE: heap_release(m->heap, val); return;
     case MBOX_BELL: return;

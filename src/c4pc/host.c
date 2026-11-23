@@ -20,7 +20,34 @@
 #include <poll.h>
 #include <termios.h>
 #include <errno.h>
+#include <pthread.h>
+#include <limits.h>
+#include <linux/futex.h>
+#include <sys/syscall.h>
 #include "snd.h"
+
+/* ---- the parallel engine's CPUs (par.c): a thread each, and a futex ---- */
+int plat_cpus(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 1; }
+struct thr { int k; void (*fn)(int); };
+static void *thr_main(void *a) { struct thr t = *(struct thr *)a; free(a); t.fn(t.k); return 0; }
+int plat_cpu_start(int k, void (*fn)(int)) {
+  struct thr *t = malloc(sizeof *t);
+  t->k = k; t->fn = fn;
+  pthread_t th;
+  if (pthread_create(&th, 0, thr_main, t)) { free(t); return 0; }
+  pthread_detach(th);
+  return 1;
+}
+void plat_wait(int k, volatile int *kick, int seen, int ms) {
+  (void)k;
+  struct timespec ts = { ms / 1000, (long)(ms % 1000) * 1000000 };
+  syscall(SYS_futex, kick, FUTEX_WAIT_PRIVATE, seen, ms < 0 ? 0 : &ts, 0, 0);
+}
+void plat_kick(int k, volatile int *kick) {
+  (void)k;
+  __atomic_add_fetch(kick, 1, __ATOMIC_SEQ_CST);
+  syscall(SYS_futex, kick, FUTEX_WAKE_PRIVATE, INT_MAX, 0, 0, 0);
+}
 
 i64 plat_now_ms(void) {
   struct timespec ts;
@@ -203,12 +230,12 @@ static FILE *texts;
 static void text_hook(int x, int y, const char *s, int n) { fprintf(texts, "%d %d %.*s\n", x, y, n, s); }
 
 static void usage(void) {
-  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
+  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] program.c4r [args...]\n");
   exit(1);
 }
 
 int main(int argc, char **argv) {
-  u32 mb = 32; double maxc = -1, mhz = 20; int stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0;
+  u32 mb = 32; double maxc = -1, mhz = 20; int cpus = 0, quantum = 0, parallel = 0, stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0;
   const char *shot = 0, *wav = 0;
   drive *drives[16]; int nd = 0;
   int i = 1;
@@ -231,6 +258,9 @@ int main(int argc, char **argv) {
     else if (!strcmp(f, "--no-accel")) noaccel = 1;      /* cli.js's: no accelerators at all */
     else if (!strcmp(f, "--no-osaccel")) noosaccel = 1;  /* ... nor C4IX's own (accel.c) */
     else if (!strcmp(f, "--mmu")) mmu_on = 1;            /* cli.js's: fit an MMU (mmu.c) */
+    else if (!strcmp(f, "--cpus") && i + 1 < argc) cpus = atoi(argv[++i]);   /* cli.js's: N processors (smp.c) */
+    else if (!strcmp(f, "-q") && i + 1 < argc) quantum = atoi(argv[++i]);    /* ... each -q instructions in turn */
+    else if (!strcmp(f, "--parallel")) parallel = 1;                         /* ... each on a thread (par.c) */
     else if (!strcmp(f, "--gui") && i + 1 < argc) { if (sscanf(argv[++i], "%dx%d", &gw, &gh) != 2) usage(); }   /* fit a display (gui.c) */
     else if (!strcmp(f, "--events") && i + 1 < argc) load_events(argv[++i]);
     else if (!strcmp(f, "--shot") && i + 1 < argc) shot = argv[++i];    /* the display as a PNG at the end */
@@ -256,6 +286,7 @@ int main(int argc, char **argv) {
   if (noaccel) m->accel = 0;
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
+  if (cpus > 0) smp_new(m, cpus, quantum);
   if (gw > 0 && gh > 0) m->gui = gui_new(m, gw, gh);
   if (wav) m->snd = snd_new(m, 44100, 0);
   if (!inter && !isatty(0)) {
@@ -270,16 +301,27 @@ int main(int argc, char **argv) {
     t.c_lflag &= ~(ICANON | ECHO); tcsetattr(0, TCSANOW, &t);
   }
   if (machine_boot(m, img, len, argc - i, argv + i)) { flush_out(); return 1; }
+  /* on threads: one for each CPU but 0, each waiting for a CPUS */
+  if (cpus > 1 && parallel) par_start(m->smp);
 
   i64 t0 = plat_now_ms();
   i64 limit = maxc < 0 ? INT64_MAX : (i64)maxc;
   int status;
   for (;;) {
-    i64 left = limit - m->cycle;
-    if (left <= 0) { flush_out(); fprintf(stderr, "libjs: stopped at cycle budget (%lld cycles)\n", (long long)m->cycle); status = 9; break; }
+    /* the machine's time: with several CPUs, the round robin's, not CPU 0's */
+    i64 left = limit - machine_clock(m);
+    if (left <= 0) { flush_out(); fprintf(stderr, "libjs: stopped at cycle budget (%lld cycles)\n", (long long)machine_clock(m)); status = 9; break; }
     i64 slice = m->gui ? 1000000 : 50000000;
     int r = machine_run(m, left < slice ? left : slice);
     flush_out();
+    /* the parallel engine: CPU 0 answers the others between runs, and
+     * waits for them when it is parked or halted (cli.js) */
+    if (m->smp && m->smp->par && !m->halted) {
+      int k = par_after(m->smp, r, &status);
+      flush_out();
+      if (k == 2) break;
+      if (k == 1) continue;
+    }
     if (m->gui) {
       gui_tick(m->gui);
       if (run_events(m)) { status = 0; break; }
@@ -310,6 +352,7 @@ int main(int argc, char **argv) {
     }
   }
   flush_out();
+  if (m->smp && m->smp->par) par_shutdown(m->smp);
   if (raw) tcsetattr(0, TCSANOW, &saved);
   if (m->snd) {
     u32 n, w, p; u8 *b = snd_wav(m->snd, &n);
@@ -327,6 +370,7 @@ int main(int argc, char **argv) {
     i64 ran = m->cycle - m->skipped;
     fprintf(stderr, "c4pc: %lld cycles in %.2fs (%lldk inst/s), %lld missed traps, status %d\n",
             (long long)ran, dt, (long long)(dt > 0 ? ran / dt / 1000 : 0), (long long)m->missed_traps, status);
+    if (m->smp && m->smp->par) { char b[512]; par_stats(m->smp, b, sizeof b); fprintf(stderr, "c4pc: %s\n", b); }
     fprintf(stderr, "c4pc: heap %d KB in use at exit, %d KB at most\n", heap_used(m->heap) / 1024, heap_peak(m->heap) / 1024);
   }
   return status & 0xff;

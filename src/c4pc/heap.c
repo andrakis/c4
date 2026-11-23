@@ -26,6 +26,7 @@ struct heap {
   range *large; u32 nlarge, large_cap;
   i32 used, peak, count, gen, released;
   u32 seq;
+  int locked; volatile int lk;           /* every CPU's at once (par.c) */
 };
 
 static int class_index(u32 n, u32 *span) {
@@ -215,14 +216,14 @@ static u32 take(heap *h, i32 n) {
   return a;
 }
 
-u32 heap_alloc(heap *h, i32 n) {
+static u32 alloc_(heap *h, i32 n) {
   if (n <= 0) return 0;
   u32 a = take(h, n);
   if (a || !consolidate(h)) return a;
   return take(h, n);
 }
 
-void heap_free(heap *h, u32 p) {
+static void free_(heap *h, u32 p) {
   if (!p) return;
   blk *b = tfind(h, p);
   if (!b) return;
@@ -234,9 +235,9 @@ void heap_free(heap *h, u32 p) {
   else give_large(h, p, span);
 }
 
-u32 heap_realloc(heap *h, u8 *mem, u32 p, i32 n) {
-  if (!p) return heap_alloc(h, n);
-  if (n <= 0) { heap_free(h, p); return 0; }
+static u32 realloc_(heap *h, u8 *mem, u32 p, i32 n) {
+  if (!p) return alloc_(h, n);
+  if (n <= 0) { free_(h, p); return 0; }
   blk *b = tfind(h, p);
   if (!b) return 0;
   i32 old = b->size;
@@ -247,18 +248,18 @@ u32 heap_realloc(heap *h, u8 *mem, u32 p, i32 n) {
     return p;
   }
   i32 g = b->gen;
-  u32 q = heap_alloc(h, n);
+  u32 q = alloc_(h, n);
   if (!q) return 0;
   blk *nb = tfind(h, q);
   if (g != h->gen) { nb->gen = g; nb->seq = g ? ++h->seq : 0; }
   memmove(mem + q, mem + p, (size_t)(old < n ? old : n));
-  heap_free(h, p);
+  free_(h, p);
   return q;
 }
 
 void heap_set_high(heap *h, int on) { h->high = !!on; }
 
-u32 heap_largest(heap *h) {
+static u32 largest_(heap *h) {
   consolidate(h);
   u32 n = h->top - h->brk;
   for (u32 i = 0; i < h->nlarge; i++) if (h->large[i].len > n) n = h->large[i].len;
@@ -269,7 +270,7 @@ static int seqcmp(const void *a, const void *b) {
   u32 x = ((const blk *)a)->seq, y = ((const blk *)b)->seq;
   return x < y ? -1 : x > y;
 }
-i32 heap_release(heap *h, i32 g) {
+static i32 release_(heap *h, i32 g) {
   h->released = 0;
   if (!g) return 0;
   u32 k = 0;
@@ -280,7 +281,7 @@ i32 heap_release(heap *h, i32 g) {
   for (u32 i = 0; i < h->tcap; i++) if (h->t[i].st == 1 && h->t[i].gen == g) list[k++] = h->t[i];
   qsort(list, k, sizeof(blk), seqcmp);
   i32 before = h->used;
-  for (u32 i = 0; i < k; i++) heap_free(h, list[i].addr);
+  for (u32 i = 0; i < k; i++) free_(h, list[i].addr);
   xfree(list);
   h->released = before - h->used;
   return h->released;
@@ -293,3 +294,16 @@ i32 heap_released(heap *h) { return h->released; }
 void heap_set_gen(heap *h, i32 g) { h->gen = g; }
 u32 heap_base(heap *h) { return h->base; }
 u32 heap_end(heap *h) { return h->end; }
+
+/* ---- the public calls: under a lock while CPUs share the heap (par.c) ---- */
+static void lock(heap *h) {
+  if (!h->locked) return;
+  while (__atomic_exchange_n(&h->lk, 1, __ATOMIC_ACQUIRE)) while (__atomic_load_n(&h->lk, __ATOMIC_RELAXED)) __builtin_ia32_pause();
+}
+static void unlock(heap *h) { if (h->locked) __atomic_store_n(&h->lk, 0, __ATOMIC_RELEASE); }
+void heap_set_locked(heap *h, int on) { h->locked = on; }
+u32 heap_alloc(heap *h, i32 n) { lock(h); u32 r = alloc_(h, n); unlock(h); return r; }
+void heap_free(heap *h, u32 p) { lock(h); free_(h, p); unlock(h); }
+u32 heap_realloc(heap *h, u8 *mem, u32 p, i32 n) { lock(h); u32 r = realloc_(h, mem, p, n); unlock(h); return r; }
+u32 heap_largest(heap *h) { lock(h); u32 r = largest_(h); unlock(h); return r; }
+i32 heap_release(heap *h, i32 g) { lock(h); i32 r = release_(h, g); unlock(h); return r; }

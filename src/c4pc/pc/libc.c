@@ -88,7 +88,7 @@ void pc_malloc_init(void *lo, void *hi) {
   pc_heap_free_bytes = b->size;
 }
 
-void *malloc(size_t n) {
+static void *malloc_(size_t n) {
   if (n > 0x7fffff00u) return 0;
   u32 need = ((u32)n + HDR + FTR + 15) & ~15u;
   if (need < MINB) need = MINB;
@@ -107,7 +107,7 @@ void *malloc(size_t n) {
   }
   return 0;
 }
-void free(void *p) {
+static void free_(void *p) {
   if (!p) return;
   fb *b = (fb *)((u8 *)p - HDR);
   u32 size = b->size & ~7u;
@@ -126,6 +126,12 @@ void free(void *p) {
   set_block(b, size, 0);
   list_add(b);
 }
+/* the processors share it (ap.c, par.c): a lock */
+static volatile int mlk;
+static void mlock(void) { while (__atomic_exchange_n(&mlk, 1, __ATOMIC_ACQUIRE)) while (__atomic_load_n(&mlk, __ATOMIC_RELAXED)) __builtin_ia32_pause(); }
+static void munlock(void) { __atomic_store_n(&mlk, 0, __ATOMIC_RELEASE); }
+void *malloc(size_t n) { mlock(); void *p = malloc_(n); munlock(); return p; }
+void free(void *p) { mlock(); free_(p); munlock(); }
 void *calloc(size_t n, size_t k) {
   size_t t = n * k;
   void *p = malloc(t);

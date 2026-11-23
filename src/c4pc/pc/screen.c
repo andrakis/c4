@@ -451,6 +451,13 @@ void mouse_byte(u8 b) {
 /* what the mouse did since, to the display (screen pixels to its own) */
 int mouse_pending(void) { return mq_head != mq_tail; }
 void mouse_poll(gui *g) {
+  /* VMware's absolute mouse (vmware.c): the PS/2 packets only say there
+   * is something; the positions are the backdoor's */
+  if (vmw_mouse()) {
+    mq_head = mq_tail;
+    if (vmw_mouse_poll(g, gui_locked(g))) return;
+    pc_log("c4pc: VMware's mouse stopped answering: the PS/2 mouse's motion again\n");
+  }
   while (mq_head != mq_tail) {
     mpkt p = *(mpkt *)&mq[mq_head & 255];
     mq_head++;

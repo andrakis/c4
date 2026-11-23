@@ -289,6 +289,12 @@ queue each, a kernel lock, c4mp's ten processor opcodes (CPUI to IPI) and
 a window of 64 words at 0x800 that each CPU sees its own of. libjs has two
 engines for them, and c4pc has both.
 
+The menus' "every processor" entries (32-bit and x86-64) pass `--cpus
+all`; the others run one CPU, as the web page does, so a VM given four
+processors still shows one in the System Monitor unless one of those is
+chosen. `c4pc: 4 processors, each the machine's CPU on one of the PC's
+own` in the boot log says how many came up.
+
 **Taking turns** (smp.c, smp.js line for line): `--cpus N` (and `-q`,
 the quantum) makes N machines over one arena, heap and devices, and CPU
 0's run hands over to a round robin that runs each runnable CPU for a
@@ -478,6 +484,64 @@ file once, extracts the whole system onto the disk in passing. The DOS
 package (c4pc-dos) is the packed archive too. `c4pc-host --tar FILE`
 loads an archive as a drive, packed or not, as a PC's loader hands one
 over.
+
+### VMware, without VMware Tools
+
+pc/vmware.c does what open-vm-tools and Linux's vmmouse driver do, over
+VMware's "backdoor": an `in` from port 5658h with EAX the magic `VMXh`
+and ECX a command, which VMware answers in the registers. A PC where EBX
+does not come back holding the magic is not VMware, and nothing below
+happens there; `--no-vmware` leaves it alone anyway.
+
+- **The mouse, absolute.** When the backdoor's pointer answers
+  (ABSPOINTER_COMMAND, STATUS, DATA: `c4pc: a display of 1024 x 768, and
+  VMware's absolute mouse`), the pointer goes where the host's is, from
+  0 to 65535 across the screen, and the VM gives the mouse up at the
+  window's edge, with no grab and no Ctrl+Alt. The PS/2 mouse's packets
+  still arrive, but only to say there is something to read. A program
+  that locks the pointer (a game: `gui_locked`) gets relative motion
+  while it holds it (REQUEST_RELATIVE), and VMware then grabs the mouse
+  as before. QEMU's vmport has the same pointer (`-machine vmport=on`, on
+  by default on the pc machine).
+- **Copy and paste**, VMware's first way (copy/paste version 1: the
+  host's text is GETSELLENGTH, then GETNEXTPIECE 4 bytes a call; the
+  guest's is SETSELLENGTH and SETNEXTPIECE). The VMware drive's file
+  `clipboard` is the host's text, and `clipboard.set` written there is
+  the guest's. The desktop (shell.c) hooks winkit's clipboard to them
+  (`wk_clip_host`): a copy in any of its windows is also the host's, and
+  a paste first takes the host's text if it changed since. VMware's own
+  setting has to allow it (VM, Settings, Options, Guest Isolation).
+- **GuestRPC.** Messages on a channel (BDOOR_CMD_MESSAGE): a size, then
+  the bytes 4 at a time, or all at once by the high-bandwidth port 5659h
+  (`rep outsb` / `rep insb`) where VMware offers it; `--vmware-lb` keeps
+  to 4 bytes a call. RPCI asks VMware things; TCLO is VMware asking the
+  guest, polled every 100 ms and answered as vmtoolsd answers "reset",
+  "ping" and the rest, so VMware takes Tools to be running (c4pc sends
+  `tools.set.version 2147483647`, the version open-vm-tools gives for
+  Tools VMware does not manage). **Shut Down Guest** then arrives as
+  `OS_Halt`, and is the power button's shutdown (above): C4IX shuts down
+  and the VM switches off.
+- **Shared folders** (HGFS, protocol version 1: an RPCI request `f `
+  and the packet). The VMware drive (`c4pc: drive N: VMware's`, kind
+  vmware) has them under `hgfs/`: `hgfs/SHARE/...` is the host's folder,
+  listed and read when something looks there (SEARCH_OPEN, GETATTR,
+  OPEN, READ). `mount N /mnt/host` puts them at /mnt/host/hgfs. A mount
+  keeps what is written into it in RAM, as a CD's does; `hostcp FILE...
+  SHARE[/DIR]` writes onto the host (the drive hands a file written to
+  `hgfs/...` to VMware whole when it is closed: OPEN with create-or-empty,
+  WRITE, CLOSE), and `hostcp` alone lists the shares. A folder a mount
+  has already listed shows what was written since after a umount and
+  mount. Turn them on in VM, Settings, Options, Shared Folders.
+
+*Measured* in QEMU with KVM (`-machine pc,vmport=on`): the backdoor
+found, the drive made (drive 3 after the CD drive; `mount` lists it,
+`hostcp` says there are no shared folders), and the pointer put where
+QMP's `input-send-event` said (absolute positions; QEMU's vmmouse gives
+them as VMware does, 0 to 65535); with `vmport=off`, neither, and the
+PS/2 mouse as before. The monitor's `mouse_move` is relative motion,
+which QEMU gives the PS/2 mouse, not the vmmouse: `--debug-mouse` logs
+each vmmouse packet. QEMU has no GuestRPC, so the clipboard, TCLO (Shut
+Down Guest) and the shared folders are untried there: VMware's to try.
 
 ### Installed onto a disk
 

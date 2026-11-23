@@ -176,6 +176,24 @@ static void store_remove(drive *d, const char *name) {
 
 /* the store's disk found (or, with create, a blank one made one) and its
  * files laid into a new drive: the drive, or 0. what: for the console */
+/* DISK_EJECT on the store's drive: the disk given up -- C4IX's to install
+ * onto (src/c4ix/user/install.c) -- and handed to its block devices as
+ * hdN (pc.c, pc_store_to_blk). What the store held stays, read-only, in
+ * memory: the session's files that came from there are still read. */
+void pc_store_to_blk(u32 io, int slave);
+static void store_release(drive *d) {
+  u32 sio = store_io; int ss = store_slave;
+  if (ss < 0) return;
+  d->sink = 0;
+  d->remove = 0;
+  d->writable = 0;
+  d->kind = "none";
+  d->eject = 0;
+  store_io = 0; store_slave = -1;
+  if (say) say("c4pc: the store's disk given up, to be a block device\n");
+  pc_store_to_blk(sio, ss);
+}
+
 drive *store_open(int create, void (*log)(const char *), char *what, u32 whatlen) {
   static const u32 ports[2][2] = {{0x1F0, 0x3F6}, {0x170, 0x376}};
   say = log;
@@ -221,6 +239,7 @@ drive *store_open(int create, void (*log)(const char *), char *what, u32 whatlen
   }
   d->sink = store_sink;
   d->remove = store_remove;
+  d->eject = store_release;
   tally(d);
   /* "a new store on the primary slave, 1024 MB" or "the store on ...: 12 files, 3456 KB" */
   char *p = what, *end = what + whatlen - 1;

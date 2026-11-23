@@ -13,7 +13,7 @@
 #define printf uprintf
 #include "wkgui.h"
 
-enum { START_W = 200, N_ICONS = 6 };
+enum { START_W = 200, N_ICONS = 7, K_INSTALL = 0 - 9 };
 // the sound card's master volume (libjs/guest/snd.h), written here and
 // not through snd.c: the desktop is linked whole by the host's Makefile
 // too, without the card's functions
@@ -225,8 +225,105 @@ void saver_preview() {
 
 // ---- the desktop: its picture, and its icons ----------------------------------------
 
-static char *icon_labels[N_ICONS] = { "Filesystem", "Terminal", "Text Editor", "IDE", "Calculator", "System Monitor" };
-static int icon_kinds[N_ICONS] = { 0, K_TERM, K_NOTE, K_EDIT, K_CALC, K_TASKS };
+static char *icon_labels[N_ICONS] = { "Filesystem", "Terminal", "Text Editor", "IDE", "Calculator", "System Monitor", "Install C4IX" };
+static int icon_kinds[N_ICONS] = { 0, K_TERM, K_NOTE, K_EDIT, K_CALC, K_TASKS, K_INSTALL };
+// the icons shown: Install C4IX's only where it can be (installable)
+static int n_icons = N_ICONS - 1;
+
+// is one of BUF's lines WANT
+static int has_line(char *buf, char *want) {
+    char *p;
+    int k;
+    p = buf;
+    while (*p) {
+        k = 0;
+        while (want[k] && p[k] == want[k]) ++k;
+        if (!want[k] && (p[k] == 10 || p[k] == 13 || !p[k])) return 1;
+        while (*p && *p != 10) ++p;
+        if (*p) ++p;
+    }
+    return 0;
+}
+// VMware's clipboard, as c4pc's VMware drive has it (src/c4pc/pc/vmware.c):
+// its file clipboard is the host's text, and clipboard.set written is
+// the host's from then on. The drive is the one whose N:.c4pc-drive says
+// "kind vmware"; it is written as persist writes drive 1, by the disk's
+// registers (uioperm under the MMU).
+enum { VD_FD = 0x124, VD_WNAME = 0x178, VD_WADDR = 0x17c, VD_WLEN = 0x180, VD_WCLOSE = 0x184,
+       VD_C4I_MMU = 0x80000, VD_LAST = 4096, VD_MAX = 65536 };
+static int vmw_n = 0 - 2;              // its drive: -2 not looked for yet, -1 none
+static char vmw_last[VD_LAST];         // the host's text last seen (or set from here)
+static int vmw_last_n;
+static char vmw_buf[VD_MAX];
+static int vmw_find() {
+    char name[16], buf[256];
+    int k, n;
+    if (vmw_n != 0 - 2) return vmw_n;
+    vmw_n = 0 - 1;
+    k = 2;
+    while (k < 10 && vmw_n < 0) {
+        name[0] = '0' + k; name[1] = ':'; ustrcpy(name + 2, ".c4pc-drive");
+        if ((n = uslurp(name, buf, 256)) > 0 && has_line(buf, "kind vmware")) vmw_n = k;
+        ++k;
+    }
+    return vmw_n;
+}
+static void vmw_seen(char *s, int n) {
+    if (n > VD_LAST) n = VD_LAST;
+    memcpy(vmw_last, s, n);
+    vmw_last_n = n;
+}
+static int vmw_push(char *s, int n) {
+    char name[24];
+    int fd;
+    name[0] = '0' + vmw_n; name[1] = ':'; ustrcpy(name + 2, "clipboard.set");
+    *(int *)VD_WNAME = (int)name;
+    fd = *(int *)VD_WNAME;
+    if (fd < 0) return 0;
+    if (n > 0) { *(int *)VD_FD = fd; *(int *)VD_WADDR = (int)s; *(int *)VD_WLEN = n; }
+    *(int *)VD_WCLOSE = fd;
+    vmw_seen(s, n);                    // the host has it now: not taken back as new
+    return 1;
+}
+static int vmw_pull(char **s, int *n) {
+    char name[24];
+    int k, i, j;
+    name[0] = '0' + vmw_n; name[1] = ':'; ustrcpy(name + 2, "clipboard");
+    if ((k = uslurp(name, vmw_buf, VD_MAX - 1)) <= 0) return 0;     // the host's has nothing
+    i = 0; j = 0;                      // a Windows host's CR LF, LF
+    while (i < k) { if (vmw_buf[i] != 13) { vmw_buf[j] = vmw_buf[i]; ++j; } ++i; }
+    k = j;
+    if (k == vmw_last_n || (k > VD_LAST && vmw_last_n == VD_LAST))
+        if (!memcmp(vmw_buf, vmw_last, k < VD_LAST ? k : VD_LAST)) return 0;
+    vmw_seen(vmw_buf, k);
+    *s = vmw_buf;
+    *n = k;
+    return 1;
+}
+static void vmw_clip_init() {
+    if (vmw_find() < 0) return;
+    if (__c4_info() & VD_C4I_MMU) uioperm(UIOPERM_DEV);
+    wk_clip_host.push = vmw_push;
+    wk_clip_host.pull = vmw_pull;
+}
+
+// Booted from c4pc's disc (a CD drive whose label is C4PC: N:.c4pc-drive),
+// and / not on a disk already: install (src/c4ix/user/install.c) can be run
+static int installable() {
+    char name[16], buf[512];
+    int k, n;
+    if ((n = uslurp("/proc/mounts", buf, 512)) > 0) {
+        k = 0;
+        while (k + 7 < n) { if (!memcmp(buf + k, " / ext2", 7)) return 0; ++k; }
+    }
+    k = 2;
+    while (k < 10) {
+        name[0] = '0' + k; name[1] = ':'; ustrcpy(name + 2, ".c4pc-drive");
+        if ((n = uslurp(name, buf, 512)) > 0 && has_line(buf, "label C4PC")) return 1;
+        ++k;
+    }
+    return 0;
+}
 
 static void icon(int x, int y, char *label, int kind) {
     int lw;
@@ -234,6 +331,11 @@ static void icon(int x, int y, char *label, int kind) {
         gui_rect(x + 10, y, 28, 20, C_FACE); d_bevel(x + 10, y, 28, 20, B_RAISED);
         gui_rect(x + 13, y + 3, 22, 14, 0x008080);
         gui_rect(x + 8, y + 22, 32, 8, C_FACE); d_bevel(x + 8, y + 22, 32, 8, B_RAISED);
+    } else if (kind == K_INSTALL) {                // a disk, and an arrow down onto it
+        gui_rect(x + 9, y + 18, 30, 12, C_FACE); d_bevel(x + 9, y + 18, 30, 12, B_RAISED);
+        gui_rect(x + 31, y + 23, 4, 2, 0x00a000);
+        gui_rect(x + 21, y, 6, 10, 0x2050c0);
+        gui_rect(x + 17, y + 10, 14, 2, 0x2050c0); gui_rect(x + 19, y + 12, 10, 2, 0x2050c0); gui_rect(x + 21, y + 14, 6, 2, 0x2050c0);
     } else if (kind == K_TERM) {
         gui_rect(x + 8, y, 32, 26, C_FACE); d_bevel(x + 8, y, 32, 26, B_RAISED);
         gui_rect(x + 11, y + 3, 26, 18, C_DARK);
@@ -256,7 +358,7 @@ static void desktop(int x, int y, int w, int h) {
     int k;
     if (!wall_draw(x, y, w, h) && wk_part) gui_rect(x, y, w, h, C_DESK);
     k = 0;
-    while (k < N_ICONS) {
+    while (k < n_icons) {
         // an icon's label is centred under it and can be wider than it
         if (wk_in_damage(0, 14 + k * 72, 80, 52)) icon(18, 14 + k * 72, icon_labels[k], icon_kinds[k]);
         ++k;
@@ -276,7 +378,7 @@ static struct go_item start_items[] = {
     { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "IDE", K_EDIT },
     { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Settings", K_SETTINGS },
     { "About C4IX", K_ABOUT }, { "-", 0 },
-    { "Games", 0, M_GAMES }, { "Run...", GO_RUN }, { "-", 0 }, { "Power Off...", GO_OFF }
+    { "Games", 0, M_GAMES }, { "Install C4IX...", GO_CMD, 0, "install" }, { "Run...", GO_RUN }, { "-", 0 }, { "Power Off...", GO_OFF }
 };
 static int n_start;
 // The rows of every menu but Go, each menu's together (games_load)
@@ -830,9 +932,11 @@ static void mouse_desk(int ev, int x, int y, int b) {
     t = now_ms();
     k = 0 - 1;
     i = 0;
-    while (i < N_ICONS) { if (ui_hit(x, y, 14, 12 + i * 72, 56, 64)) k = i; ++i; }
+    while (i < n_icons) { if (ui_hit(x, y, 14, 12 + i * 72, 56, 64)) k = i; ++i; }
     if (k >= 0 && k == icon_k && t - icon_t < 500) {
-        if (icon_kinds[k] == 0) files_open("/"); else launch(icon_kinds[k]);
+        if (icon_kinds[k] == 0) files_open("/");
+        else if (icon_kinds[k] == K_INSTALL) run_command("install");   // in a Terminal: it asks first
+        else launch(icon_kinds[k]);
         icon_k = 0 - 1;
     } else { icon_k = k; icon_t = t; }
 }
@@ -914,6 +1018,7 @@ int main(int argc, char **argv) {
     // (include/display.h, and "aside" below)
     if (!udisplay_take(DISP_YIELDS)) { printf("desktop: a program has the display\n"); return 1; }
     if (!(region = ualloc(RING))) { printf("desktop: no memory for the display's ring\n"); udisplay_give(); return 1; }
+    vmw_clip_init();                   // the host's clipboard, under VMware
     theme_init();
     theme_apply();                     // the default scheme, unless the file names one
     theme_load();
@@ -924,6 +1029,14 @@ int main(int argc, char **argv) {
     gui_events(EVENTS);
     volume_apply();
     n_start = sizeof(start_items) / sizeof(start_items[0]);
+    // Install C4IX, on the desktop and in Go, only booted from c4pc's disc
+    if (installable()) n_icons = N_ICONS;
+    else {
+        k = 0;
+        while (k < n_start && !(start_items[k].kind == GO_CMD && ui_eq(start_items[k].cmd, "install"))) ++k;
+        while (k + 1 < n_start) { memcpy((char *)&start_items[k], (char *)&start_items[k + 1], sizeof(struct go_item)); ++k; }
+        if (k < n_start) --n_start;
+    }
     start_games();
     // the kit's Notepad, as this desktop has always called it
     notepad_name = "Text Editor";

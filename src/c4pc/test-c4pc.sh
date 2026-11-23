@@ -61,7 +61,7 @@ session () {
     return
   fi
   rm -f $W/serial$t.txt
-  timeout 1800 "$Q" -m 512 -display none -no-reboot -serial file:$W/serial$t.txt \
+  timeout 1800 "$Q" -machine vmport=off -m 512 -display none -no-reboot -serial file:$W/serial$t.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
     -append "--no-cdrom -s $f $ca -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/test-disk.tar drive,$W/in.txt stdin"
   st=$?
@@ -232,13 +232,13 @@ else
   qemu_smp () {
     local n=$1; shift
     rm -f $W/serial-smp.txt
-    timeout 600 "$Q" $accel -smp 4 -m 512 -display none -no-reboot -serial file:$W/serial-smp.txt \
-      -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf -append "--cpus $n" -initrd "$1" > /dev/null 2>&1
+    timeout 600 "$Q" $accel -machine vmport=off -smp 4 -m 512 -display none -no-reboot -serial file:$W/serial-smp.txt \
+      -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf -append "--cpus $n -m 32" -initrd "$1" > /dev/null 2>&1
     tr -d '\r' < $W/serial-smp.txt
   }
   smp_checks "c4pc.elf on 4 processors" qemu_smp
   rm -f $W/serial-smp.txt
-  timeout 900 "$Q" $accel -smp 4 -m 512 -display none -no-reboot -serial file:$W/serial-smp.txt \
+  timeout 900 "$Q" $accel -machine vmport=off -smp 4 -m 512 -display none -no-reboot -serial file:$W/serial-smp.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf -append "--mmu --cpus 4 -m 64" \
     -initrd "$W/c4ix32.c4r,$W/test-disk.tar drive,$W/in.txt stdin" > /dev/null 2>&1
   out=$(tr -d '\r' < $W/serial-smp.txt)

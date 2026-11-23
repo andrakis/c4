@@ -3219,10 +3219,10 @@ C4PC_CFLAGS := -O2 -g -Wall -Wno-unused-parameter -fwrapv -fno-strict-aliasing -
 C4PC_BARE_CFLAGS := -m32 -march=i486 -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
 c4pc-host: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	$(NATIVE_CC) $(C4PC_CFLAGS) -I$(C4PC_SRC) $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS) host) .c4pc/fontdata.c .c4pc/opltables.c -o $@ -lm -pthread
-c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
+c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/vmware.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 		$(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	gcc $(C4PC_BARE_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
-		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
+		-Wl,--no-warn-rwx-segments -o $@ $(C4PC_SRC)/pc/boot.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/vmware.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 		$(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 # c4pc64.elf (M8): the same machine built for x86-64, its twice as many
 # registers and 64-bit arithmetic; pc/boot64.S enters long mode from the
@@ -3230,11 +3230,11 @@ c4pc.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_
 # ELF32, which multiboot loaders take (its addresses are all below 4 GB).
 # -mno-red-zone: an interrupt pushes its frame where the code is.
 C4PC_BARE64_CFLAGS := -m64 -mno-red-zone -fcf-protection=none -ffreestanding -fno-pic -fno-pie -fno-stack-protector -DC4PC_BARE $(C4PC_CFLAGS)
-c4pc64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
+c4pc64.elf: $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c $(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/vmware.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c \
 	$(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/link.ld $(C4PC_HDRS) .c4pc/fontdata.c .c4pc/opltables.c
 	gcc $(C4PC_BARE64_CFLAGS) -nostdlib -no-pie -Wl,-T,$(C4PC_SRC)/pc/link.ld -Wl,--build-id=none \
 		-Wl,--no-warn-rwx-segments -o .c4pc/c4pc64.elf64 $(C4PC_SRC)/pc/boot64.S $(C4PC_SRC)/pc/pc.c $(C4PC_SRC)/pc/screen.c \
-		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
+		$(C4PC_SRC)/pc/sb16.c $(C4PC_SRC)/pc/hda.c $(C4PC_SRC)/pc/store.c $(C4PC_SRC)/pc/ata.c $(C4PC_SRC)/pc/acpi.c $(C4PC_SRC)/pc/ap.c $(C4PC_SRC)/pc/vmware.c $(C4PC_SRC)/pc/aptramp.S $(C4PC_SRC)/pc/libc.c $(patsubst %,$(C4PC_SRC)/%.c,$(C4PC_MODS)) -I$(C4PC_SRC) .c4pc/fontdata.c .c4pc/opltables.c
 	objcopy -I elf64-x86-64 -O elf32-i386 .c4pc/c4pc64.elf64 $@
 
 # The DOS loader (src/c4pc/dos): boots c4pc.elf from DOS, for DOSBox.
@@ -3247,12 +3247,22 @@ C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com
 # C4IX's programs this tree has that a C4PC_IMAGES built from another may
 # not (mount, umount, df, cp: the CD's), built as build-images.sh builds
 # them, and laid on the boot disk over its own, named in its manifest's BIN_ALL
-C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin
+C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin hostcp
 .c4pc/bin/c4ix-%.c4r: $(SRCS)/c4ix/user/%.c .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP)
 	mkdir -p .c4pc/bin
 	./c4sc-host32 -c 400000 compile -O -c -D C4IX_SHARED -I $(SRCS)/c4ix/include $< .c4pc/u_$*.c4o > /dev/null
 	./c4rlink32 .c4pc/u_$*.c4o -l .c4pc/lib/libc4ix.c4s -o $@ > /dev/null
 	rm -f .c4pc/u_$*.c4o
+# the desktop as this tree has it (its Install C4IX), built as
+# build-images.sh builds it: its modules and the window kit's, libc's fp.c,
+# against the images' libgui and libarc and this tree's libc4ix
+C4PC_DESK_MODS := shell tools host term files taskmgr apps edit hl explore wall draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
+.c4pc/bin/c4ix-desktop.c4r: $(wildcard $(SRCS)/c4ix/user/desktop/*.c $(SRCS)/c4ix/user/desktop/*.h $(SRCS)/winkit/*.c $(SRCS)/winkit/*.h) .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP)
+	mkdir -p .c4pc/bin .c4pc/desk
+	for m in $(C4PC_DESK_MODS); do src=$(SRCS)/c4ix/user/desktop/$$m.c; [ -f $$src ] || src=$(SRCS)/winkit/$$m.c; \
+	  ./c4sc-host32 -c 400000 compile -O -c -D C4IX_SHARED -I $(SRCS)/c4ix/include -I $(SRCS)/c4ix/user/desktop -I $(SRCS)/winkit $$src .c4pc/desk/$$m.c4o > /dev/null || exit 1; done
+	./c4sc-host32 -c 400000 compile -O -c $(SRCS)/c4ix/libc/fp.c .c4pc/desk/fp.c4o > /dev/null
+	./c4rlink32 $(patsubst %,.c4pc/desk/%.c4o,$(C4PC_DESK_MODS)) .c4pc/desk/fp.c4o -l $(C4PC_IMAGES)/build/lib/libgui.c4s -l $(C4PC_IMAGES)/build/lib/libarc.c4s -l .c4pc/lib/libc4ix.c4s -o $@ > /dev/null
 # libc4ix, the user library, as this tree has it -- what its programs above
 # call is there (ustrncmp, upathjoin, uslurp ...) -- built as build-images.sh
 # builds the shared one, and on the boot disk over the images' own: a
@@ -3270,11 +3280,12 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 	for m in $(C4PC_IX_MODS); do ./c4sc-host32 -c 400000 compile -O -c -I $(SRCS)/c4ix $(SRCS)/c4ix/$$m.c .c4pc/kernel/$$m.c4o > /dev/null || exit 1; done
 	./c4rlink32 $(patsubst %,.c4pc/kernel/%.c4o,$(C4PC_IX_MODS)) -o $@ > /dev/null
 # The boot disk as one archive, for a loader to hand c4pc as a module
-.c4pc/disk.tar: $(C4PC_IMAGES_DEP) $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/lib/libc4ix.c4s $(C4PC_SRC)/pc/disksizes.py
+.c4pc/disk.tar: $(C4PC_IMAGES_DEP) $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/bin/c4ix-desktop.c4r .c4pc/lib/libc4ix.c4s $(C4PC_SRC)/pc/disksizes.py
 	rm -rf .c4pc/add && mkdir -p .c4pc/add
 	tar --format=ustar -C $(C4PC_IMAGES)/disk -cf $@ .
 	cp $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/add/
 	cp .c4pc/lib/libc4ix.c4s .c4pc/add/c4ix-libc4ix.c4s
+	cp .c4pc/bin/c4ix-desktop.c4r .c4pc/add/
 	awk -v add="$(C4PC_IX_NEW)" '/^BIN_ALL = /{n=split(add,w," "); for(i=1;i<=n;i++) if ((" " $$0 " ") !~ (" " w[i] " ")) $$0 = $$0 " " w[i]} {print}' $(C4PC_IMAGES)/disk/c4ix.vfs.txt > .c4pc/add/c4ix.vfs.txt
 	@# and the sizes C4IX's VFS believes until it reads a file: the new ones'
 	python3 $(C4PC_SRC)/pc/disksizes.py $(C4PC_IMAGES)/disk/c4ix.sizes .c4pc/add > .c4pc/add/c4ix.sizes.new

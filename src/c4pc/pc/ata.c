@@ -196,6 +196,16 @@ static int identify(ata *d) {
   return d->b.sectors > 0;
 }
 
+/* the ATA disk at IO's channel, master or SLAVE, as a block device: 0 if
+ * there is none (the store's, handed over: store.c, store_release) */
+blkdev *ata_one(u32 io, int slave) {
+  ata *d = xmalloc(sizeof *d);
+  d->io = io; d->ctl = io == 0x1F0 ? 0x3F6 : 0x376; d->slave = slave;
+  if (!identify(d)) { xfree(d); return 0; }
+  d->b.rw = rw; d->b.flush = flush; d->b.ctx = d;
+  return &d->b;
+}
+
 /* every ATA disk but the one at (skip_io, skip_slave), as block devices
  * into blks[*n] on, at most max; how many */
 int ata_find(blkdev **blks, int *n, int max, u32 skip_io, int skip_slave) {

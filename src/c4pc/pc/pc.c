@@ -151,6 +151,17 @@ static void con_flush(void) { if (vga_dirty) { vga_cursor(); vga_dirty = 0; } }
 static void con_dec(i64 v) { char t[24]; int n = 0; int neg = v < 0; uint64_t u = neg ? (uint64_t)-v : (uint64_t)v;
   do { t[n++] = (char)('0' + u % 10); u /= 10; } while (u); if (neg) con_put('-'); while (n) con_put(t[--n]); }
 void pc_log(const char *s) { con_puts(s); }
+/* the store's disk given up (store.c, store_release): a block device now,
+ * the next of CPU 0's machine's, which C4IX finds by BLK_COUNT */
+static machine *pc_m;
+void pc_store_to_blk(u32 io, int slave) {
+  extern blkdev *ata_one(u32, int);
+  blkdev *b;
+  if (!pc_m || pc_m->nblk >= 8 || !(b = ata_one(io, slave))) return;
+  pc_m->blk[pc_m->nblk++] = b;
+  con_puts("c4pc: block device "); con_dec(pc_m->nblk - 1); con_puts(": "); con_puts(b->what);
+  con_puts(", "); con_dec(b->sectors / 2048); con_puts(" MB (the store's)\n");
+}
 static machine *dbg_m;
 static void trace_event(i32 type, const i32 *pl, int n, int sent) {
   con_puts("event "); con_dec(type);
@@ -535,7 +546,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, acpi = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0;
+  u32 mb_arena = 32; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, acpi = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0, vmware = 1;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -562,6 +573,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--store")) store_create = 1;      /* a blank ATA disk may become the store */
     else if (!strcmp(args[a], "--no-store")) store = 0;
     else if (!strcmp(args[a], "--no-cdrom")) cdrom = 0;      /* the CD drives left be (cdrom.c): a session libjs can match */
+    else if (!strcmp(args[a], "--no-vmware")) vmware = 0;    /* VMware's backdoor left be (vmware.c) */
+    else if (!strcmp(args[a], "--vmware-lb")) vmware = 2;    /* ... its messages 4 bytes at a time, no high-bandwidth port */
     else if (!strcmp(args[a], "--no-acpi")) acpi = 0;        /* ACPI left be (acpi.c): off by the fixed ports, no power button */
     else if (!strcmp(args[a], "--debug-sound")) { extern void (*hda_log)(const char *); hda_log = con_puts; }
     else if (!strcmp(args[a], "--clock") && a + 1 < nargs) { a++; clock_want = !strcmp(args[a], "tsc") ? 1 : !strcmp(args[a], "pit") ? 0 : -1; }
@@ -645,6 +658,15 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (nc && nd < 2) { drive *e = drive_new(0); e->kind = "none"; drives[nd++] = e; }
     for (int i = 0; i < nc && nd < 16; i++) drives[nd++] = cds[i];
   }
+  /* VMware's (vmware.c): its shared folders and clipboard, a drive after
+   * the CDs */
+  if (vmware && vmw_detect(vmware == 2)) {
+    if (nd < 2) { drive *e = drive_new(0); e->kind = "none"; drives[nd++] = e; }
+    if (nd < 16) {
+      drives[nd++] = vmw_drive();
+      con_puts("c4pc: drive "); con_dec(nd - 1); con_puts(": VMware's, its shared folders (hgfs/) and clipboard\n");
+    }
+  }
   /* the IDE disks but the store's, as block devices (ata.c), for C4IX's
    * own filesystem (docs/c4ix-ext2.md) */
   static blkdev *blks[8]; int nblk = 0;
@@ -687,6 +709,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
   for (int i = 0; i < nblk; i++) m->blk[m->nblk++] = blks[i];
+  pc_m = m;
   /* the display: GRUB's framebuffer, or the BGA's at --gui's size */
   if (screen_from_multiboot(mb) || (gui_w > 0 && gui_h > 0 && screen_bga(gui_w, gui_h))) {
     int w, h; screen_size(&w, &h);
@@ -696,8 +719,9 @@ void pc_main(u32 magic, struct mb_info *mb) {
     dbg_m = m;
     int mouse = mouse_init();
     if (mouse) outb(0xA1, (u8)(inb(0xA1) & 0xEF));   /* IRQ 12 (the SCI's may be unmasked: acpi.c) */
+    int vmouse = mouse && vmw_mouse_init();
     con_puts("c4pc: a display of "); con_dec(w); con_puts(" x "); con_dec(h);
-    con_puts(mouse ? ", and a mouse\n" : ", and no mouse\n");
+    con_puts(vmouse ? ", and VMware's absolute mouse (the pointer leaves at the edge)\n" : mouse ? ", and a mouse\n" : ", and no mouse\n");
     vga_real = 0;                       /* graphics: the VGA's text is not shown */
     screen_console(vtext, vy * 80 + vx);
   }
@@ -768,7 +792,12 @@ void pc_main(u32 magic, struct mb_info *mb) {
     {
       static i64 pressed;
       i64 now = plat_now_ms();
-      if (acpi_button(now)) {
+      /* VMware's requests (vmware.c): its Shut Down Guest, as the button */
+      static i64 vmw_at;
+      int vmw_halt = 0;
+      if (now - vmw_at >= 100) { vmw_at = now; vmw_halt = vmw_poll(); }
+      if (vmw_halt) con_puts("\nc4pc: VMware asked the guest to shut down\n");
+      if (acpi_button(now) || vmw_halt) {
         if (!m->sigh[15] || (pressed && now - pressed >= 1000)) { con_puts("\nc4pc: the power button: off\n"); status = 0; break; }
         if (!pressed) { pressed = now ? now : 1; m->pending_signal = 15; }
       }

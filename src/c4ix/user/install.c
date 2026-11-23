@@ -25,7 +25,7 @@
 
 #include "c4ix_user.h"
 
-enum { C4I_MMU = 0x80000, DISK_COUNT = 0x188 };
+enum { C4I_MMU = 0x80000, DISK_COUNT = 0x188, DISK_EJECT = 0x190 };
 enum { SYS_MOUNT = 248, SYS_UMOUNT = 249, SYS_MKFS = 250, SYS_SYNC = 252, SYS_CHMOD = 253, SYS_BLKIO = 255 };
 enum { RUN = 64, BUFSZ = 32768, CORE_MAX = 2047 * 512, PATHW = 256, START = 2048, NAMEW = 64 };
 
@@ -77,6 +77,21 @@ static int disk_busy(char *name) {
     }
     return 0;
 }
+// drive 1 is persist's store, on a disk c4pc keeps for it (its
+// N:.c4pc-drive says "kind store"): that disk's MB, or 0
+static int store_mb() {
+    char *p;
+    if (uslurp("1:.c4pc-drive", text, 4096) < 0) return 0;
+    p = text;
+    while (*p) {
+        if (!ustrncmp(p, "kind ", 5) && ustrncmp(p + 5, "store", 5)) return 0;
+        if (!ustrncmp(p, "size ", 5)) return uatoi(p + 5) / 1024;
+        while (*p && *p != 10) ++p;
+        if (*p) ++p;
+    }
+    return 0;
+}
+
 // is the line at P (to a newline or the end) WANT
 static int line_is(char *p, char *want) {
     while (*want && *p == *want) { ++p; ++want; }
@@ -250,7 +265,7 @@ static int copy_boot(char *cfg) {
 int main(int argc, char **argv) {
     char *disk, *p, *menu;
     char dev1[8];
-    int k, yes, d, sectors, ro, p1, n, fd, lba, coresz, cfgn, i, files;
+    int k, yes, d, sectors, ro, p1, n, fd, lba, coresz, cfgn, i, files, store;
     if (__c4_info() & C4I_MMU) uioperm(UIOPERM_DEV);
     yes = 0; disk = "hd0";
     k = 1;
@@ -263,7 +278,14 @@ int main(int argc, char **argv) {
     d = disk[2] - '0';
     // the menu for the system that is running: the word's
     menu = sizeof(int) == 8 ? "grub/disk64.cfg" : "grub/disk.cfg";
-    if ((sectors = disk_size(disk, &ro)) < 0) { ufprintf(STDERR, "install: there is no disk %s (cat /proc/disks lists them)\n", disk); return 1; }
+    // the disk persist keeps its store on is not a block device until it
+    // is given up (DISK_EJECT on drive 1): install takes it so, once asked
+    store = 0;
+    if ((sectors = disk_size(disk, &ro)) < 0 && (store = store_mb()) > 0 && !ustrcmp(disk, "hd0")) {
+        sectors = store * 2048;
+        ro = 0;
+    } else store = 0;
+    if (sectors < 0) { ufprintf(STDERR, "install: there is no disk %s (cat /proc/disks lists them; a SATA or SCSI disk is not seen: put the VM's disk on an IDE controller)\n", disk); return 1; }
     if (ro) { ufprintf(STDERR, "install: %s is read-only\n", disk); return 1; }
     if (disk_busy(disk)) { ufprintf(STDERR, "install: %s, or a partition of it, is mounted: umount it first\n", disk); return 1; }
     ustrcpy(src, "/mnt/c4pc");
@@ -283,6 +305,12 @@ int main(int argc, char **argv) {
     uprintf("\n");
     uprintf("  WARNING: EVERYTHING ON %s WILL BE ERASED: its partitions, its files,\n", disk);
     uprintf("  whatever system was on it. This cannot be undone.\n");
+    if (store) {
+        uprintf("\n");
+        uprintf("  It is persist's store now (drive 1), where this session's saved files\n");
+        uprintf("  are kept. They are in the system being installed, so they go onto the\n");
+        uprintf("  disk with it; the store itself is erased.\n");
+    }
     uprintf("\n");
     uprintf("  It becomes GRUB to boot from and one ext2 partition, %d MB, holding\n", p1 / 2048);
     uprintf("  the whole system (%d files, %d MB) and your files.\n", files, kb_all / 1024);
@@ -298,6 +326,16 @@ int main(int argc, char **argv) {
             uprintf("install: stopped; %s is as it was\n", disk);
             return 1;
         }
+    }
+    // the store's disk given up: a block device now (c4pc's store.c)
+    if (store) {
+        *(int *)DISK_EJECT = 1;
+        if ((k = disk_size(disk, &ro)) < 0) { ufprintf(STDERR, "install: the store's disk was not given up as %s (dmesg, and c4pc's log, say why)\n", disk); return 1; }
+        sectors = k;
+        p1 = (sectors - START) / 2048 * 2048;
+        uprintf("install: the store's disk is %s now, %d MB\n", disk, sectors / 2048);
+        // disk_size read /proc/disks into TEXT: the menu again
+        if ((cfgn = read_all(menu, text, 12000)) <= 0) { ufprintf(STDERR, "install: the boot disc has no %s\n", menu); return 1; }
     }
     // GRUB: core.img into the sectors before the first partition, then
     // boot.img and the partition table in sector 0

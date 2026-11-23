@@ -327,7 +327,8 @@ int wk_next_timer() {
 
 // ---- the clipboard ----------------------------------------------------------------
 
-int wk_clip_set(char *s, int n) {
+struct wk_clip_host wk_clip_host;
+static int clip_keep(char *s, int n) {
     char *t;
     if (n < 0) n = 0;
     if (!(t = wk_alloc(n + 1))) return 0;
@@ -337,7 +338,18 @@ int wk_clip_set(char *s, int n) {
     clip_text = t; clip_n = n;
     return 1;
 }
-char *wk_clip_get(int *n) { *n = clip_text ? clip_n : 0; return clip_text ? clip_text : ""; }
+int wk_clip_set(char *s, int n) {
+    if (!clip_keep(s, n)) return 0;
+    if (wk_clip_host.push) wk_clip_host.push(clip_text, clip_n);
+    return 1;
+}
+char *wk_clip_get(int *n) {
+    char *h;
+    int hn;
+    if (wk_clip_host.pull && wk_clip_host.pull(&h, &hn)) clip_keep(h, hn);
+    *n = clip_text ? clip_n : 0;
+    return clip_text ? clip_text : "";
+}
 
 // ---- menus ------------------------------------------------------------------------
 

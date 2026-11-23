@@ -191,6 +191,14 @@ void  wk_filebox(int owner, int dialog, int save, char *pattern, char *buf, int 
 // kit's own memory, so a paste after the copier has gone still has it
 int   wk_clip_set(char *s, int n);    // 1 if it took it
 char *wk_clip_get(int *n);
+// the host's clipboard (VMware's, through c4pc: the desktop's shell.c):
+// push, what was copied here; pull, the host's text into *S and *N when
+// it changed since (1; 0 when it did not), taken on the next paste here
+struct wk_clip_host {
+    int (*push)(char *s, int n);
+    int (*pull)(char **s, int *n);
+};
+extern struct wk_clip_host wk_clip_host;
 
 // ---- drawing (draw.c), only inside draw(): client-relative and clipped -----
 void d_rect(int x, int y, int w, int h, int rgb);

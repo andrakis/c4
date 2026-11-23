@@ -102,7 +102,7 @@ void boot_report() {
             *(int *)C4IX_DISK_DRIVE = k;
             ro = *(int *)C4IX_DISK_RO;
             klog("drive %d: %s%s\n", k, ro ? "read-only" : "writable",
-                k == 0 ? ", the boot disk" : (!ro ? ", where persist keeps changes" : ""));
+                k == 0 ? ", the boot disk" : (k == 1 && !ro ? ", where persist keeps changes" : ""));
             ++k;
         }
         *(int *)C4IX_DISK_DRIVE = cur;

@@ -93,7 +93,7 @@ if [ -n "${NO_QEMU:-}" ] || [ ! -x "$Q" ] || [ ! -f c4pc.elf ]; then
 else
   [ $W/disk.tar -nt $W/disk/wild.c ] || tar --format=ustar -h -C $W/disk -cf $W/disk.tar .
   rm -f $W/serial.txt
-  timeout 1800 "$Q" -m 512 -display none -no-reboot -serial file:$W/serial.txt \
+  timeout 1800 "$Q" -machine vmport=off -m 512 -display none -no-reboot -serial file:$W/serial.txt \
     -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
     -append "--no-cdrom -s --mmu --no-accel --no-osaccel -m 64 -c $CYC" -initrd "$W/c4ix32.c4r,$W/disk.tar drive,$W/in.txt stdin"
   st=$?

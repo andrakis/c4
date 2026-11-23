@@ -22,14 +22,17 @@ enum {
 };
 
 static int blk_lk[2];          // the registers: one command at a time, whichever CPU
-static int blk_scanned;        // the MBRs read
+static int blk_scanned;        // the MBRs read, of this many disks
+static int blk_ndisks;
 static int p_start[BLK_DISKS * 4];
 static int p_len[BLK_DISKS * 4];      // 0: no such partition
 static int p_type[BLK_DISKS * 4];
 
 static int disk_count() {
     int n;
-    if (!host_has(C4IX_I_BLK)) return 0;
+    // the machine asked again where the boot found no disks: c4pc offers
+    // the window once a disk is handed over (its store's, DISK_EJECT)
+    if (!host_has(C4IX_I_BLK) && !(__c4_info() & C4IX_I_BLK)) return 0;
     n = *(int *)BLK_COUNT;
     return n > BLK_DISKS ? BLK_DISKS : n;
 }
@@ -93,9 +96,12 @@ static void blk_scan(int d) {
 }
 static void blk_scan_all() {
     int d, n;
-    if (blk_scanned) return;
-    blk_scanned = 1;
+    // again where the disks are more than when they were read: one handed
+    // over (c4pc's store's, to install onto: DISK_EJECT)
     n = disk_count();
+    if (blk_scanned && n == blk_ndisks) return;
+    blk_scanned = 1;
+    blk_ndisks = n;
     d = 0;
     while (d < n) { blk_scan(d); ++d; }
 }
@@ -103,7 +109,7 @@ static void blk_scan_all() {
 // a device's disk, and its partition's slot (-1: the whole disk); 0 if ID is a device
 static int dev_split(int id, int *disk, int *slot) {
     if (id < 0) return 0 - 1;
-    if (id < BLK_DISKS) { *disk = id; *slot = 0 - 1; return id < disk_count() ? 0 : 0 - 1; }
+    if (id < BLK_DISKS) { *disk = id; *slot = 0 - 1; if (id >= disk_count()) return 0 - 1; blk_scan_all(); return 0; }
     if (id >= BLK_DISKS + BLK_DISKS * 4) return 0 - 1;
     *disk = (id - BLK_DISKS) / 4;
     *slot = id - BLK_DISKS;

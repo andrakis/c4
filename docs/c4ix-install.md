@@ -24,6 +24,18 @@ when it is done. Then take the CD out (or put the disk first in the VM's
 boot order) and `reboot`. The disk's own menu is the ISO's, from the
 disk.
 
+The desktop has an Install C4IX icon, and its Go menu an "Install
+C4IX..." item, when it was booted from the ISO and / is not on a disk
+already; either runs `install` in a terminal.
+
+A disk persist keeps its store on (c4pc's drive 1: a blank disk the ISO
+booted with, or one `--store` made) is no block device, so there is no
+hd0 at first. `install` then names the store's disk instead, warns that
+the store's saved files go with it, and after "yes" has c4pc give the
+disk up (DISK_EJECT on drive 1: pc/store.c hands its channel and
+position to ata.c, and it becomes block device 0); it is hd0 from then
+on, and the install goes on as above.
+
 The disk must hold the system's files (230 MB now) and an eighth more for
 ext2's own blocks, and 16 MB more: a VM's default disk is far bigger.
 

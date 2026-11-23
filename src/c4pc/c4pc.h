@@ -458,6 +458,17 @@ void gui_irq_taken(gui *g);
 void gui_tick(gui *g);
 void gui_mouse(gui *g, int dx256, int dy256, int buttons, int wheel);
 void gui_mouse_at(gui *g, int x, int y, int buttons);
+void gui_size(gui *g, int *w, int *h);  /* the display's, in its pixels */
+int gui_locked(gui *g);                 /* a program has the pointer (relative motion) */
+/* VMware's backdoor (pc/vmware.c): its absolute mouse, copy and paste,
+ * GuestRPC's requests and the shared folders, as a drive */
+int vmw_detect(int no_hb);
+int vmw_present(void);
+int vmw_mouse_init(void);
+int vmw_mouse(void);
+int vmw_mouse_poll(gui *g, int locked);
+struct drive *vmw_drive(void);
+int vmw_poll(void);
 void gui_key(gui *g, int down, int code, int ch, int mods);
 void gui_focus(gui *g, int on);
 int gui_attached(gui *g);

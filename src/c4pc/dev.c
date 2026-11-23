@@ -484,8 +484,9 @@ static i32 disk_unlink(machine *m, u32 name_addr) {
   if (!d || !d->writable || !d->sink) return -1;
   char *clean = w_path(d, rest);
   blob *b = smap_del(d->files, clean);
-  if (!b) { xfree(clean); return -1; }
-  blob_unref(b);
+  /* a drive whose files are elsewhere (VMware's) has none of them here */
+  if (!b && !d->remove) { xfree(clean); return -1; }
+  if (b) blob_unref(b);
   if (d->remove) d->remove(d, clean);
   xfree(clean);
   return 0;

@@ -53,8 +53,10 @@ typedef struct vm {
   vterm vt;                            /* its console as a text screen */
   char log[16384]; u32 logn;           /* its console, kept (LOG) */
   int mmu;                             /* 1 an MMU, 2 none, 0 as c4pc's --mmu says */
-  int cpus;                            /* its CPUs, taking turns on CPU 0's thread (smp.c): 1 to 8 */
-  i32 a[4], res;                       /* its own window's arguments and answer */
+  int cpus;                            /* its CPUs, taking turns (smp.c): 1 to 8 */
+  int cpu;                             /* the PC processor it runs on: one of the pool's, or 0 (hv_run) */
+  volatile int fin;                    /* halted on its processor: hv_run, on 0, finishes it */
+                                       /* (its window's arguments: wins, by its CPU) */
 } vm;
 static vm vms[HV_MAX];                 /* [0]: the control machine, VM 0 */
 static machine *ctl;
@@ -64,6 +66,20 @@ static char pend_name[32], pend_args[256];
 static u32 pend_mb = 64;
 static int pend_mmu, pend_cpus = 1;
 static int stopping;                   /* hv_stop_all: a guest that asks to restart halts instead */
+/* The PC's processors the machines run on (hv_pool, from pc.c): pool_lo
+ * to pool_hi - 1, a worker on each (guest_ap) running the guests given it
+ * in turn, as hv_run does on processor 0 when there are none. VM 0's CPUs
+ * have the processors below. What the machines share -- devices, the
+ * console, the disks, this file's tables -- is under the device lock
+ * (engine.c) then; a guest's halt is finished on processor 0 (hv_run) */
+static int pool_lo, pool_hi;
+static volatile int ap_kick[32];
+static void lk(int on) { if (eng_lock_fn) eng_lock_fn(on); }
+static void wake(int k) { if (k > 0) plat_kick(k, &ap_kick[k]); }
+/* the machine of VM 0's whose command this is: its memory is read and
+ * written through it, as the task that asked sees it -- with VM 0 on
+ * several processors, CPU 0's own machine had another task's space */
+static machine *cm;
 void hv_out(const char *s);            /* pc.c: to the serial line alone */
 
 static void outn(i64 v) { char b[24]; int k = 0; uint64_t x = v < 0 ? (uint64_t)-v : (uint64_t)v; do b[k++] = (char)('0' + x % 10); while (x /= 10); if (v < 0) b[k++] = '-'; char o[24]; int n = 0; while (k) o[n++] = b[--k]; o[n] = 0; hv_out(o); }
@@ -91,14 +107,14 @@ static void hv_wr(machine *m, u32 a, i32 val);
 
 /* a string at ADDR in VM 0's memory, into OUT (at most N - 1 bytes) */
 static void ctl_string(u32 addr, char *out, u32 n) {
-  u32 k = dma_cstring(ctl, addr, out, n - 1);
+  u32 k = dma_cstring(cm ? cm : ctl, addr, out, n - 1);
   out[k < n ? k : n - 1] = 0;
 }
 /* LEN bytes at ADDR in VM 0's memory, copied: 0 if they cannot be */
 static u8 *ctl_copy(u32 addr, u32 len) {
   if (!len || len > (256u << 20) || pc_heap_free_bytes < len + (64u << 20)) return 0;
   u8 *p = xmalloc(len);
-  if (dev_dma_read(ctl, addr, len, p) != len) { xfree(p); return 0; }
+  if (dev_dma_read(cm ? cm : ctl, addr, len, p) != len) { xfree(p); return 0; }
   return p;
 }
 
@@ -115,7 +131,7 @@ static struct xmap *xmap_new(u32 table, u32 n, u32 sectors) {
   struct xmap *x = xmalloc(sizeof *x);
   x->n = n; x->sectors = sectors;
   x->e = xmalloc((size_t)n * 16);
-  if (dev_dma_read(ctl, table, n * 16, (u8 *)x->e) != n * 16) { xfree(x->e); xfree(x); return 0; }
+  if (dev_dma_read(cm ? cm : ctl, table, n * 16, (u8 *)x->e) != n * 16) { xfree(x->e); xfree(x); return 0; }
   for (u32 k = 0; k < n; k++)
     if (x->e[4 * k + 1] >= (u32)ctl->nblk || x->e[4 * k + 2] + x->e[4 * k + 3] < x->e[4 * k + 2] ||
         x->e[4 * k + 2] + x->e[4 * k + 3] > ctl->blk[x->e[4 * k + 1]]->sectors) { xfree(x->e); xfree(x); return 0; }
@@ -169,6 +185,17 @@ static void release(vm *v) {
   if (m->gui) { extern void gui_release(gui *g); gui_release(m->gui); m->gui = 0; }
   if (m->snd) { snd_free(m->snd); m->snd = 0; }
 }
+/* the pool's processor with the fewest machines on it, or 0 */
+static int pick_cpu(int id) {
+  if (pool_hi <= pool_lo) return 0;
+  int best = pool_lo, bn = 1 << 30;
+  for (int k = pool_lo; k < pool_hi; k++) {
+    int n = 0;
+    for (int j = 1; j < HV_MAX; j++) if (j != id && vms[j].cpu == k && (vms[j].state == S_RUN || vms[j].state == S_PAUSE)) n++;
+    if (n < bn) { bn = n; best = k; }
+  }
+  return best;
+}
 static int start(int id) {
   vm *v = &vms[id];
   if (v->state != S_MADE && v->state != S_HALT) return -1;
@@ -194,10 +221,11 @@ static int start(int id) {
    * smp_new, whose CPUs share it */
   if (ctl->snd) m->snd = snd_new(m, 44100, 1);
   if (v->cpus > 1) smp_new(m, v->cpus, 0);  /* its CPUs take turns (machine_run runs them) */
-  /* its CPUs past 0 keep their accelerators' state where VM 0's on the
-   * PC's other processors keep theirs (accel.h, by cpu_id): with VM 0 on
-   * several at once (par.c), such a guest has none */
-  if (v->cpus > 1 && ctl->smp && ctl->smp->par) m->accel = m->osaccel = 0;
+  /* its processor; its CPUs, in turns there, hold their accelerators'
+   * writes in that processor's place (accel.h acc_k), apart from VM 0's */
+  v->cpu = pick_cpu(id);
+  m->acc_k = v->cpu;
+  if (m->smp) for (int k = 0; k < m->smp->n; k++) m->smp->cpu[k]->acc_k = v->cpu;
   m->gui = gui_new(m, hv_w, hv_h);
   vt_init(&v->vt, 0);
   m->dv->hv_rd = hv_rd; m->dv->hv_wr = hv_wr; m->dv->hv_id = id;
@@ -215,9 +243,14 @@ static int start(int id) {
   }
   argv[argc] = 0;
   if (machine_boot(m, v->img, v->img_len, argc, argv)) { hv_out("c4pc: hv: vm"); outn(id); hv_out(" did not boot\n"); return -3; }
-  v->m = m; v->state = S_RUN; v->nap_until = 0; v->ll = 0;
+  v->m = m; v->nap_until = 0; v->ll = 0; v->fin = 0;
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  __atomic_store_n(&v->state, S_RUN, __ATOMIC_RELEASE);     /* its processor's worker may take it now */
   glog(v, "c4pc: started\n");
-  hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(v->name); hv_out(" started, "); outn(v->mb); hv_out(" MB\n");
+  hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(v->name); hv_out(" started, "); outn(v->mb); hv_out(" MB");
+  if (v->cpu) { hv_out(", on processor "); outn(v->cpu); }
+  hv_out("\n");
+  wake(v->cpu);
   return 0;
 }
 
@@ -268,7 +301,15 @@ const u16 *hv_text(machine *m, int *cur) {
 /* a key from the PC's keyboard, for the attached guest if it shows its text
  * screen: given to it as a terminal would (echoed, backspace taken back,
  * ^C its SIGINT, ^D its end of input), unless it reads the keys raw */
+static int hv_key_(int c);
 int hv_key(int c) {
+  lk(1);
+  int r = hv_key_(c);
+  if (r && attached) wake(vms[attached].cpu);
+  lk(-1);
+  return r;
+}
+static int hv_key_(int c) {
   if (!attached || vms[attached].state != S_RUN || !text_shown(&vms[attached])) return 0;
   vm *v = &vms[attached];
   machine *g = v->m;
@@ -299,6 +340,7 @@ static i32 info(int id, u32 addr, u32 len) {
   PUT("id "); NUM(id); PUT("\nname "); PUT(id ? v->name : "control"); PUT("\nstate "); PUT(id ? STATE_NAME[v->state] : "running");
   PUT("\nmb "); NUM(id ? v->mb : ctl->size >> 20);
   if (id && v->m) { PUT("\ncycles "); NUM((uint64_t)v->m->cycle); }
+  if (id && (v->state == S_RUN || v->state == S_PAUSE)) { PUT("\nprocessor "); NUM(v->cpu); }
   /* each CPU's instructions so far (Machines' Load): the guest's, or VM 0's */
   { machine *cm = id ? v->m : ctl;
     if (cm && cm->smp) for (int k = 0; k < cm->smp->n && k < 16; k++) { PUT("\ncpu"); NUM(k); PUT(" "); NUM((uint64_t)cm->smp->cpu[k]->cycle); }
@@ -313,7 +355,7 @@ static i32 info(int id, u32 addr, u32 len) {
   b[n] = 0;
   if ((u32)n + 1 > len) n = (int)len - 1;
   if (n < 0) return -1;
-  dev_dma_write(ctl, addr, (const u8 *)b, (u32)n + 1);
+  dev_dma_write(cm ? cm : ctl, addr, (const u8 *)b, (u32)n + 1);
   return n;
 }
 
@@ -325,13 +367,23 @@ static void resume(int id) {
   v->m->wall_base += d;
   if (v->nap_until) v->nap_until += d;
   v->state = S_RUN;
+  wake(v->cpu);
   hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(v->name); hv_out(" resumed\n");
 }
 
+/* the window's arguments and answer, a set for each CPU of each machine:
+ * with VM 0 on several processors, Machines asking once a second on one
+ * CPU wrote its arguments between those of `vm up` on another, and a
+ * guest started with 4 MB and 8 CPUs */
+static i32 wins[HV_MAX][32][5];
+static i32 *win(machine *m) { return wins[vm_of(m)][m->cpu_id & 31]; }
+static i32 win_args[4];
 static i32 command(machine *m, i32 c) {
   int me = vm_of(m);
-  vm *v = &vms[me];
-  i32 *a = v->a;
+  cm = m;
+  vm *v = &vms[me]; (void)v;
+  i32 *a = win_args;
+  memcpy(a, win(m), sizeof win_args);
   if (c == C_DETACH) { hv_attach(0); return 0; }
   if (c == C_ATTACHED) return attached;
   if (me != 0) return -1;              /* the rest are the control machine's */
@@ -364,9 +416,10 @@ static i32 command(machine *m, i32 c) {
     case C_SEND: {
       if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state != S_RUN || a[2] < 0 || a[2] > 4096) return -1;
       char b[4096];
-      if (dev_dma_read(ctl, (u32)a[1], (u32)a[2], (u8 *)b) != (u32)a[2]) return -1;
+      if (dev_dma_read(cm ? cm : ctl, (u32)a[1], (u32)a[2], (u8 *)b) != (u32)a[2]) return -1;
       for (i32 k = 0; k < a[2]; k++) kbd_push(vms[a[0]].m, (u8)b[k]);
       vms[a[0]].nap_until = 0;
+      wake(vms[a[0]].cpu);
       return a[2];
     }
     case C_STOP: {
@@ -376,6 +429,8 @@ static i32 command(machine *m, i32 c) {
       /* SIGTERM, as the power button: C4IX shuts down; or at once (A1) */
       if (a[1] || !g->sigh[15]) { g->halted = 1; g->status = 0; }
       else g->pending_signal = 15;
+      vms[a[0]].nap_until = 0;
+      wake(vms[a[0]].cpu);
       return 0;
     }
     case C_ATTACH: hv_attach(a[0]); return attached == a[0] ? 0 : -1;
@@ -398,12 +453,12 @@ static i32 command(machine *m, i32 c) {
         xfree(t);
       } else if (gui_thumb(a[0] ? vms[a[0]].m->gui : ctl->gui, px, a[2], a[3]) < 0) { xfree(px); return -1; }
 #if WB == 4
-      u32 got = dev_dma_write(ctl, (u32)a[1], (const u8 *)px, n * 4);
+      u32 got = dev_dma_write(cm ? cm : ctl, (u32)a[1], (const u8 *)px, n * 4);
 #else
       u8 *wb = xmalloc((size_t)n * WB);
       memset(wb, 0, (size_t)n * WB);
       for (u32 k = 0; k < n; k++) memcpy(wb + (size_t)k * WB, &px[k], 4);
-      u32 got = dev_dma_write(ctl, (u32)a[1], wb, n * WB) / (WB / 4);
+      u32 got = dev_dma_write(cm ? cm : ctl, (u32)a[1], wb, n * WB) / (WB / 4);
       xfree(wb);
 #endif
       xfree(px);
@@ -426,7 +481,7 @@ static i32 command(machine *m, i32 c) {
         for (u32 k = 0; k < n; k++) b[k] = g->log[(g->logn - n + k) % sizeof g->log];
       }
       b[n] = 0;
-      dev_dma_write(ctl, (u32)a[0], (const u8 *)b, n + 1);
+      dev_dma_write(cm ? cm : ctl, (u32)a[0], (const u8 *)b, n + 1);
       xfree(b);
       return (i32)n;
     }
@@ -451,7 +506,7 @@ static i32 command(machine *m, i32 c) {
       u32 max = (u32)a[1] > 4096 ? 4096 : (u32)a[1];
       char *b = xmalloc(max);
       u32 n = pc_host_info(b, max);
-      dev_dma_write(ctl, (u32)a[0], (const u8 *)b, n + 1);
+      dev_dma_write(cm ? cm : ctl, (u32)a[0], (const u8 *)b, n + 1);
       xfree(b);
       return (i32)n;
     }
@@ -484,21 +539,21 @@ static i32 command(machine *m, i32 c) {
 }
 
 static i32 hv_rd(machine *m, u32 a) {
-  vm *v = &vms[vm_of(m)];
+  i32 *w = win(m);
   switch (a) {
     case R_ID: return vm_of(m);
-    case R_A0: return v->a[0]; case R_A1: return v->a[1]; case R_A2: return v->a[2]; case R_A3: return v->a[3];
-    case R_RES: return v->res;
+    case R_A0: return w[0]; case R_A1: return w[1]; case R_A2: return w[2]; case R_A3: return w[3];
+    case R_RES: return w[4];
     case R_COUNT: return HV_MAX;
   }
   return 0;
 }
 static void hv_wr(machine *m, u32 a, i32 val) {
-  vm *v = &vms[vm_of(m)];
+  i32 *w = win(m);
   switch (a) {
-    case R_A0: v->a[0] = val; return; case R_A1: v->a[1] = val; return;
-    case R_A2: v->a[2] = val; return; case R_A3: v->a[3] = val; return;
-    case R_CMD: v->res = command(m, val); return;
+    case R_A0: w[0] = val; return; case R_A1: w[1] = val; return;
+    case R_A2: w[2] = val; return; case R_A3: w[3] = val; return;
+    case R_CMD: w[4] = command(m, val); return;
   }
 }
 
@@ -512,14 +567,62 @@ void hv_init(machine *m, double mhz, int mmu_on, int w, int h) {
 
 /* a turn for each runnable guest: 1 if any ran */
 void pc_audio(void);                    /* pc.c: the card under VM 0's, polled */
+/* a pool processor's worker: its guests' slices in turn, napping until the
+ * soonest wakes (or it is kicked: started, resumed, typed at, stopped) */
+static void guest_ap(int k) {
+  for (;;) {
+    int seen = __atomic_load_n(&ap_kick[k], __ATOMIC_SEQ_CST), ran = 0;
+    i64 now = plat_now_ms(), soon = now + 100;
+    for (int id = 1; id < HV_MAX; id++) {
+      vm *v = &vms[id];
+      if (v->cpu != k || __atomic_load_n(&v->state, __ATOMIC_ACQUIRE) != S_RUN || v->fin) continue;
+      machine *m = v->m;
+      if (!m->halted && v->nap_until > now) { if (v->nap_until < soon) soon = v->nap_until; continue; }
+      int r = m->halted ? STOP_HALT : machine_run(m, (i64)m->cycles_per_ms * 4);
+      ran = 1;
+      lk(1);
+      if (m->gui) gui_tick(m->gui);
+      if (r == STOP_HALT || m->halted) v->fin = 1;           /* hv_run finishes it */
+      else if (r == STOP_SLEEP) v->nap_until = m->wall_base + m->nap_until;
+      else if (r == STOP_INPUT) v->nap_until = now + 10;
+      lk(-1);
+      now = plat_now_ms();
+    }
+    if (!ran) {
+      i64 ms = soon - plat_now_ms();
+      if (ms > 0) plat_wait(k, &ap_kick[k], seen, (int)(ms > 100 ? 100 : ms));
+    }
+  }
+}
+/* the pool (pc.c, before VM 0 boots): processors LO to HI - 1 */
+void hv_pool(int lo, int hi) {
+  if (!ctl || hi <= lo || lo < 1 || hi > 32) return;
+  extern void pc_lock(int); extern int pc_lock_depth(void);
+  eng_lock_fn = pc_lock; eng_lock_depth_fn = pc_lock_depth;
+  pool_lo = lo; pool_hi = hi;
+  for (int k = lo; k < hi; k++) plat_cpu_start(k, guest_ap);
+  hv_out(hi - 1 > lo ? "c4pc: hv: the machines on processors " : "c4pc: hv: the machines on processor "); outn(lo);
+  if (hi - 1 > lo) { hv_out(" to "); outn(hi - 1); }
+  hv_out(", VM 0 on "); hv_out(lo > 1 ? "those below\n" : "processor 0\n");
+}
+
+static int hv_run_(void);
 int hv_run(void) {
   if (!ctl) return 0;
+  lk(1);
+  int r = hv_run_();
+  lk(-1);
+  return r;
+}
+static int hv_run_(void) {
   int busy = 0;
   i64 now = plat_now_ms();
   for (int id = 1; id < HV_MAX; id++) {
     vm *v = &vms[id];
     if (v->state != S_RUN) continue;
     machine *m = v->m;
+    /* on a processor of its own: here only to be finished, once halted */
+    if (v->cpu) { if (!v->fin) continue; v->fin = 0; m->halted = 1; }
     if (!m->halted && v->nap_until > now) continue;
     int r = m->halted ? STOP_HALT : machine_run(m, (i64)m->cycles_per_ms * 4);
     busy = 1;
@@ -561,6 +664,7 @@ int hv_stop_all(void) {
     if (v->state != S_RUN) continue;
     if (v->m->sigh[15]) v->m->pending_signal = 15; else { v->m->halted = 1; v->m->status = 0; }
     v->nap_until = 0;
+    wake(v->cpu);
     n++;
   }
   return n;
@@ -590,7 +694,7 @@ void hv_stop_rest(void) {
 i64 hv_next_wake(void) {
   i64 best = -1;
   for (int id = 1; id < HV_MAX; id++)
-    if (vms[id].state == S_RUN && (best < 0 || vms[id].nap_until < best)) best = vms[id].nap_until;
+    if (vms[id].state == S_RUN && !vms[id].cpu && (best < 0 || vms[id].nap_until < best)) best = vms[id].nap_until;
   return best;
 }
 int hv_on(void) { return ctl != 0; }

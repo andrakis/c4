@@ -28,6 +28,33 @@ void pc_logn(i64 v);
 void cpu_init_ap(void);
 
 static volatile u32 *lapic;
+static uintptr_t stk_lo, stk_hi;             /* the other processors' stacks */
+
+/* this processor's number: 0 the boot one, k the one on stack k - 1
+ * (aptramp.S: processor n, from 0, has the stack below stacks + (n+1) x size) */
+int plat_self(void) {
+  uintptr_t sp = (uintptr_t)__builtin_frame_address(0);
+  return sp >= stk_lo && sp < stk_hi ? (int)((sp - stk_lo) / STACK_SIZE) + 1 : 0;
+}
+
+/* the device lock (engine.c eng_lock_fn, set by hv.c): one processor at a
+ * time, taken again by the one that holds it as often as it likes */
+static volatile int dl_flag, dl_owner = -1;
+static int dl_depth[MAXCPU];
+void pc_lock(int on) {
+  int me = plat_self();
+  if (on > 0) {
+    if (__atomic_load_n(&dl_owner, __ATOMIC_ACQUIRE) == me) { dl_depth[me]++; return; }
+    while (__atomic_exchange_n(&dl_flag, 1, __ATOMIC_ACQUIRE))
+      while (__atomic_load_n(&dl_flag, __ATOMIC_RELAXED)) __builtin_ia32_pause();
+    __atomic_store_n(&dl_owner, me, __ATOMIC_RELAXED);
+    dl_depth[me] = 1;
+  } else if (__atomic_load_n(&dl_owner, __ATOMIC_ACQUIRE) == me && dl_depth[me] > 0 && --dl_depth[me] == 0) {
+    __atomic_store_n(&dl_owner, -1, __ATOMIC_RELAXED);
+    __atomic_store_n(&dl_flag, 0, __ATOMIC_RELEASE);
+  }
+}
+int pc_lock_depth(void) { int me = plat_self(); return __atomic_load_n(&dl_owner, __ATOMIC_ACQUIRE) == me ? dl_depth[me] : 0; }
 static int ncpu = 1;
 static volatile int apic_id[MAXCPU];
 static volatile int up[MAXCPU];
@@ -97,6 +124,7 @@ int ap_start(int want, const char **why) {
   u8 *stacks = xmalloc((size_t)STACK_SIZE * MAXCPU + 16);
   TW(ap_tramp_count) = 0;
   TW(ap_tramp_stacks) = (u32)(((uintptr_t)stacks + 15) & ~(uintptr_t)15);
+  stk_lo = ((uintptr_t)stacks + 15) & ~(uintptr_t)15; stk_hi = stk_lo + (uintptr_t)STACK_SIZE * MAXCPU;
   TW(ap_tramp_stack_size) = STACK_SIZE;
   uintptr_t cr0, cr3, cr4;
   __asm__ volatile("mov %%cr0, %0" : "=r"(cr0)); __asm__ volatile("mov %%cr3, %0" : "=r"(cr3)); __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));

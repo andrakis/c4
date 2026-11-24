@@ -32,11 +32,11 @@ static void sink_init(sink_t *o, machine *m, int held) {
   o->m = m; o->held = held; rw_init(&o->wr, m);
   if (held) hold_begin(&acc_hold);
 }
-static inline void put(sink_t *o, i32 x, i32 v) { if (o->held) hold_put(&acc_holds[o->m->cpu_id], x, v); else wr8(&o->wr, x, v); }
+static inline void put(sink_t *o, i32 x, i32 v) { if (o->held) hold_put(&acc_holds[o->m->acc_k], x, v); else wr8(&o->wr, x, v); }
 static void done(sink_t *o) {
   if (!o->held) return;
-  hold_probe(o->m, &acc_holds[o->m->cpu_id], 1);
-  hold_write8(o->m, &acc_holds[o->m->cpu_id]);
+  hold_probe(o->m, &acc_holds[o->m->acc_k], 1);
+  hold_write8(o->m, &acc_holds[o->m->acc_k]);
 }
 
 /* TA_SUM (h, pal, pixels, w, hgt, pitch): tyrian-sum.c's checksum */

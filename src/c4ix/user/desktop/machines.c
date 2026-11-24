@@ -54,6 +54,7 @@ struct machines {
     int n, sel, tab;                     // sel: 0 c4pc, 1 the control C4IX, 2.. a machine
     char name[MAXM * NAMEW];
     int id[MAXM], state[MAXM], mb[MAXM], cfg[MAXM], ncpu[MAXM];
+    int proc[MAXM];                      // the PC processor a machine runs on (its INFO's "processor")
     long long cyc[MAXM];
     long long ccyc[MAXM * MAXC];         // each CPU's instructions, at the last look
     int rate[MAXM];                      // thousands of instructions a second
@@ -246,6 +247,8 @@ static void cpus_from_info(struct machines *t, int k, int dt) {
         ++c; ++nc;
     }
     t->ncpu[k] = nc ? nc : 1;
+    line_get(info_buf, "processor", buf, 20);
+    t->proc[k] = buf[0] ? (int)num_of(buf) : 0;
     ++t->nchist[k];
 }
 
@@ -317,7 +320,7 @@ static void refresh(struct machines *t) {
                 ui_cpy(mname(t, i), mname(t, i + 1));
                 t->id[i] = t->id[i + 1]; t->state[i] = t->state[i + 1]; t->mb[i] = t->mb[i + 1]; t->cfg[i] = t->cfg[i + 1];
                 t->cyc[i] = t->cyc[i + 1]; t->rate[i] = t->rate[i + 1]; t->nhist[i] = t->nhist[i + 1];
-                t->ncpu[i] = t->ncpu[i + 1]; t->nchist[i] = t->nchist[i + 1];
+                t->ncpu[i] = t->ncpu[i + 1]; t->nchist[i] = t->nchist[i + 1]; t->proc[i] = t->proc[i + 1];
                 memcpy((char *)(t->hist + i * HIST), (char *)(t->hist + (i + 1) * HIST), HIST * sizeof(int));
                 memcpy((char *)(t->chist + i * MAXC * HIST), (char *)(t->chist + (i + 1) * MAXC * HIST), MAXC * HIST * sizeof(int));
                 memcpy((char *)(t->ccyc + i * MAXC), (char *)(t->ccyc + (i + 1) * MAXC), MAXC * sizeof(long long));
@@ -944,6 +947,40 @@ static int host_cpus(int *used) {
     if (n < *used) n = *used;
     return n;
 }
+// processor C's machines: their CPUs' instructions a second, added up
+// (each machine's history ends now), and their names onto buf
+static int psum[HIST];
+static void proc_graph(struct machines *t, int c, int gx, int gy, int gw, int gh) {
+    int j, i, q, n, at, named;
+    n = 0; i = 0; named = 0;
+    while (i < HIST) { psum[i] = 0; ++i; }
+    j = CTL + 1;
+    while (j < t->n) {
+        if (t->state[j] == S_RUN && t->proc[j] == c) {
+            ui_cat(buf, named ? ", " : " ");
+            ui_cat(buf, mname(t, j));
+            ++named;
+            if (t->nchist[j] > n) n = t->nchist[j];
+            q = 0;
+            while (q < t->ncpu[j] && q < MAXC) {
+                i = 0;
+                while (i < t->nchist[j]) {
+                    at = HIST - t->nchist[j] + i;
+                    psum[at] = psum[at] + t->chist[(j * MAXC + q) * HIST + i];
+                    ++i;
+                }
+                ++q;
+            }
+        }
+        ++j;
+    }
+    d_text(gx, gy - 16, C_DARK, F_SANS, buf);
+    if (n) graph(psum + HIST - n, n, gx, gy, gw, gh, 0);
+    else {
+        d_rect(gx, gy, gw, gh, C_DARK);
+        d_text(gx + 8, gy + 8, 0xa0a0a0, F_SANS, "no machine on it now");
+    }
+}
 static void draw_load(struct machines *t, int x, int y, int w, int h) {
     int k, c, n, cols, rows, gw, gh, gx, gy, used;
     k = t->sel;
@@ -961,6 +998,13 @@ static void draw_load(struct machines *t, int x, int y, int w, int h) {
             // the PC's processor C: CPU 0's time busy; one c4pc runs the
             // control C4IX's CPU C on, its instructions; one unused, said
             ui_cpy(buf, "Processor "); ui_num(buf + 10, c);
+            if (c > 0 && c >= t->ncpu[CTL] && c < used) {
+                // one of the machines' (hv.c's pool): theirs, added up
+                ui_cat(buf, ": machines, instructions a second:");
+                proc_graph(t, c, gx, gy + 16, gw, gh);
+                ++c;
+                continue;
+            }
             ui_cat(buf, c == 0 ? ": its time busy, %" : c < used ? ": the control's CPU, instructions a second" : ": not used by c4pc");
             d_text(gx, gy, C_DARK, F_SANS, buf);
             if (c == 0) graph(t->chist, t->nchist[0], gx, gy + 16, gw, gh, 100);
@@ -977,7 +1021,11 @@ static void draw_load(struct machines *t, int x, int y, int w, int h) {
         }
         ++c;
     }
-    if (k == 0) d_text(x, y + h - 14, C_DARK, F_SANS, "c4pc's CPU 0 runs the control C4IX's CPU 0 and the machines in turn");
+    if (k == 0 && used > t->ncpu[CTL]) {
+        ui_cpy(buf, "Machines: processors "); ui_num(buf + 21, t->ncpu[CTL]);
+        ui_cat(buf, " and up, a machine on the one with fewest; the control C4IX: those below");
+        d_text(x, y + h - 14, C_DARK, F_SANS, buf);
+    } else if (k == 0) d_text(x, y + h - 14, C_DARK, F_SANS, "c4pc's CPU 0 runs the control C4IX's CPU 0 and the machines in turn");
 }
 
 // Log: its source's lines (c4pc's, the control's, a guest's), scrolled

@@ -38,14 +38,37 @@ are the plan.
 | 15 SEND | bytes (A1, A2) typed at a guest's console | VM 0 |
 | 16 THUMB | a running guest's screen scaled to A2 x A3 (at most 640x480), a word a pixel at A1 | VM 0 |
 
-- **The guests run on CPU 0's thread**, in turn with VM 0: a slice of
-  4 ms of each runnable guest after each of VM 0's, and while VM 0 naps;
-  a guest naps as VM 0 does, on the real clock. Each has its own arena,
-  display (drawn off screen unless attached; its screens and Alt+Tab
-  its own, but no modes: it is scaled into VM 0's), drives and console (the
-  serial line's, a line at a time, "vm1 NAME: ..."). Their accelerators
-  are off (theirs keep state a CPU at a time, which VM 0's CPU 0 has
-  already), and they have no swap of the host's.
+- **Every processor**: under `--hv` c4pc starts all the PC's processors.
+  VM 0's CPUs have the first (`--cpus N`; half of them, rounded up, when
+  it does not say: 4 of 8, 1 of 2), each on one of its own (par.c), and
+  the machines the rest (hv.c's pool: "c4pc: hv: the machines on
+  processors 4 to 7"): a guest goes to the pool's processor with fewest
+  on it, whose worker (guest_ap) runs its guests' slices of 4 ms in turn
+  and naps until the soonest wakes or it is kicked (started, resumed,
+  typed at, stopped). A guest's CPUs take turns there (smp.c). On a PC
+  of one processor, or with VM 0 on all of them, the guests run on
+  processor 0 in turn with VM 0, a slice of each after each of VM 0's
+  and while VM 0 naps (hv_run). A guest naps as VM 0 does, on the real
+  clock. Each has its own arena, display (drawn off screen unless
+  attached; its screens and Alt+Tab its own, but no modes: it is scaled
+  into VM 0's), drives, sound card (heard while attached) and console
+  (the serial line's, a line at a time, "vm1 NAME: ..."); no swap of the
+  host's. Their accelerators hold their writes in their processor's
+  place (accel.h acc_k), apart from VM 0's CPUs.
+- **The device lock**: with a pool, what the machines share is one
+  processor's at a time (engine.c eng_lock_fn, pc/ap.c pc_lock): every
+  machine's device registers, rare opcodes (OPEN, READ, PRTF ...) and
+  console, c4pc's own console, the screen and the sound card's mixing.
+  Their scratch buffers, the font cache, the drives' caches and the IDE
+  disks are the PC's, not a machine's; the instructions between run side
+  by side. The lock is taken again by the processor that holds it, and
+  a fault out of a device (a DMA a task's space refuses), which jumps
+  past the unlock, gives it back at the catch it lands in (mmu.c's,
+  par.c's). A guest that halts on its processor is finished on processor
+  0 (hv_run: the screen given back, its memory freed, a restart).
+- **VM 0's commands** read and write its memory through the machine of
+  the CPU that asked (with VM 0 on several processors, CPU 0's machine
+  had another task's space: a guest started with another's arguments).
 - **Disks (Q3: images on the disk)**: a guest's hd0 is a file on VM 0's
   ext2, read and written where it lies on the PC's IDE disk: C4IX's
   SYS_FMAP (257) says where a file keeps each block (the disk, the
@@ -171,8 +194,11 @@ tabs:
   and Apply writes vm.cfg, for the machine's next start. For c4pc,
   Hardware is what c4pc found of the PC.
 - **Load**: each of its CPUs' instructions a second, the last minute (a
-  machine of several CPUs: them taking turns on CPU 0's thread, smp.c);
-  for c4pc, CPU 0's time busy.
+  machine of several CPUs: them taking turns on its processor, smp.c);
+  for c4pc, a graph for each of the PC's processors (the firmware's
+  count): processor 0's time busy, the control's CPUs on theirs, and on
+  each of the pool's the instructions of the machines on it, added up,
+  with their names (INFO's "processor").
 - **Log**: its own: c4pc's (its boot, the hypervisor's words), the
   control C4IX's console, or a machine's console (LOG, 17: A2 0, 1, or
   its id + 1), scrolled with the bar, the wheel or Page Up and Down.

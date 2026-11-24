@@ -63,6 +63,7 @@ smp *smp_new(machine *m0, int n, i32 quantum) {
     machine *m = i == 0 ? m0 : cpu_new(m0);
     m->smp = s;
     m->cpu_id = i;
+    m->acc_k = i;                      /* par.c: CPU i on processor i; smp.c: in turns, apart all the same */
     m->cpu_state = i == 0 ? CPU_RUN : CPU_OFF;
     m->ipi_pending = 0;
     m->wait_addr = m->wait_val = m->cpu_status = 0;

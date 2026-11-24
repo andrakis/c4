@@ -687,6 +687,8 @@ void wk_screen(int w, int h) {
 
 void wk_init(struct wk_shell *s) {
     shell = s;
+    // black on white, for a shell that set no scheme (text and field are the scheme's)
+    if (!wk.text && !wk.field) wk.field = 0xffffff;
     if (!next_id) next_id = 1;
     wk.sw = gui_width(); wk.sh = gui_height();
     if (wk.sw <= 0) wk.sw = 640;

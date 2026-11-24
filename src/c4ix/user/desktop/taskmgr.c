@@ -378,7 +378,7 @@ static void draw_procs(struct tasks *t, int ox, int oy, int cw, int ch) {
 // NT's gauge: green bars on black, lit from the bottom up to the usage.
 static void gauge(int x, int y, int w, int h, int pct) {
     int k, n, lit, by;
-    d_rect(x, y, w, h, C_DARK);
+    d_rect(x, y, w, h, 0x000000);
     n = (h - 22) / 3;
     lit = (n * pct + 50) / 100;
     k = 0;
@@ -395,7 +395,7 @@ static void gauge(int x, int y, int w, int h, int pct) {
 // a minute of percentages, newest at the right: CPU use, or memory's
 static void graph(int *hist, int nhist, int x, int y, int w, int h) {
     int k, gx, px, py, qx, qy;
-    d_rect(x, y, w, h, C_DARK);
+    d_rect(x, y, w, h, 0x000000);
     k = 1;
     while (k < 5) { d_rect(x, y + (h * k) / 5, w, 1, 0x006000); ++k; }
     gx = (nhist * 12) % 12;
@@ -419,7 +419,7 @@ static void memory(struct tasks *t, int x, int y, int w, int h) {
     int fill;
     ui_group(x, y, w, h, "Memory");
     if (t->heap <= 0) { d_text(x + 12, y + 20, C_DARK, F_SANS, "not known on this host"); return; }
-    d_rect(x + 12, y + 20, w - 24, 12, C_DARK);
+    d_rect(x + 12, y + 20, w - 24, 12, 0x000000);
     fill = (int)(((long long)(w - 26) * t->heapused) / t->heap);
     d_rect(x + 13, y + 21, fill, 10, C_GREEN);
     d_text(x + 12, y + 40, C_DARK, F_SANS, "In use (MB)");
@@ -463,7 +463,7 @@ static void swapbox(struct tasks *t, int x, int y, int w, int h) {
         return;
     }
     used = t->swap - t->swapfree;
-    d_rect(x + 12, y + 20, w - 24, 12, C_DARK);
+    d_rect(x + 12, y + 20, w - 24, 12, 0x000000);
     fill = (int)(((long long)(w - 26) * used) / t->swap);
     d_rect(x + 13, y + 21, fill, 10, C_GREEN);
     d_text(x + 12, y + 40, C_DARK, F_SANS, "On swap (MB)");

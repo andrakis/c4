@@ -52,6 +52,8 @@ struct wk_env {
     int desk, face, light, shadow;    // the scheme's colours (Settings)
     int title, title2, ititle, ititle2, sel;
     int fsans, fbold, fsize;          // the interface's font (wk_font_use): F_SANS's, F_BOLD's, a size step
+    int text, field;                  // the scheme's text, and what text is written on (fields, lists):
+                                      // black and white but in a dark scheme (last: grin's table)
 };
 // A grin application (compiled with -D WK_IMPORT, src/grin/import.c) has
 // no wk of its own: it reads grin's, through the pointer grin publishes
@@ -63,9 +65,13 @@ extern struct wk_env *wk_import_env;
 extern struct wk_env wk;
 #endif
 
-// colours: these never change...
-enum { C_DARK = 0x000000, C_WHITE = 0xffffff, C_GREEN = 0x00ff00 };
-// ... and these are the scheme's
+// colours: this never changes...
+enum { C_GREEN = 0x00ff00 };
+// ... and these are the scheme's: C_DARK is text (and lines drawn as text
+// is), C_WHITE what text is written on and the selection's text -- black
+// and white, but the other way about in a dark scheme (Hypervisor's)
+#define C_DARK    (wk.text)
+#define C_WHITE   (wk.field)
 #define C_DESK    (wk.desk)
 #define C_FACE    (wk.face)
 #define C_LIGHT   (wk.light)

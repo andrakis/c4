@@ -775,7 +775,7 @@ void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     t = T(w);
     // only the canvas being drawn again (a frame): it covers all of that
     if (t->gfx && d_damage_within(ox + 2, oy + 2, t->gw, t->gh)) { gfx_draw(t, ox + 2, oy + 2); return; }
-    d_rect(ox, oy, cw, ch, C_DARK);
+    d_rect(ox, oy, cw, ch, 0x000000);
     if (t->gfx) { d_bevel(ox, oy, t->gw + 4, t->gh + 4, B_SUNKEN); gfx_draw(t, ox + 2, oy + 2); return; }
     d_bevel(ox, oy, TG_W, TG_H, B_SUNKEN);
     if (t->g) tg_draw(t->g, ox + 2, oy + 2, focused && !t->ended);

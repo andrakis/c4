@@ -391,11 +391,11 @@ static void icon(int x, int y, char *label, int kind) {
         gui_rect(x + 17, y + 10, 14, 2, 0x2050c0); gui_rect(x + 19, y + 12, 10, 2, 0x2050c0); gui_rect(x + 21, y + 14, 6, 2, 0x2050c0);
     } else if (kind == K_TERM) {
         gui_rect(x + 8, y, 32, 26, C_FACE); d_bevel(x + 8, y, 32, 26, B_RAISED);
-        gui_rect(x + 11, y + 3, 26, 18, C_DARK);
+        gui_rect(x + 11, y + 3, 26, 18, 0x000000);
         gui_text2(x + 13, y + 5, 0xc0c0c0, 10, F_MONO, 0, ">_", 2);
         gui_rect(x + 12, y + 28, 24, 3, C_FACE);
     } else {
-        gui_rect(x + 14, y + 4, 20, 24, C_WHITE); gui_recto(x + 14, y + 4, 20, 24, C_SHADOW);
+        gui_rect(x + 14, y + 4, 20, 24, 0xffffff); gui_recto(x + 14, y + 4, 20, 24, C_SHADOW);
         if (kind == K_NOTE) { gui_rect(x + 17, y + 10, 14, 1, 0x4060c0); gui_rect(x + 17, y + 14, 14, 1, 0x4060c0); gui_rect(x + 17, y + 18, 10, 1, 0x4060c0); }
         else d_icon(kind, x + 16, y + 8);
     }

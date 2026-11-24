@@ -171,12 +171,19 @@ stop, start again, mount: the file read back from the image.
 The control C4IX's desktop (only where the hypervisor is: its own colour
 scheme, "Hypervisor") opens **Machines** and System Monitor as it starts,
 and has Machines on the desktop and in the Go menu, after Proxmox's look.
+"Hypervisor" is dark -- charcoal faces, light text, amber title bars and
+selection, to go with Kiln's picture behind it -- so the PC's own
+desktop is told from a guest's at a glance; guests keep their light
+schemes. A scheme gives its text and field colours (winkit's `C_DARK` and
+`C_WHITE` are the scheme's: black and white in every other one), and
+what is black whatever the scheme -- a terminal, a graph, a screen --
+says 0x000000.
 A tree on the left: c4pc, the PC; under it the control C4IX (VM 0, this
 one: shown, its log and screen, not changed) and each machine, from
 /vm/NAME/vm.cfg and from what the hypervisor has made, its id and a
 monitor lit while it runs (amber, paused). For the one chosen a toolbar
-(Start, Shutdown, Stop, Restart, Pause or Resume, Attach, Delete) and six
-tabs:
+(Start, Shutdown, Stop, Restart, Pause or Resume, Attach, Delete) and
+seven tabs:
 
 - **Summary**: its state and settings, compact, with its instructions a
   second and a minute of them beside; under them its screen, as large as
@@ -193,15 +200,47 @@ tabs:
   file that is not there), Browse... for a file (the kit's file box) --
   and Apply writes vm.cfg, for the machine's next start. For c4pc,
   Hardware is what c4pc found of the PC.
-- **Load**: each of its CPUs' instructions a second, the last minute (a
-  machine of several CPUs: them taking turns on its processor, smp.c);
-  for c4pc, a graph for each of the PC's processors (the firmware's
-  count): processor 0's time busy, the control's CPUs on theirs, and on
-  each of the pool's the instructions of the machines on it, added up,
-  with their names (INFO's "processor").
+- **Load**: four tabs of its own, the last minute, each graph with its
+  scale at the top left and its value now at the top right (and the
+  value in its title):
+  - **CPU**: each of its CPUs' instructions a second, and its time busy
+    where c4pc says (INFO's idle<k>) (a machine of several CPUs: them
+    taking turns on its processor, smp.c); for c4pc, a graph for each
+    of the PC's processors (the firmware's count): processor 0's time
+    busy, the control's CPUs on theirs, and on each of the pool's the
+    instructions of the machines on it, added up, with their names
+    (INFO's "processor").
+  - **Disk**, after btop's disks box: each disk image's reads and
+    writes, KB a second, with its size (INFO's blk<k>); for c4pc, its
+    own disks' (HOST's io and diskio<k>) and every running machine's.
+  - **Memory**: total, used, free, cached (the control's, from its
+    /proc/meminfo) and swap; for c4pc, what the machines were given of
+    the PC's and each one's heap in use.
+  - **Network**: its layout, received and sent for each machine, empty
+    until the machines have a network card (stage 4).
+- **Overview**, after btop, in the GUI: the processors across the top
+  (all of them busy, the last minute; a bar and share for each, c4pc's
+  uptime), then memory and disks side by side, the network under them,
+  and on the right the machines (state, instructions a second, CPUs, MB)
+  and the control C4IX's tasks, the busiest first (cpustat.h).
 - **Log**: its own: c4pc's (its boot, the hypervisor's words), the
   control C4IX's console, or a machine's console (LOG, 17: A2 0, 1, or
   its id + 1), scrolled with the bar, the wheel or Page Up and Down.
+
+A counter c4pc does not keep (an older c4pc) shows as "-", or a line
+saying so: INFO's heap, heapused, swapslots, swapused, blk<k> and
+idle<k>, and HOST's io, diskio<k> and pidle<k>, are cumulative and read
+each second.
+
+**View** (the window's menu) chooses between that and **VMware's look**,
+kept in /etc/machines.cfg (`view 0` or `view 1`): the same toolbar in
+VMware's words (New VM, Power On, Shut Down, Power Off, Restart,
+Suspend, Full Screen, Delete) and the tree as a library; on the right
+the one chosen, no tabs -- a running machine's console with Full Screen
+(Attach) and Settings...; a stopped one's "Power on this virtual
+machine", "Edit virtual machine settings", its Devices and its Details;
+c4pc's summary. Settings are Hardware and Options, the same form, with
+Back.
 
 Start runs `vm up NAME` in the background (it reads the kernel and the
 boot archive), its output and errors into /vm/NAME/start.log: a start

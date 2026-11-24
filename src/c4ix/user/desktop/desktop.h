@@ -102,6 +102,7 @@ void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch);
 void machines_key(struct win *w, int code, int ch, int mods);
 void machines_tick(struct win *w);
 void machines_answer(struct win *w, int action, int yes);
+void machines_command(struct win *w, int menu, int item);   // View: Proxmox's look or VMware's
 
 int  note_open(char *path);       // the kit's Notepad, as the Text Editor
 

@@ -16,26 +16,29 @@ struct wk_env wk;
 
 // ---- colour schemes ----------------------------------------------------------
 //
-// Nine colours each: desktop, face, light and shadow edges, the active
-// and inactive title bars (each a gradient's two ends), and the
-// selection, which is the active title's first colour.
-enum { N_SCHEMES = 10, S_COLS = 8 };
+// Ten colours each: desktop, face, light and shadow edges, the active
+// and inactive title bars (each a gradient's two ends), text, and what
+// text is written on; the selection is the active title's first colour.
+// Hypervisor's is dark (the user: "I dislike the bright colours ... they're
+// hard on my eyes"): charcoal faces, light text, amber title and selection,
+// to go with the control C4IX's Kiln picture.
+enum { N_SCHEMES = 10, S_COLS = 10 };
 static char *scheme_names[N_SCHEMES] = {
     "Classic Teal", "Granite", "Drizzle", "Sandstone", "Blush", "Pine", "Lavender", "Thunder",
     "Modern",                         // the flat look's own: cool greys, slate title bars
     "Hypervisor"                      // the C4PC hypervisor's control C4IX: dark slate, amber
 };
 static int schemes[N_SCHEMES * S_COLS] = {
-    0x008080, 0xc0c0c0, 0xffffff, 0x808080, 0x000080, 0x1084d0, 0x808080, 0xb4b4b4,
-    0x3a4e62, 0xb8c4cc, 0xeef3f6, 0x687884, 0x384c60, 0x7890a8, 0x808c98, 0xb0bcc8,
-    0x48586c, 0xb4bcc4, 0xeef2f6, 0x707880, 0x4c5c7c, 0x8898b8, 0x80888c, 0xb0b8c0,
-    0xa08060, 0xd5ccbb, 0xf5f0e8, 0xa29275, 0x008080, 0x40b0b0, 0xa29275, 0xc8bca8,
-    0x804050, 0xcfafb7, 0xf3e4e8, 0x9f6070, 0x9f6070, 0xd090a0, 0xa08890, 0xc8b0b8,
-    0x285040, 0xa2c8a9, 0xe2f2e6, 0x5e9a6a, 0x184830, 0x408048, 0x6a8a70, 0x9ab8a0,
-    0x504878, 0xaea8d9, 0xeae6f8, 0x6c64a8, 0x504888, 0x8880c8, 0x8880a0, 0xb4b0d0,
-    0x202830, 0xa8a8a8, 0xe8e8e8, 0x606060, 0x303848, 0x607088, 0x707070, 0x989898,
-    0x2e3440, 0xeceff4, 0xffffff, 0xa0a8b4, 0x3b4252, 0x3b4252, 0xd8dee9, 0xd8dee9,
-    0x1a2128, 0xe6e8eb, 0xffffff, 0x9aa1a9, 0xa85a12, 0xa85a12, 0xd4d8dd, 0xd4d8dd
+    0x008080, 0xc0c0c0, 0xffffff, 0x808080, 0x000080, 0x1084d0, 0x808080, 0xb4b4b4, 0x000000, 0xffffff,
+    0x3a4e62, 0xb8c4cc, 0xeef3f6, 0x687884, 0x384c60, 0x7890a8, 0x808c98, 0xb0bcc8, 0x000000, 0xffffff,
+    0x48586c, 0xb4bcc4, 0xeef2f6, 0x707880, 0x4c5c7c, 0x8898b8, 0x80888c, 0xb0b8c0, 0x000000, 0xffffff,
+    0xa08060, 0xd5ccbb, 0xf5f0e8, 0xa29275, 0x008080, 0x40b0b0, 0xa29275, 0xc8bca8, 0x000000, 0xffffff,
+    0x804050, 0xcfafb7, 0xf3e4e8, 0x9f6070, 0x9f6070, 0xd090a0, 0xa08890, 0xc8b0b8, 0x000000, 0xffffff,
+    0x285040, 0xa2c8a9, 0xe2f2e6, 0x5e9a6a, 0x184830, 0x408048, 0x6a8a70, 0x9ab8a0, 0x000000, 0xffffff,
+    0x504878, 0xaea8d9, 0xeae6f8, 0x6c64a8, 0x504888, 0x8880c8, 0x8880a0, 0xb4b0d0, 0x000000, 0xffffff,
+    0x202830, 0xa8a8a8, 0xe8e8e8, 0x606060, 0x303848, 0x607088, 0x707070, 0x989898, 0x000000, 0xffffff,
+    0x2e3440, 0xeceff4, 0xffffff, 0xa0a8b4, 0x3b4252, 0x3b4252, 0xd8dee9, 0xd8dee9, 0x000000, 0xffffff,
+    0x1c1d20, 0x2b2c30, 0x45474d, 0x121315, 0xc07a1e, 0x8a4f10, 0x3a3b40, 0x2e2f33, 0xdcd6cc, 0x1f2023
 };
 
 int wk_scheme_count() { return N_SCHEMES; }
@@ -47,6 +50,7 @@ void wk_scheme_use(int i, int desk) {
     wk.desk = desk >= 0 ? desk : t[0];
     wk.face = t[1]; wk.light = t[2]; wk.shadow = t[3];
     wk.title = t[4]; wk.title2 = t[5]; wk.ititle = t[6]; wk.ititle2 = t[7]; wk.sel = t[4];
+    wk.text = t[8]; wk.field = t[9];
     wk_full = 1;
 }
 
@@ -212,21 +216,21 @@ void d_bevel(int x, int y, int w, int h, int style) {
 void d_icon(int kind, int x, int y) {
     x = x + ox; y = y + oy;
     if (kind == ICON_TERM) {
-        gui_rect(x, y + 1, 16, 13, C_DARK); gui_recto(x, y + 1, 16, 13, C_SHADOW);
+        gui_rect(x, y + 1, 16, 13, 0x000000); gui_recto(x, y + 1, 16, 13, C_SHADOW);
         gui_text2(x + 2, y + 3, 0xc0c0c0, 8, F_MONO, 0, ">_", 2);
     } else if (kind == ICON_FILES) {
         gui_rect(x, y + 3, 7, 3, 0xc8a000); gui_rect(x, y + 5, 16, 10, 0xffd84a);
         gui_recto(x, y + 5, 16, 10, 0x806000);
     } else if (kind == ICON_TASKS) {
-        gui_rect(x, y + 1, 16, 12, C_DARK); gui_recto(x, y + 1, 16, 12, C_SHADOW);
+        gui_rect(x, y + 1, 16, 12, 0x000000); gui_recto(x, y + 1, 16, 12, C_SHADOW);
         gui_line(x + 2, y + 10, x + 6, y + 5, C_GREEN); gui_line(x + 6, y + 5, x + 9, y + 8, C_GREEN);
         gui_line(x + 9, y + 8, x + 14, y + 3, C_GREEN); gui_rect(x + 5, y + 13, 6, 2, C_SHADOW);
     } else if (kind == ICON_EDIT) {
-        gui_rect(x + 1, y, 14, 16, C_WHITE); gui_recto(x + 1, y, 14, 16, C_SHADOW);
+        gui_rect(x + 1, y, 14, 16, 0xffffff); gui_recto(x + 1, y, 14, 16, C_SHADOW);
         gui_text2(x + 2, y + 3, 0x008000, 8, F_MONO, 0, "{}", 2);
         gui_rect(x + 3, y + 12, 10, 1, 0x4060c0);
     } else if (kind == ICON_NOTE) {
-        gui_rect(x + 2, y, 12, 16, C_WHITE); gui_recto(x + 2, y, 12, 16, C_SHADOW);
+        gui_rect(x + 2, y, 12, 16, 0xffffff); gui_recto(x + 2, y, 12, 16, C_SHADOW);
         gui_rect(x + 4, y + 4, 8, 1, 0x4060c0); gui_rect(x + 4, y + 7, 8, 1, 0x4060c0);
         gui_rect(x + 4, y + 10, 6, 1, 0x4060c0);
     } else if (kind == ICON_SETTINGS) {
@@ -237,21 +241,21 @@ void d_icon(int kind, int x, int y) {
         gui_disc(x + 8, y + 8, 6, 0x909090);
         gui_disc(x + 8, y + 8, 2, C_FACE);
     } else if (kind == ICON_CALC) {
-        gui_rect(x + 2, y, 12, 16, 0xa0a0a0); gui_recto(x + 2, y, 12, 16, C_DARK);
+        gui_rect(x + 2, y, 12, 16, 0xa0a0a0); gui_recto(x + 2, y, 12, 16, 0x000000);
         gui_rect(x + 4, y + 2, 8, 4, 0xd0ffd0);
-        gui_rect(x + 4, y + 8, 3, 2, C_DARK); gui_rect(x + 9, y + 8, 3, 2, C_DARK);
-        gui_rect(x + 4, y + 12, 3, 2, C_DARK); gui_rect(x + 9, y + 12, 3, 2, 0xc02020);
+        gui_rect(x + 4, y + 8, 3, 2, 0x000000); gui_rect(x + 9, y + 8, 3, 2, 0x000000);
+        gui_rect(x + 4, y + 12, 3, 2, 0x000000); gui_rect(x + 9, y + 12, 3, 2, 0xc02020);
     } else if (kind == ICON_VMS) {
         // a rack of three machines, each with its light
-        gui_rect(x + 1, y, 14, 16, 0x384048); gui_recto(x + 1, y, 14, 16, C_DARK);
+        gui_rect(x + 1, y, 14, 16, 0x384048); gui_recto(x + 1, y, 14, 16, 0x000000);
         gui_rect(x + 3, y + 2, 10, 3, 0x8090a0); gui_rect(x + 11, y + 3, 1, 1, C_GREEN);
         gui_rect(x + 3, y + 7, 10, 3, 0x8090a0); gui_rect(x + 11, y + 8, 1, 1, C_GREEN);
         gui_rect(x + 3, y + 12, 10, 3, 0x8090a0); gui_rect(x + 11, y + 13, 1, 1, 0xe0a000);
     } else if (kind == ICON_CLOCK) {
-        gui_disc(x + 8, y + 8, 7, C_DARK); gui_disc(x + 8, y + 8, 6, C_WHITE);
-        gui_line(x + 8, y + 8, x + 8, y + 4, C_DARK); gui_line(x + 8, y + 8, x + 11, y + 8, C_DARK);
+        gui_disc(x + 8, y + 8, 7, 0x000000); gui_disc(x + 8, y + 8, 6, 0xffffff);
+        gui_line(x + 8, y + 8, x + 8, y + 4, 0x000000); gui_line(x + 8, y + 8, x + 11, y + 8, 0x000000);
     } else {
-        gui_rect(x + 1, y + 1, 14, 14, C_WHITE); gui_recto(x + 1, y + 1, 14, 14, C_TITLE);
+        gui_rect(x + 1, y + 1, 14, 14, 0xffffff); gui_recto(x + 1, y + 1, 14, 14, C_TITLE);
         gui_text2(x + 6, y + 2, C_TITLE, 12, F_BOLD, 0, "i", 1);
     }
 }

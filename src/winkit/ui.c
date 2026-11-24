@@ -113,7 +113,7 @@ void ui_button(int x, int y, int w, int h, char *label, int pressed, int deflt) 
 // visible. Nothing to scroll draws it disabled.
 void ui_scrollbar(int x, int y, int h, int total, int visible, int top) {
     int track, th, ty;
-    d_rect(x, y, 16, h, 0xe0e0e0);
+    d_rect(x, y, 16, h, C_WHITE == 0xffffff ? 0xe0e0e0 : C_SHADOW);   // the track: light grey, or a dark scheme's shadow
     if (ui_style != S_FLAT) {
         d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
         d_rect(x, y + h - 16, 16, 16, C_FACE); d_bevel(x, y + h - 16, 16, 16, B_RAISED);
@@ -163,7 +163,7 @@ void ui_scroll_end() { sd_on = 0; sr_on = 0; sp_on = 0; }
 // on their side. LEFT is the first column shown of TOTAL, VISIBLE at once.
 void ui_hscrollbar(int x, int y, int w, int total, int visible, int left) {
     int track, tw, tx;
-    d_rect(x, y, w, 16, 0xe0e0e0);
+    d_rect(x, y, w, 16, C_WHITE == 0xffffff ? 0xe0e0e0 : C_SHADOW);
     if (ui_style != S_FLAT) {
         d_rect(x, y, 16, 16, C_FACE); d_bevel(x, y, 16, 16, B_RAISED);
         d_rect(x + w - 16, y, 16, 16, C_FACE); d_bevel(x + w - 16, y, 16, 16, B_RAISED);

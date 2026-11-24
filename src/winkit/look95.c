@@ -22,7 +22,7 @@ void wk_gradient(int x, int y, int w, int h, int a, int b) {
 
 // white on a dark bar, the scheme's dark on a light one
 int wk_ink(int bg) {
-    return (((bg >> 16) & 255) + ((bg >> 8) & 255) + (bg & 255)) < 384 ? C_WHITE : 0x404850;
+    return (((bg >> 16) & 255) + ((bg >> 8) & 255) + (bg & 255)) < 384 ? 0xffffff : 0x404850;
 }
 
 enum { CAP_CLOSE = 0, CAP_MAX = 1, CAP_RESTORE = 2, CAP_MIN = 3 };
@@ -160,7 +160,7 @@ static void fb_folder_icon(int x, int y) {
     d_recto(x + 1, y + 5, 13, 8, 0xc8a000);
 }
 static void fb_file_icon(int x, int y) {
-    d_rect(x + 3, y + 1, 10, 14, C_WHITE);
+    d_rect(x + 3, y + 1, 10, 14, 0xffffff);
     d_recto(x + 3, y + 1, 9, 13, C_SHADOW);
     d_rect(x + 5, y + 5, 6, 1, C_SHADOW); d_rect(x + 5, y + 8, 6, 1, C_SHADOW); d_rect(x + 5, y + 11, 4, 1, C_SHADOW);
 }

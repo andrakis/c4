@@ -610,7 +610,7 @@ void tg_draw(struct tgrid *t, int ox, int oy, int focused) {
             d_rect(ox + k * CW, oy + r * CH, (n - k + 1) * CW, CH, tg_pal[7]);
             g = 0;
             while (k + g <= n) { tmp[g] = run[k + g] & 255; if (tmp[g] < 32 || tmp[g] > 126) tmp[g] = ' '; ++g; }
-            d_textn(ox + k * CW, oy + r * CH + 1, C_DARK, TG_FONT, F_MONO, CW, tmp, g);
+            d_textn(ox + k * CW, oy + r * CH + 1, 0x000000, TG_FONT, F_MONO, CW, tmp, g);
         }
         ++r;
     }

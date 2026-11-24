@@ -15,10 +15,21 @@
 //             c4pc, what c4pc found of the PC (HOST)
 //   Options   what it boots from, its kernel, boot archive and arguments,
 //             start at boot
-//   Load      each of its CPUs' instructions a second (c4pc: CPU 0's time
-//             busy), the last minute
+//   Load      four tabs of its own, the last minute, each graph with its
+//             scale and its value now beside it: CPU (each CPU's
+//             instructions a second and its time busy, %), Disk (each disk
+//             image's reads and writes, and c4pc's own disks), Memory (used,
+//             free, cached, swap), Network (its layout: there is none yet)
+//   Overview  btop's look, in the GUI: the processors across the top, then
+//             memory, disks and network, and the machines and the control
+//             C4IX's tasks, all at a glance
 //   Log       its console, as c4pc keeps it (LOG: c4pc's own, the control
 //             C4IX's, each guest's), scrolled
+// View chooses between that and VMware's look: a library of the machines
+// on the left, and on the right the one chosen -- its console when it
+// runs, its devices and details and "Power on" when it does not, and its
+// settings (the same form) a click away. The choice is kept in
+// /etc/machines.cfg.
 // Hardware and Options are a form: dropdowns where there is a choice,
 // fields that take only what fits (red-edged otherwise), Browse... for a
 // file; Apply writes vm.cfg, for the machine's next start. Create VM is one
@@ -29,10 +40,21 @@
 //
 // The machine manager's window (HV_BASE) is read directly: state, info,
 // start, stop, attach, THUMB (a screen scaled into our memory), LOG, HOST.
+// INFO's and HOST's counters (heap, swap, blk<k>, idle<k>; io, diskio<k>,
+// pidle<k>) are cumulative, read each second and differenced; a c4pc that
+// has not got one shows "-" where it would go.
 // What is slow -- `vm up`, which reads the kernel and the boot archive, and
 // `vm create` -- runs as `vm`, in the background or in a Terminal.
 
 #include "desktop.h"
+// cpustat.c's code is taskmgr.c's (or the shared library's): its declarations alone here
+#ifdef C4IX_SHARED
+#include "cpustat.h"
+#else
+#define C4IX_SHARED 1
+#include "cpustat.h"
+#undef C4IX_SHARED
+#endif
 
 enum { R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
 enum { C_START = 5, C_STOP = 6, C_ATTACH = 7, C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_THUMB = 16, C_LOG = 17,
@@ -41,7 +63,7 @@ enum { S_FREE = 0, S_MADE = 1, S_RUN = 2, S_HALT = 3, S_PAUSE = 4, S_NONE = 9 };
 // the toolbar: Create VM, then seven buttons 74 wide, 78 apart, to the right
 enum { N_TB = 7, TB = 78, TBW = 74 };
 enum { MAXM = 16, NAMEW = 32, HIST = 60, MAXC = 8, TREE_W = 170, TOOL_H = 34, TAB_Y = 40, PAGE_Y = 62, ROW_H = 22,
-       SW_MAX = 640, SH_MAX = 504, STRIP = 36, IMG_ID = 300, N_TABS = 6, LOGW = 32768, LOG_MAX = 800, LROW = 14,
+       SW_MAX = 640, SH_MAX = 504, STRIP = 36, IMG_ID = 300, N_TABS = 7, LOGW = 32768, LOG_MAX = 800, LROW = 14,
        CTL = 1,                                   // the control C4IX's row
        A_DEL = 45, A_BOOT = 46, A_BROWSE = 60, A_CBROWSE = 80,
        N_F = 11, FROW = 30, FLX = 170 };
@@ -49,6 +71,13 @@ enum { MAXM = 16, NAMEW = 32, HIST = 60, MAXC = 8, TREE_W = 170, TOOL_H = 34, TA
 enum { F_MB = 0, F_CPUS = 1, F_MMU = 2, F_DISK = 3, F_SWAP = 4, F_CD = 5, F_BOOT = 6, F_KERNEL = 7, F_ARCH = 8,
        F_ARGS = 9, F_AUTO = 10 };
 enum { CF_NAME = 0, CF_SYS = 1, CF_ISO = 2, CF_MB = 3, CF_CPUS = 4, CF_DISK = 5, CF_SWAP = 6, CF_AUTO = 7, N_CF = 8 };
+// the tabs, Load's own, and the counters' sizes: disks a machine, PC processors
+enum { T_SUM = 0, T_CON = 1, T_HW = 2, T_OPT = 3, T_LOAD = 4, T_TOP = 5, T_LOG = 6 };
+enum { L_CPU = 0, L_DISK = 1, L_MEM = 2, L_NET = 3, N_LTABS = 4, MAXB = 4, BNAME = 40, MAXP = 16 };
+// what a graph's numbers are: thousands of instructions a second, %, KB a second
+enum { G_KIPS = 0, G_PCT = 1, G_KBS = 2 };
+// screens and graphs are black whatever the scheme (a dark one makes C_DARK light)
+enum { C_BLACK = 0x000000, C_GRID = 0x1c3a1c, C_RD = 0x40c040, C_WR = 0xd06060, C_LBL = 0x9aa0a8 };
 
 struct machines {
     int n, sel, tab;                     // sel: 0 c4pc, 1 the control C4IX, 2.. a machine
@@ -83,12 +112,45 @@ struct machines {
     int ccaret[N_CF], cfocus;
     struct ui_drop csys, ccpus;
     int cauto, cmb_said;                 // Start at boot; the memory typed (not the system's)
+    // the look (View): 0 Proxmox's tree and tabs, 1 VMware's library and machine;
+    // VMware's page: 0 the machine, 1 its settings (Hardware), 2 (Options)
+    int view, vpage;
+    int ltab;                            // Load's tab
+    // each CPU's time busy, %, the last second (-1: c4pc does not say), and
+    // its idle ms at the last look (INFO's idle<k>)
+    int pct[MAXM * MAXC];
+    long long cidle[MAXM * MAXC];
+    // each machine's disks (INFO's blk<k>: bytes read, written, its size, what
+    // it is), and KB a second read and written, the last minute
+    int nb[MAXM], nbh[MAXM];
+    char bname[MAXM * MAXB * BNAME];
+    long long bsize[MAXM * MAXB], brd[MAXM * MAXB], bwr[MAXM * MAXB];
+    int bhr[MAXM * MAXB * HIST], bhw[MAXM * MAXB * HIST];
+    // its memory, KB, and swap, in 4 KB pages (-1: not known); the control's
+    // free and cached (its own /proc/meminfo)
+    int heap[MAXM], hused[MAXM], sslots[MAXM], sused[MAXM];
+    int m_free, m_cached;
+    // c4pc's own disks (HOST's io and diskio<k>): bytes so far, KB a second
+    int has_io, npd, nioh;
+    long long io_rd, io_wr, pdrd[MAXB], pdwr[MAXB];
+    int iohr[HIST], iohw[HIST], pdhr[MAXB * HIST], pdhw[MAXB * HIST];
+    // the PC's processors (HOST's pidle<k>): idle ms at the last look, % busy
+    // now, and all of them busy, %, the last minute
+    long long pidle[MAXP];
+    int ppct[MAXP], npp, tot[HIST], ntot;
 };
 
 static struct machines *S(struct win *w) { return (struct machines *)w->st; }
-static char buf[200], info_buf[600], host_buf[2048], cfg[2048], path[128], vmpath[96], browse[WK_PATH];
+static char buf[200], info_buf[2048], host_buf[2048], cfg[2048], path[128], vmpath[96], browse[WK_PATH];
 static int thumb[SW_MAX * SH_MAX];
 static char *tabs[N_TABS];
+static char *ltabs[N_LTABS];
+static char *view_items[3];
+static char vi_prox[48], vi_vmw[48];
+static struct wk_menu view_menu[1];
+// the control C4IX's tasks and CPUs, two snapshots a second apart (cpustat.h)
+static struct cpusample cs_a, cs_b;
+static int cs_have, tpct[CPU_MAXT], tord[CPU_MAXT];
 static char logbuf[LOGW + 1];
 static int log_at[LOG_MAX], log_len[LOG_MAX];   // the Log's rows: where each starts, its length
 static char start_log[1024], why_title[64];
@@ -192,6 +254,150 @@ static int cfg_set(char *name, char *key, char *value) {
     return 1;
 }
 
+// ---- the counters (INFO's and HOST's), read each second ----
+
+// past spaces, a number: its value into *V, and where it ends
+static char *num_at(char *p, long long *v) {
+    while (*p == ' ') ++p;
+    *v = 0;
+    while (*p >= '0' && *p <= '9') { *v = *v * 10 + *p - '0'; ++p; }
+    return p;
+}
+// a value onto history H, which holds N (the caller counts)
+static void hpush(int *h, int n, int v) {
+    int i;
+    if (n < HIST) { h[n] = v; return; }
+    i = 0; while (i < HIST - 1) { h[i] = h[i + 1]; ++i; }
+    h[HIST - 1] = v;
+}
+// KB a second, from a count of bytes then and now, DT ms apart
+static int kbs(long long now, long long then, int dt) {
+    if (dt <= 0 || !then || now < then) return 0;
+    return (int)(((now - then) * 1000 / dt) / 1024);
+}
+// the share of DT ms that was not idle, from idle ms then and now; -1 unknown
+static int busy_pct(long long now, long long then, int dt) {
+    int p;
+    if (dt <= 0 || !then || now < then) return 0 - 1;
+    p = 100 - (int)((now - then) * 100 / dt);
+    return p < 0 ? 0 : p > 100 ? 100 : p;
+}
+// row K's counters: nothing known yet
+static void row_clear(struct machines *t, int k) {
+    int c;
+    c = 0; while (c < MAXC) { t->pct[k * MAXC + c] = 0 - 1; t->cidle[k * MAXC + c] = 0; ++c; }
+    c = 0; while (c < MAXB) { t->brd[k * MAXB + c] = 0; t->bwr[k * MAXB + c] = 0; t->bsize[k * MAXB + c] = 0; ++c; }
+    t->nb[k] = 0; t->nbh[k] = 0;
+    t->heap[k] = 0 - 1; t->hused[k] = 0 - 1; t->sslots[k] = 0 - 1; t->sused[k] = 0 - 1;
+}
+// row J's counters into row I (a row gone from the list: those after it move up)
+static void row_move(struct machines *t, int i, int j) {
+    memcpy((char *)(t->pct + i * MAXC), (char *)(t->pct + j * MAXC), MAXC * sizeof(int));
+    memcpy((char *)(t->cidle + i * MAXC), (char *)(t->cidle + j * MAXC), MAXC * sizeof(long long));
+    memcpy(t->bname + i * MAXB * BNAME, t->bname + j * MAXB * BNAME, MAXB * BNAME);
+    memcpy((char *)(t->bsize + i * MAXB), (char *)(t->bsize + j * MAXB), MAXB * sizeof(long long));
+    memcpy((char *)(t->brd + i * MAXB), (char *)(t->brd + j * MAXB), MAXB * sizeof(long long));
+    memcpy((char *)(t->bwr + i * MAXB), (char *)(t->bwr + j * MAXB), MAXB * sizeof(long long));
+    memcpy((char *)(t->bhr + i * MAXB * HIST), (char *)(t->bhr + j * MAXB * HIST), MAXB * HIST * sizeof(int));
+    memcpy((char *)(t->bhw + i * MAXB * HIST), (char *)(t->bhw + j * MAXB * HIST), MAXB * HIST * sizeof(int));
+    t->nb[i] = t->nb[j]; t->nbh[i] = t->nbh[j];
+    t->heap[i] = t->heap[j]; t->hused[i] = t->hused[j]; t->sslots[i] = t->sslots[j]; t->sused[i] = t->sused[j];
+}
+// row K's memory and disks from info_buf (INFO's heap, heapused, swapslots,
+// swapused, blk<k>): the disks' KB a second onto their histories
+static void extras_from_info(struct machines *t, int k, int dt) {
+    int b, at;
+    long long rd, wr, sz;
+    char key[12], *p;
+    t->heap[k] = line_get(info_buf, "heap", buf, 30) ? (int)num_of(buf) : 0 - 1;
+    t->hused[k] = line_get(info_buf, "heapused", buf, 30) ? (int)num_of(buf) : 0 - 1;
+    t->sslots[k] = line_get(info_buf, "swapslots", buf, 30) ? (int)num_of(buf) : 0 - 1;
+    t->sused[k] = line_get(info_buf, "swapused", buf, 30) ? (int)num_of(buf) : 0 - 1;
+    b = 0;
+    while (b < MAXB) {
+        ui_cpy(key, "blk"); ui_num(key + 3, b);
+        if (!line_get(info_buf, key, buf, 180)) break;
+        p = num_at(buf, &rd); p = num_at(p, &wr); p = num_at(p, &sz);
+        while (*p == ' ') ++p;
+        at = k * MAXB + b;
+        ui_ncpy(t->bname + at * BNAME, p, BNAME - 1);
+        hpush(t->bhr + at * HIST, t->nbh[k], kbs(rd, t->brd[at], dt));
+        hpush(t->bhw + at * HIST, t->nbh[k], kbs(wr, t->bwr[at], dt));
+        t->brd[at] = rd; t->bwr[at] = wr; t->bsize[at] = sz;
+        ++b;
+    }
+    t->nb[k] = b;
+    if (b && t->nbh[k] < HIST) ++t->nbh[k];
+}
+// the control C4IX's own: /proc/meminfo's heap, used, free, cached and swap
+// (KB), and each of its CPUs' time busy and its tasks' shares (cpustat.h)
+static char meminfo[1024];
+static void control_own(struct machines *t) {
+    int n, c, sys;
+    n = uslurp("/proc/meminfo", meminfo, sizeof meminfo - 1);
+    if (n > 0) {
+        meminfo[n] = 0;
+        if (line_get(meminfo, "heap", buf, 30)) t->heap[CTL] = (int)num_of(buf);
+        if (line_get(meminfo, "used", buf, 30)) t->hused[CTL] = (int)num_of(buf);
+        t->m_free = line_get(meminfo, "free", buf, 30) ? (int)num_of(buf) : 0 - 1;
+        t->m_cached = line_get(meminfo, "cached", buf, 30) ? (int)num_of(buf) : 0 - 1;
+        if (line_get(meminfo, "swap", buf, 30)) {
+            t->sslots[CTL] = (int)num_of(buf) / 4;
+            t->sused[CTL] = line_get(meminfo, "swapfree", buf, 30) ? t->sslots[CTL] - (int)num_of(buf) / 4 : 0 - 1;
+        }
+    }
+    if (cs_have) memcpy((char *)&cs_a, (char *)&cs_b, sizeof cs_b);
+    if (cpu_sample(&cs_b) < 0) return;
+    if (cs_have) {
+        c = 0;
+        while (c < cs_b.h.ncpu && c < MAXC) { t->pct[CTL * MAXC + c] = cpu_load(&cs_a, &cs_b, c); ++c; }
+        cpu_shares(&cs_a, &cs_b, tpct, &sys);
+    }
+    cs_have = 1;
+}
+// c4pc's own disks (HOST's io, diskio<k>) and the PC's processors (pidle<k>,
+// and CPU 0's uptime and idle, which an older c4pc has alone): onto their
+// histories, and all of them busy, %, onto tot
+static void host_counters(struct machines *t, int dt) {
+    int b, c, n, sum, cpu0;
+    long long rd, wr, v;
+    char key[12], *p;
+    n = t->nioh;
+    t->has_io = line_get(host_buf, "io", buf, 60);
+    if (t->has_io) {
+        p = num_at(buf, &rd); num_at(p, &wr);
+        hpush(t->iohr, n, kbs(rd, t->io_rd, dt)); hpush(t->iohw, n, kbs(wr, t->io_wr, dt));
+        t->io_rd = rd; t->io_wr = wr;
+    }
+    b = 0;
+    while (b < MAXB) {
+        ui_cpy(key, "diskio"); ui_num(key + 6, b);
+        if (!line_get(host_buf, key, buf, 60)) break;
+        p = num_at(buf, &rd); num_at(p, &wr);
+        hpush(t->pdhr + b * HIST, n, kbs(rd, t->pdrd[b], dt)); hpush(t->pdhw + b * HIST, n, kbs(wr, t->pdwr[b], dt));
+        t->pdrd[b] = rd; t->pdwr[b] = wr;
+        ++b;
+    }
+    t->npd = b;
+    if ((t->has_io || b) && t->nioh < HIST) ++t->nioh;
+    c = 0;
+    while (c < MAXP) {
+        ui_cpy(key, "pidle"); ui_num(key + 5, c);
+        if (!line_get(host_buf, key, buf, 40)) break;
+        v = num_of(buf);
+        t->ppct[c] = busy_pct(v, t->pidle[c], dt);
+        t->pidle[c] = v;
+        ++c;
+    }
+    t->npp = c;
+    // all of them busy: their mean; or CPU 0's alone
+    cpu0 = t->nchist[0] ? t->chist[t->nchist[0] - 1] : 0;
+    sum = 0; n = 0; c = 0;
+    while (c < t->npp) { if (t->ppct[c] >= 0) { sum = sum + t->ppct[c]; ++n; } ++c; }
+    hpush(t->tot, t->ntot, n ? sum / n : cpu0);
+    if (t->ntot < HIST) ++t->ntot;
+}
+
 // the machine called NAME in the list, or a new row for it
 static int row_of(struct machines *t, char *name) {
     int k;
@@ -204,6 +410,7 @@ static int row_of(struct machines *t, char *name) {
     mname(t, k)[NAMEW - 1] = 0;
     t->id[k] = 0; t->state[k] = S_NONE; t->mb[k] = 0; t->cfg[k] = 0; t->cyc[k] = 0; t->rate[k] = 0;
     t->nhist[k] = 0; t->nchist[k] = 0; t->ncpu[k] = 1;
+    row_clear(t, k);
     return k;
 }
 
@@ -244,6 +451,13 @@ static void cpus_from_info(struct machines *t, int k, int dt) {
             t->chist[(k * MAXC + c) * HIST + at] = (int)((v - t->ccyc[k * MAXC + c]) / dt);
         else t->chist[(k * MAXC + c) * HIST + at] = 0;
         t->ccyc[k * MAXC + c] = v;
+        // its time busy: from its idle ms (idle<k>), where c4pc says
+        ui_cpy(buf, "idle"); ui_num(buf + 4, c);
+        if (line_get(info_buf, buf, buf + 100, 40)) {
+            v = num_of(buf + 100);
+            t->pct[k * MAXC + c] = busy_pct(v, t->cidle[k * MAXC + c], dt);
+            t->cidle[k * MAXC + c] = v;
+        } else t->pct[k * MAXC + c] = 0 - 1;
         ++c; ++nc;
     }
     t->ncpu[k] = nc ? nc : 1;
@@ -289,7 +503,7 @@ static void refresh(struct machines *t) {
                 c = info_num("cycles");
                 t->rate[k] = st == S_RUN && dt > 0 && t->cyc[k] && c >= t->cyc[k] ? (int)((c - t->cyc[k]) / dt) : 0;
                 t->cyc[k] = c;
-                if (st == S_RUN) cpus_from_info(t, k, dt);
+                if (st == S_RUN) { cpus_from_info(t, k, dt); extras_from_info(t, k, dt); }
             }
         }
         ++id;
@@ -298,6 +512,8 @@ static void refresh(struct machines *t) {
     if (hv(C_INFO, 0, (int)info_buf, sizeof info_buf, 0) >= 0) {
         t->mb[CTL] = (int)info_num("mb");
         cpus_from_info(t, CTL, dt);
+        extras_from_info(t, CTL, dt);
+        control_own(t);
         c = 0; i = 0; while (i < t->ncpu[CTL]) { c = c + t->ccyc[CTL * MAXC + i]; ++i; }
         t->rate[CTL] = dt > 0 && t->cyc[CTL] && c >= t->cyc[CTL] ? (int)((c - t->cyc[CTL]) / dt) : 0;
         t->cyc[CTL] = c;
@@ -310,6 +526,7 @@ static void refresh(struct machines *t) {
         t->chist[i] = t->up0 && up0 > t->up0 ? (int)(100 - ((idle0 - t->idle0) * 100) / (up0 - t->up0)) : 0;
         ++t->nchist[0];
         t->up0 = up0; t->idle0 = idle0;
+        host_counters(t, dt);
     } else host_buf[0] = 0;
     // a machine gone from both (its vm.cfg removed, deleted): out of the list
     k = CTL + 1;
@@ -324,6 +541,7 @@ static void refresh(struct machines *t) {
                 memcpy((char *)(t->hist + i * HIST), (char *)(t->hist + (i + 1) * HIST), HIST * sizeof(int));
                 memcpy((char *)(t->chist + i * MAXC * HIST), (char *)(t->chist + (i + 1) * MAXC * HIST), MAXC * HIST * sizeof(int));
                 memcpy((char *)(t->ccyc + i * MAXC), (char *)(t->ccyc + (i + 1) * MAXC), MAXC * sizeof(long long));
+                row_move(t, i, i + 1);
                 ++i;
             }
             --t->n;
@@ -341,7 +559,7 @@ static void refresh(struct machines *t) {
 static void grab(struct machines *t) {
     int k, s, id;
     t->shown = 0 - 1;
-    if (t->sel < CTL || t->tab > 1 || t->sw < 32 || t->sh < STRIP) return;
+    if (t->sel < CTL || (t->view ? t->vpage != 0 : t->tab > T_CON) || t->sw < 32 || t->sh < STRIP) return;
     if (t->sel > CTL && !up(t, t->sel)) return;
     id = t->sel == CTL ? 0 : t->id[t->sel];
     if (hv(C_THUMB, id, (int)thumb, t->sw, t->sh) < 0) return;
@@ -634,14 +852,19 @@ static int n_running(struct machines *t) {
 }
 
 int machines_open() {
-    int i;
+    int i, k;
     struct win *w;
     w = win_first();
     while (w) { if (w->used && w->kind == K_VMS) { win_raise(w->id); return w->id; } w = w->next; }
-    i = win_open(K_VMS, "Machines", 800, 560, sizeof(struct machines));
+    i = win_open(K_VMS, "Machines", 820, 600, sizeof(struct machines));
     if (i < 0) return i;
     w = win_get(i);
     S(w)->ltop = 0 - 1; S(w)->form_row = 0 - 1; S(w)->focus = 0 - 1; S(w)->shown = 0 - 1;
+    // which look: as last chosen (/etc/machines.cfg), Proxmox's at first
+    k = uslurp("/etc/machines.cfg", buf, 60);
+    if (k > 0) { buf[k] = 0; line_get(buf, "view", buf + 100, 8); S(w)->view = same(buf + 100, "1"); }
+    view_marks(S(w)->view);
+    wk_menu(i, view_menu, 1);
     if (!(__c4_info() & C4I_HV_BIT)) say(S(w), "No hypervisor here: GRUB's \"C4PC hypervisor\" entries boot one.");
     else {
         // the hypervisor's window is a device's: the desktop may read it
@@ -716,7 +939,7 @@ void machines_tick(struct win *w) {
         }
     }
     refresh(t);
-    if (t->tab == 5) log_fetch(t);
+    if (!t->view && t->tab == T_LOG) log_fetch(t);
     if (t->restart) {
         k = CTL + 1;
         while (k < t->n && t->id[k] != t->restart) ++k;
@@ -744,7 +967,7 @@ static void state_text(struct machines *t, int k, char *out) {
 
 // a monitor: its screen green when it runs, amber paused
 static void icon(int x, int y, int st) {
-    d_rect(x, y + 1, 16, 11, C_DARK);
+    d_rect(x, y + 1, 16, 11, C_BLACK);
     d_rect(x + 2, y + 3, 12, 7, st == S_RUN ? 0x30c030 : st == S_PAUSE ? 0xe0a000 : 0x707070);
     d_rect(x + 6, y + 12, 4, 2, C_SHADOW);
     d_rect(x + 3, y + 14, 10, 1, C_SHADOW);
@@ -755,21 +978,78 @@ static void field(int x, int y, char *label, char *value) {
     d_text(x + 104, y, C_DARK, F_BOLD, value);
 }
 
-static void graph(int *h, int n, int x, int y, int w, int ht, int max) {
+// a value as a graph shows it, in KIND's units: "850 K/s", "12.3 M/s", "45%", "1.2 MB/s"
+static void gfmt(int v, int kind, char *out) {
+    if (v < 0) { ui_cpy(out, "-"); return; }
+    if (kind == G_PCT) { ui_num(out, v); ui_cat(out, "%"); return; }
+    if (kind == G_KBS) {
+        if (v < 1024) { ui_num(out, v); ui_cat(out, " KB/s"); }
+        else if (v < 102400) { ui_num(out, v / 1024); ui_cat(out, "."); ui_num(out + ui_len(out), (v % 1024) * 10 / 1024); ui_cat(out, " MB/s"); }
+        else { ui_num(out, v / 1024); ui_cat(out, " MB/s"); }
+        return;
+    }
+    if (v < 1000) { ui_num(out, v); ui_cat(out, " K/s"); }
+    else if (v < 100000) { ui_num(out, v / 1000); ui_cat(out, "."); ui_num(out + ui_len(out), (v % 1000) / 100); ui_cat(out, " M/s"); }
+    else if (v < 1000000) { ui_num(out, v / 1000); ui_cat(out, " M/s"); }
+    else { ui_num(out, v / 1000000); ui_cat(out, "."); ui_num(out + ui_len(out), (v % 1000000) / 100000); ui_cat(out, " G/s"); }
+}
+// a size in KB: "512 KB", "12.3 MB", "1.2 GB"
+static void kbfmt(long long v, char *out) {
+    if (v < 0) { ui_cpy(out, "-"); return; }
+    if (v < 1024) { ui_num(out, (int)v); ui_cat(out, " KB"); }
+    else if (v < 1024 * 1024) { ui_num(out, (int)(v / 1024)); ui_cat(out, "."); ui_num(out + ui_len(out), (int)((v % 1024) * 10 / 1024)); ui_cat(out, " MB"); }
+    else { ui_num(out, (int)(v / (1024 * 1024))); ui_cat(out, "."); ui_num(out + ui_len(out), (int)((v % (1024 * 1024)) * 10 / (1024 * 1024))); ui_cat(out, " GB"); }
+}
+// a scale: V rounded up to 1, 2 or 5 times a power of ten
+static int nice_top(int v) {
+    int m;
+    m = 1;
+    while (m < 100000000) {
+        if (v <= m) return m;
+        if (v <= m * 2) return m * 2;
+        if (v <= m * 5) return m * 5;
+        m = m * 10;
+    }
+    return v;
+}
+// A graph of the last N values of H (the last minute), in COL, on black:
+// MAX its top (0: the minute's largest, rounded up), which is written in
+// its top left, and the value now in its top right -- an auto-scaled graph
+// without them could not be read (the user)
+static void graphc(int *h, int n, int x, int y, int w, int ht, int max, int kind, int col) {
     int k, px, py, qx, qy;
-    d_rect(x, y, w, ht, C_DARK);
-    k = 1; while (k < 4) { d_rect(x, y + (ht * k) / 4, w, 1, 0x005000); ++k; }
-    if (!max) { max = 1; k = 0; while (k < n) { if (h[k] > max) max = h[k]; ++k; } }
-    if (n < 2) return;
+    char s[32];
+    d_rect(x, y, w, ht, C_BLACK);
+    k = 1; while (k < 4) { d_rect(x, y + (ht * k) / 4, w, 1, C_GRID); ++k; }
+    if (!max) { max = 1; k = 0; while (k < n) { if (h[k] > max) max = h[k]; ++k; } max = nice_top(max); }
     k = 1;
     while (k < n) {
         px = x + w - 1 - (n - k) * (w - 2) / (HIST - 1);
         qx = x + w - 1 - (n - 1 - k) * (w - 2) / (HIST - 1);
         py = y + ht - 2 - (int)(((long long)(h[k - 1] > max ? max : h[k - 1]) * (ht - 4)) / max);
         qy = y + ht - 2 - (int)(((long long)(h[k] > max ? max : h[k]) * (ht - 4)) / max);
-        d_line(px, py, qx, qy, C_GREEN);
+        d_line(px, py, qx, qy, col);
         ++k;
     }
+    if (ht >= 26) {
+        gfmt(max, kind, s); d_text(x + 4, y + 2, C_LBL, F_SANS, s);
+        gfmt(n ? h[n - 1] : 0 - 1, kind, s); d_text(x + w - 6 - ui_len(s) * 6, y + 2, col, F_BOLD, s);
+    }
+}
+static void graph(int *h, int n, int x, int y, int w, int ht, int max, int kind) { graphc(h, n, x, y, w, ht, max, kind, C_GREEN); }
+// a bar: LABEL, then its value of TOTAL (KB) and the share, and the bar under, in COL
+static void bar(int x, int y, int w, char *label, long long v, long long total, int col) {
+    char s[64], t2[24];
+    int fill;
+    d_text(x, y, C_DARK, F_SANS, label);
+    if (v < 0 || total <= 0) ui_cpy(s, "-");
+    else {
+        kbfmt(v, s); ui_cat(s, " of "); kbfmt(total, t2); ui_cat(s, t2);
+        ui_cat(s, ", "); ui_num(s + ui_len(s), (int)(v * 100 / total)); ui_cat(s, "%");
+    }
+    d_text(x + w - ui_len(s) * 6 - 4, y, C_DARK, F_BOLD, s);
+    d_rect(x, y + 16, w, 8, C_BLACK);
+    if (v > 0 && total > 0) { fill = (int)(v * (w - 2) / total); if (fill > w - 2) fill = w - 2; d_rect(x + 1, y + 17, fill, 6, col); }
 }
 
 // the screen box: as large as fits W x H at 4:3 (its size kept for grab)
@@ -782,7 +1062,7 @@ static void screen_box(struct machines *t, int x, int y, int w, int h) {
     sw = sh * 4 / 3;
     if (sw != t->sw || sh != t->sh) { t->sw = sw; t->sh = sh; t->shown = 0 - 1; }
     x = x + (w - sw) / 2;
-    d_rect(x, y, sw, sh, C_DARK);
+    d_rect(x, y, sw, sh, C_BLACK);
     if (t->shown == t->sel && t->sel >= CTL && (t->sel == CTL || up(t, t->sel))) {
         s = 0; k = 0;
         while (s < sh) { d_image(IMG_ID + k, x, y + s); s = s + STRIP; ++k; }
@@ -809,11 +1089,11 @@ static void draw_host_summary(struct machines *t, int x, int y, int w, int h) {
     ui_num(buf, t->n - CTL - 1); field(x + 12, y + 102, "Machines", buf);
     k = CTL + 1; g = 0; while (k < t->n) { if (t->state[k] == S_RUN) ++g; ++k; }
     ui_num(buf, g); field(x + 12, y + 122, "Running", buf);
-    d_text(x + 12, y + 150, C_DARK, F_SANS, "Create VM makes a machine; the control C4IX is this one.");
+    d_text(x + 12, y + 150, C_DARK, F_SANS, t->view ? "New VM makes a machine; the control C4IX is this one." : "Create VM makes a machine; the control C4IX is this one.");
     d_text(x + 12, y + 168, C_DARK, F_SANS, "Hardware: what c4pc found. Load: its time busy. Log: what it said.");
     if (h > 290) {
         ui_group(x, y + 206, w, h - 206, "CPU 0: its time busy, %, the last minute");
-        graph(t->chist, t->nchist[0], x + 8, y + 224, w - 16, h - 232, 100);
+        graph(t->chist, t->nchist[0], x + 8, y + 224, w - 16, h - 232, 100, G_PCT);
     }
 }
 
@@ -842,7 +1122,7 @@ static void draw_summary(struct machines *t, int x, int y, int w, int h) {
     } else d_text(cx, y + 20, C_DARK, F_SANS, "made by vm new: no vm.cfg");
     ui_group(x + w - gw, y, gw, 112, "CPU, a second");
     rate_text(t, k, buf); d_text(x + w - gw + 8, y + 18, C_DARK, F_SANS, buf);
-    graph(t->hist + k * HIST, t->nhist[k], x + w - gw + 8, y + 34, gw - 16, 70, 0);
+    graph(t->hist + k * HIST, t->nhist[k], x + w - gw + 8, y + 34, gw - 16, 70, 0, G_KIPS);
     sy = y + 120;
     ui_group(x, sy, w, h - (sy - y), "Screen");
     screen_box(t, x + 8, sy + 18, w - 16, h - (sy - y) - 26);
@@ -974,14 +1254,24 @@ static void proc_graph(struct machines *t, int c, int gx, int gy, int gw, int gh
         }
         ++j;
     }
+    // its machines' instructions a second now, and its time busy
+    if (n) { ui_cat(buf, " -- "); gfmt(psum[HIST - 1], G_KIPS, buf + ui_len(buf)); }
+    if (c < t->npp && t->ppct[c] >= 0) { ui_cat(buf, ", "); ui_num(buf + ui_len(buf), t->ppct[c]); ui_cat(buf, "% busy"); }
     d_text(gx, gy - 16, C_DARK, F_SANS, buf);
-    if (n) graph(psum + HIST - n, n, gx, gy, gw, gh, 0);
+    if (n) graph(psum + HIST - n, n, gx, gy, gw, gh, 0, G_KIPS);
     else {
-        d_rect(gx, gy, gw, gh, C_DARK);
+        d_rect(gx, gy, gw, gh, C_BLACK);
         d_text(gx + 8, gy + 8, 0xa0a0a0, F_SANS, "no machine on it now");
     }
 }
-static void draw_load(struct machines *t, int x, int y, int w, int h) {
+// CPU C of row K's busy share now, ", 45% busy", onto buf ("" if not known)
+static void pct_text(struct machines *t, int k, int c) {
+    int p;
+    p = k == 0 ? (c < t->npp ? t->ppct[c] : c == 0 && t->nchist[0] ? t->chist[t->nchist[0] - 1] : 0 - 1) : t->pct[k * MAXC + c];
+    if (p < 0) { ui_cat(buf, ", busy: -"); return; }
+    ui_cat(buf, ", "); ui_num(buf + ui_len(buf), p); ui_cat(buf, "% busy");
+}
+static void draw_load_cpu(struct machines *t, int x, int y, int w, int h) {
     int k, c, n, cols, rows, gw, gh, gx, gy, used;
     k = t->sel;
     n = k == 0 ? host_cpus(&used) : t->ncpu[k];
@@ -1005,19 +1295,26 @@ static void draw_load(struct machines *t, int x, int y, int w, int h) {
                 ++c;
                 continue;
             }
-            ui_cat(buf, c == 0 ? ": its time busy, %" : c < used ? ": the control's CPU, instructions a second" : ": not used by c4pc");
+            if (c == 0) { ui_cat(buf, ": its time busy"); pct_text(t, 0, 0); }
+            else if (c < used) {
+                ui_cat(buf, ": the control's CPU "); ui_num(buf + ui_len(buf), c); ui_cat(buf, ", ");
+                gfmt(t->nchist[CTL] ? t->chist[(CTL * MAXC + c) * HIST + t->nchist[CTL] - 1] : 0 - 1, G_KIPS, buf + ui_len(buf));
+                pct_text(t, CTL, c);
+            } else ui_cat(buf, ": not used by c4pc");
             d_text(gx, gy, C_DARK, F_SANS, buf);
-            if (c == 0) graph(t->chist, t->nchist[0], gx, gy + 16, gw, gh, 100);
-            else if (c < used) graph(t->chist + (CTL * MAXC + c) * HIST, t->nchist[CTL], gx, gy + 16, gw, gh, 0);
+            if (c == 0) graph(t->chist, t->nchist[0], gx, gy + 16, gw, gh, 100, G_PCT);
+            else if (c < used) graph(t->chist + (CTL * MAXC + c) * HIST, t->nchist[CTL], gx, gy + 16, gw, gh, 0, G_KIPS);
             else {
-                d_rect(gx, gy + 16, gw, gh, C_DARK);
+                d_rect(gx, gy + 16, gw, gh, C_BLACK);
                 d_text(gx + 8, gy + 24, 0xa0a0a0, F_SANS, "idle: GRUB's \"every processor\" entries run C4IX on it");
             }
         } else {
-            ui_cpy(buf, "CPU "); ui_num(buf + 4, c);
-            ui_cat(buf, ": instructions a second");
+            ui_cpy(buf, "CPU "); ui_num(buf + 4, c); ui_cat(buf, ": ");
+            gfmt(t->nchist[k] ? t->chist[(k * MAXC + c) * HIST + t->nchist[k] - 1] : 0 - 1, G_KIPS, buf + ui_len(buf));
+            ui_cat(buf, " instructions");
+            pct_text(t, k, c);
             d_text(gx, gy, C_DARK, F_SANS, buf);
-            graph(t->chist + (k * MAXC + c) * HIST, t->nchist[k], gx, gy + 16, gw, gh, 0);
+            graph(t->chist + (k * MAXC + c) * HIST, t->nchist[k], gx, gy + 16, gw, gh, 0, G_KIPS);
         }
         ++c;
     }
@@ -1028,11 +1325,148 @@ static void draw_load(struct machines *t, int x, int y, int w, int h) {
     } else if (k == 0) d_text(x, y + h - 14, C_DARK, F_SANS, "c4pc's CPU 0 runs the control C4IX's CPU 0 and the machines in turn");
 }
 
+// Disk: c4pc's own disks, or the machine's: each one's reads and writes a
+// second, the last minute, as btop's disks box has them, and its share of
+// all of c4pc's disk access now (IO%)
+static char *host_disk_name(int b, char *out) {
+    char *p;
+    int n, k;
+    p = host_buf; n = 0; out[0] = 0;
+    while (*p) {
+        if (!memcmp(p, "disk ", 5)) {
+            if (n == b) { p = p + 5; k = 0; while (*p && *p != 10 && k < 60) { out[k] = *p; ++k; ++p; } out[k] = 0; return out; }
+            ++n;
+        }
+        while (*p && *p != 10) ++p;
+        if (*p) ++p;
+    }
+    ui_cpy(out, "disk "); ui_num(out + 5, b);
+    return out;
+}
+static void disk_block(struct machines *t, int x, int y, int w, char *name, long long size, int *hr, int *hw, int n, long long rd, long long wr) {
+    char s[80], s2[24];
+    int r, wv, iop, all;
+    d_text(x, y, C_DARK, F_BOLD, name);
+    r = n ? hr[n - 1] : 0; wv = n ? hw[n - 1] : 0;
+    all = t->nioh ? t->iohr[t->nioh - 1] + t->iohw[t->nioh - 1] : 0;
+    iop = all > 0 ? (r + wv) * 100 / all : 0 - 1;
+    s[0] = 0;
+    if (size > 0) { kbfmt(size / 1024, s); ui_cat(s, "   "); }
+    ui_cat(s, "IO% "); if (iop < 0) ui_cat(s, "-"); else ui_num(s + ui_len(s), iop > 100 ? 100 : iop);
+    d_text(x + w - ui_len(s) * 6 - 4, y, C_DARK, F_SANS, s);
+    ui_cpy(s, "R  "); kbfmt(rd / 1024, s2); ui_cat(s, s2); ui_cat(s, " in all");
+    d_text(x, y + 18, C_RD, F_SANS, "R");
+    graphc(hr, n, x + 16, y + 16, w - 16, 26, 0, G_KBS, C_RD);
+    ui_cpy(s, "read "); kbfmt(rd / 1024, s2); ui_cat(s, s2); ui_cat(s, ", written "); kbfmt(wr / 1024, s2); ui_cat(s, s2);
+    d_text(x, y + 48, C_WR, F_SANS, "W");
+    graphc(hw, n, x + 16, y + 46, w - 16, 26, 0, G_KBS, C_WR);
+    d_text(x + 16, y + 76, C_LBL, F_SANS, s);
+}
+static void draw_load_disk(struct machines *t, int x, int y, int w, int h) {
+    int k, b, gw, at, yy;
+    char nm[64];
+    k = t->sel;
+    if (k == 0) {
+        if (!t->has_io && !t->npd) {
+            d_text(x + 8, y + 8, C_DARK, F_SANS, "This c4pc does not count its disks' reads and writes (HOST io, diskio): an older one.");
+            return;
+        }
+        gw = (w - 10) / 2;
+        d_text(x, y, C_DARK, F_BOLD, "All of c4pc's disk access, the last minute");
+        d_text(x, y + 20, C_RD, F_SANS, "Read"); d_text(x + gw + 10, y + 20, C_WR, F_SANS, "Written");
+        graphc(t->iohr, t->nioh, x, y + 36, gw, 90, 0, G_KBS, C_RD);
+        graphc(t->iohw, t->nioh, x + gw + 10, y + 36, gw, 90, 0, G_KBS, C_WR);
+        ui_cpy(buf, "In all: read "); kbfmt(t->io_rd / 1024, buf + ui_len(buf)); ui_cat(buf, ", written "); kbfmt(t->io_wr / 1024, buf + ui_len(buf));
+        d_text(x, y + 132, C_DARK, F_SANS, buf);
+        yy = y + 158; b = 0;
+        while (b < t->npd && yy + 92 < y + h) {
+            disk_block(t, x, yy, w, host_disk_name(b, nm), 0, t->pdhr + b * HIST, t->pdhw + b * HIST, t->nioh, t->pdrd[b], t->pdwr[b]);
+            yy = yy + 98; ++b;
+        }
+        return;
+    }
+    if (k > CTL && t->state[k] != S_RUN && t->state[k] != S_PAUSE) { d_text(x + 8, y + 8, C_DARK, F_SANS, "It is not running."); return; }
+    if (!t->nb[k]) {
+        d_text(x + 8, y + 8, C_DARK, F_SANS, "c4pc does not say what this machine's disks read and write (an older c4pc), or it has none.");
+        return;
+    }
+    yy = y; b = 0;
+    while (b < t->nb[k] && yy + 92 < y + h) {
+        at = k * MAXB + b;
+        disk_block(t, x, yy, w, t->bname + at * BNAME, t->bsize[at], t->bhr + at * HIST, t->bhw + at * HIST, t->nbh[k], t->brd[at], t->bwr[at]);
+        yy = yy + 98; ++b;
+    }
+}
+
+// Memory: used, free, cached, swap (the control's from its own
+// /proc/meminfo; a guest's heap and swap from INFO; c4pc: the PC's, and
+// what each machine was given)
+static void draw_load_mem(struct machines *t, int x, int y, int w, int h) {
+    int k, j, yy;
+    long long total, given;
+    k = t->sel;
+    if (k == 0) {
+        line_get(host_buf, "memory", buf, 80);
+        total = num_of(buf) * 1024;
+        given = 0; j = CTL; while (j < t->n) { if (j == CTL || up(t, j)) given = given + (long long)t->mb[j] * 1024; ++j; }
+        d_text(x, y, C_DARK, F_BOLD, "The PC's memory");
+        bar(x, y + 22, w, "Given to the machines (the control C4IX's and those running)", given, total, 0xd0a040);
+        yy = y + 60;
+        j = CTL;
+        while (j < t->n && yy + 30 < y + h) {
+            if (j == CTL || up(t, j)) {
+                ui_cpy(buf, j == CTL ? "control (this C4IX)" : mname(t, j)); ui_cat(buf, ": its heap in use");
+                bar(x, yy, w, buf, t->hused[j], t->heap[j] > 0 ? t->heap[j] : (long long)t->mb[j] * 1024, 0x40a0d0);
+                yy = yy + 34;
+            }
+            ++j;
+        }
+        return;
+    }
+    if (k > CTL && !up(t, k)) { d_text(x + 8, y + 8, C_DARK, F_SANS, "It is not running."); return; }
+    total = t->heap[k] > 0 ? t->heap[k] : (long long)t->mb[k] * 1024;
+    ui_cpy(buf, "Total: "); kbfmt(total, buf + ui_len(buf)); ui_cat(buf, " (its heap: what its programs and files have)");
+    d_text(x, y, C_DARK, F_BOLD, buf);
+    bar(x, y + 24, w, "Used", t->hused[k], total, 0xd06060);
+    bar(x, y + 60, w, "Free", t->hused[k] >= 0 ? total - t->hused[k] : 0 - 1, total, 0x60c060);
+    bar(x, y + 96, w, k == CTL ? "Cached (files kept from the host)" : "Cached (inside it: not seen from here)", k == CTL ? t->m_cached : 0 - 1, total, 0x40a0d0);
+    bar(x, y + 132, w, "Swap used", t->sused[k] >= 0 ? (long long)t->sused[k] * 4 : 0 - 1, t->sslots[k] > 0 ? (long long)t->sslots[k] * 4 : 0, 0xd0a040);
+    if (t->hused[k] < 0) d_text(x, y + 172, C_LBL, F_SANS, "c4pc does not say this machine's heap and swap (INFO heap, swap): an older c4pc.");
+}
+
+// Network: its layout, for when the machines have network cards
+static int empty_h[2];
+static void draw_load_net(struct machines *t, int x, int y, int w, int h) {
+    int j, yy, gw;
+    d_text(x, y, C_DARK, F_BOLD, "Network");
+    d_text(x, y + 18, C_LBL, F_SANS, "No network yet: the machines have no network card. Each one's traffic will show here, as below.");
+    gw = (w - 150 - 10) / 2;
+    yy = y + 46; j = CTL;
+    while (j < t->n && yy + 44 < y + h) {
+        d_text(x, yy + 12, C_DARK, F_SANS, j == CTL ? "control" : mname(t, j));
+        d_text(x + 150, yy - 2, C_RD, F_SANS, "received"); graphc(empty_h, 0, x + 150, yy + 12, gw, 28, 1, G_KBS, C_RD);
+        d_text(x + 160 + gw, yy - 2, C_WR, F_SANS, "sent"); graphc(empty_h, 0, x + 160 + gw, yy + 12, gw, 28, 1, G_KBS, C_WR);
+        yy = yy + 50; ++j;
+    }
+}
+
+// Load: its own tabs
+static void draw_load(struct machines *t, int x, int y, int w, int h) {
+    ltabs[0] = "CPU"; ltabs[1] = "Disk"; ltabs[2] = "Memory"; ltabs[3] = "Network";
+    ui_tabs(x, y, ltabs, N_LTABS, t->ltab);
+    d_rect(x, y + 22, w, 1, C_SHADOW);
+    y = y + 30; h = h - 30;
+    if (t->ltab == L_CPU) draw_load_cpu(t, x, y, w, h);
+    else if (t->ltab == L_DISK) draw_load_disk(t, x, y, w, h);
+    else if (t->ltab == L_MEM) draw_load_mem(t, x, y, w, h);
+    else draw_load_net(t, x, y, w, h);
+}
+
 // Log: its source's lines (c4pc's, the control's, a guest's), scrolled
 static void draw_log(struct machines *t, int x, int y, int w, int h) {
     int n, k, rows, cols, top, c, i2;
     char *p, line[160];
-    d_rect(x, y, w - 16, h, C_DARK);
+    d_rect(x, y, w - 16, h, C_BLACK);
     if (!logbuf[0]) log_fetch(t);
     rows = (h - 8) / LROW; cols = (w - 24) / 7;
     if (cols > 159) cols = 159;
@@ -1125,21 +1559,309 @@ static int power_rows(struct machines *t) {
     return n;
 }
 
+// ---- Overview: btop's look, in the GUI ----
+//
+// Everything at a glance, as btop lays it out: the processors across the
+// top (all of them busy, the last minute, and each one's bar and share),
+// then memory and disks side by side, the network under them, and on the
+// right the machines and the control C4IX's busiest tasks.
+static void box(int x, int y, int w, int h, char *title) {
+    d_recto(x, y, w, h, C_SHADOW);
+    d_rect(x + 8, y - 6, ui_len(title) * 7 + 8, 12, C_FACE);
+    d_text(x + 12, y - 7, C_TITLE, F_BOLD, title);
+}
+// a bar with its share at the right: "P0 [=====    ] 45%"
+static void pbar(int x, int y, int w, char *label, int pct, int col) {
+    char s[12];
+    d_text(x, y, C_DARK, F_SANS, label);
+    d_rect(x + 34, y + 3, w - 34 - 40, 8, C_BLACK);
+    if (pct > 0) d_rect(x + 35, y + 4, (w - 36 - 40) * (pct > 100 ? 100 : pct) / 100, 6, col);
+    if (pct < 0) ui_cpy(s, "-"); else { ui_num(s, pct); ui_cat(s, "%"); }
+    d_text(x + w - ui_len(s) * 6 - 2, y, C_DARK, F_BOLD, s);
+}
+// a bar for a narrow box: LABEL and the share, the bar, then "V of TOTAL"
+static void nbar(int x, int y, int w, char *label, long long v, long long total, int col) {
+    char s[40], t2[24];
+    int fill;
+    d_text(x, y, C_DARK, F_SANS, label);
+    if (v < 0 || total <= 0) ui_cpy(s, "-");
+    else { ui_num(s, (int)(v * 100 / total)); ui_cat(s, "%"); }
+    d_text(x + w - ui_len(s) * 6 - 2, y, C_DARK, F_BOLD, s);
+    d_rect(x, y + 15, w, 7, C_BLACK);
+    if (v > 0 && total > 0) { fill = (int)(v * (w - 2) / total); if (fill > w - 2) fill = w - 2; d_rect(x + 1, y + 16, fill, 5, col); }
+    if (v >= 0 && total > 0) { kbfmt(v, s); ui_cat(s, " of "); kbfmt(total, t2); ui_cat(s, t2); d_text(x, y + 24, C_LBL, F_SANS, s); }
+}
+// a machine's state in a word, for the list
+static char *state_word(struct machines *t, int k) {
+    if (k == CTL) return "running";
+    if (t->state[k] == S_RUN) return "running";
+    if (t->state[k] == S_PAUSE) return "paused";
+    if (t->state[k] == S_HALT) return "stopped";
+    return t->id[k] ? "made" : "off";
+}
+// how long c4pc has been up (HOST's uptime, ms): "up 2h 03m"
+static void uptime_text(char *out) {
+    long long ms;
+    int m;
+    line_get(host_buf, "uptime", buf, 30);
+    ms = num_of(buf);
+    m = (int)(ms / 60000);
+    ui_cpy(out, "up "); ui_num(out + 3, m / 60); ui_cat(out, "h ");
+    if (m % 60 < 10) ui_cat(out, "0");
+    ui_num(out + ui_len(out), m % 60); ui_cat(out, "m");
+}
+static void draw_top(struct machines *t, int x, int y, int w, int h) {
+    int ch1, gw, c, n, used, pct, cols, px, py, k, j, lw, rw2, my, mh, nh, yy, i, best, r, all;
+    long long total, given;
+    char s[64], lab[8];
+    // the processors
+    ch1 = h * 36 / 100;
+    box(x, y + 6, w, ch1 - 6, "cpu");
+    uptime_text(s); d_text(x + w - ui_len(s) * 6 - 10, y + 12, C_LBL, F_SANS, s);
+    gw = w - 270;
+    ui_cpy(buf, "all of c4pc's processors busy: "); gfmt(t->ntot ? t->tot[t->ntot - 1] : 0 - 1, G_PCT, buf + ui_len(buf));
+    d_text(x + 10, y + 14, C_DARK, F_SANS, buf);
+    graph(t->tot, t->ntot, x + 10, y + 32, gw - 10, ch1 - 42, 100, G_PCT);
+    n = host_cpus(&used);
+    if (n > MAXP) n = MAXP;
+    cols = n > 6 ? 2 : 1;
+    px = x + gw + 10; py = y + 32;
+    line_get(host_buf, "processor", s, 60);
+    d_text(px, y + 14, C_DARK, F_BOLD, s[0] ? s : "the PC");
+    c = 0;
+    while (c < n) {
+        pct = c < t->npp ? t->ppct[c] : c == 0 && t->nchist[0] ? t->chist[t->nchist[0] - 1] : c < t->ncpu[CTL] ? t->pct[CTL * MAXC + c] : 0 - 1;
+        ui_cpy(lab, "P"); ui_num(lab + 1, c);
+        pbar(px + (c % cols) * 126, py + (c / cols) * 16, cols > 1 ? 120 : 246, lab, pct, pct > 80 ? 0xd06060 : pct > 50 ? 0xd0a040 : 0x60c060);
+        ++c;
+    }
+    j = CTL + 1; k = 0; i = 0; while (j < t->n) { if (t->state[j] == S_RUN) ++k; if (t->id[j] || t->cfg[j]) ++i; ++j; }
+    ui_cpy(s, "machines: "); ui_num(s + 10, k); ui_cat(s, " running of "); ui_num(s + ui_len(s), i);
+    d_text(px, y + ch1 - 22, C_DARK, F_SANS, s);
+    // memory and disks side by side, the network under them; the list on the right
+    my = y + ch1 + 10; mh = h - ch1 - 10;
+    lw = w * 46 / 100; rw2 = w - lw - 8;
+    nh = mh * 30 / 100;
+    box(x, my, lw / 2 - 4, mh - nh - 8, "mem");
+    line_get(host_buf, "memory", buf, 80); total = num_of(buf) * 1024;
+    given = 0; j = CTL; while (j < t->n) { if (j == CTL || up(t, j)) given = given + (long long)t->mb[j] * 1024; ++j; }
+    yy = my + 10;
+    ui_cpy(s, "Total: "); kbfmt(total, s + 7); d_text(x + 8, yy, C_DARK, F_SANS, s);
+    nbar(x + 8, yy + 18, lw / 2 - 20, "Machines", given, total, 0xd0a040);
+    nbar(x + 8, yy + 56, lw / 2 - 20, "Control used", t->hused[CTL], t->heap[CTL], 0xd06060);
+    nbar(x + 8, yy + 94, lw / 2 - 20, "Cached", t->m_cached, t->heap[CTL], 0x40a0d0);
+    nbar(x + 8, yy + 132, lw / 2 - 20, "Swap", t->sused[CTL] >= 0 ? (long long)t->sused[CTL] * 4 : 0 - 1, (long long)t->sslots[CTL] * 4, 0xa060d0);
+    box(x + lw / 2 + 4, my, lw / 2 - 4, mh - nh - 8, "disks");
+    yy = my + 10; px = x + lw / 2 + 12;
+    if (t->has_io) {
+        d_text(px, yy, C_DARK, F_BOLD, "c4pc");
+        ui_cpy(s, "R "); gfmt(t->nioh ? t->iohr[t->nioh - 1] : 0, G_KBS, s + ui_len(s));
+        ui_cat(s, " W "); gfmt(t->nioh ? t->iohw[t->nioh - 1] : 0, G_KBS, s + ui_len(s));
+        d_text(px + lw / 2 - 20 - ui_len(s) * 6, yy, C_DARK, F_SANS, s);
+        graphc(t->iohr, t->nioh, px, yy + 16, lw / 2 - 20, 20, 0, G_KBS, C_RD);
+        graphc(t->iohw, t->nioh, px, yy + 38, lw / 2 - 20, 20, 0, G_KBS, C_WR);
+        yy = yy + 66;
+    } else { d_text(px, yy, C_LBL, F_SANS, "no disk counts:"); d_text(px, yy + 14, C_LBL, F_SANS, "an older c4pc"); yy = yy + 34; }
+    // each running machine's disks, a line each
+    j = CTL;
+    while (j < t->n && yy + 30 < my + mh - nh - 10) {
+        k = 0;
+        while ((j == CTL || up(t, j)) && k < t->nb[j] && yy + 30 < my + mh - nh - 10) {
+            i = j * MAXB + k;
+            ui_ncpy(s, ui_base(t->bname + i * BNAME), 20);
+            d_text(px, yy, C_DARK, F_SANS, s);
+            ui_cpy(s, "R "); gfmt(t->nbh[j] ? t->bhr[i * HIST + t->nbh[j] - 1] : 0, G_KBS, s + ui_len(s));
+            ui_cat(s, " W "); gfmt(t->nbh[j] ? t->bhw[i * HIST + t->nbh[j] - 1] : 0, G_KBS, s + ui_len(s));
+            d_text(px + 8, yy + 14, C_LBL, F_SANS, s);
+            yy = yy + 32; ++k;
+        }
+        ++j;
+    }
+    box(x, my + mh - nh, lw, nh - 4, "net");
+    d_text(x + 10, my + mh - nh + 10, C_LBL, F_SANS, "no network yet: the machines have no network card");
+    graphc(empty_h, 0, x + 10, my + mh - nh + 28, lw - 20, nh - 40, 1, G_KBS, 0xa060d0);
+    // the machines, then the control C4IX's busiest tasks
+    px = x + lw + 8;
+    box(px, my, rw2, mh - 4, "proc");
+    yy = my + 10;
+    d_text(px + 8, yy, C_TITLE, F_BOLD, "ID  Machine");
+    d_text(px + rw2 - 210, yy, C_TITLE, F_BOLD, "State");
+    d_text(px + rw2 - 150, yy, C_TITLE, F_BOLD, "CPU/s");
+    d_text(px + rw2 - 82, yy, C_TITLE, F_BOLD, "CPUs");
+    d_text(px + rw2 - 42, yy, C_TITLE, F_BOLD, "MB");
+    yy = yy + 18; j = CTL;
+    while (j < t->n && yy + 16 < my + mh) {
+        if (j == CTL || t->id[j] || t->cfg[j]) {
+            if (j == CTL) ui_cpy(s, "0   control"); else { ui_num(s, t->id[j]); ui_cat(s, t->id[j] < 10 ? "   " : "  "); ui_ncpy(s + ui_len(s), mname(t, j), 14); }
+            d_text(px + 8, yy, C_DARK, F_SANS, s);
+            d_text(px + rw2 - 210, yy, t->state[j] == S_RUN || j == CTL ? 0x60c060 : C_LBL, F_SANS, state_word(t, j));
+            gfmt(j == CTL || t->state[j] == S_RUN ? t->rate[j] : 0 - 1, G_KIPS, s); d_text(px + rw2 - 150, yy, C_DARK, F_SANS, s);
+            ui_num(s, t->ncpu[j]); d_text(px + rw2 - 82, yy, C_DARK, F_SANS, s);
+            ui_num(s, t->mb[j]); d_text(px + rw2 - 42, yy, C_DARK, F_SANS, s);
+            yy = yy + 16;
+        }
+        ++j;
+    }
+    yy = yy + 8;
+    d_text(px + 8, yy, C_TITLE, F_BOLD, "PID Program");
+    d_text(px + rw2 - 150, yy, C_TITLE, F_BOLD, "Mem");
+    d_text(px + rw2 - 60, yy, C_TITLE, F_BOLD, "Cpu%");
+    yy = yy + 18;
+    // its tasks by their share, the largest first
+    all = cs_have ? cs_b.h.ntasks : 0;
+    i = 0; while (i < all) { tord[i] = i; ++i; }
+    i = 0;
+    while (i < all) {
+        best = i; r = i + 1;
+        while (r < all) { if (tpct[tord[r]] > tpct[tord[best]]) best = r; ++r; }
+        r = tord[i]; tord[i] = tord[best]; tord[best] = r;
+        ++i;
+    }
+    i = 0;
+    while (i < all && yy + 16 < my + mh) {
+        r = tord[i];
+        if (cs_b.t[r].id != cs_b.h.idle) {
+            ui_num(s, cs_b.t[r].id); ui_cat(s, cs_b.t[r].id < 10 ? "   " : cs_b.t[r].id < 100 ? "  " : " ");
+            ui_ncpy(s + ui_len(s), cs_b.t[r].name, CPUSTAT_NAME);
+            d_text(px + 8, yy, C_DARK, F_SANS, s);
+            kbfmt(cs_b.t[r].mem / 1024, s); d_text(px + rw2 - 150, yy, C_DARK, F_SANS, s);
+            ui_num(s, tpct[r]); d_text(px + rw2 - 60, yy, C_DARK, F_SANS, s);
+            yy = yy + 16;
+        }
+        ++i;
+    }
+}
+
+// ---- VMware's look: a library on the left, the machine on the right ----
+//
+// The toolbar and the list are the tree's (the same places, VMware's
+// words); on the right the one chosen: its console while it runs, its
+// devices and details and "Power on" while it does not, and its settings
+// -- Hardware and Options, the same form -- a click away.
+static char *vtabs[2];
+static void draw_vmw_dev(struct machines *t, int k, int x, int y, int w) {
+    int r;
+    ui_group(x, y, w, 170, "Devices");
+    r = 0;
+    ui_num(buf, t->mb[k]); ui_cat(buf, " MB"); field(x + 10, y + 20, "Memory", buf);
+    ui_num(buf, t->ncpu[k]); field(x + 10, y + 40, "Processors", buf);
+    if (t->cfg[k] && cfg_read(mname(t, k)) >= 0) {
+        line_get(cfg, "disk", buf, 60); field(x + 10, y + 60, "Hard Disk", buf[0] ? ui_base(buf) : "none");
+        line_get(cfg, "cdrom", buf, 60); field(x + 10, y + 80, "CD/DVD", !buf[0] ? "none" : same(buf, "pc") ? "the PC's drive" : ui_base(buf));
+        line_get(cfg, "swap", buf, 60); field(x + 10, y + 100, "Swap", buf[0] ? ui_base(buf) : "none");
+        line_get(cfg, "mmu", buf, 8); field(x + 10, y + 120, "MMU", same(buf, "no") ? "no" : "yes");
+    }
+    field(x + 10, y + 140, "Display", "the hypervisor's screen");
+}
+static void draw_vmw_details(struct machines *t, int k, int x, int y, int w) {
+    ui_group(x, y, w, 130, "Virtual Machine Details");
+    state_text(t, k, buf); field(x + 10, y + 20, "State", buf);
+    ui_cpy(buf, "/vm/"); ui_cat(buf, mname(t, k)); ui_cat(buf, "/vm.cfg"); field(x + 10, y + 40, "Configuration", t->cfg[k] ? buf : "none (vm new made it)");
+    if (t->cfg[k] && cfg_read(mname(t, k)) >= 0) {
+        line_get(cfg, "system", buf, 30); field(x + 10, y + 60, "System", buf[0] ? buf : "-");
+        line_get(cfg, "autostart", buf, 8); field(x + 10, y + 80, "Start at boot", same(buf, "yes") ? "yes" : "no");
+        line_get(cfg, "boot", buf, 60); field(x + 10, y + 100, "Boots from", same(buf, "-") ? "its disk" : "its system's archive");
+    }
+}
+static void draw_vmw(struct machines *t, int x, int y, int w, int h, int focused) {
+    int k, run;
+    k = t->sel;
+    // its name, large, and its state
+    d_rect(x, y, w, 30, C_FACE);
+    d_text(x + 8, y + 6, C_DARK, F_BOLD, k == 0 ? "c4pc (this PC)" : k == CTL ? "control (this C4IX)" : mname(t, k));
+    state_text(t, k, buf); d_text(x + w - ui_len(buf) * 6 - 10, y + 8, C_LBL, F_SANS, buf);
+    d_rect(x, y + 30, w, 1, C_SHADOW);
+    y = y + 38; h = h - 38;
+    if (k == 0) { draw_host_summary(t, x, y, w, h); return; }
+    if (t->vpage) {
+        vtabs[0] = "Hardware"; vtabs[1] = "Options";
+        ui_tabs(x, y, vtabs, 2, t->vpage - 1);
+        ui_button(x + w - 90, y, 90, 22, "Back", 0, 0);
+        t->tab = t->vpage == 1 ? T_HW : T_OPT;
+        draw_cfgtab(t, x, y + 30, w, focused);
+        return;
+    }
+    run = k == CTL || up(t, k);
+    if (run) {
+        screen_box(t, x, y, w, h - 34);
+        if (k == CTL) d_text(x + 8, y + h - 24, C_LBL, F_SANS, "The control C4IX's own screen: the one you are at.");
+        else {
+            ui_button(x, y + h - 28, 150, 24, "Full Screen (Attach)", 0, 1);
+            d_text(x + 160, y + h - 23, C_LBL, F_SANS, "Ctrl+Alt+Home comes back.");
+        }
+        if (k > CTL) ui_button(x + w - 100, y + h - 28, 100, 24, "Settings...", 0, 0);
+        return;
+    }
+    // not running: VMware's page
+    ui_button(x, y, 280, 26, "Power on this virtual machine", 0, 1);
+    ui_button(x, y + 32, 280, 26, "Edit virtual machine settings", 0, 0);
+    draw_vmw_dev(t, k, x, y + 72, w / 2 - 6);
+    draw_vmw_details(t, k, x + w / 2 + 6, y + 72, w / 2 - 6);
+}
+// its mouse, on the right: 1 if it took the event
+static int vmw_mouse(struct win *w, struct machines *t, int ev, int x, int y, int cw, int ch) {
+    int px, py, pw, ph, k, j;
+    k = t->sel;
+    px = TREE_W + 18; pw = cw - TREE_W - 30;
+    py = TOOL_H + 46; ph = ch - TOOL_H - 80;
+    if (k == 0) return 0;
+    if (t->vpage) {
+        if (guest(t, k) && t->form_row == k && form_mouse(w, t, ev, x, y, px, py + 30, pw)) return 1;
+        if (ev != E_DOWN) return 0;
+        if (ui_hit(x, y, px + pw - 90, py, 90, 22)) { t->vpage = 0; t->form_row = 0 - 1; t->shown = 0 - 1; return 1; }
+        vtabs[0] = "Hardware"; vtabs[1] = "Options";
+        j = ui_tab_hit(x, y, px, py, vtabs, 2);
+        if (j >= 0) { t->vpage = j + 1; t->form_row = 0 - 1; return 1; }
+        return 0;
+    }
+    if (ev != E_DOWN) return 0;
+    if (k == CTL || up(t, k)) {
+        if (k > CTL && ui_hit(x, y, px, py + ph - 28, 150, 24)) { attach_one(t, k); return 1; }
+        if (k > CTL && ui_hit(x, y, px + pw - 100, py + ph - 28, 100, 24)) { t->vpage = 1; t->form_row = 0 - 1; return 1; }
+        return 0;
+    }
+    if (ui_hit(x, y, px, py, 280, 26)) { start_one(t, k); return 1; }
+    if (ui_hit(x, y, px, py + 32, 280, 26)) { t->vpage = 1; t->form_row = 0 - 1; return 1; }
+    return 0;
+}
+
+// ---- View: which look, kept in /etc/machines.cfg ----
+static void view_marks(int v) {
+    vi_prox[0] = 0; vi_vmw[0] = 0;
+    if (v == 0) { vi_prox[0] = WK_CHECKED; ui_cpy(vi_prox + 1, "Proxmox-style: a tree and tabs"); }
+    else ui_cpy(vi_prox, "Proxmox-style: a tree and tabs");
+    if (v == 1) { vi_vmw[0] = WK_CHECKED; ui_cpy(vi_vmw + 1, "VMware-style: a library and the machine"); }
+    else ui_cpy(vi_vmw, "VMware-style: a library and the machine");
+    view_items[0] = vi_prox; view_items[1] = vi_vmw; view_items[2] = 0;
+    view_menu[0].title = "View"; view_menu[0].items = view_items;
+}
+static void view_set(struct machines *t, int v) {
+    int fd;
+    t->view = v ? 1 : 0; t->vpage = 0; t->shown = 0 - 1; t->form_row = 0 - 1;
+    view_marks(t->view);
+    umkdir("/etc");
+    if ((fd = uopen("/etc/machines.cfg", O_WR + O_CREATE + O_TRUNCATE)) >= 0) { write(fd, t->view ? "view 1\n" : "view 0\n", 7); uclose(fd); }
+}
+void machines_command(struct win *w, int menu, int item) {
+    if (menu == 0 && (item == 0 || item == 1)) { view_set(S(w), item); grab(S(w)); }
+    mark_win_dirty(w);
+}
+
 void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct machines *t;
     int k, y, rx, rw, bx;
     t = S(w);
-    tabs[0] = "Summary"; tabs[1] = "Console"; tabs[2] = "Hardware"; tabs[3] = "Options"; tabs[4] = "Load"; tabs[5] = "Log";
+    tabs[0] = "Summary"; tabs[1] = "Console"; tabs[2] = "Hardware"; tabs[3] = "Options"; tabs[4] = "Load"; tabs[5] = "Overview"; tabs[6] = "Log";
     d_rect(ox, oy, cw, ch, C_FACE);
-    // the toolbar
-    ui_button(ox + 6, oy + 5, 100, 24, "Create VM", 0, 0);
+    // the toolbar: the same buttons in both looks, VMware's words in its
+    ui_button(ox + 6, oy + 5, 100, 24, t->view ? "New VM" : "Create VM", 0, 0);
     bx = ox + cw - 6 - N_TB * TB;
-    ui_button(bx, oy + 5, TBW, 24, "Start", 0, 0);
-    ui_button(bx + TB, oy + 5, TBW, 24, "Shutdown", 0, 0);
-    ui_button(bx + 2 * TB, oy + 5, TBW, 24, "Stop", 0, 0);
+    ui_button(bx, oy + 5, TBW, 24, t->view ? "Power On" : "Start", 0, 0);
+    ui_button(bx + TB, oy + 5, TBW, 24, t->view ? "Shut Down" : "Shutdown", 0, 0);
+    ui_button(bx + 2 * TB, oy + 5, TBW, 24, t->view ? "Power Off" : "Stop", 0, 0);
     ui_button(bx + 3 * TB, oy + 5, TBW, 24, "Restart", 0, 0);
-    ui_button(bx + 4 * TB, oy + 5, TBW, 24, guest(t, t->sel) && t->state[t->sel] == S_PAUSE ? "Resume" : "Pause", 0, 0);
-    ui_button(bx + 5 * TB, oy + 5, TBW, 24, "Attach", 0, 0);
+    ui_button(bx + 4 * TB, oy + 5, TBW, 24, guest(t, t->sel) && t->state[t->sel] == S_PAUSE ? "Resume" : t->view ? "Suspend" : "Pause", 0, 0);
+    ui_button(bx + 5 * TB, oy + 5, TBW, 24, t->view ? "Full Screen" : "Attach", 0, 0);
     ui_button(bx + 6 * TB, oy + 5, TBW, 24, "Delete", 0, 0);
     // the tree: c4pc, and under it the control C4IX and the machines
     d_rect(ox + 4, oy + TOOL_H, TREE_W, ch - TOOL_H - 26, C_WHITE);
@@ -1148,9 +1870,9 @@ void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     k = 0;
     while (k < t->n) {
         if (k == t->sel) d_rect(ox + 6, y - 1, TREE_W - 4, ROW_H - 2, C_SEL);
-        if (k == 0) { d_icon(K_VMS, ox + 10, y + 1); d_text(ox + 30, y + 3, k == t->sel ? C_WHITE : C_DARK, F_BOLD, "c4pc"); }
+        if (k == 0) { d_icon(K_VMS, ox + 10, y + 1); d_text(ox + 30, y + 3, k == t->sel ? C_WHITE : C_DARK, F_BOLD, t->view ? "c4pc (this PC)" : "c4pc"); }
         else {
-            d_rect(ox + 14, y + 2, 1, ROW_H - 6, C_SHADOW);
+            if (!t->view) d_rect(ox + 14, y + 2, 1, ROW_H - 6, C_SHADOW);
             icon(ox + 22, y + 2, k == CTL ? S_RUN : t->state[k]);
             buf[0] = 0;
             if (k == CTL) ui_cpy(buf, "0 control (this C4IX)");
@@ -1170,17 +1892,27 @@ void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         d_text(ox + 8, oy + ch - 18, C_DARK, F_SANS, t->status);
         return;
     }
+    if (t->view) {
+        // VMware's: the machine on the right
+        d_bevel(rx, oy + TOOL_H, rw, ch - TOOL_H - 26, B_RAISED);
+        draw_vmw(t, rx + 8, oy + TOOL_H + 8, rw - 16, ch - TOOL_H - 26 - 16, focused);
+        d_bevel(ox + 2, oy + ch - 22, cw - 4, 20, B_SUNKEN);
+        d_text(ox + 8, oy + ch - 18, C_DARK, F_SANS, t->status);
+        if (t->vpage && guest(t, t->sel) && t->form_row == t->sel) draw_form_lists(t, rx + 8, oy + TOOL_H + 46 + 30);
+        return;
+    }
     d_bevel(rx, oy + PAGE_Y, rw, ch - PAGE_Y - 26, B_RAISED);
     ui_tabs(rx + 4, oy + TAB_Y, tabs, N_TABS, t->tab);
-    if (t->tab == 0) draw_summary(t, rx + 8, oy + PAGE_Y + 10, rw - 16, ch - PAGE_Y - 44);
-    else if (t->tab == 1) draw_console(t, rx + 8, oy + PAGE_Y + 8, rw - 16, ch - PAGE_Y - 40);
-    else if (t->tab == 2 || t->tab == 3) draw_cfgtab(t, rx + 8, oy + PAGE_Y + 10, rw - 16, focused);
-    else if (t->tab == 4) draw_load(t, rx + 8, oy + PAGE_Y + 10, rw - 16, ch - PAGE_Y - 44);
+    if (t->tab == T_SUM) draw_summary(t, rx + 8, oy + PAGE_Y + 10, rw - 16, ch - PAGE_Y - 44);
+    else if (t->tab == T_CON) draw_console(t, rx + 8, oy + PAGE_Y + 8, rw - 16, ch - PAGE_Y - 40);
+    else if (t->tab == T_HW || t->tab == T_OPT) draw_cfgtab(t, rx + 8, oy + PAGE_Y + 10, rw - 16, focused);
+    else if (t->tab == T_LOAD) draw_load(t, rx + 8, oy + PAGE_Y + 10, rw - 16, ch - PAGE_Y - 44);
+    else if (t->tab == T_TOP) draw_top(t, rx + 8, oy + PAGE_Y + 10, rw - 16, ch - PAGE_Y - 44);
     else draw_log(t, rx + 8, oy + PAGE_Y + 8, rw - 16, ch - PAGE_Y - 40);
     d_bevel(ox + 2, oy + ch - 22, cw - 4, 20, B_SUNKEN);
     d_text(ox + 8, oy + ch - 18, C_DARK, F_SANS, t->status);
     // an open dropdown's list, over the rest
-    if ((t->tab == 2 || t->tab == 3) && guest(t, t->sel) && t->form_row == t->sel) draw_form_lists(t, rx + 8, oy + PAGE_Y + 10);
+    if ((t->tab == T_HW || t->tab == T_OPT) && guest(t, t->sel) && t->form_row == t->sel) draw_form_lists(t, rx + 8, oy + PAGE_Y + 10);
 }
 
 // ---- input ----
@@ -1279,8 +2011,10 @@ void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     }
     if (t->create) { create_mouse(w, t, ev, x, y, 8, TOOL_H + 4, cw - 16); mark_win_dirty(w); return; }
     rx = TREE_W + 10; rw = cw - TREE_W - 14;
+    // VMware's look: the right side's own
+    if (t->view && vmw_mouse(w, t, ev, x, y, cw, ch)) { grab(t); mark_win_dirty(w); return; }
     // the Log's scroll bar and wheel
-    if (t->tab == 5) {
+    if (!t->view && t->tab == T_LOG) {
         if (ev == E_WHEEL) {
             top = t->ltop < 0 ? (t->ln > t->lrows ? t->ln - t->lrows : 0) : t->ltop;
             top = top + y * 3;
@@ -1303,7 +2037,7 @@ void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         }
     }
     // the form (an open list takes moves and lets-go too)
-    if ((t->tab == 2 || t->tab == 3) && guest(t, t->sel) && t->form_row == t->sel) {
+    if (!t->view && (t->tab == T_HW || t->tab == T_OPT) && guest(t, t->sel) && t->form_row == t->sel) {
         if (form_mouse(w, t, ev, x, y, rx + 8, PAGE_Y + 10, rw - 16)) { mark_win_dirty(w); return; }
     }
     if (ev != E_DOWN && ev != E_DBL) return;
@@ -1324,14 +2058,21 @@ void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     }
     if (ui_hit(x, y, 4, TOOL_H, TREE_W, ch - TOOL_H - 26)) {
         k = (y - TOOL_H - 4) / ROW_H;
-        if (k >= 0 && k < t->n && k != t->sel) { t->sel = k; t->shown = 0 - 1; t->ltop = 0 - 1; t->form_row = 0 - 1; logbuf[0] = 0; grab(t); }
+        if (k >= 0 && k < t->n && k != t->sel) { t->sel = k; t->shown = 0 - 1; t->ltop = 0 - 1; t->form_row = 0 - 1; t->vpage = 0; logbuf[0] = 0; grab(t); }
         if (ev == E_DBL && guest(t, k) && t->state[k] == S_RUN) hv(C_ATTACH, t->id[k], 0, 0, 0);
         mark_win_dirty(w);
         return;
     }
+    if (t->view) return;
     k = ui_tab_hit(x, y, rx + 4, TAB_Y, tabs, N_TABS);
     if (k >= 0) { t->tab = k; t->shown = 0 - 1; t->ltop = 0 - 1; t->form_row = 0 - 1; logbuf[0] = 0; grab(t); mark_win_dirty(w); return; }
-    if (t->tab == 1 && guest(t, t->sel) && ui_hit(x, y, rx + 8 + (rw - 16 - 220) / 2, ch - 40 - 58 + 8, 220, 26)) {
+    // Load's own tabs
+    if (t->tab == T_LOAD) {
+        ltabs[0] = "CPU"; ltabs[1] = "Disk"; ltabs[2] = "Memory"; ltabs[3] = "Network";
+        k = ui_tab_hit(x, y, rx + 8, PAGE_Y + 10, ltabs, N_LTABS);
+        if (k >= 0) { t->ltab = k; mark_win_dirty(w); return; }
+    }
+    if (t->tab == T_CON && guest(t, t->sel) && ui_hit(x, y, rx + 8 + (rw - 16 - 220) / 2, ch - 40 - 58 + 8, 220, 26)) {
         attach_one(t, t->sel);
         return;
     }
@@ -1357,7 +2098,7 @@ void machines_key(struct win *w, int code, int ch, int mods) {
         return;
     }
     // the form's field with the keyboard
-    if ((t->tab == 2 || t->tab == 3) && guest(t, t->sel) && t->form_row == t->sel) {
+    if ((t->view ? t->vpage != 0 : t->tab == T_HW || t->tab == T_OPT) && guest(t, t->sel) && t->form_row == t->sel) {
         tab_fields(t->tab, &first, &last);
         f = first;
         while (f <= last) {
@@ -1381,10 +2122,10 @@ void machines_key(struct win *w, int code, int ch, int mods) {
             return;
         }
     }
-    if (code == KEY_UP && t->sel > 0) { --t->sel; t->shown = 0 - 1; t->form_row = 0 - 1; t->ltop = 0 - 1; logbuf[0] = 0; }
-    else if (code == KEY_DOWN && t->sel < t->n - 1) { ++t->sel; t->shown = 0 - 1; t->form_row = 0 - 1; t->ltop = 0 - 1; logbuf[0] = 0; }
+    if (code == KEY_UP && t->sel > 0) { --t->sel; t->shown = 0 - 1; t->form_row = 0 - 1; t->ltop = 0 - 1; t->vpage = 0; logbuf[0] = 0; }
+    else if (code == KEY_DOWN && t->sel < t->n - 1) { ++t->sel; t->shown = 0 - 1; t->form_row = 0 - 1; t->ltop = 0 - 1; t->vpage = 0; logbuf[0] = 0; }
     else if (code == KEY_TAB && (mods & M_CTRL)) { t->tab = (t->tab + 1) % N_TABS; t->form_row = 0 - 1; t->ltop = 0 - 1; logbuf[0] = 0; }
-    else if (t->tab == 5 && (code == KEY_PGUP || code == KEY_PGDN)) {
+    else if (!t->view && t->tab == T_LOG && (code == KEY_PGUP || code == KEY_PGDN)) {
         f = t->ltop < 0 ? (t->ln > t->lrows ? t->ln - t->lrows : 0) : t->ltop;
         f = f + (code == KEY_PGUP ? 0 - t->lrows : t->lrows);
         if (f < 0) f = 0;

@@ -611,9 +611,9 @@ static void small_icon(int dir, int prog, int x, int y) {
     if (dir) {
         d_rect(x, y + 2, 6, 2, 0xc8a000); d_rect(x, y + 4, 14, 9, 0xffd84a); d_recto(x, y + 4, 14, 9, 0x806000);
     } else if (prog) {
-        d_rect(x, y + 1, 14, 12, C_WHITE); d_recto(x, y + 1, 14, 12, C_DARK); d_rect(x + 1, y + 2, 12, 3, C_TITLE);
+        d_rect(x, y + 1, 14, 12, 0xffffff); d_recto(x, y + 1, 14, 12, 0x000000); d_rect(x + 1, y + 2, 12, 3, C_TITLE);
     } else {
-        d_rect(x + 2, y, 10, 14, C_WHITE); d_recto(x + 2, y, 10, 14, C_SHADOW);
+        d_rect(x + 2, y, 10, 14, 0xffffff); d_recto(x + 2, y, 10, 14, C_SHADOW);
         d_rect(x + 4, y + 4, 6, 1, C_SHADOW); d_rect(x + 4, y + 7, 6, 1, C_SHADOW);
     }
 }

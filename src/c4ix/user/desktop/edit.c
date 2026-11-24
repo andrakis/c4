@@ -2282,7 +2282,7 @@ static void f_draw(struct edit *e, int ox, int oy, int ch) {
     e->ffollow = 0;
     f_clamp(e, rows);
     dx = e->fleft * 6;
-    d_rect(ox, oy, e->fwx, ch, 0xf4f4f4);
+    d_rect(ox, oy, e->fwx, ch, C_WHITE == 0xffffff ? 0xf4f4f4 : C_WHITE);
     d_rect(ox, oy, e->fwx, FHDR, C_FACE);
     d_bevel(ox, oy, e->fwx, FHDR, B_RAISED);
     d_text(ox + 6, oy + 4, C_DARK, F_BOLD, "Files");
@@ -2291,14 +2291,14 @@ static void f_draw(struct edit *e, int ox, int oy, int ch) {
     y = oy + FHDR + 2;
     while (i < e->fn && i < e->ftop + rows) {
         x = ox + 4 + e->fdepth[i] * 12 - dx;
-        if (i == cur) d_rect(ox, y, e->fwx, FROW, 0xc8dcff);
+        if (i == cur) d_rect(ox, y, e->fwx, FROW, C_WHITE == 0xffffff ? 0xc8dcff : C_FACE);
         if (e->fflag[i] & F_DIR) {
             if (e->fflag[i] & F_OPEN) { d_line(x, y + 6, x + 4, y + 10, C_DARK); d_line(x + 4, y + 10, x + 8, y + 6, C_DARK); }
             else { d_line(x + 2, y + 4, x + 6, y + 8, C_DARK); d_line(x + 6, y + 8, x + 2, y + 12, C_DARK); }
             d_rect(x + 11, y + 3, 5, 2, 0xc8a000);
             d_rect(x + 11, y + 5, 13, 8, 0xffd84a);
         } else {
-            d_rect(x + 13, y + 2, 9, 12, C_WHITE);
+            d_rect(x + 13, y + 2, 9, 12, 0xffffff);
             d_recto(x + 13, y + 2, 9, 12, C_SHADOW);
         }
         p = e->fpath[i];

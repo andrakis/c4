@@ -319,16 +319,16 @@ static void hv_attach_(int id) {
  * one is attached, VM 0's (s0) else. The mixes not heard are made too,
  * into nothing, so that their events are applied and their clocks kept,
  * and none piles up to be heard late */
-void hv_snd_fill(snd *s0, int16_t *out, u32 n) {
+void hv_snd_fill(snd *s0, int16_t *out, u32 n, u32 ahead) {
   static int16_t junk[2 * 1024];
   snd *heard = s0;
   if (attached && vms[attached].state == S_RUN && vms[attached].m && vms[attached].m->snd) heard = vms[attached].m->snd;
   for (int id = 0; id < HV_MAX; id++) {
     snd *s = id ? (vms[id].state == S_RUN && vms[id].m ? vms[id].m->snd : 0) : s0;
     if (!s || s == heard) continue;
-    for (u32 d = 0; d < n;) { u32 k = n - d < 1024 ? n - d : 1024; snd_fill(s, junk, k); d += k; }
+    for (u32 d = 0; d < n;) { u32 k = n - d < 1024 ? n - d : 1024; snd_fill_ahead(s, junk, k, ahead + d); d += k; }
   }
-  snd_fill(heard, out, n);
+  snd_fill_ahead(heard, out, n, ahead);
 }
 /* the machine the screen, keyboard and mouse are: VM 0's or an attached guest's */
 machine *hv_shown(machine *m0) {
@@ -726,13 +726,7 @@ static void report(void) {
   extern int pc_lock_report(char *, int);
   static char b[600];
   if (pc_lock_report(b, sizeof b)) { hv_out("c4pc: hv: the device lock, the last 30 s: "); hv_out(b); hv_out("\n"); }
-  /* VM 0's sound, to set beside the guests' */
-  if (ctl->snd) {
-    u32 n, most, rs;
-    snd_lateness(ctl->snd, &n, &most, &rs);
-    hv_out("c4pc: hv: vm0 control: its sound: "); outn(n); hv_out(" events late (most "); outn(most);
-    hv_out(" ms), "); outn(rs); hv_out(attached ? " resyncs\n" : " resyncs (heard)\n");
-  }
+  /* (VM 0's sound: the card's own line, aring.h) */
   for (int id = 1; id < HV_MAX; id++) {
     vm *v = &vms[id];
     if (v->state != S_RUN || !v->m) continue;

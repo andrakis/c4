@@ -196,13 +196,22 @@ reset leaves them at -14 dB). The mixer's output goes round a ring of
 loop, after every slice, every frame drawn, every guest's slice and at
 every tick it waits through, reads how far the DMA has got and mixes the
 ring a lead ahead of it again (pc/aring.h, shared by the three cards); no
-interrupt reaches the CPU. The lead is 40 ms, longer only while the polls
-come further apart: twice the most the DMA moved between two of them in
-the last second or two. The card's now is then the real clock, and the
-events of now go 10 ms after the last frame made. c4pc's log says how it
-keeps up five seconds in, every 30 s after, and for each second it fell
-behind: `c4pc: hda: 40 ms ahead (least 31), polls every 4 ms (most 22),
-the DMA's steps 7 to 256 frames, 0 underruns (0 in all)`.
+interrupt reaches the CPU. The lead is 40 ms (`--snd-lead MS`, 10 to
+150, from GRUB's `e`), longer only while the polls come further apart:
+twice the most the DMA moved between two of them in the last second or
+two. The card's now is then the real clock, and the events of now are
+heard 60 ms later (the lead + 20 ms): placed past the frame the card
+plays, not the last one mixed (snd_fill_ahead), so that a lead that grows
+or shrinks moves no sound, and that offset followed a 64th of the way
+each fill, so that a card whose samples run a little fast or slow does
+not drift to the 50 ms slack and jump back. Placed past the last frame
+mixed, as it was, HD Audio's and the ES1371's sounds came late and piled
+up (the user's VMware, 2026-11-24). c4pc's log says how it keeps up five
+seconds in, every 30 s after, and for each second it fell behind:
+`c4pc: hda: 40 ms ahead (least 31), polls every 4 ms (most 22), the
+DMA's steps 7 to 256 frames, 0 underruns (0 in all); the mix: 0 events
+late (most 0 ms), 0 resyncs` -- the events that came after their time
+had been mixed, and the times the clocks were set again.
 
 Under the hypervisor (`--hv`) each guest has a sound card of its own when
 VM 0 has one, and the card under them plays the attached guest's mix

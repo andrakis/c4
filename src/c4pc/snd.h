@@ -26,6 +26,10 @@ void snd_write32(snd *s, u32 addr, i32 v);
 double snd_now(snd *s);
 /* live: n frames of 16-bit stereo, now's events placed latency frames on */
 void snd_fill(snd *s, i16 *out, u32 n);
+/* ... the card having AHEAD frames still to play before out's first: now
+ * is placed by its playing (latency past it), the same whatever its lead */
+void snd_fill_ahead(snd *s, i16 *out, u32 n, u32 ahead);
+extern u32 snd_live_latency_ms;         /* a live card's: its lead + 20 ms (pc.c --snd-lead) */
 /* the card and all it holds freed (a guest's, when it halts: pc/hv.c) */
 void snd_free(snd *s);
 /* since the last call: events that came after their time had been mixed,

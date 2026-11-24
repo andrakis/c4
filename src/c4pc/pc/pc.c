@@ -29,6 +29,7 @@ void hda_poll(void);
 extern u32 sb16_underruns, hda_underruns, es137x_underruns;
 static void (*audio_poll)(void) = sb16_poll;   /* the card under the machine's */
 static int audio_on;
+u32 ar_lead_frames = 44100 * 40 / 1000;      /* aring.h's least lead: 40 ms, or --snd-lead's */
 /* the card polled: under the device lock, when there is one (hv.c's
  * guests on their processors, whose mixes it renders) */
 static void audio(void) { if (eng_lock_fn) eng_lock_fn(1); audio_poll(); if (eng_lock_fn) eng_lock_fn(-1); }
@@ -633,6 +634,14 @@ void pc_main(u32 magic, struct mb_info *mb) {
     else if (!strcmp(args[a], "--no-realtime")) realtime = 0;
     else if (!strcmp(args[a], "--no-wc")) wc = 0;
     else if (!strcmp(args[a], "--no-sound")) sound = 0;
+    /* the sound card's lead past where it plays (aring.h: 40 ms), and the
+     * mix's delay with it (snd.c: the lead + 20 ms) */
+    else if (!strcmp(args[a], "--snd-lead") && a + 1 < nargs) {
+      u32 ms = 0; for (char *p = args[++a]; *p >= '0' && *p <= '9'; p++) ms = ms * 10 + (u32)(*p - '0');
+      if (ms < 10) ms = 10;
+      if (ms > 150) ms = 150;
+      ar_lead_frames = 44100 * ms / 1000; snd_live_latency_ms = ms + 20;
+    }
     else if (!strcmp(args[a], "--store")) store_create = 1;      /* a blank ATA disk may become the store */
     else if (!strcmp(args[a], "--no-store")) store = 0;
     else if (!strcmp(args[a], "--no-cdrom")) cdrom = 0;      /* the CD drives left be (cdrom.c): a session libjs can match */

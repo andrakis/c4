@@ -22,7 +22,8 @@
 
 #define AR_RATE 44100
 #define AR_RING 8192                   /* frames round the ring: 186 ms */
-#define AR_LEAD (AR_RATE * 40 / 1000)  /* the least lead: 40 ms */
+#define AR_LEAD ar_lead_frames         /* the least lead: 40 ms, or --snd-lead's (pc.c) */
+extern u32 ar_lead_frames;
 
 typedef struct {
   const char *name; snd *card; int16_t *ring;
@@ -34,7 +35,7 @@ typedef struct {
   double r_gap, r_first;
 } aring;
 
-void hv_snd_fill(snd *s0, int16_t *out, u32 n);    /* hv.c: the attached guest's mix, else s0's */
+void hv_snd_fill(snd *s0, int16_t *out, u32 n, u32 ahead);    /* hv.c: the attached guest's mix, else s0's */
 void pc_log(const char *s);
 void pc_logn(i64 v);
 double plat_now_us(void);
@@ -59,7 +60,12 @@ static void ar_line(aring *a, double now) {
   pc_logn(a->polls ? (i64)(span / a->polls / 1000) : 0); pc_log(" ms (most ");
   pc_logn((i64)(a->r_gap / 1000)); pc_log("), the DMA's steps ");
   pc_logn(a->r_step_min == ~0u ? 0 : (i64)a->r_step_min); pc_log(" to "); pc_logn((i64)a->r_step_max);
-  pc_log(" frames, "); pc_logn((i64)a->r_und); pc_log(" underruns ("); pc_logn((i64)a->underruns); pc_log(" in all)\n");
+  pc_log(" frames, "); pc_logn((i64)a->r_und); pc_log(" underruns ("); pc_logn((i64)a->underruns); pc_log(" in all)");
+  /* VM 0's mix: events that came after their time had been mixed, and its clocks set again */
+  { u32 ln, lm, rs; snd_lateness(a->card, &ln, &lm, &rs);
+    pc_log("; the mix: "); pc_logn((i64)ln); pc_log(" events late (most "); pc_logn((i64)lm); pc_log(" ms), ");
+    pc_logn((i64)rs); pc_log(" resyncs"); }
+  pc_log("\n");
   a->polls = 0; a->r_step_max = 0; a->r_step_min = ~0u; a->r_lead_min = ~0u; a->r_und = 0; a->r_gap = 0; a->r_first = now;
   a->lines++;
 }
@@ -101,7 +107,7 @@ static void ar_poll(aring *a, u32 pos) {
   u32 n = lead - (u32)ahead;
   while (n > 0) {
     u32 at = a->made % AR_RING, k = AR_RING - at < n ? AR_RING - at : n;
-    hv_snd_fill(a->card, a->ring + 2 * at, k);
+    hv_snd_fill(a->card, a->ring + 2 * at, k, a->made - a->played);
     a->made += k; n -= k;
   }
 }

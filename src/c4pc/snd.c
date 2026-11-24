@@ -82,7 +82,10 @@ snd *snd_new(machine *m, u32 rate, int live) {
   s->rate = rate;
   s->opl = opl_new(rate);
   s->gain = 1;
-  s->latency = live ? (i64)rate * 10 / 1000 : 0;       /* 10 ms past the last frame made */
+  /* live: the events of now heard this long after now (snd_fill: past
+   * the frame the card plays, not the last one made, so that a lead that
+   * grows or shrinks moves nothing); --snd-lead sets it, its lead + 20 ms */
+  s->latency = live ? (i64)rate * snd_live_latency_ms / 1000 : 0;
   s->slack = (i64)jround(0.05 * rate);
   return s;
 }
@@ -203,13 +206,27 @@ static void render(snd *s, float *L, float *R, u32 n) {
 }
 static inline int16_t to16(float x) { return (int16_t)(i32)jround((double)x * 32767); }
 
-void snd_fill(snd *s, int16_t *out, u32 n) {
-  /* where now falls: latency frames past the last one made */
+u32 snd_live_latency_ms = 60;
+void snd_fill(snd *s, int16_t *out, u32 n) { snd_fill_ahead(s, out, n, 0); }
+/* AHEAD: the frames the card has still to play before out's first */
+void snd_fill_ahead(snd *s, int16_t *out, u32 n, u32 ahead) {
+  /* where now falls: latency frames past the frame the card plays now.
+   * Placed past the last frame made, as it was, a lead grown by a slow
+   * poll or a coarse position (ES1371's 4096 frames) put every sound that
+   * much later, and its shrinking drifted them back until a resync threw
+   * the waiting ones onto the new: late, then piled up (the user's HD
+   * Audio and ES1371, 2026-11-24) */
   double now = snd_now(s);
-  double want = (double)(s->frame + s->latency), got = now * s->rate / 1e6 + s->offset;
+  double want = (double)(s->frame - (i64)ahead + s->latency), got = now * s->rate / 1e6 + s->offset;
   if (!s->synced || got - want > s->slack || want - got > s->slack) {
     s->offset = want - now * s->rate / 1e6;
     s->synced = 1; s->resyncs++;
+  } else if (ahead) {
+    /* a card whose samples go a little faster or slower than the clock:
+     * followed a 64th of the way each fill, so that now stays latency
+     * past its playing (its place known to its DMA's step, which this
+     * evens out) rather than drifting to the slack and jumping back */
+    s->offset += (want - got) / 64;
   }
   while (n > 0) {
     u32 k = n < 4096 ? n : 4096;

@@ -221,7 +221,11 @@ const char *es137x_init(snd *s) {
   outl(io + DAC2_FRAME, (u32)(uintptr_t)ring);
   outl(io + DAC2_SIZE, sizeof ring / 4 - 1);
   outl(io + SERIAL, P2_MODE(3) | P2_END_INC(2));
-  outl(io + DAC2_COUNT, sizeof ring / 8 - 1);
+  /* its interrupt every quarter of the ring (2048 frames, 46 ms): VMware's
+   * ES1371 says its place only there (the user's log: steps of 4096 at an
+   * interrupt each half, so 162 ms ahead) and waits at each until it is
+   * acknowledged (es137x_poll), which a poll 46 ms late would still do */
+  outl(io + DAC2_COUNT, sizeof ring / 16 - 1);
   outl(io + CONTROL, ctrl | DAC2_EN);
   card = s;
   ar_start(&A, "es137x", s, ring);

@@ -597,10 +597,16 @@ them to the guest: CAPS bit 32, `MODEIX`/`MODEWH` to read the list,
 `MODE` the mode now, and a write of one listed asks for it (gui.c; the
 platform's `gui_mode_request`, after each slice). The desktop starts in
 the screen's mode (not 800x600 scaled), its Settings list the modes
-(`<` size `>` and Apply), and the one applied is the screen's mode and
-the desktop's size, its picture, windows and taskbar laid out and drawn
-again at it, pixel for pixel; desktop.cfg remembers it. A game's smaller
-display is scaled into whatever mode the screen is in, as before.
+(a dropdown, winkit's ui_drop, opening upward, and Apply), and the one
+applied is the screen's mode and the desktop's size, its picture,
+windows and taskbar laid out and drawn again at it, pixel for pixel;
+desktop.cfg remembers it. The window kit lays itself out up to
+2560x1600 (WK_MAX_W, WK_MAX_H; it stopped at 1280x1024, and above that
+the taskbar was left mid-screen), and the desktop's ring is made large
+enough for a tile of the picture at the largest mode listed (a 1920x1200
+tile is 144 KB, past the 256 KB ring's half). The modes are the
+desktop's: a game's smaller display is scaled into whatever mode the
+screen is in, as before.
 `--gui WxH` is the size at boot, on the SVGA or the BGA, and the ISO's
 GRUB menu has a **Screen size** submenu (last) that sets it for every
 desktop entry (`c4pc_gui`; GRUB's own gfxpayload asks for it too, for a

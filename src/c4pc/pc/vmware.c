@@ -127,6 +127,8 @@ static int mouse_on, mouse_rel;
 extern int mouse_debug;                 /* --debug-mouse (screen.c) */
 void pc_log(const char *s);
 void pc_logn(i64 v);
+void screen_size(int *w, int *h);
+void screen_to_display(gui *g, int sx, int sy, int *x, int *y);
 static u32 call1(u32 cmd, u32 arg) { regs r = { 0, arg, cmd, 0, 0, 0 }; bdoor(&r); return r.ax; }
 /* the absolute pointer, where VMware (or QEMU's vmmouse) has it: 1 */
 int vmw_mouse_init(void) {
@@ -163,8 +165,22 @@ int vmw_mouse_poll(gui *g, int locked) {
     }
     if (r.ax & ABS_REL_PACKET) gui_mouse(g, (int)r.bx * 256, -(int)r.cx * 256, b, z);   /* its y is up */
     else {
-      int w, h; gui_size(g, &w, &h);
-      int x = (int)((uint64_t)(r.bx & 0xffff) * (u32)w / 65536), y = (int)((uint64_t)(r.cx & 0xffff) * (u32)h / 65536);
+      /* 0..65535 across the screen (the mode VMware shows), then to the
+       * display through where it is on the screen (screen.c): mapped
+       * straight onto the display's own size, a display that does not
+       * fill the screen -- a game's, scaled and centred, a guest's under
+       * the hypervisor, the desktop at 1280 wide in a 1366 mode before
+       * the window kit went wider -- put the pointer off where it was
+       * drawn, by up to the border's width */
+      int w, h, x, y; screen_size(&w, &h);
+      if (w > 0 && h > 0) {
+        int sx = (int)((uint64_t)(r.bx & 0xffff) * (u32)w / 65536), sy = (int)((uint64_t)(r.cx & 0xffff) * (u32)h / 65536);
+        screen_to_display(g, sx, sy, &x, &y);
+      } else {
+        gui_size(g, &w, &h);
+        x = (int)((uint64_t)(r.bx & 0xffff) * (u32)w / 65536); y = (int)((uint64_t)(r.cx & 0xffff) * (u32)h / 65536);
+      }
+      if (mouse_debug) { pc_log("vmmouse at "); pc_logn(x); pc_log(" "); pc_logn(y); pc_log(" on the display\n"); }
       gui_mouse_at(g, x, y, b);
       if (z) gui_mouse(g, 0, 0, b, z);
     }

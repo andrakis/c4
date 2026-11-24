@@ -28,6 +28,8 @@ const char *hda_init(snd *s);
 void hda_poll(void);
 extern u32 sb16_underruns, hda_underruns, es137x_underruns;
 static void (*audio_poll)(void) = sb16_poll;   /* the card under the machine's */
+static void (*audio_stop)(void);                 /* ... and stopped, before a restart or power off */
+void sb16_stop(void), hda_stop(void), es137x_stop(void);
 static int audio_on;
 u32 ar_lead_frames = 44100 * 40 / 1000;      /* aring.h's least lead: 40 ms, or --snd-lead's */
 /* the card polled: under the device lock, when there is one (hv.c's
@@ -145,6 +147,9 @@ void acpi_off(void);
 void acpi_reset(void);
 enum { STATUS_REBOOT = 82 };          /* C4IX_EXIT_REBOOT: reboot, shutdown -r */
 static void power_off(int status) {
+  /* the sound card's DMA stopped first: VMware's ES1371 hung the VM when
+   * reset with it running */
+  if (audio_stop) { void (*f)(void) = audio_stop; audio_stop = 0; f(); }
   con_flush();
   if (status == STATUS_REBOOT) { con_puts("c4pc: restarting the PC\n"); con_flush(); acpi_reset(); }
   outb(0xF4, (u8)(status & 0x7f));   /* QEMU's isa-debug-exit: exits (v << 1) | 1 */
@@ -879,6 +884,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     /* the Ensoniq AudioPCI: VMware's ES1371 for many guest types (es137x.c) */
     { extern const char *es137x_init(snd *); extern void es137x_poll(void);
       if (!how && (how = es137x_init(s))) audio_poll = es137x_poll; }
+    if (how) audio_stop = audio_poll == hda_poll ? hda_stop : audio_poll == sb16_poll ? sb16_stop : es137x_stop;
     if (how) { m->snd = s; audio_on = 1; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); hw_str("sound "); hw_str(how); hw_str("\n"); }
     else {
       extern const char *hda_why, *es137x_why;

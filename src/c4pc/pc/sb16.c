@@ -111,6 +111,17 @@ const char *sb16_init(snd *s) {
 }
 
 /* the ring mixed a short lead past where the DMA reads (aring.h) */
+/* stopped before c4pc restarts or powers off: the 16-bit output paused
+ * and its auto-init ended, its DMA channel masked, the DSP reset (as
+ * es137x_stop, for VMware's reset) */
+void sb16_stop(void) {
+  if (!card) return;
+  card = 0;
+  dsp_write(0xD5);
+  dsp_write(0xD9);
+  outb(0xD4, (u8)(4 | (hdma & 3)));
+  dsp_reset(base);
+}
 void sb16_poll(void) {
   if (!card) return;
   inb(base + 0xF);                                  /* the 16-bit interrupt, acknowledged */

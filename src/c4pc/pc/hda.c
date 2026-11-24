@@ -271,6 +271,17 @@ const char *hda_init(snd *s) {
 }
 
 /* the ring mixed a short lead past where the stream reads (aring.h) */
+/* stopped before c4pc restarts or powers off: the stream's run bit, then
+ * the CORB's and the RIRB's DMA (as es137x_stop, for VMware's reset) */
+void hda_stop(void) {
+  if (!card || !SD) return;
+  card = 0;
+  SD[0] = 0;
+  for (u32 n = 0; n < 1000 && (SD[0] & 2); n++) udelay(1);
+  SD[3] = 0x1C;
+  R8(0x4C) = 0; R8(0x5C) = 0;
+  for (u32 n = 0; n < 1000 && ((R8(0x4C) & 2) || (R8(0x5C) & 2)); n++) udelay(1);
+}
 void hda_poll(void) {
   if (!card) return;
   SD[3] = 0x1C;                                                       /* its status bits, cleared */

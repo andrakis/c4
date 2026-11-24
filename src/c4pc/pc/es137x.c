@@ -252,6 +252,22 @@ const char *es137x_init(snd *s) {
 
 /* the ring mixed FILL frames past where DAC2 reads: its frame's count,
  * in longwords (a frame each) */
+/* stopped before c4pc restarts or powers off: DAC2 and its interrupt off,
+ * one pending acknowledged. VMware's ES1371 hung the whole VM when reset
+ * (the guest's restart, VMware's Reset) while DAC2 was running (the
+ * user's vmware.log: 20 s silent after "Resetting device 'ALL'", then
+ * "Input stall") */
+void es137x_stop(void) {
+  if (!card) return;
+  card = 0;
+  unsigned long fl;
+  __asm__ volatile("pushf; pop %0; cli" : "=r"(fl) : : "memory");
+  outl(io + CONTROL, inl(io + CONTROL) & ~DAC2_EN);
+  u32 sc = inl(io + SERIAL);
+  outl(io + SERIAL, sc | P2_INT_EN);
+  outl(io + SERIAL, sc & ~P2_INT_EN);
+  __asm__ volatile("push %0; popf" : : "r"(fl) : "memory", "cc");
+}
 void es137x_poll(void) {
   if (!card) return;
   /* DAC2's interrupt pending (STATUS bit 1, though its enable is off):

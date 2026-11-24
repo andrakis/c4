@@ -732,7 +732,14 @@ happens there; `--no-vmware` leaves it alone anyway.
   that locks the pointer (a game: `gui_locked`) gets relative motion
   while it holds it (REQUEST_RELATIVE), and VMware then grabs the mouse
   as before. QEMU's vmport has the same pointer (`-machine vmport=on`, on
-  by default on the pc machine).
+  by default on the pc machine). The position is the screen's, taken to
+  the display through where it is drawn (screen.c `screen_to_display`):
+  mapped straight onto the display's size, one that did not fill the
+  screen -- a game's, scaled and centred, a hypervisor guest's, the
+  desktop at 1280 wide in a 1366x768 mode before the window kit went
+  wider -- had the pointer land off where it showed, up to the border's
+  width (a user in VMware "kept missing buttons" at 1366x768). test-c4pc
+  checks it in QEMU: `gui` at 640x480 on a 1366x768 SVGA mode.
 - **Copy and paste**, VMware's first way (copy/paste version 1: the
   host's text is GETSELLENGTH, then GETNEXTPIECE 4 bytes a call; the
   guest's is SETSELLENGTH and SETNEXTPIECE). The VMware drive's file

@@ -191,3 +191,4 @@ int  wall_pick();                             // the picture for this desktop an
 int  wall_draw(int x, int y, int w, int h);   // 0: no picture, fill with C_DESK
 int  wall_shown();
 void wall_resize();                           // the screen changed size: the tiles again
+int  desk_ring_words();                       // shell.c: the display ring's command half, in words

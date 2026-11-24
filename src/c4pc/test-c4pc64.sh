@@ -119,6 +119,39 @@ for want in Filesystem Terminal "Text Editor" Calculator Integer Double; do
 done
 grep -h 'display:' $W/gui64.err | sed 's/^/        /'
 
+# The 64-bit desktop straight into 1920x1080 (c4pc-host64w --modes: the
+# screen's mode, which the desktop takes): its picture whole. With 8-byte
+# words a picture's tile is twice the bytes, and one the ring refused left
+# a grid of dark gaps (wall.c); right of the windows, no column or row of
+# the picture is dark
+wall_gaps () {
+python3 - "$1" << 'PNG'
+import sys, zlib, struct
+d = open(sys.argv[1], "rb").read()
+w, h = struct.unpack(">II", d[16:24])
+i, z = 8, b""
+while i < len(d):
+    n, t = struct.unpack(">I4s", d[i:i + 8])
+    if t == b"IDAT": z += d[i + 8:i + 8 + n]
+    i += 12 + n
+raw = zlib.decompress(z)
+rows = [raw[y * (1 + w * 3) + 1:(y + 1) * (1 + w * 3)] for y in range(h)]
+lit = lambda x, y: sum(rows[y][x * 3:x * 3 + 3]) > 90
+x0 = w * 2 // 5                     # right of the desktop's windows
+cols = sum(1 for x in range(x0, w) if sum(lit(x, y) for y in range(0, h - 40, 8)) * 4 < len(range(0, h - 40, 8)))
+rws = sum(1 for y in range(0, h * 4 // 5) if sum(lit(x, y) for x in range(x0, w, 8)) * 4 < len(range(x0, w, 8)))
+print(w, h, cols, rws)
+PNG
+}
+printf '25000 shot %s\n25100 quit\n' $W/desktop64-1920.png > $W/gui64w-events.txt
+timeout 600 ./c4pc-host64w -s --mmu -m 128 --gui 1920x1080 --modes --events $W/gui64w-events.txt --texts $W/gui64w-texts.txt \
+  -d $D $D/c4ix.c4r --desktop > $W/gui64w.out 2> $W/gui64w.err
+r=( $(wall_gaps $W/desktop64-1920.png 2> /dev/null) )
+[ "${r[0]:-0}" = 1920 ] && [ "${r[1]:-0}" = 1080 ] && [ "${r[2]:-1}" = 0 ] && [ "${r[3]:-1}" = 0 ] &&
+  grep -qE "^1767 1059 CPU" $W/gui64w-texts.txt &&
+  ok "the 64-bit desktop at 1920x1080: its picture whole (no dark column or row), the taskbar across" ||
+  bad "the 64-bit desktop at 1920x1080: ${r[0]:-?}x${r[1]:-?}, ${r[2]:-?} dark columns, ${r[3]:-?} dark rows ($W/desktop64-1920.png)"
+
 # ---- several CPUs ----
 echo "  ---   several CPUs, 64-bit"
 # the CPU-local window's and the parallel engine's guests, as 64-bit images

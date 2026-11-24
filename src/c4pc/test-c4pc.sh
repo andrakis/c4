@@ -283,8 +283,8 @@ PNG
   [ "${lit:-0}" -ge 30 ] && ok "the desktop's windowed $nm draws its window ($lit% of its middle lit)" ||
     bad "the desktop's windowed $nm: its window is black (${lit:-?}% lit; $W/win-$nm.png)"
 done
-# A PNG's size and how much of it is lit (pixels brighter than near-black,
-# every 8th each way): "W H PERCENT"
+# A PNG's size, how much of it is lit (pixels brighter than near-black,
+# every 8th each way) and how much of its right edge: "W H PERCENT EDGE"
 png_lit () {
   python3 - "$1" << 'PNG'
 import sys, zlib, struct
@@ -296,13 +296,15 @@ while i < len(d):
     if t == b"IDAT": z += d[i + 8:i + 8 + n]
     i += 12 + n
 raw = zlib.decompress(z)
-lit = tot = 0
+lit = tot = edge = etot = 0
 for y in range(0, h, 8):
     row = raw[y * (1 + w * 3) + 1:(y + 1) * (1 + w * 3)]
     for x in range(0, w, 8):
         tot += 1
         if sum(row[x * 3:x * 3 + 3]) > 90: lit += 1
-print(w, h, lit * 100 // tot)
+    etot += 1
+    if sum(row[(w - 6) * 3:(w - 5) * 3]) > 90: edge += 1
+print(w, h, lit * 100 // tot, edge * 100 // etot)
 PNG
 }
 # Alt+Tab (gui.c's screens and SWITCH, C4IX's sys.c "The display", the
@@ -349,28 +351,126 @@ grep -a -E "panic|illegal" $W/alttab.out | head -3
 # the picture, windows and taskbar drawn again at it -- up to 1920x1080,
 # wider than the window kit once went (WK_MAX_W) and with a tile of the
 # picture over half the desktop's first ring, its taskbar at the foot, then
-# down to 800x600 (1920x1080's picture takes 8-17 s of the machine's
-# time to scale and send, here). The clicks are where Go, Settings, its dropdown, the
+# then 1366x768, a width no multiple of 8 (VMware's users saw the desktop
+# stop at 1280 there, with a dark strip down the right), then down to
+# 800x600 (1920x1080's picture takes 8-17 s of the machine's time to scale
+# and send, here). Each without a restart. The clicks are where Go, Settings, its dropdown, the
 # list (opening upward) and Apply are at 1024x768 (the texts say if they moved)
 echo "  ---   the screen's modes: Settings' screen size, up and down"
 { echo "30000 click 30 755"; echo "30500 click 80 549"
   echo "32000 click 180 432"; echo "32500 click 180 390"; echo "33000 click 288 432"; echo "52000 shot $W/modes-up.png"
-  echo "52100 click 180 432"; echo "52600 click 180 212"; echo "53100 click 288 432"; echo "60000 shot $W/modes-down.png"
-  echo "60100 quit"; } > $W/modes-events.txt
+  echo "52100 click 180 432"; echo "52600 click 180 320"; echo "53100 click 288 432"; echo "64000 shot $W/modes-odd.png"
+  echo "64100 click 180 432"; echo "64600 click 180 212"; echo "65100 click 288 432"; echo "72000 shot $W/modes-down.png"
+  echo "72100 quit"; } > $W/modes-events.txt
 timeout 600 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --modes --events $W/modes-events.txt --texts $W/modes-texts.txt   --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/modes.out 2> $W/modes.err
 grep -qE "^151 426 1024x768$" $W/modes-texts.txt && grep -qE "^152 386 1920x1080$" $W/modes-texts.txt &&
   ok "Settings: the screen's modes in a dropdown, from the one it is in (1024x768)" ||
   bad "Settings' screen size is not where the test clicks ($W/modes-texts.txt)"
-for s in "up 1920 1080" "down 800 600"; do
+for s in "up 1920 1080" "odd 1366 768" "down 800 600"; do
   read -r d mw mh <<< "$s"
   r=( $(png_lit $W/modes-$d.png 2> /dev/null) )
-  [ "${r[0]:-0}" = $mw ] && [ "${r[1]:-0}" = $mh ] && [ "${r[2]:-0}" -ge 50 ] &&
-    ok "the desktop at ${mw}x$mh: the display that size, ${r[2]}% of it drawn" ||
-    bad "the desktop at ${mw}x$mh: ${r[0]:-?}x${r[1]:-?}, ${r[2]:-?}% drawn ($W/modes-$d.png)"
+  [ "${r[0]:-0}" = $mw ] && [ "${r[1]:-0}" = $mh ] && [ "${r[2]:-0}" -ge 50 ] && [ "${r[3]:-0}" -ge 60 ] &&
+    ok "the desktop at ${mw}x$mh: the display that size, ${r[2]}% of it drawn, ${r[3]}% of its right edge" ||
+    bad "the desktop at ${mw}x$mh: ${r[0]:-?}x${r[1]:-?}, ${r[2]:-?}% drawn, ${r[3]:-?}% of its right edge ($W/modes-$d.png)"
 done
+grep -qE "^1213 74[0-9] CPU" $W/modes-texts.txt && ok "at 1366x768 the taskbar reaches the right edge (its CPU meter at x 1213)" ||
+  bad "at 1366x768 the taskbar does not reach the right edge ($W/modes-texts.txt)"
 grep -qE "^[0-9]+ 10[5-7][0-9] Go$" $W/modes-texts.txt && ok "at 1920x1080 the taskbar is along the screen's foot" ||
   bad "at 1920x1080 the taskbar is not at the foot ($W/modes-texts.txt)"
 grep -a -E "panic|illegal|killed" $W/modes.out | head -3
+# The picture at 1920x1080, the mode changed back and forth without a
+# restart: 1024x768, 1920x1080, 1366x768, 1920x1080, 1280x720, 1920x1080.
+# A tile the display's ring refused once left the last size's tiles in its
+# place, a grid with dark gaps, which no later redraw mended (a VMware user,
+# 2026-11-24: wall.c now sends it again, smaller if need be). At the end,
+# right of the windows, no column or row of the picture dark, and the
+# taskbar across the whole width (its CPU meter at x 1767)
+echo "  ---   the picture at 1920x1080, the mode changed back and forth"
+wall_gaps () {
+python3 - "$1" << 'PNG'
+import sys, zlib, struct
+d = open(sys.argv[1], "rb").read()
+w, h = struct.unpack(">II", d[16:24])
+i, z = 8, b""
+while i < len(d):
+    n, t = struct.unpack(">I4s", d[i:i + 8])
+    if t == b"IDAT": z += d[i + 8:i + 8 + n]
+    i += 12 + n
+raw = zlib.decompress(z)
+rows = [raw[y * (1 + w * 3) + 1:(y + 1) * (1 + w * 3)] for y in range(h)]
+lit = lambda x, y: sum(rows[y][x * 3:x * 3 + 3]) > 90
+x0 = w * 2 // 5                     # right of the desktop's windows
+cols = sum(1 for x in range(x0, w) if sum(lit(x, y) for y in range(0, h - 40, 8)) * 4 < len(range(0, h - 40, 8)))
+rws = sum(1 for y in range(0, h * 4 // 5) if sum(lit(x, y) for x in range(x0, w, 8)) * 4 < len(range(x0, w, 8)))
+print(w, h, cols, rws)
+PNG
+}
+{ echo "30000 click 30 755"; echo "30500 click 80 549"; t=32000
+  for y in 390 320 390 266 390; do
+    echo "$t click 180 432"; echo "$(( t + 500 )) click 180 $y"; echo "$(( t + 1000 )) click 288 432"; t=$(( t + 20000 ))
+  done
+  echo "$t shot $W/wall-1920.png"; echo "$(( t + 100 )) quit"; } > $W/wall-events.txt
+timeout 900 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --modes --events $W/wall-events.txt --texts $W/wall-texts.txt \
+  --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/wall.out 2> $W/wall.err
+r=( $(wall_gaps $W/wall-1920.png 2> /dev/null) )
+[ "${r[0]:-0}" = 1920 ] && [ "${r[1]:-0}" = 1080 ] && [ "${r[2]:-1}" = 0 ] && [ "${r[3]:-1}" = 0 ] &&
+  ok "after five changes, 1920x1080: the picture whole (no dark column or row right of the windows)" ||
+  bad "after five changes: ${r[0]:-?}x${r[1]:-?}, ${r[2]:-?} dark columns, ${r[3]:-?} dark rows ($W/wall-1920.png)"
+grep -qE "^1767 1059 CPU" $W/wall-texts.txt && ok "at 1920x1080 the taskbar spans the width (its CPU meter at x 1767)" ||
+  bad "at 1920x1080 the taskbar does not span the width ($W/wall-texts.txt)"
+# VMware's absolute pointer (pc/vmware.c; QEMU's vmport has the same) on a
+# display that does not fill the screen: `gui` (640x480, until QMP's quit) on a 1366x768 mode
+# of the SVGA II (QEMU's -vga vmware), scaled by 1.6 and centred, 171
+# pixels in. The host's pointer put at screen pixels (QMP), where it lands on
+# the display (--debug-mouse logs each): the screen point through where the
+# display is, as it is drawn. Mapped straight onto the display's size, as
+# it once was, (300, 600) landed at 140, not 80 -- VMware's users "kept
+# missing buttons" at 1366x768
+if [ -n "${NO_QEMU:-}" ] || [ ! -x "$Q" ]; then
+  echo "  skip  VMware's pointer on a scaled display (no qemu-system-i386)"
+else
+  echo "  ---   VMware's absolute pointer, the display scaled and centred"
+  accel=""; [ -r /dev/kvm ] && [ -w /dev/kvm ] && accel="-accel kvm -cpu host"
+  printf 'gui 1000000\nshutdown\n' > $W/inptr.txt
+  rm -f $W/serialptr.txt $W/qmp.sock
+  timeout 300 "$Q" $accel -machine vmport=on -vga vmware -m 512 -display none -no-reboot -serial file:$W/serialptr.txt \
+    -qmp unix:$W/qmp.sock,server=on,wait=off -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
+    -append "--no-cdrom --mmu --debug-mouse --gui 1366x768" \
+    -initrd "$W/c4ix32.c4r,$W/test-disk.tar drive,$W/inptr.txt stdin" > /dev/null 2>&1 &
+  qp=$!
+  python3 - $W/serialptr.txt $W/qmp.sock << 'QMP'
+import json, socket, sys, time
+log, sock = sys.argv[1], sys.argv[2]
+t0 = time.time()
+while not __import__("os").path.exists(sock) and time.time() - t0 < 30: time.sleep(0.2)
+s = socket.socket(socket.AF_UNIX); s.connect(sock); f = s.makefile("rw")
+while time.time() - t0 < 200:
+    try:
+        if b"gui: fitted" in open(log, "rb").read(): break
+    except OSError: pass
+    time.sleep(0.5)
+time.sleep(2)
+def cmd(c):
+    f.write(json.dumps(c) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if "return" in r or "error" in r: return r
+f.readline(); cmd({"execute": "qmp_capabilities"})
+for x, y in ((300, 600), (1100, 420)):
+    ev = [{"type": "abs", "data": {"axis": "x", "value": x * 32768 // 1366}}, {"type": "abs", "data": {"axis": "y", "value": y * 32768 // 768}}]
+    cmd({"execute": "input-send-event", "arguments": {"events": ev}})
+    time.sleep(1.5)
+cmd({"execute": "quit"})
+QMP
+  wait $qp
+  at=( $(tr -d '\r' < $W/serialptr.txt | grep -a "^vmmouse at " | tail -2 | awk '{print $3 "," $4}') )
+  grep -qa "the screen is VMware SVGA II" $W/serialptr.txt && grep -qa "1366 x 768 x 32" $W/serialptr.txt &&
+    ok "c4pc.elf in QEMU: the SVGA II at 1366x768" || bad "c4pc.elf in QEMU: no SVGA II at 1366x768 ($W/serialptr.txt)"
+  near () { local x=${1%,*} y=${1#*,}; [ $(( x - $2 )) -ge -3 ] && [ $(( x - $2 )) -le 3 ] && [ $(( y - $3 )) -ge -3 ] && [ $(( y - $3 )) -le 3 ]; }
+  near "${at[0]:-0,0}" 80 375 && near "${at[1]:-0,0}" 580 262 &&
+    ok "the pointer at (300, 600) and (1100, 420) lands at ${at[0]} and ${at[1]} on the display (80,375 and 580,262)" ||
+    bad "the pointer at (300, 600) and (1100, 420) lands at ${at[0]:-?} and ${at[1]:-?}, not 80,375 and 580,262 ($W/serialptr.txt)"
+fi
 # C4IX with more than 256 MB (a VM of 512 MB and more): the MMU's user
 # window above memory (src/c4ix/mmu.c mmu_wbase), so swap is on, where it
 # once kept the identity map and System Monitor said the MMU was off; and

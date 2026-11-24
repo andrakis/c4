@@ -657,6 +657,21 @@ static void sv_pointer(int x, int y, int on) {
 /* the next look copies all of the display, not what changed: another
  * machine's is on the screen now (hv.c) */
 void screen_full(void) { cw = ch = 0; }
+/* A point on the screen (VMware's absolute pointer) to the display G
+ * shows: where place() puts the display, scaled by n/d and centred, as
+ * screen_show draws it; past its edge, the edge. The display's own size,
+ * not the one last shown, so a resize not yet drawn is already right */
+void screen_to_display(gui *g, int sx, int sy, int *x, int *y) {
+  int w, h; gui_size(g, &w, &h);
+  if (!sw || !sh || w <= 0 || h <= 0) { *x = sx; *y = sy; return; }
+  i64 n, d;
+  if ((i64)sw * h <= (i64)sh * w) { n = sw; d = w; } else { n = sh; d = h; }
+  if (w == sw && h == sh) n = d = 1;
+  i64 x0 = (sw - w * n / d) / 2, y0 = (sh - h * n / d) / 2;
+  i64 dx = sx - x0, dy = sy - y0;
+  i64 cx = dx < 0 ? 0 : dx * d / n, cy = dy < 0 ? 0 : dy * d / n;
+  *x = (int)(cx >= w ? w - 1 : cx); *y = (int)(cy >= h ? h - 1 : cy);
+}
 /* what changed since the last look, and the pointer */
 void screen_show(gui *g) {
   if (!fb) return;

@@ -41,7 +41,8 @@ are the plan.
 - **The guests run on CPU 0's thread**, in turn with VM 0: a slice of
   4 ms of each runnable guest after each of VM 0's, and while VM 0 naps;
   a guest naps as VM 0 does, on the real clock. Each has its own arena,
-  display (drawn off screen unless attached), drives and console (the
+  display (drawn off screen unless attached; its screens and Alt+Tab
+  its own, but no modes: it is scaled into VM 0's), drives and console (the
   serial line's, a line at a time, "vm1 NAME: ..."). Their accelerators
   are off (theirs keep state a CPU at a time, which VM 0's CPU 0 has
   already), and they have no swap of the host's.

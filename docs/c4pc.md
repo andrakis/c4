@@ -12,7 +12,7 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | with the MMU: the same session byte for byte libjs `--mmu`'s, in its 1,500,630,450 cycles, on c4pc-host and on c4pc.elf in QEMU; test-c4ix-mmu.mjs's cases but the display's (test-c4pc-mmu.sh) are killed by the page faults that test names, byte for byte and cycle for cycle as libjs, on c4pc-host and in QEMU |
 | done | C4IX's own accelerators (accel.c, src/c4ix/accel.mjs in C): libarc's inflater and CRC-32, behind libjs's loader numbers (INFO's C4I_ACCEL, ACC_FIND, ACC_OS); `--no-accel`, `--no-osaccel` as cli.js |
 | *measured* | with them and the MMU: the session byte for byte libjs's (its build listing os/c4ix), in its 111,571,007 cycles, on c4pc-host and in QEMU: 13 times fewer than C4IX's own C |
-| done (M4) | the display (gui.c): libjs's device at 0x400, its rings and IRQ, the page's drawing done in C with c4pc's own faces (font.c); on a PC a VBE framebuffer from GRUB or the BGA, the PS/2 mouse, the keyboard to the display |
+| done (M4) | the display (gui.c): libjs's device at 0x400, its rings and IRQ, the page's drawing done in C with c4pc's own faces (font.c); on a PC VMware's SVGA II (updates through its FIFO, its own pointer), the BGA or GRUB's framebuffer, the screen's modes, the PS/2 mouse, the keyboard to the display; Alt+Tab between a fullscreen game and the desktop |
 | *measured* | C4IX's desktop from the ISO under KVM, mouse and keyboard; on c4pc-host, scripted, in `make test-c4pc`; in DOSBox-X through C4PC.COM's VESA mode; Doom from the desktop at the clock's whole rate under KVM, 1% of the time drawing |
 | done | at the keyboard, the real clock: games drop frames on a slow PC rather than play in slow motion or at uneven speed; the screen written a row at a time, write-combined through the PAT; the console drawn on a framebuffer while no program has the display |
 | done | the games' accelerators (games/NAME.c, each game's c4/accel.mjs in C): Doom, Duke Nukem 3D, Quake, Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, behind libjs's loader numbers as its full build lists them |
@@ -564,6 +564,99 @@ and demo2 70 s, on one processor and pinned to CPU 1 of four alike.
 (its presents and flips, a second at a time) in a box in the screen's
 top right corner, over a game or the desktop, and hides it again.
 
+### The screen: VMware's SVGA II, its modes, and Alt+Tab
+
+Asked for 2026-11-24, with the user's VMware in mind: the SVGA II for
+speed, more of the desktop's sizes, and Alt+Tab. All of it in
+`pc/screen.c`, `gui.c` and C4IX's `sys.c` and desktop.
+
+**VMware's SVGA II** (PCI 15AD:0405: VMware, VirtualBox's VMSVGA, QEMU's
+`-vga vmware`). `screen_init` takes it before the BGA and GRUB's
+framebuffer (`--no-svga` passes it over): the ID negotiated (SVGA_ID_2),
+the framebuffer, the command FIFO and the largest mode read from its
+registers, the FIFO laid out as the X server's vmware driver lays it
+out (four registers, then commands; every SVGA II takes that), and a
+mode set at any size up to the largest its memory holds. What changes is
+written to the framebuffer as before and then told to the adapter as
+SVGA_CMD_UPDATE rectangles (`touched`, `flush`: up to 16 a look, merged
+where they meet), so the host copies only that. In VGA and VBE modes
+the host has to notice the framebuffer's writes itself, page by page --
+VMware traces them, QEMU/KVM logs them dirty -- and that was most of
+what showing a frame cost. A full FIFO is synced (SVGA_REG_SYNC, then
+BUSY). The pointer is the adapter's own where it has one
+(SVGA_CAP_CURSOR and CURSOR_BYPASS_2: DEFINE_CURSOR's 32 x 32 AND and
+XOR masks, then CURSOR_X/Y/ON as it moves), so a move draws nothing;
+`--soft-pointer` draws ours instead. The BGA's modes are set the same
+way (its largest from GETCAPS, its memory from BAR 0's size); GRUB's
+framebuffer alone (Hyper-V, a real PC) has one mode, GRUB's.
+
+**Modes.** `screen_modes` lists the common sizes from 640x480 to
+2560x1600 the adapter has room for (and the one it is in), c4pc prints
+them at boot (`c4pc: screen modes ...`), and the display device gives
+them to the guest: CAPS bit 32, `MODEIX`/`MODEWH` to read the list,
+`MODE` the mode now, and a write of one listed asks for it (gui.c; the
+platform's `gui_mode_request`, after each slice). The desktop starts in
+the screen's mode (not 800x600 scaled), its Settings list the modes
+(`<` size `>` and Apply), and the one applied is the screen's mode and
+the desktop's size, its picture, windows and taskbar laid out and drawn
+again at it, pixel for pixel; desktop.cfg remembers it. A game's smaller
+display is scaled into whatever mode the screen is in, as before.
+`--gui WxH` is the size at boot, on the SVGA or the BGA, and the ISO's
+GRUB menu has a **Screen size** submenu (last) that sets it for every
+desktop entry (`c4pc_gui`; GRUB's own gfxpayload asks for it too, for a
+PC with neither adapter). The desktop's remembered size wins over the
+boot's.
+
+**Alt+Tab.** The display device keeps *screens* (CAPS bit 16): a
+program's whole state on the display -- its rings, canvas, pictures,
+pointer shape, size, framebuffer registers and the keys it was told are
+down -- which `SCREEN` puts away whole and brings back as it was. The
+kernel gives each program that takes the whole display a screen of its
+own (the desktop's, a game's: `sys.c`, "The display") and arms `SWITCH`
+while a game has the display over the desktop; then Alt+Tab is not the
+game's: the device notes it, and the kernel, looking each ms
+(`sched_tick`), *parks* the game -- held, not run (`TF_PARKED`), as
+Windows 3 suspended a DOS game it put in the background -- and gives the
+desktop its screen back, as if the game had given it up. The game's
+keys are let go and its focus lost first, so it finds nothing held when
+it is back, and the sound card is muted until it is (a game stopped
+mid-tune leaves the AdLib's notes held: *measured*, Doom's music droned
+on at a steady level through ten parked seconds; muted, silence, and the
+music again when Doom was back). The desktop's taskbar has a button for each parked game, and
+its own Alt+Tab steps through the window in front, the parked games
+(the last parked first) and the other windows, a box naming each, and
+brings the one stepped to to the front when Alt is let go: a parked game
+is given the display again (`DISP_RESUME`), its screen shown as it left
+it, and it runs on from where it stopped, never having known. Up to three
+games parked at once; one that dies or is killed parked has its screen
+forgotten (`SCRDROP`). libjs's device has the same registers, its screens
+kept but not its canvas (the page has one): the game's next frame fills it.
+
+*Measured*, 2026-11-24, QEMU 10.2 under KVM on helios, one CPU, C4IX's
+shell on COM1 and a display at 1024 x 768, with a VNC viewer asking for
+updates all the time (`vncwatch.py`: without one QEMU never refreshes,
+and the framebuffer's dirty tracking costs nothing). Time spent drawing
+to the screen, c4pc's `-s` (`display_ms`):
+
+| run | `-vga std` (the BGA) | `-vga vmware` (the SVGA II) |
+|---|---|---|
+| Doom, `-timedemo demo1 -show`, 5065 frames (640x400 scaled to 1024x768) | 32,373 ms, 6.4 ms a frame; 19-20% of the time; ~81M c4 instructions/s | 2,227 ms, 0.44 ms a frame; 1%; ~103M instructions/s |
+| Quake, `-show +timedemo demo1`, 978 frames | 5,578 / 5,402 ms; 26.9 / 27.2 fps | 587 / 457 ms; 26.1 / 31.4 fps |
+
+Doom's frames were the same in both (checksum 2be7597c). Quake renders
+in its accelerators, natively, so the drawing saved shows less in its
+frames a second, which varied by 15% between runs either way. In VMware
+the SVGA's gain should be larger: there the VBE framebuffer GRUB set is
+traced page by page. Also checked in QEMU: Settings' screen size from
+1024x768 to 1280x960 by clicks (QMP, VMware's absolute mouse) on both
+adapters, the viewer told the new size and the desktop drawn whole at
+it; Alt+Tab (PS/2 keys) out of fullscreen Doom to the desktop and back,
+Doom drawing again (179 viewer updates in 8 s); the hypervisor's attach
+and Ctrl+Alt+Home detach (`hvtest.sh`) as before. `make test-c4pc` has
+both on c4pc-host: Alt+Tab with Doom (its own screen, the desktop's back
+with a taskbar button, Doom's frames again) and Settings' modes
+(`--modes`: up to 1280x1024 and down to 800x600, the desktop drawn at each).
+
 ### Memory, and swap
 
 C4IX gets all of the PC's memory unless `-m N` says otherwise: the arena
@@ -788,13 +881,15 @@ PRESENT copies what changed to the front:
   DejaVu the Bitstream Vera licence; each face's copyright lines go into
   the generated file beside its data.
 
-On a PC (`pc/screen.c`) the front goes to a linear framebuffer: GRUB's,
-when the multiboot header's video request is granted (the ISO's first
-entry: `gfxpayload=1024x768x32`), or the Bochs display adapter's (BGA,
-PCI 1234:1111 in QEMU and Bochs, 80EE:BEEF in VirtualBox) where c4pc is
-given `--gui WxH` and no GRUB set a mode. A display smaller than the
-screen is scaled up and centred, as the page's canvas is (C4IX's desktop
-asks for 800 x 600); a pointer is drawn over it. The mouse is the 8042's
+On a PC (`pc/screen.c`) the front goes to a linear framebuffer: VMware's
+SVGA II's, the Bochs display adapter's (BGA, PCI 1234:1111 in QEMU and
+Bochs, 80EE:BEEF in VirtualBox) or GRUB's, when the multiboot header's
+video request is granted (the ISO's first entry:
+`gfxpayload=1024x768x32`), at `--gui WxH` or GRUB's size; with no GRUB
+mode and no `--gui`, none (section The screen, above). A display smaller
+than the screen is scaled up and centred, as the page's canvas is (a
+game's; the desktop takes the screen's mode); a pointer is drawn over
+it, or the SVGA draws its own. The mouse is the 8042's
 second port, with the IntelliMouse wheel where it has one, each packet
 queued so that a press and its release between two looks are both seen.
 While a program has the display's keys (the ring attached, keys in its
@@ -944,10 +1039,13 @@ then needs SIGKILL, ignoring SIGTERM while halted).
 
 - **M3, the console**: `-i`-style pacing to the machine's clock, a
   scrollback, and the keyboard's raw mode as keys.js has it.
-- **The display, further**: the page's pointer shapes; a resize to the
-  screen's own size rather than scaling; the display's command stream
-  held against libjs's in a test; write-combining measured in VMware and
-  on a real PC.
+- **The display, further**: the page's pointer shapes (the SVGA's
+  pointer is the arrow for every shape); the display's command stream
+  held against libjs's in a test; write-combining and the SVGA measured
+  in VMware and on a real PC; the SVGA's screen objects and GMRs (a
+  frame DMA'd from guest memory, no framebuffer copy); a parked game's
+  clock, which runs on while it is stopped (a game that keeps time by it
+  may hurry to catch up when it is back).
 - **Plain DOSBox 0.74**: why C4PC.COM stops copying the disk there.
 - A test in the gate: `test-c4pc` takes about ten minutes, most of it
   QEMU's three runs (`NO_MMU=1`: three minutes; `NO_QEMU=1`: two).

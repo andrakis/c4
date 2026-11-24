@@ -308,6 +308,22 @@ before touching it.
 | 0x438 | FBFLIP | w | (w << 16) \| h: copy, scale to the display, present |
 | 0x43C | FBMODE | r/w | 0 row-major, 1 column-major |
 | 0x440 | CLOCK | r | host local time, seconds since midnight |
+| 0x444 | SCREEN | r/w | the screen shown, 0-3; a write puts it away and brings that one back (C4IX's Alt+Tab) |
+| 0x448 | SCRDROP | w | a screen put away, forgotten |
+| 0x44C | SWITCH | r/w | w: 1 watch for Alt+Tab, 0 not (either clears it); r: 1 when it was pressed |
+| 0x450 | MODE | r/w | the screen's mode (w << 16) \| h; a write of a listed one asks for it (0 here: the page scales) |
+| 0x454 | MODEIX | w | which mode MODEWH reads |
+| 0x458 | MODEWH | r | that mode, (w << 16) \| h; 0 past the last |
+
+CAPS also has bit4 (16), the screens, here and on c4pc, and bit5 (32),
+modes, only where the platform has them (c4pc on a PC: docs/c4pc.md,
+"The screen"). A screen is what one program set the display to: rings,
+size, framebuffer registers, event mask, pointer shape and the keys it
+was told are down. Put away, it gets no events, its keys and buttons let
+go and its focus lost first; brought back, its focus and its size and
+pointer told to the page, whose one canvas its next frame fills (c4pc
+keeps each screen's canvas and pictures as well). While SWITCH is armed,
+Alt+Tab is not sent: SWITCH reads 1 instead (C4IX's sys.c, "The display").
 
 The rings use exactly the c4bb mailbox format (`src/c4bb/sim/mbox.js`). The
 first half of the region carries events to the guest, the second half

@@ -568,6 +568,8 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && !ustrcmp(argv[1], "images")) return argc == 3 ? vm_images(argv[2]) : images();
     if (argc > 1 && !ustrcmp(argv[1], "mkswap")) return argc == 4 ? mkswap(argv[2], uatoi(argv[3])) : usage();
+    // a guest's own: detach (c4pc's C4I_HVG)
+    if (argc > 1 && !ustrcmp(argv[1], "detach") && (__c4_info() & 0x800000)) { hv(C_DETACH, 0, 0, 0, 0); return 0; }
     if (!there()) { ufprintf(STDERR, "vm: no hypervisor (c4pc --hv: GRUB's \"C4PC hypervisor\")\n"); return 1; }
     if (argc < 2) { list(); return 0; }
     cmd = argv[1];

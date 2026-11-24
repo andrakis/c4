@@ -33,7 +33,7 @@ enum { TASK_H = 30, SIGINT = 2, SIGTERM = 15 };
 enum { K_TERM = 1, K_ABOUT = 2, K_FILES = 3, K_TASKS = 4, K_NOTE = 5, K_CALC = 6,
        K_MSG = 7, K_INPUT = 8, K_EDIT = 9, K_SETTINGS = 10, K_CLOCK = 11, K_VMS = 13, N_KINDS = 14 };
 // __c4_info's bit for c4pc's hypervisor (Machines; docs/c4pc-hypervisor.md)
-enum { C4I_HV_BIT = 0x400000 };
+enum { C4I_HV_BIT = 0x400000 };       // the hypervisor's control C4IX (a guest's is 0x800000: c4pc's C4I_HVG)
 
 // dialog results reach the window that asked through its answer hook
 enum { A_NONE = 0, A_DELETE = 1, A_RENAME = 2, A_NEWDIR = 3, A_OPEN = 4, A_SAVEAS = 5,

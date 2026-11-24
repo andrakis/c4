@@ -132,8 +132,14 @@ enum {
 #define SVGA_ID_2 0x90000002u
 enum { F_MIN = 0, F_MAX = 1, F_NEXT = 2, F_STOP = 3 };
 enum { CMD_UPDATE = 1, CMD_DEFINE_CURSOR = 19 };
-enum { CAP_CURSOR = 0x20, CAP_CURSOR_BYPASS_2 = 0x80 };
+enum { CAP_CURSOR = 0x20, CAP_CURSOR_BYPASS_2 = 0x80, CAP_EXTENDED_FIFO = 0x8000 };
+/* the extended FIFO's registers past the front 4 (svga_reg.h), there when
+ * MIN leaves room for all of them: VMware's own pointer (cursor bypass 3)
+ * among them, taken when CURSOR_COUNT moves */
+enum { F_CAPS = 4, F_CURON = 9, F_CURX = 10, F_CURY = 11, F_CURCOUNT = 12 };
+enum { FCAP_CURSOR_BYPASS_3 = 1 << 1 };
 static u32 sv_io, sv_fb, sv_caps;
+static int sv_bypass3;                         /* the pointer through the FIFO's registers */
 static volatile u32 *fifo;
 static int sv_hwcur;                           /* the adapter draws the pointer */
 static u32 sv_updates, sv_syncs;               /* for -s */
@@ -180,8 +186,10 @@ static int sv_probe(void) {
     sv_caps = sv_rd(SV_CAPS);
     max_w = (int)sv_rd(SV_MAXW); max_h = (int)sv_rd(SV_MAXH);
     if (!fifo || fsize < 16384 || max_w < 640 || max_h < 480) return 0;
-    fifo[F_MIN] = 16; fifo[F_MAX] = fsize; fifo[F_NEXT] = 16; fifo[F_STOP] = 16;
+    u32 fmin = (sv_caps & CAP_EXTENDED_FIFO) ? 4096 : 16;      /* a page: past every register (Linux's vmwgfx) */
+    fifo[F_MIN] = fmin; fifo[F_MAX] = fsize; fifo[F_NEXT] = fmin; fifo[F_STOP] = fmin;
     sv_wr(SV_CONFIGDONE, 1);
+    sv_bypass3 = (sv_caps & CAP_EXTENDED_FIFO) && (fifo[F_CAPS] & FCAP_CURSOR_BYPASS_3);
     return 1;
   }
   return 0;
@@ -200,7 +208,7 @@ static void sv_set(int w, int h) {
   if (fb_pitch < (u32)w * 4) fb_pitch = (u32)w * 4;
   /* the pointer is the adapter's, where it can draw one (defined again:
    * a mode change may forget it) */
-  sv_hwcur = !screen_soft_pointer && (sv_caps & CAP_CURSOR) && (sv_caps & CAP_CURSOR_BYPASS_2);
+  sv_hwcur = !screen_soft_pointer && (sv_caps & CAP_CURSOR) && (sv_bypass3 || (sv_caps & CAP_CURSOR_BYPASS_2));
   if (sv_hwcur) sv_cursor_define();
 }
 
@@ -255,7 +263,7 @@ void screen_describe(void) {
   if (drv != DRV_GRUB) {
     pc_log(", modes up to "); pc_logn(max_w); pc_log(" x "); pc_logn(max_h); pc_log(" in "); pc_logn(vram_bytes >> 20); pc_log(" MB");
   }
-  if (drv == DRV_SVGA) pc_log(sv_hwcur ? ", its own pointer" : ", our pointer");
+  if (drv == DRV_SVGA) pc_log(!sv_hwcur ? ", our pointer" : sv_bypass3 ? ", its own pointer (FIFO)" : ", its own pointer");
   pc_log("\n");
 }
 /* for -s: the SVGA's updates and syncs */
@@ -654,11 +662,23 @@ static void sv_cursor_define(void) {
   fifo_cmd(c, 8 + 64);
 }
 extern int mouse_debug;
+/* Moved, shown or hidden. VMware's through the FIFO (bypass 3): its
+ * registers (bypass 2) switched VMware's pointer to bypass 2 and back at
+ * every move, a round trip and a log line each ("SVGA: Restoring cursor
+ * bypass 3 from vm which took 3->2->3 roundtrip", about every 10 ms while
+ * the mouse moved, 2026-11-25). The registers where there is no FIFO
+ * pointer (QEMU's), ON at every move: QEMU moves its pointer on ON */
 static void sv_pointer(int x, int y, int on) {
   static int was = -1;
-  sv_wr(SV_CURID, 1);
-  if (on) { sv_wr(SV_CURX, (u32)x); sv_wr(SV_CURY, (u32)y); }
-  sv_wr(SV_CURON, on ? 1 : 0);
+  if (sv_bypass3) {
+    if (on) { fifo[F_CURX] = (u32)x; fifo[F_CURY] = (u32)y; }
+    fifo[F_CURON] = on ? 1 : 0;
+    fifo[F_CURCOUNT] = fifo[F_CURCOUNT] + 1;      /* volatile: after the others */
+  } else {
+    sv_wr(SV_CURID, 1);
+    if (on) { sv_wr(SV_CURX, (u32)x); sv_wr(SV_CURY, (u32)y); }
+    sv_wr(SV_CURON, on ? 1 : 0);
+  }
   if (mouse_debug && on != was) pc_log(on ? "c4pc: the adapter's pointer on\n" : "c4pc: the adapter's pointer off\n");
   was = on;
 }

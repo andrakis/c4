@@ -41,11 +41,51 @@ static int cur_sort;               // Files' order: SORT_* * 2, plus 1 for desce
 static int cur_tree = 180;         // Files' folder tree: its width (its splitter)
 // The sizes offered: the window kit lays itself out at any of them, and
 // the page scales the display to its pane. 640x480 still fits Settings,
-// the Go menu and the desktop's icons.
-enum { N_SIZES = 3 };
-static int size_w[N_SIZES] = { 640, 800, 1024 }, size_h[N_SIZES] = { 480, 600, 768 };
-static char *size_names[N_SIZES] = { "640x480", "800x600", "1024x768" };
+// the Go menu and the desktop's icons. Where the display has modes of its
+// own (c4pc on a PC: VMware's SVGA II, the BGA), the sizes offered are
+// those, and the screen is put in the one chosen (GUI_MODE), the desktop
+// drawn its size, pixel for pixel; the first choice is the mode the screen
+// is in.
+enum { MAX_SIZES = 32, SIZE_NAME = 12 };
+static int size_w[MAX_SIZES], size_h[MAX_SIZES];
+static char size_names[MAX_SIZES * SIZE_NAME];
+static int n_sizes, has_modes;
 static int cur_size;
+
+static void sizes_init() {
+    int v, i, cur;
+    n_sizes = 0; cur = 0 - 1;
+    if (*(int *)GUI_CAPS & GUI_CAP_MODES) {
+        while (n_sizes < MAX_SIZES) {
+            *(int *)GUI_MODEIX = n_sizes;
+            v = *(int *)GUI_MODEWH;
+            if (!v) break;
+            size_w[n_sizes] = (v >> 16) & 0xffff; size_h[n_sizes] = v & 0xffff;
+            ++n_sizes;
+        }
+        v = *(int *)GUI_MODE;
+        i = 0;
+        while (i < n_sizes) { if (size_w[i] == ((v >> 16) & 0xffff) && size_h[i] == (v & 0xffff)) cur = i; ++i; }
+    }
+    has_modes = n_sizes > 0;
+    if (!has_modes) {
+        n_sizes = 3;
+        size_w[0] = 640; size_h[0] = 480; size_w[1] = 800; size_h[1] = 600; size_w[2] = 1024; size_h[2] = 768;
+        cur = 1;
+    } else if (cur < 0) cur = 0;
+    i = 0;
+    while (i < n_sizes) {
+        ui_num(size_names + i * SIZE_NAME, size_w[i]);
+        ui_cat(size_names + i * SIZE_NAME, "x");
+        ui_num(size_names + i * SIZE_NAME + ui_len(size_names + i * SIZE_NAME), size_h[i]);
+        ++i;
+    }
+    cur_size = cur;
+}
+// the screen in the size chosen, where it has modes
+static void mode_apply() {
+    if (has_modes) *(int *)GUI_MODE = (size_w[cur_size] << 16) | size_h[cur_size];
+}
 static int cur_vol, cur_mute;      // the volume, 0-100 as the tray shows it, and muted
 static int cur_font, cur_fsize;    // the interface's face and size (the kit's, wk_font_use)
 
@@ -105,7 +145,7 @@ static void theme_load() {
             k = cfg_num(cfg + i + 4, &v);
             cfg_num(cfg + i + 5 + k, &h);
             k = 0;
-            while (k < N_SIZES) { if (size_w[k] == v && size_h[k] == h) cur_size = k; ++k; }
+            while (k < n_sizes) { if (size_w[k] == v && size_h[k] == h) cur_size = k; ++k; }
         }
         if (cfg[i] == 'v' && cfg[i + 1] == 'o' && cfg[i + 2] == 'l' && cfg[i + 3] == ' ') { cfg_num(cfg + i + 4, &v); if (v >= 0 && v <= 100) cur_vol = v; }
         if (cfg[i] == 'm' && cfg[i + 1] == 'u' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); cur_mute = v != 0; }
@@ -195,12 +235,14 @@ void theme_set_font(int face, int size) {
 
 // The screen's size: asked of the display now (the page sizes its canvas,
 // the kit lays the windows out again, the picture is stretched to it)
-int display_count() { return N_SIZES; }
-char *display_name(int i) { return i >= 0 && i < N_SIZES ? size_names[i] : ""; }
+int display_count() { return n_sizes; }
+int display_modes() { return has_modes; }
+char *display_name(int i) { return i >= 0 && i < n_sizes ? size_names + i * SIZE_NAME : ""; }
 int display_cur() { return cur_size; }
 void display_set(int i) {
-    if (i < 0 || i >= N_SIZES) return;
+    if (i < 0 || i >= n_sizes) return;
     cur_size = i;
+    mode_apply();
     theme_save();
     if (wk.sw != size_w[i] || wk.sh != size_h[i]) wk_screen(size_w[i], size_h[i]);
     wk_redraw_all();
@@ -729,6 +771,96 @@ static void go_press(int x, int y) {
     if (it) start_pick(it);
 }
 
+// ---- Alt+Tab: the windows, and the games it put in the background ------------------
+//
+// A game on the whole display goes to the background with Alt+Tab (the
+// kernel parks it: include/display.h) and the desktop is back; its button
+// on the taskbar, after the windows', brings it back, as Alt+Tab here does.
+// Held Alt, each Tab steps on (Shift+Tab back) through the window in
+// front, the parked games, the last parked first, and the other windows
+// from the top down; a box in the middle names the one stepped to, and
+// letting Alt go brings it to the front -- a window raised, a game given
+// the display (DISP_RESUME). So one Alt+Tab is the way back to where you
+// were. Esc lets it be.
+enum { AT_MAX = 24, KEY_ALT = 18, AT_W = 360, AT_H = 64 };
+static int at_on, at_sel, at_n;
+static int at_ids[AT_MAX];         // a window's number, or minus a parked game's task id
+static int resume_id;              // a game to give the display to, at the loop's next turn
+static int tinfo[TASKINFO_WORDS];
+
+static int n_parked() { int k; k = 0; while (udisplay(DISP_PARKED, k)) ++k; return k; }
+
+// a task's name, from utaskinfo
+static char *task_name(int id) {
+    int i;
+    i = 0;
+    while (utaskinfo(i, tinfo)) { if (tinfo[0] == id) return (char *)(tinfo + 8); ++i; }
+    return "game";
+}
+static int at_has(int id) {
+    int k;
+    k = 0;
+    while (k < at_n) { if (at_ids[k] == id) return 1; ++k; }
+    return 0;
+}
+static void at_add(int id) { if (at_n < AT_MAX && !at_has(id)) { at_ids[at_n] = id; ++at_n; } }
+static void at_build() {
+    struct win *w, *f;
+    int k, id;
+    at_n = 0;
+    f = win_get(wk_focus());
+    if (f && f->used && !f->dialog) at_add(f->id);
+    k = 0;
+    while ((id = udisplay(DISP_PARKED, k))) { at_add(0 - id); ++k; }
+    w = f ? f->below : 0;
+    while (w) { if (w->used && !w->dialog) at_add(w->id); w = w->below; }
+    w = win_first();
+    while (w) { if (w->used && !w->dialog) at_add(w->id); w = w->next; }
+}
+// the one stepped to, to the front
+static void at_pick() {
+    int v;
+    at_on = 0;
+    v = at_sel < at_n ? at_ids[at_sel] : 0;
+    if (v > 0 && wk_alive(v)) wk_raise(v);
+    else if (v < 0) resume_id = 0 - v;
+    wk_redraw_all();
+}
+// its keys: 1 taken
+static int at_key(int down, int code, int mods) {
+    if (down && code == KEY_TAB && (mods & M_ALT) && !(mods & M_CTRL)) {
+        if (!at_on) { at_build(); at_on = 1; at_sel = 0; }
+        if (at_n) at_sel = (at_sel + ((mods & M_SHIFT) ? at_n - 1 : 1)) % at_n;
+        wk_redraw_all();
+        return 1;
+    }
+    if (!at_on) return 0;
+    if (!down && code == KEY_ALT) { at_pick(); return 1; }
+    if (down && code == KEY_ESC) { at_on = 0; wk_redraw_all(); }
+    return 1;
+}
+// its box, over everything
+static void draw_alttab() {
+    int x, y, v, kind;
+    char *name;
+    struct win *w;
+    if (!at_on || !at_n) return;
+    x = (wk.sw - AT_W) / 2; y = (wk.sh - AT_H) / 2;
+    gui_rect(x, y, AT_W, AT_H, C_FACE);
+    d_bevel(x, y, AT_W, AT_H, B_RAISED);
+    v = at_ids[at_sel];
+    kind = ICON_TASKS; name = "";
+    if (v > 0 && (w = win_get(v))) { kind = w->kind; name = w->title; }
+    else if (v < 0) name = task_name(0 - v);
+    d_icon(kind, x + 14, y + 14);
+    d_text(x + 40, y + 14, C_DARK, F_BOLD, name);
+    ui_num(tbuf, at_sel + 1);
+    ui_cat(tbuf, " of ");
+    ui_num(tbuf + ui_len(tbuf), at_n);
+    ui_cat(tbuf, v < 0 ? ": in the background" : ": a window");
+    d_text(x + 40, y + 36, C_SHADOW, F_SANS, tbuf);
+}
+
 // ---- the taskbar ----------------------------------------------------------------------
 
 static int n_buttons() {
@@ -736,6 +868,7 @@ static int n_buttons() {
     int n;
     n = 0; w = win_first();
     while (w) { if (w->used && !w->dialog) ++n; w = w->next; }
+    n = n + n_parked();
     return n;
 }
 static int button_w() { int n, w; n = n_buttons(); if (!n) return 150; w = (wk.sw - 64 - 178) / n - 4; return w > 150 ? 150 : w; }
@@ -851,6 +984,18 @@ static void draw_taskbar() {
         }
         w = w->next;
     }
+    // the parked games: a button each, its task's name
+    i = 0;
+    while ((f = udisplay(DISP_PARKED, i))) {
+        bx = 64 + k * (bw + 4);
+        gui_rect(bx, ty + 4, bw, 22, C_FACE);
+        if (ui_style != S_FLAT) d_bevel(bx, ty + 4, bw, 22, B_RAISED);
+        d_icon(ICON_TASKS, bx + 4, ty + 7);
+        wk_clip_screen(bx + 22, ty + 4, bw - 26, 22);
+        d_text(bx + 24, ty + 9, C_SHADOW, F_SANS, task_name(f));
+        wk_noclip();
+        ++k; ++i;
+    }
     gui_rect(cpu_x(), ty + 4, CPU_W, 22, C_FACE);
     if (ui_style != S_FLAT) d_bevel(cpu_x(), ty + 4, CPU_W, 22, B_SUNKEN);
     gui_rect(cpu_x() + 5, ty + 8, 8, 14, 0x000000);
@@ -879,6 +1024,7 @@ static void front() {
     if (wk_in_damage(0, wk.sh - TASK_H, wk.sw, TASK_H)) draw_taskbar();
     if (go_depth) draw_start();
     if (vol_open) draw_volume();
+    draw_alttab();
 }
 
 static int popup() { return go_depth || vol_open; }
@@ -886,7 +1032,7 @@ static int popup() { return go_depth || vol_open; }
 // ---- input the shell takes before the windows, and where there are none ----
 
 static int mouse_front(int ev, int x, int y, int b) {
-    int k, bw, ty;
+    int k, bw, ty, n, id;
     struct win *w;
     ty = wk.sh - TASK_H;
     if (vol_open) {
@@ -932,6 +1078,12 @@ static int mouse_front(int ev, int x, int y, int b) {
         }
         w = w->next;
     }
+    // a parked game's: the display its again
+    n = 0;
+    while ((id = udisplay(DISP_PARKED, n))) {
+        if (ui_hit(x, y, 64 + k * (bw + 4), ty + 4, bw, 22)) { resume_id = id; return 1; }
+        ++k; ++n;
+    }
     return 1;
 }
 
@@ -953,12 +1105,16 @@ static void mouse_desk(int ev, int x, int y, int b) {
 
 static int key(int down, int code, int ch, int mods) {
     icon_k = 0 - 1;
+    if (at_key(down, code, mods)) return 1;
     // Ctrl+Shift+Esc: System Monitor, from anywhere
     if (code == KEY_ESC && (mods & M_CTRL) && (mods & M_SHIFT)) { tasks_open(); return 1; }
     if (go_depth && code == KEY_ESC) { go_depth = 0; wk_redraw_all(); return 1; }
     if (vol_open && code == KEY_ESC) { vol_close(); return 1; }
     return 0;
 }
+
+// a key let go: Alt, ending an Alt+Tab
+static int keyup(int code, int ch, int mods) { return at_key(0, code, mods); }
 
 static int pointer(int x, int y) { return go_depth || vol_open || y >= wk.sh - TASK_H ? PTR_ARROW : 0 - 1; }
 
@@ -976,7 +1132,8 @@ static void resized() {
 
 static struct wk_shell shell = {
     .desktop = desktop, .front = front, .popup = popup, .mouse_front = mouse_front,
-    .mouse_desk = mouse_desk, .key = key, .pointer = pointer, .answer = answer, .resized = resized
+    .mouse_desk = mouse_desk, .key = key, .pointer = pointer, .answer = answer, .resized = resized,
+    .keyup = keyup
 };
 
 // ---- starting and stopping ------------------------------------------------------------
@@ -1030,6 +1187,7 @@ int main(int argc, char **argv) {
     if (!(region = ualloc(RING))) { printf("desktop: no memory for the display's ring\n"); udisplay_give(); return 1; }
     vmw_clip_init();                   // the host's clipboard, under VMware
     theme_init();
+    sizes_init();                      // the screen's modes, where it has them
     theme_apply();                     // the default scheme, unless the file names one
     theme_load();
     // at the size Settings chose: 800x600 unless the file names another
@@ -1037,6 +1195,7 @@ int main(int argc, char **argv) {
     // GUI_M_WINDOW too: a resize or a focus change from the page means the
     // canvas may have been cleared, and the scene is drawn again
     gui_events(EVENTS);
+    mode_apply();
     volume_apply();
     n_start = sizeof(start_items) / sizeof(start_items[0]);
     // Install C4IX, on the desktop and in Go, only booted from c4pc's disc
@@ -1076,6 +1235,9 @@ int main(int argc, char **argv) {
         // the terminals' pipes, so their programs run on, but drawing
         // nothing and reading no events, which go to the game. Then the
         // display again, at the desktop's size, and the whole scene drawn on it.
+        // A game Alt+Tab put in the background, asked for (its button, Alt+Tab
+        // here): it has the display again, and the desktop stands aside as below
+        if (!aside && resume_id) { k = resume_id; resume_id = 0; at_on = 0; if (udisplay(DISP_RESUME, k)) aside = 1; }
         if (!aside && udisplay(DISP_STATE, 0) == 1 && udisplay(DISP_YIELD, 0)) aside = 1;
         if (aside) {
             if (udisplay(DISP_STATE, 0) == 2) {

@@ -37,6 +37,16 @@ enum {
 	GUI_FB = 0x430, GUI_FBPITCH = 0x434, GUI_FBFLIP = 0x438, GUI_FBMODE = 0x43c, GUI_CLOCK = 0x440,
 	C4I_GUI = 0x4000
 };
+// The display's screens, the kernel's (C4IX's Alt+Tab: include/display.h),
+// and the screen's own modes, where the platform has them (c4pc's PC; not
+// the page): libjs/gui-device.js. GUI_MODE reads (w << 16) | h, the mode
+// now, and a write of one GUI_MODEWH listed asks for it; GUI_MODEWH reads
+// the mode GUI_MODEIX names, 0 past the last.
+enum {
+	GUI_SCREEN = 0x444, GUI_SCRDROP = 0x448, GUI_SWITCH = 0x44c,
+	GUI_MODE = 0x450, GUI_MODEIX = 0x454, GUI_MODEWH = 0x458,
+	GUI_CAP_SCREENS = 16, GUI_CAP_MODES = 32
+};
 // commands
 enum {
 	GUI_CLEAR = 1, GUI_RECT = 2, GUI_RECTO = 3, GUI_LINE = 4, GUI_CIRCLE = 5, GUI_TEXT = 6,

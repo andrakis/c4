@@ -179,6 +179,7 @@ void theme_set_font(int face, int size);
 // the screen's size (Settings): one of the sizes offered, asked of the
 // display at once and when the desktop starts, and remembered with the rest
 int  display_count();
+int  display_modes();              // 1: the sizes are the screen's own modes (c4pc), chosen with Apply
 char *display_name(int i);         // "800x600"
 int  display_cur();                // the one in use
 void display_set(int i);

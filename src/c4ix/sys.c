@@ -405,10 +405,77 @@ static int sys_waitpid(int pid, int *st, int opts) {
 // desktop cannot keep a game off the screen; one that did not agree to
 // give way is never asked, and a second program is told no. One level
 // deep: the desktop under a game, never a game under a game.
-enum { DISP_GRACE = 1000 };
-static int disp_holder, disp_hyields;               // who has it; gives way?
-static int disp_prev, disp_pyields;                 // who gave way to it
+//
+// Alt+Tab, where the display keeps screens (its CAPS' GUI_CAP_SCREENS:
+// libjs/gui-device.js, c4pc's gui.c). Each program that has the whole
+// display draws on a screen of its own: its rings, its canvas, its
+// pictures and pointer, which the display puts away whole when another is
+// shown and brings back as they were (GUI_SCREEN). The kernel picks the
+// screens: the first holder's is the one shown, and a program the holder
+// gives way to gets one nobody has. While a game has the display over the
+// desktop, the display watches for Alt+Tab (GUI_SWITCH armed) and does not
+// give it to the game; each ms (sched_tick, sys_display_tick) the kernel
+// looks, and when it was pressed, parks the game: it is held (TF_PARKED,
+// not run, as a DOS game Windows 3 put in the background was suspended),
+// its screen put away, and the desktop has the display back as if the game
+// had given it up. The desktop lists the parked (DISP_PARKED) beside its
+// windows, and brings one back (DISP_RESUME), giving way to it as to a
+// game that asks: the game's screen is shown again as it left it, and the
+// game runs on from where it stopped, never having known. A parked game
+// that dies, or is killed, has its screen forgotten (GUI_SCRDROP).
+// DISP_NPARK at once; a fourth Alt+Tab is the game's to keep.
+enum { DISP_GRACE = 1000, DISP_NPARK = 3, DISP_NSCR = 4 };
+static int disp_holder, disp_hyields, disp_hscr;    // who has it; gives way?; its screen
+static int disp_prev, disp_pyields, disp_pscr;      // who gave way to it
 static int disp_want, disp_wyields, disp_want_at;   // who asks, and since when
+static int disp_park[DISP_NPARK], disp_kyields[DISP_NPARK], disp_kscr[DISP_NPARK];   // parked,
+static int disp_npark;                              // the last parked first
+static int disp_shown;                              // the screen the display shows
+static int disp_caps;                               // 1 it keeps screens, -1 not, 0 not yet asked
+int disp_armed;                                     // GUI_SWITCH armed: sched_tick looks
+
+static int disp_screens() {
+    if (!disp_caps) disp_caps = host_has(C4IX_I_GUI) && (*(int *)C4IX_GUI_CAPS & C4IX_GUI_CAP_SCREENS) ? 1 : 0 - 1;
+    return disp_caps > 0;
+}
+// screen S on the display, and S forgotten (not the one shown)
+static void disp_show(int s) {
+    if (!disp_screens() || s == disp_shown) return;
+    *(int *)C4IX_GUI_SCREEN = s;
+    disp_shown = s;
+}
+static void disp_forget(int s) {
+    if (disp_screens() && s != disp_shown) *(int *)C4IX_GUI_SCRDROP = s;
+}
+// Alt+Tab watched for while a game has the display over one who gave way
+static void disp_arm() {
+    int on;
+    if (!disp_screens()) return;
+    on = disp_holder && disp_prev ? 1 : 0;
+    if (on != disp_armed) { disp_armed = on; *(int *)C4IX_GUI_SWITCH = on; }
+}
+// a screen nobody has: not the holder's, nor who gave way's, nor a parked game's
+static int disp_free_screen() {
+    int s, k, used;
+    s = 0;
+    while (s < DISP_NSCR) {
+        used = (disp_holder && s == disp_hscr) || (disp_prev && s == disp_pscr);
+        k = 0;
+        while (k < disp_npark) { if (disp_kscr[k] == s) used = 1; ++k; }
+        if (!used) return s;
+        ++s;
+    }
+    return 0;
+}
+
+// the K'th parked off the list
+static void disp_unpark(int k) {
+    --disp_npark;
+    while (k < disp_npark) {
+        disp_park[k] = disp_park[k + 1]; disp_kyields[k] = disp_kyields[k + 1]; disp_kscr[k] = disp_kscr[k + 1];
+        ++k;
+    }
+}
 
 // A holder asleep on the clock or its event ring looks now
 static void disp_nudge(int id) {
@@ -418,27 +485,91 @@ static void disp_nudge(int id) {
 }
 
 static void disp_pass() {
-    disp_prev = disp_holder; disp_pyields = disp_hyields;
-    disp_holder = disp_want; disp_hyields = disp_wyields;
+    int s;
+    s = disp_free_screen();
+    disp_prev = disp_holder; disp_pyields = disp_hyields; disp_pscr = disp_hscr;
+    disp_holder = disp_want; disp_hyields = disp_wyields; disp_hscr = s;
     disp_want = 0;
+    disp_show(s);
+    disp_arm();
 }
 
 // A task gives the display up, or dies having it, waiting under a game
-// for it, or asking for it
+// for it, parked, or asking for it. The holder's screen is forgotten once
+// another is shown; with nobody under it, a parked game has the display.
 void sys_display_drop(int id) {
+    struct task *t;
+    int k, s;
     if (!id) return;
     if (disp_want == id) disp_want = 0;
-    if (disp_prev == id) disp_prev = 0;
+    if (disp_prev == id) { disp_prev = 0; disp_forget(disp_pscr); }
+    k = 0;
+    while (k < disp_npark) { if (disp_park[k] == id) { disp_forget(disp_kscr[k]); disp_unpark(k); } else ++k; }
     if (disp_holder == id) {
-        disp_holder = disp_prev; disp_hyields = disp_pyields;
-        disp_prev = 0;
-        if (disp_holder) disp_nudge(disp_holder);
+        s = disp_hscr;
+        if (disp_prev) { disp_holder = disp_prev; disp_hyields = disp_pyields; disp_hscr = disp_pscr; disp_prev = 0; }
+        else {
+            disp_holder = 0;
+            if (disp_npark && (t = task_get(disp_park[0]))) {
+                disp_holder = disp_park[0]; disp_hyields = disp_kyields[0]; disp_hscr = disp_kscr[0];
+                disp_unpark(0);
+                TF_CLR(t, TF_PARKED);
+                sched_wake = 1;
+            }
+        }
+        if (disp_holder) { disp_show(disp_hscr); disp_forget(s); disp_nudge(disp_holder); }
     }
+    disp_arm();
+}
+
+// Each ms, while Alt+Tab is watched for (sched_tick): pressed, the game
+// parked and the display the desktop's again
+void sys_display_tick() {
+    struct task *t;
+    int k;
+    if (!disp_armed || !*(int *)C4IX_GUI_SWITCH) return;
+    *(int *)C4IX_GUI_SWITCH = 1;                    // taken: still watched for
+    if (disp_npark == DISP_NPARK || !disp_prev || !(t = task_get(disp_holder))) return;
+    k = disp_npark;
+    while (k > 0) {
+        disp_park[k] = disp_park[k - 1]; disp_kyields[k] = disp_kyields[k - 1]; disp_kscr[k] = disp_kscr[k - 1];
+        --k;
+    }
+    ++disp_npark;
+    disp_park[0] = disp_holder; disp_kyields[0] = disp_hyields; disp_kscr[0] = disp_hscr;
+    TF_SET(t, TF_PARKED);
+    disp_holder = disp_prev; disp_hyields = disp_pyields; disp_hscr = disp_pscr;
+    disp_prev = 0;
+    disp_show(disp_hscr);
+    disp_arm();
+    disp_nudge(disp_holder);
+    sched_wake = 1;
+}
+
+// RESUME: the holder, who gives way, gives way to parked game ID: 1 if it did
+static int disp_resume(int me, int id) {
+    struct task *t;
+    int k;
+    if (!id || disp_holder != me || disp_prev || !disp_hyields) return 0;
+    k = 0;
+    while (k < disp_npark && disp_park[k] != id) ++k;
+    if (k == disp_npark || !(t = task_get(id))) return 0;
+    disp_prev = disp_holder; disp_pyields = disp_hyields; disp_pscr = disp_hscr;
+    disp_holder = id; disp_hyields = disp_kyields[k]; disp_hscr = disp_kscr[k];
+    disp_unpark(k);
+    TF_CLR(t, TF_PARKED);
+    sched_wake = 1;
+    disp_show(disp_hscr);
+    disp_arm();
+    return 1;
 }
 
 // TAKE: 1 it is the caller's, 0 ask again soon, -1 no. STATE: 0 the
 // caller has it, 1 it has it and another asks, 2 it has not. YIELD: 1 it
 // passed to the one asking. GIVE: it goes back to who gave way, if anyone.
+// PARKED: the id of the FLAGS'th parked game (the last parked first), 0
+// past the last. RESUME:
+// 1 the display passed to parked game FLAGS.
 static int sys_display(struct task *t, int op, int flags) {
     int me;
     if (!t) return -1;
@@ -447,6 +578,7 @@ static int sys_display(struct task *t, int op, int flags) {
     if (op == DISP_TAKE) {
         sched_softpin(t);
         if (!disp_holder || disp_holder == me) {
+            if (!disp_holder) disp_hscr = disp_shown;
             disp_holder = me; disp_hyields = flags & DISP_YIELDS;
             if (disp_want == me) disp_want = 0;
             return 1;
@@ -468,6 +600,8 @@ static int sys_display(struct task *t, int op, int flags) {
         return 1;
     }
     if (op == DISP_GIVE) { sys_display_drop(me); return 0; }
+    if (op == DISP_PARKED) return flags >= 0 && flags < disp_npark ? disp_park[flags] : 0;
+    if (op == DISP_RESUME) return disp_resume(me, flags);
     return -1;
 }
 

@@ -192,6 +192,7 @@ void *imap_get(imap *m, u32 k);
 void imap_set(imap *m, u32 k, void *v);
 void *imap_del(imap *m, u32 k);
 void imap_clear(imap *m, void (*f)(void *));
+void imap_free(imap *m, void (*f)(void *));   /* cleared, and the map itself freed */
 
 /* ---- the heap (heap.js) ---- */
 typedef struct heap heap;
@@ -535,6 +536,13 @@ void gui_redraw_all(gui *g);
 int gui_thumb(gui *g, u32 *out, int w, int h);   /* the canvas shown, scaled (hv.c THUMB) */
 int gui_pointer(gui *g, int *x, int *y);
 void gui_stats(gui *g, u32 *commands, u32 *presents, u32 *events, u32 *flips);
+/* the screen's modes (pc.c: screen.c's), the one it is in; one the guest
+ * asked for (MODE), taken; the screens: which is shown, how many switches */
+void gui_set_modes(gui *g, const int *w, const int *h, int n, int cw, int ch);
+int gui_mode_request(gui *g, int *w, int *h);
+void gui_mode_now(gui *g, int w, int h);
+int gui_screen(gui *g);
+u32 gui_switches(gui *g);
 /* memory as a device reaches it (dev.c), and a space's own (mmu.c) */
 i64 dev_dma(machine *m, u32 addr, i32 len, int write, int pin);
 u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out);

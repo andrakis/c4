@@ -156,3 +156,7 @@ void imap_clear(imap *m, void (*f)(void *)) {
   }
   m->n = m->used = 0;
 }
+void imap_free(imap *m, void (*f)(void *)) {
+  imap_clear(m, f);
+  xfree(m->k); xfree(m->st); xfree(m->v); xfree(m);
+}

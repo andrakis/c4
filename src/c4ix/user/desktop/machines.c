@@ -1393,7 +1393,14 @@ static void draw_load_disk(struct machines *t, int x, int y, int w, int h) {
     yy = y; b = 0;
     while (b < t->nb[k] && yy + 92 < y + h) {
         at = k * MAXB + b;
-        disk_block(t, x, yy, w, t->bname + at * BNAME, t->bsize[at], t->bhr + at * HIST, t->bhw + at * HIST, t->nbh[k], t->brd[at], t->bwr[at]);
+        // c4pc names them hd<k> and swap (it sees extents, not files): hd0
+        // and swap are vm.cfg's disk and swap lines' images
+        ui_ncpy(nm, t->bname + at * BNAME, 20);
+        if (k > CTL && t->cfg[k] && (same(nm, "hd0") || same(nm, "swap")) && cfg_read(mname(t, k)) >= 0
+            && line_get(cfg, same(nm, "hd0") ? "disk" : "swap", buf, 60) && buf[0]) {
+            ui_cat(nm, ": "); ui_ncpy(nm + ui_len(nm), ui_base(buf), 40);
+        }
+        disk_block(t, x, yy, w, nm, t->bsize[at],t->bhr + at * HIST, t->bhw + at * HIST, t->nbh[k], t->brd[at], t->bwr[at]);
         yy = yy + 98; ++b;
     }
 }
@@ -1654,13 +1661,13 @@ static void draw_top(struct machines *t, int x, int y, int w, int h) {
     box(x + lw / 2 + 4, my, lw / 2 - 4, mh - nh - 8, "disks");
     yy = my + 10; px = x + lw / 2 + 12;
     if (t->has_io) {
-        d_text(px, yy, C_DARK, F_BOLD, "c4pc");
+        d_text(px, yy, C_DARK, F_BOLD, "c4pc, all");
         ui_cpy(s, "R "); gfmt(t->nioh ? t->iohr[t->nioh - 1] : 0, G_KBS, s + ui_len(s));
         ui_cat(s, " W "); gfmt(t->nioh ? t->iohw[t->nioh - 1] : 0, G_KBS, s + ui_len(s));
-        d_text(px + lw / 2 - 20 - ui_len(s) * 6, yy, C_DARK, F_SANS, s);
-        graphc(t->iohr, t->nioh, px, yy + 16, lw / 2 - 20, 20, 0, G_KBS, C_RD);
-        graphc(t->iohw, t->nioh, px, yy + 38, lw / 2 - 20, 20, 0, G_KBS, C_WR);
-        yy = yy + 66;
+        d_text(px + 8, yy + 14, C_LBL, F_SANS, s);
+        graphc(t->iohr, t->nioh, px, yy + 30, lw / 2 - 20, 20, 0, G_KBS, C_RD);
+        graphc(t->iohw, t->nioh, px, yy + 52, lw / 2 - 20, 20, 0, G_KBS, C_WR);
+        yy = yy + 80;
     } else { d_text(px, yy, C_LBL, F_SANS, "no disk counts:"); d_text(px, yy + 14, C_LBL, F_SANS, "an older c4pc"); yy = yy + 34; }
     // each running machine's disks, a line each
     j = CTL;
@@ -1668,7 +1675,8 @@ static void draw_top(struct machines *t, int x, int y, int w, int h) {
         k = 0;
         while ((j == CTL || up(t, j)) && k < t->nb[j] && yy + 30 < my + mh - nh - 10) {
             i = j * MAXB + k;
-            ui_ncpy(s, ui_base(t->bname + i * BNAME), 20);
+            ui_ncpy(s, j == CTL ? "control" : mname(t, j), 12); ui_cat(s, " ");
+            ui_ncpy(s + ui_len(s), ui_base(t->bname + i * BNAME), 12);
             d_text(px, yy, C_DARK, F_SANS, s);
             ui_cpy(s, "R "); gfmt(t->nbh[j] ? t->bhr[i * HIST + t->nbh[j] - 1] : 0, G_KBS, s + ui_len(s));
             ui_cat(s, " W "); gfmt(t->nbh[j] ? t->bhw[i * HIST + t->nbh[j] - 1] : 0, G_KBS, s + ui_len(s));
@@ -1720,7 +1728,7 @@ static void draw_top(struct machines *t, int x, int y, int w, int h) {
     i = 0;
     while (i < all && yy + 16 < my + mh) {
         r = tord[i];
-        if (cs_b.t[r].id != cs_b.h.idle) {
+        if (cs_b.t[r].id != cs_b.h.idle && memcmp(cs_b.t[r].name, "idle", 4)) {
             ui_num(s, cs_b.t[r].id); ui_cat(s, cs_b.t[r].id < 10 ? "   " : cs_b.t[r].id < 100 ? "  " : " ");
             ui_ncpy(s + ui_len(s), cs_b.t[r].name, CPUSTAT_NAME);
             d_text(px + 8, yy, C_DARK, F_SANS, s);

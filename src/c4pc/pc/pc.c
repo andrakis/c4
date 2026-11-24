@@ -26,8 +26,10 @@ const char *sb16_init(snd *s);
 void sb16_poll(void);
 const char *hda_init(snd *s);
 void hda_poll(void);
-extern u32 sb16_underruns, hda_underruns;
+extern u32 sb16_underruns, hda_underruns, es137x_underruns;
 static void (*audio_poll)(void) = sb16_poll;   /* the card under the machine's */
+static int audio_on;
+void pc_audio(void) { if (audio_on) audio_poll(); }
 
 /* the clock -hz auto sets: this share, in percent, of machine_kips's
  * loop rate (pc_main) */
@@ -855,7 +857,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     /* the Ensoniq AudioPCI: VMware's ES1371 for many guest types (es137x.c) */
     { extern const char *es137x_init(snd *); extern void es137x_poll(void);
       if (!how && (how = es137x_init(s))) audio_poll = es137x_poll; }
-    if (how) { m->snd = s; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); hw_str("sound "); hw_str(how); hw_str("\n"); }
+    if (how) { m->snd = s; audio_on = 1; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); hw_str("sound "); hw_str(how); hw_str("\n"); }
     else {
       extern const char *hda_why, *es137x_why;
       con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h; "); con_puts(hda_why);
@@ -971,7 +973,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     i64 slice = paced ? (i64)m->cycles_per_ms * 4 : 20000000;
     int r = machine_run(m, left < slice ? left : slice);
     if (m->snd) audio_poll();
-    if (m->gui) display_tick(hv ? hv_shown(m) : m);
+    if (m->gui) { display_tick(hv ? hv_shown(m) : m); if (m->snd) audio_poll(); }
     if (hv) { if (hv_detach) { hv_detach = 0; hv_attach(0); } hv_run(); }
     /* -s at the keyboard: every 10 s, on COM1 alone, how the PC kept up */
     if (stats && paced) {
@@ -984,7 +986,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         con_puts("c4pc: "); con_dec((ran - rep_cyc) / dt); con_puts("k inst/s, ");
         con_dec((display_ms - rep_disp) * 100 / dt); con_puts("% drawing to the screen, ");
         con_dec((idle_ms - rep_idle) * 100 / dt); con_puts("% idle");
-        if (m->snd) { con_puts(", "); con_dec(sb16_underruns + hda_underruns); con_puts(" sound underruns"); }
+        if (m->snd) { con_puts(", "); con_dec(sb16_underruns + hda_underruns + es137x_underruns); con_puts(" sound underruns"); }
         con_puts("\n");
         /* the other processors' requests of CPU 0, since the boot (par.c) */
         if (m->smp && m->smp->par) { static char b[700]; par_stats(m->smp, b, sizeof b); con_puts("c4pc: "); con_puts(b); con_puts("\n"); }

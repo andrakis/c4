@@ -2,9 +2,11 @@
  * (snd.c), where there is no Sound Blaster 16: VMware's default sound
  * device, VirtualBox's, QEMU's -device intel-hda -device hda-output, and
  * most PCs since 2004. As sb16.c: 16-bit stereo at 44100 Hz round a ring
- * the controller reads by DMA, its two halves a buffer descriptor list of
- * two, and hda_poll mixing the ring FILL frames past where the stream's
- * link position (LPIB) says it is. No interrupt.
+ * the controller reads by DMA, a buffer descriptor list of 32 entries of
+ * 256 frames (5.8 ms) each, and hda_poll mixing the ring a short lead
+ * past where the stream's link position (LPIB) says it is (aring.h). No
+ * interrupt. With two entries of half the ring each, VMware's LPIB moved
+ * a long step at a time, and what was mixed past it was already played. 
  *
  * The controller: the first PCI function of class 04h, subclass 03h, its
  * registers at BAR0 (below 4 GB, which c4pc maps to itself). Reset, then
@@ -19,22 +21,23 @@
 #include "../c4pc.h"
 #include "../clib.h"
 #include "../snd.h"
+#include "aring.h"
 
 static inline void outl(u32 p, u32 v) { __asm__ volatile("outl %0,%w1" : : "a"(v), "Nd"(p)); }
 static inline u32 inl(u32 p) { u32 v; __asm__ volatile("inl %w1,%0" : "=a"(v) : "Nd"(p)); return v; }
 static inline u8 inb(u32 p) { u8 v; __asm__ volatile("inb %w1,%0" : "=a"(v) : "Nd"(p)); return v; }
 
-#define RATE 44100
-#define RING 8192                      /* frames round the ring: 186 ms */
-#define FILL 2048                      /* frames mixed ahead of the DMA: 46 ms */
+#define RATE AR_RATE
+#define RING AR_RING
+#define NBDL 32                        /* the list's entries: 256 frames each */
 static int16_t ring[RING * 2] __attribute__((aligned(128)));
-static u32 bdl[8] __attribute__((aligned(128)));     /* two entries of 16 bytes */
+static u32 bdl[4 * NBDL] __attribute__((aligned(128)));     /* entries of 16 bytes */
 static u32 corb[256] __attribute__((aligned(128)));
 static u32 rirb[512] __attribute__((aligned(128)));
 static volatile u8 *R;                 /* the controller's registers */
 static volatile u8 *SD;                /* the output stream's descriptor */
 static u32 corb_wp, rirb_rp;
-static u32 played, made, last_pos;
+static aring A;
 static snd *card;
 u32 hda_underruns;
 void (*hda_log)(const char *s);   /* --debug-sound: the codec's graph, on the console */
@@ -242,18 +245,17 @@ const char *hda_init(snd *s) {
   SD[0] = 0;
   for (u32 n = 0; n < 1000 && (SD[0] & 1); n++) udelay(1);
   memset(ring, 0, sizeof ring);
-  u32 half = sizeof ring / 2;
-  bdl[0] = (u32)(uintptr_t)ring; bdl[1] = 0; bdl[2] = half; bdl[3] = 0;
-  bdl[4] = (u32)(uintptr_t)ring + half; bdl[5] = 0; bdl[6] = half; bdl[7] = 0;
+  u32 part = sizeof ring / NBDL;
+  for (u32 i = 0; i < NBDL; i++) { bdl[4 * i] = (u32)(uintptr_t)ring + i * part; bdl[4 * i + 1] = 0; bdl[4 * i + 2] = part; bdl[4 * i + 3] = 0; }
   *(volatile u32 *)(SD + 0x18) = (u32)(uintptr_t)bdl;
   *(volatile u32 *)(SD + 0x1C) = 0;
   *(volatile u32 *)(SD + 0x08) = sizeof ring;                         /* CBL */
-  *(volatile u16 *)(SD + 0x0C) = 1;                                   /* LVI: two entries */
+  *(volatile u16 *)(SD + 0x0C) = NBDL - 1;                            /* LVI: the last entry */
   *(volatile u16 *)(SD + 0x12) = 0x4011;                              /* the format, as the DACs' */
   SD[2] = 1 << 4;                                                     /* stream 1 */
   SD[0] = 2;                                                          /* run */
   card = s;
-  played = made = last_pos = 0;
+  ar_start(&A, "hda", s, ring);
   /* "HD Audio, codec 15ad:1975, 1 output" */
   static const char hex[] = "0123456789abcdef";
   char *p = desc;
@@ -268,20 +270,10 @@ const char *hda_init(snd *s) {
   return desc;
 }
 
-/* the ring mixed FILL frames past where the stream reads */
+/* the ring mixed a short lead past where the stream reads (aring.h) */
 void hda_poll(void) {
   if (!card) return;
   SD[3] = 0x1C;                                                       /* its status bits, cleared */
-  u32 pos = (*(volatile u32 *)(SD + 0x04) / 4) % RING;                /* LPIB: bytes */
-  played += (pos - last_pos + RING) % RING;
-  last_pos = pos;
-  if ((i32)(made - played) < 0) { made = played; hda_underruns++; }
-  u32 ahead = made - played;
-  if (ahead >= FILL) return;
-  u32 n = FILL - ahead;
-  while (n > 0) {
-    u32 at = made % RING, k = RING - at < n ? RING - at : n;
-    snd_fill(card, ring + 2 * at, k);
-    made += k; n -= k;
-  }
+  ar_poll(&A, (*(volatile u32 *)(SD + 0x04) / 4) % RING);             /* LPIB: bytes */
+  hda_underruns = A.underruns;
 }

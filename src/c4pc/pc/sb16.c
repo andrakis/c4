@@ -6,27 +6,28 @@
  *
  * No interrupt: the run loop calls sb16_poll after every slice and at
  * every tick it waits through, which reads how far the DMA has read and
- * mixes the ring that far ahead again, FILL frames past it. The DSP's
+ * mixes the ring a short lead past it (aring.h). The DSP's
  * interrupt at each half of the ring is acknowledged there and never
  * reaches the CPU (its PIC line stays masked); the DMA goes round
  * regardless, as auto-init does.
  *
  * The card is found at 0x220 or 0x240 (the DSP's reset answers 0xAA), its
  * version must be 4 or more, and its 16-bit DMA channel is the one its
- * mixer's register 0x81 names (5 if none). */
+ * mixer's register 0x81 names (5 if none). Its mixer's master and voice
+ * volumes are put at full: the card's reset leaves them at -14 dB. */
 #include "../c4pc.h"
 #include "../clib.h"
 #include "../snd.h"
+#include "aring.h"
 
 static inline void outb(u32 p, u8 v) { __asm__ volatile("outb %0,%w1" : : "a"(v), "Nd"(p)); }
 static inline u8 inb(u32 p) { u8 v; __asm__ volatile("inb %w1,%0" : "=a"(v) : "Nd"(p)); return v; }
 
-#define RATE 44100
-#define RING 8192                  /* frames round the ring: 186 ms */
-#define FILL 2048                  /* frames mixed ahead of the DMA: 46 ms */
+#define RATE AR_RATE
+#define RING AR_RING
 static int16_t ring[RING * 2] __attribute__((aligned(65536)));
 static u32 base, hdma, ring_words;
-static u32 played, made, last_pos;  /* frames: read by the DMA, mixed, the DMA's place last time */
+static aring A;
 static snd *card;
 u32 sb16_underruns;
 
@@ -72,6 +73,11 @@ const char *sb16_init(snd *s) {
   outb(base + 4, 0x81);
   u8 dmas = inb(base + 5);
   hdma = dmas & 0x80 ? 7 : dmas & 0x40 ? 6 : 5;
+  /* the mixer: master and voice at full, the SB Pro's registers first
+   * (the SB16 keeps them as its own's top bits), then the SB16's, left
+   * and right; VMware's SB16 played at a fraction of HD Audio's volume */
+  static const u8 mix[6][2] = {{0x22, 0xFF}, {0x04, 0xFF}, {0x30, 0xF8}, {0x31, 0xF8}, {0x32, 0xF8}, {0x33, 0xF8}};
+  for (int i = 0; i < 6; i++) { outb(base + 4, mix[i][0]); io_delay(); outb(base + 5, mix[i][1]); io_delay(); }
   memset(ring, 0, sizeof ring);
   ring_words = RING * 2;
   /* the DMA: single, auto-init, memory to the card, from the ring's start */
@@ -91,7 +97,7 @@ const char *sb16_init(snd *s) {
   dsp_write(0xB6); dsp_write(0x30);
   dsp_write((u8)(RING - 1)); dsp_write((u8)((RING - 1) >> 8));
   card = s;
-  played = made = last_pos = 0;
+  ar_start(&A, "sb16", s, ring);
   /* "SB16 at 220h, DSP 4.5, 16-bit DMA 5" */
   char *p = desc;
   const char *t = "SB16 at ";
@@ -104,20 +110,10 @@ const char *sb16_init(snd *s) {
   return desc;
 }
 
-/* the ring mixed FILL frames past where the DMA reads */
+/* the ring mixed a short lead past where the DMA reads (aring.h) */
 void sb16_poll(void) {
   if (!card) return;
   inb(base + 0xF);                                  /* the 16-bit interrupt, acknowledged */
-  u32 pos = dma_pos();
-  played += (pos - last_pos + RING) % RING;
-  last_pos = pos;
-  if ((i32)(made - played) < 0) { made = played; sb16_underruns++; }   /* fallen behind: start again here */
-  u32 ahead = made - played;
-  if (ahead >= FILL) return;
-  u32 n = FILL - ahead;
-  while (n > 0) {
-    u32 at = made % RING, k = RING - at < n ? RING - at : n;
-    snd_fill(card, ring + 2 * at, k);
-    made += k; n -= k;
-  }
+  ar_poll(&A, dma_pos());
+  sb16_underruns = A.underruns;
 }

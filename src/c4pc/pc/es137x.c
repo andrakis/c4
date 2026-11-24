@@ -6,8 +6,8 @@
  *
  * One stream: DAC2, 16-bit stereo at 44.1 kHz, looping round the same
  * ring as the SB16's and HD Audio's (8,192 frames), and polled: its
- * position is the DAC2 frame's count, and the run loop mixes FILL frames
- * past it (es137x_poll). No interrupt reaches the CPU.
+ * position is the DAC2 frame's count, and the run loop mixes a short lead
+ * past it (es137x_poll, aring.h). No interrupt reaches the CPU.
  *   - the ES1370 divides its clock for the rate (CONTROL's PCLKDIV) and
  *     has an AK4531 codec, reset and its mixer opened;
  *   - the ES1371 sends DAC2 through its sample-rate converter, whose RAM
@@ -23,6 +23,7 @@
 #include "../c4pc.h"
 #include "../clib.h"
 #include "../snd.h"
+#include "aring.h"
 
 static inline void outl(u32 p, u32 v) { __asm__ volatile("outl %0,%w1" : : "a"(v), "Nd"(p)); }
 static inline u32 inl(u32 p) { u32 v; __asm__ volatile("inl %w1,%0" : "=a"(v) : "Nd"(p)); return v; }
@@ -66,13 +67,12 @@ enum {
 #define ST_DAC2        (1u << 1)
 #define CODEC_WRITE(a, d) ((((u32)(a) & 0x7f) << 16) | ((u32)(d) & 0xffff))
 
-#define RATE 44100
-#define RING 8192                      /* frames round the ring: 186 ms */
-#define FILL 2048                      /* frames mixed ahead of the DMA: 46 ms */
+#define RATE AR_RATE
+#define RING AR_RING
 static int16_t ring[RING * 2] __attribute__((aligned(64)));
 static u32 io;                         /* the chip's I/O ports */
 static int is1371;
-static u32 played, made, last_pos;
+static aring A;
 static snd *card;
 static i64 t_first;                    /* the first poll's time: the log's seconds count from it */
 static int logged;
@@ -224,7 +224,7 @@ const char *es137x_init(snd *s) {
   outl(io + DAC2_COUNT, sizeof ring / 8 - 1);
   outl(io + CONTROL, ctrl | DAC2_EN);
   card = s;
-  played = made = last_pos = 0;
+  ar_start(&A, "es137x", s, ring);
   t_first = 0; logged = 0;
   pc_log("c4pc: es137x: ports at "); pc_logn((i64)io); say_hex(", id ", id);
   pc_log(" (pci "); pc_logn((i64)bus); pc_log(":"); pc_logn((i64)dev); pc_log("."); pc_logn((i64)fn); pc_log(")\n");
@@ -266,27 +266,18 @@ void es137x_poll(void) {
   }
   outl(io + MEM_PAGE, PAGE_DAC);
   u32 pos = (inl(io + DAC2_SIZE) >> 16) % RING;
-  played += (pos - last_pos + RING) % RING;
-  last_pos = pos;
-  if ((i32)(made - played) < 0) { made = played; es137x_underruns++; }
   /* the first seconds, once a second: is DAC2 moving */
   if (logged < 4) {
     i64 now = plat_now_ms();
     if (!t_first) t_first = now;
     if (now - t_first >= (i64)logged * 1000) {
       pc_log("c4pc: es137x: "); pc_logn(now - t_first); pc_log(" ms: DAC2 at frame "); pc_logn((i64)pos);
-      pc_log(", "); pc_logn((i64)played); pc_log(" played, "); pc_logn((i64)made); pc_log(" mixed, ");
+      pc_log(", "); pc_logn((i64)A.played); pc_log(" played, "); pc_logn((i64)A.made); pc_log(" mixed, ");
       pc_logn((i64)es137x_underruns); pc_log(" underruns, "); pc_logn((i64)es137x_acks); say_hex(" acks; CONTROL ", inl(io + CONTROL));
       say_hex(", STATUS ", inl(io + STATUS)); pc_log("\n");
       logged++;
     }
   }
-  u32 ahead = made - played;
-  if (ahead >= FILL) return;
-  u32 n = FILL - ahead;
-  while (n > 0) {
-    u32 at = made % RING, k = RING - at < n ? RING - at : n;
-    snd_fill(card, ring + 2 * at, k);
-    made += k; n -= k;
-  }
+  ar_poll(&A, pos);
+  es137x_underruns = A.underruns;
 }

@@ -27,6 +27,7 @@
 #include "../c4pc.h"
 #include "../clib.h"
 #include "vterm.h"
+#include "../snd.h"
 
 extern u32 pc_heap_free_bytes;
 
@@ -166,6 +167,7 @@ static void release(vm *v) {
   if (!m || !m->u8) return;
   xfree(m->u8); m->u8 = 0;
   if (m->gui) { extern void gui_release(gui *g); gui_release(m->gui); m->gui = 0; }
+  if (m->snd) { snd_free(m->snd); m->snd = 0; }
 }
 static int start(int id) {
   vm *v = &vms[id];
@@ -187,6 +189,10 @@ static int start(int id) {
   if (v->swap) { extern void dev_swap_disk(machine *, blkdev *, u32, u32); dev_swap_disk(m, v->swap, 0, v->swap->sectors); }
   if (v->disk) m->blk[m->nblk++] = v->disk;
   if (v->mmu == 1 || (!v->mmu && hv_mmu)) mmu_new(m);
+  /* a sound card of its own where VM 0 has one, its clock the real one
+   * (m->wall, below): heard while it is attached (hv_snd_fill). Before
+   * smp_new, whose CPUs share it */
+  if (ctl->snd) m->snd = snd_new(m, 44100, 1);
   if (v->cpus > 1) smp_new(m, v->cpus, 0);  /* its CPUs take turns (machine_run runs them) */
   /* its CPUs past 0 keep their accelerators' state where VM 0's on the
    * PC's other processors keep theirs (accel.h, by cpu_id): with VM 0 on
@@ -226,6 +232,21 @@ void hv_attach(int id) {
   screen_full();
   hv_out("c4pc: hv: the screen is vm"); outn(id); hv_out("'s"); if (id) { hv_out(" ("); hv_out(vms[id].name); hv_out(")"); }
   hv_out(id ? "; Ctrl+Alt+Home comes back\n" : "\n");
+}
+/* the card's next n frames (pc/aring.h): the attached guest's mix while
+ * one is attached, VM 0's (s0) else. The mixes not heard are made too,
+ * into nothing, so that their events are applied and their clocks kept,
+ * and none piles up to be heard late */
+void hv_snd_fill(snd *s0, int16_t *out, u32 n) {
+  static int16_t junk[2 * 1024];
+  snd *heard = s0;
+  if (attached && vms[attached].state == S_RUN && vms[attached].m && vms[attached].m->snd) heard = vms[attached].m->snd;
+  for (int id = 0; id < HV_MAX; id++) {
+    snd *s = id ? (vms[id].state == S_RUN && vms[id].m ? vms[id].m->snd : 0) : s0;
+    if (!s || s == heard) continue;
+    for (u32 d = 0; d < n;) { u32 k = n - d < 1024 ? n - d : 1024; snd_fill(s, junk, k); d += k; }
+  }
+  snd_fill(heard, out, n);
 }
 /* the machine the screen, keyboard and mouse are: VM 0's or an attached guest's */
 machine *hv_shown(machine *m0) {
@@ -490,6 +511,7 @@ void hv_init(machine *m, double mhz, int mmu_on, int w, int h) {
 }
 
 /* a turn for each runnable guest: 1 if any ran */
+void pc_audio(void);                    /* pc.c: the card under VM 0's, polled */
 int hv_run(void) {
   if (!ctl) return 0;
   int busy = 0;
@@ -501,6 +523,7 @@ int hv_run(void) {
     if (!m->halted && v->nap_until > now) continue;
     int r = m->halted ? STOP_HALT : machine_run(m, (i64)m->cycles_per_ms * 4);
     busy = 1;
+    pc_audio();                     /* the card kept fed between guests' slices */
     if (m->gui) gui_tick(m->gui);
     if (r == STOP_HALT || m->halted) {
       v->state = S_HALT; v->status = m->status;

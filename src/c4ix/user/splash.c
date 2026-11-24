@@ -93,6 +93,9 @@ static int alive(int pid) {
     return 0;
 }
 
+// D made S, and S added to D
+static void s_cpy(char *d, char *s) { while (*s) { *d = *s; ++d; ++s; } *d = 0; }
+static void s_cat(char *d, char *s) { while (*d) ++d; s_cpy(d, s); }
 // PX (W x H) covering a canvas of SW x SH at its own proportions, cut
 // evenly where it is past an edge: a new picture, or 0
 static int *cover(int *px, int w, int h) {
@@ -135,8 +138,8 @@ int main(int argc, char **argv) {
     BAR_Y = SH - 34;
     wide = sw * 100 >= sh * 155;
     if (!given) {
-        ustrcpy(path, "/usr/share/splash/"); ustrcat(path, (__c4_info() & 0x400000) ? "hv" : "c4ix");
-        ustrcat(path, wide ? "-wide.c4p.gz" : ".c4p.gz");
+        s_cpy(path, "/usr/share/splash/"); s_cat(path, (__c4_info() & 0x400000) ? "hv" : "c4ix");
+        s_cat(path, wide ? "-wide.c4p.gz" : ".c4p.gz");
         image = path;
     }
     region = ualloc(65536);
@@ -147,7 +150,7 @@ int main(int argc, char **argv) {
 
     // the wide picture missing: the 4:3; the hypervisor's missing: C4IX's
     if (!given && !(px = load(image, &w, &h))) {
-        ustrcpy(path, "/usr/share/splash/"); ustrcat(path, (__c4_info() & 0x400000) ? "hv.c4p.gz" : "c4ix.c4p.gz");
+        s_cpy(path, "/usr/share/splash/"); s_cat(path, (__c4_info() & 0x400000) ? "hv.c4p.gz" : "c4ix.c4p.gz");
         if (!(px = load(path, &w, &h))) image = "/usr/share/splash/c4ix.c4p.gz";
     } else if (given) px = load(image, &w, &h);
     if (!px) px = load(image, &w, &h);

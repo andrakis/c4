@@ -89,7 +89,7 @@ static char buf[200], info_buf[600], host_buf[2048], cfg[2048], path[128], vmpat
 static int thumb[SW_MAX * SH_MAX];
 static char *tabs[N_TABS];
 static char logbuf[LOGW + 1];
-static int log_at[LOG_MAX];
+static int log_at[LOG_MAX], log_len[LOG_MAX];   // the Log's rows: where each starts, its length
 static char start_log[1024], why_title[64];
 static char *cpu_items[4] = { "1", "2", "4", "8" };
 static char *yn_items[2] = { "yes", "no" };
@@ -931,11 +931,25 @@ static void draw_cfgtab(struct machines *t, int x, int y, int w, int focused) {
 }
 
 // Load: each CPU's instructions a second (c4pc: CPU 0's time busy, %)
+// the PC's processors (HOST: "processors N (the CPU says), c4pc on M"): N,
+// and in *USED how many c4pc runs on
+static int host_cpus(int *used) {
+    char *p;
+    int n;
+    line_get(host_buf, "processors", buf, 80);
+    n = (int)num_of(buf);
+    p = buf; *used = 1;
+    while (*p) { if (!memcmp(p, " on ", 4)) *used = (int)num_of(p + 4); ++p; }
+    if (*used < 1) *used = 1;
+    if (n < *used) n = *used;
+    return n;
+}
 static void draw_load(struct machines *t, int x, int y, int w, int h) {
-    int k, c, n, cols, rows, gw, gh, gx, gy;
+    int k, c, n, cols, rows, gw, gh, gx, gy, used;
     k = t->sel;
-    n = k == 0 ? 1 : t->ncpu[k];
+    n = k == 0 ? host_cpus(&used) : t->ncpu[k];
     if (n < 1) n = 1;
+    if (n > MAXC) n = MAXC;
     if (k > CTL && t->state[k] != S_RUN) { d_text(x + 8, y + 8, C_DARK, F_SANS, "It is not running."); return; }
     cols = n > 1 ? 2 : 1; rows = (n + cols - 1) / cols;
     gw = (w - (cols - 1) * 10) / cols; gh = (h - 8) / rows - 20;
@@ -943,40 +957,59 @@ static void draw_load(struct machines *t, int x, int y, int w, int h) {
     c = 0;
     while (c < n) {
         gx = x + (c % cols) * (gw + 10); gy = y + (c / cols) * (gh + 20);
-        ui_cpy(buf, "CPU "); ui_num(buf + 4, c);
-        ui_cat(buf, k == 0 ? ": its time busy, %" : ": instructions a second");
-        d_text(gx, gy, C_DARK, F_SANS, buf);
-        graph(t->chist + (k * MAXC + c) * HIST, t->nchist[k], gx, gy + 16, gw, gh, k == 0 ? 100 : 0);
+        if (k == 0) {
+            // the PC's processor C: CPU 0's time busy; one c4pc runs the
+            // control C4IX's CPU C on, its instructions; one unused, said
+            ui_cpy(buf, "Processor "); ui_num(buf + 10, c);
+            ui_cat(buf, c == 0 ? ": its time busy, %" : c < used ? ": the control's CPU, instructions a second" : ": not used by c4pc");
+            d_text(gx, gy, C_DARK, F_SANS, buf);
+            if (c == 0) graph(t->chist, t->nchist[0], gx, gy + 16, gw, gh, 100);
+            else if (c < used) graph(t->chist + (CTL * MAXC + c) * HIST, t->nchist[CTL], gx, gy + 16, gw, gh, 0);
+            else {
+                d_rect(gx, gy + 16, gw, gh, C_DARK);
+                d_text(gx + 8, gy + 24, 0xa0a0a0, F_SANS, "idle: GRUB's \"every processor\" entries run C4IX on it");
+            }
+        } else {
+            ui_cpy(buf, "CPU "); ui_num(buf + 4, c);
+            ui_cat(buf, ": instructions a second");
+            d_text(gx, gy, C_DARK, F_SANS, buf);
+            graph(t->chist + (k * MAXC + c) * HIST, t->nchist[k], gx, gy + 16, gw, gh, 0);
+        }
         ++c;
     }
-    if (k == 0) {
-        line_get(host_buf, "processors", buf, 80);
-        d_text(x, y + h - 14, C_DARK, F_SANS, "c4pc's CPU 0 runs the control C4IX and the machines in turn");
-    }
+    if (k == 0) d_text(x, y + h - 14, C_DARK, F_SANS, "c4pc's CPU 0 runs the control C4IX's CPU 0 and the machines in turn");
 }
 
 // Log: its source's lines (c4pc's, the control's, a guest's), scrolled
 static void draw_log(struct machines *t, int x, int y, int w, int h) {
-    int n, k, rows, cols, top, c;
+    int n, k, rows, cols, top, c, i2;
     char *p, line[160];
     d_rect(x, y, w - 16, h, C_DARK);
     if (!logbuf[0]) log_fetch(t);
-    n = 0; p = logbuf;
-    while (*p) {
-        if (n == LOG_MAX) { k = 0; while (k < LOG_MAX - 1) { log_at[k] = log_at[k + 1]; ++k; } --n; }
-        log_at[n] = p - logbuf; ++n;
-        while (*p && *p != 10) ++p;
-        if (*p) ++p;
-    }
     rows = (h - 8) / LROW; cols = (w - 24) / 7;
     if (cols > 159) cols = 159;
+    if (cols < 20) cols = 20;
+    // a row each line, or as many as a long one takes: wrapped, not cut off
+    n = 0; p = logbuf;
+    while (*p) {
+        c = 0; while (p[c] && p[c] != 10) ++c;
+        k = 0;
+        while (k < c || (!c && !k)) {
+            if (n == LOG_MAX) { i2 = 0; while (i2 < LOG_MAX - 1) { log_at[i2] = log_at[i2 + 1]; log_len[i2] = log_len[i2 + 1]; ++i2; } --n; }
+            log_at[n] = p - logbuf + k; log_len[n] = c - k > cols ? cols : c - k; ++n;
+            k = k + cols;
+            if (!c) break;
+        }
+        p = p + c;
+        if (*p) ++p;
+    }
     t->lrows = rows; t->ln = n;
     top = t->ltop < 0 || t->ltop > n - rows ? (n > rows ? n - rows : 0) : t->ltop;
     if (!n) d_text(x + 6, y + 6, 0xa0a0a0, F_SANS, guest(t, t->sel) && !t->id[t->sel] ? "Not made yet: its log is its console's, once it runs." : "Nothing yet.");
     k = top;
     while (k < n && k < top + rows) {
         p = logbuf + log_at[k]; c = 0;
-        while (p[c] && p[c] != 10 && c < cols) { line[c] = p[c]; ++c; }
+        while (c < log_len[k]) { line[c] = p[c]; ++c; }
         line[c] = 0;
         d_text(x + 4, y + 4 + (k - top) * LROW, 0xd0d0d0, F_MONO, line);
         ++k;

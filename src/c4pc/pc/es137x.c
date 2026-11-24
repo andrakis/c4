@@ -62,6 +62,8 @@ enum {
 #define CODEC_WIP      (1u << 30)
 #define CODEC_RDY      (1u << 31)
 #define CODEC_PIRD     (1u << 23)
+#define P2_INT_EN      (1u << 9)
+#define ST_DAC2        (1u << 1)
 #define CODEC_WRITE(a, d) ((((u32)(a) & 0x7f) << 16) | ((u32)(d) & 0xffff))
 
 #define RATE 44100
@@ -74,7 +76,7 @@ static u32 played, made, last_pos;
 static snd *card;
 static i64 t_first;                    /* the first poll's time: the log's seconds count from it */
 static int logged;
-u32 es137x_underruns;
+u32 es137x_underruns, es137x_acks;
 void pc_log(const char *s);
 void pc_logn(i64 v);
 static void say_hex(const char *what, u32 v) {
@@ -248,6 +250,20 @@ const char *es137x_init(snd *s) {
  * in longwords (a frame each) */
 void es137x_poll(void) {
   if (!card) return;
+  /* DAC2's interrupt pending (STATUS bit 1, though its enable is off):
+   * VMware's ES1371 stopped at the frame it came at, 4096, until it was
+   * acknowledged (the user's log, 2026-11-24) -- as Linux does it, its
+   * enable set and cleared, here with the CPU's interrupts held off so
+   * that the line is never seen up (it may be the ACPI SCI's) */
+  if (inl(io + STATUS) & ST_DAC2) {
+    unsigned long fl;
+    __asm__ volatile("pushf; pop %0; cli" : "=r"(fl) : : "memory");
+    u32 sc = inl(io + SERIAL);
+    outl(io + SERIAL, sc | P2_INT_EN);
+    outl(io + SERIAL, sc & ~P2_INT_EN);
+    __asm__ volatile("push %0; popf" : : "r"(fl) : "memory", "cc");
+    es137x_acks++;
+  }
   outl(io + MEM_PAGE, PAGE_DAC);
   u32 pos = (inl(io + DAC2_SIZE) >> 16) % RING;
   played += (pos - last_pos + RING) % RING;
@@ -260,7 +276,7 @@ void es137x_poll(void) {
     if (now - t_first >= (i64)logged * 1000) {
       pc_log("c4pc: es137x: "); pc_logn(now - t_first); pc_log(" ms: DAC2 at frame "); pc_logn((i64)pos);
       pc_log(", "); pc_logn((i64)played); pc_log(" played, "); pc_logn((i64)made); pc_log(" mixed, ");
-      pc_logn((i64)es137x_underruns); say_hex(" underruns; CONTROL ", inl(io + CONTROL));
+      pc_logn((i64)es137x_underruns); pc_log(" underruns, "); pc_logn((i64)es137x_acks); say_hex(" acks; CONTROL ", inl(io + CONTROL));
       say_hex(", STATUS ", inl(io + STATUS)); pc_log("\n");
       logged++;
     }

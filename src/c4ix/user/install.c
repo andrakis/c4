@@ -36,7 +36,7 @@
 
 #include "c4ix_user.h"
 
-enum { C4I_MMU = 0x80000, C4I_HV = 0x400000, HV_ID = 0x560, DISK_COUNT = 0x188, DISK_EJECT = 0x190 };
+enum { C4I_MMU = 0x80000, C4I_HV = 0x400000, C4I_HVG = 0x800000, DISK_COUNT = 0x188, DISK_EJECT = 0x190 };
 enum { SYS_MOUNT = 248, SYS_UMOUNT = 249, SYS_MKFS = 250, SYS_SYNC = 252, SYS_CHMOD = 253, SYS_BLKIO = 255 };
 enum { RUN = 64, BUFSZ = 262144, CORE_MAX = 2047 * 512, PATHW = 256, START = 2048, NAMEW = 64 };
 
@@ -308,8 +308,10 @@ int main(int argc, char **argv) {
     if (__c4_info() & C4I_MMU) uioperm(UIOPERM_DEV);
     yes = 0; disk = "hd0"; swmb = 0 - 1;
     // the hypervisor's: a guest of it, or its control machine (VM 0)
-    guest = (__c4_info() & C4I_HV) && *(int *)HV_ID > 0;
-    hvdef = (__c4_info() & C4I_HV) && !guest;
+    // c4pc says which (C4I_HV the control's alone, C4I_HVG a guest's): a
+    // guest installs the ordinary C4IX, as any other PC's
+    guest = (__c4_info() & C4I_HVG) != 0;
+    hvdef = (__c4_info() & C4I_HV) != 0;
     k = 1;
     while (k < argc) {
         if (!ustrcmp(argv[k], "-y")) yes = 1;

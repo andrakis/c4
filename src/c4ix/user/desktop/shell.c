@@ -362,8 +362,7 @@ static int installable() {
     }
     // a guest of c4pc's hypervisor with a disk: install needs no CD there
     // (the hypervisor's window is a device's: uioperm first, under the MMU)
-    if ((__c4_info() & C4I_HV_BIT) && (__c4_info() & VD_C4I_MMU)) uioperm(UIOPERM_DEV);
-    if ((__c4_info() & C4I_HV_BIT) && *(int *)0x560 > 0 && (n = uslurp("/proc/disks", buf, 511)) > 0) {
+    if ((__c4_info() & 0x800000) && (n = uslurp("/proc/disks", buf, 511)) > 0) {
         buf[n] = 0;
         // a disk with a partition already has it: install has been
         k = 0;

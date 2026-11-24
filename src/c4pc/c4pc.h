@@ -122,7 +122,8 @@ enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OP
 #define HV_BASE  0x560
 #define HV_END   0x580
 #define C4I_BLK  0x200000
-#define C4I_HV   0x400000                /* the hypervisor's window (pc/hv.c, --hv) */
+#define C4I_HV   0x400000                /* the hypervisor's control machine, VM 0 (pc/hv.c, --hv) */
+#define C4I_HVG  0x800000                /* a guest of the hypervisor's (its window, to detach) */
 typedef struct blkdev {
   u32 sectors; int flags;              /* 512-byte sectors; 1 read-only, 2 removable */
   /* n sectors at lba to or from buf: 0, or -1 */

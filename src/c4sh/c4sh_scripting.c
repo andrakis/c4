@@ -49,6 +49,12 @@ int  echo_run   (int argc, char **argv) {
 // exit
 ///
 
+// shutdown and reboot: the shell ends, as exit does, with the machine's
+// status -- 0, or 82 (C4IX's restart, which c4pc and its hypervisor take
+// as starting the machine again); init passes it on (services/init.c)
+void shutdown_usage (char *argv0) { }
+int  shutdown_run   (int argc, char **argv) { shell_mode = SH_EXIT; exit_code = 0; printf("c4sh: shutting down\n"); return CR_OK; }
+int  reboot_run     (int argc, char **argv) { shell_mode = SH_EXIT; exit_code = 82; printf("c4sh: restarting\n"); return CR_OK; }
 void exit_usage (char *argv0) { }
 int  exit_run   (int argc, char **argv) {
 	int code;
@@ -131,6 +137,12 @@ static int __attribute__((constructor)) c4sh_scripting_init (int *c4r) {
 		(int *)&exit_usage,         // Callback for help exit
 		(int *)&exit_run))          // Callback to run the command
 		printf("c4sh: failed to register builtin 'exit'\n");
+	if (CR_FAIL == c4sh_builtin_register("shutdown", "Shut the machine down", " ",
+		(int *)&shutdown_usage, (int *)&shutdown_run))
+		printf("c4sh: failed to register builtin 'shutdown'\n");
+	if (CR_FAIL == c4sh_builtin_register("reboot", "Restart the machine", " ",
+		(int *)&shutdown_usage, (int *)&reboot_run))
+		printf("c4sh: failed to register builtin 'reboot'\n");
 	if (CR_FAIL == c4sh_builtin_register(
 		"set",                       // Command name
 		// Short description

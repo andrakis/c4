@@ -152,6 +152,9 @@ int g_drives;            // CONFIG.SYS said DEVICE=DRIVES.SYS
 int g_drive;             // the drive the prompt is on, 0 = A:
 int g_home;              // DRIVES.SYS HOME=: where files are written, or -1
 int g_quit;              // EXIT was typed
+int g_status;            // the machine's status when C4DOS ends: 0, or 82 for REBOOT
+                         // (C4IX's restart: c4pc restarts the PC, its
+                         // hypervisor the machine)
 int g_linelen;           // the length of the line parse_line last split
 int g_redir;             // CONFIG.SYS said DEVICE=REDIR.SYS: > >> < and |
 int g_tap;               // ... with TAP: the machine has the console tap
@@ -2621,6 +2624,9 @@ int dispatch (int argc) {
   if (cieq(cmd, "TIME")) return cmd_time();
   if (cieq(cmd, "MEM")) return cmd_mem();
   if (cieq(cmd, "EXIT")) { g_quit = 1; return 0; }
+  // SHUTDOWN: C4DOS ends, and the machine with it; REBOOT: and starts again
+  if (cieq(cmd, "SHUTDOWN")) { pf("C4DOS: shutting down\n", 0, 0, 0); g_quit = 1; g_status = 0; return 0; }
+  if (cieq(cmd, "REBOOT")) { pf("C4DOS: restarting\n", 0, 0, 0); g_quit = 1; g_status = 82; return 0; }
   if (cieq(cmd, "RUN")) {
     if (argc < 2) { pf("usage: RUN program[.c4r] [args]\n", 0, 0, 0); return 1; }
     if (!(path = prog_path(g_argv[1]))) {
@@ -3343,5 +3349,5 @@ int main (int argc, char **argv) {
     else line_run(0);
   }
   printf("C4DOS: system halted\n");
-  return 0;
+  return g_status;
 }

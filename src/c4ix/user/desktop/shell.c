@@ -1167,19 +1167,32 @@ static void shutdown_screen() {
 }
 
 // The ring's command half takes the largest frame the desktop sends, one
-// of the picture's tiles (wall.c): 128x96 at 1024x768, 48 KB. A frame
-// longer than half of it is placed only when the ring's head happens to
-// allow (gui_frame), so the half is 128 KB.
+// of the picture's tiles (wall.c): an eighth of the screen each way, 128x96
+// at 1024x768, 48 KB. A frame longer than half of it is placed only when
+// the ring's head happens to allow (gui_frame), so the half is 128 KB --
+// or, where the screen has larger modes (c4pc: 1920x1200's tile is 144 KB,
+// 2560x1600's 250 KB), twice the largest one's tile, and some (ring_size).
 // GUI_M_REL: the mouse's motion while it is locked to the display, which
 // only a canvas that asked for it (window.h's L) has it be (term.c)
 enum { RING = 262144, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW | GUI_M_REL };
+static int ring_size() {
+    int i, t, n;
+    n = RING;
+    i = 0;
+    while (i < n_sizes) {
+        t = 2 * ((size_w[i] + 7) / 8) * ((size_h[i] + 7) / 8) * sizeof(int) + 65536;
+        if (t > n) n = (t + 4095) & ~4095;
+        ++i;
+    }
+    return n;
+}
 
 // The display lets the mouse go, and the kit draws its pointer again
 void desk_unlock() { gui_cursor(GUI_PTR_ARROW); wk_repoint(); }
 
 int main(int argc, char **argv) {
     int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
-    int last_input, last_frame, aside, ev[4];
+    int last_input, last_frame, aside, ev[4], ring;
 
     if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
     // Run in the background (init --desktop has the console's shell run
@@ -1193,14 +1206,15 @@ int main(int argc, char **argv) {
     // the display, from the kernel, giving way to a game that asks for it
     // (include/display.h, and "aside" below)
     if (!udisplay_take(DISP_YIELDS)) { printf("desktop: a program has the display\n"); return 1; }
-    if (!(region = ualloc(RING))) { printf("desktop: no memory for the display's ring\n"); udisplay_give(); return 1; }
-    vmw_clip_init();                   // the host's clipboard, under VMware
     theme_init();
     sizes_init();                      // the screen's modes, where it has them
+    ring = ring_size();
+    if (!(region = ualloc(ring))) { printf("desktop: no memory for the display's ring\n"); udisplay_give(); return 1; }
+    vmw_clip_init();                   // the host's clipboard, under VMware
     theme_apply();                     // the default scheme, unless the file names one
     theme_load();
     // at the size Settings chose: 800x600 unless the file names another
-    if (!gui_attach(region, RING, size_w[cur_size], size_h[cur_size])) { printf("desktop: the display refused the ring\n"); udisplay_give(); return 1; }
+    if (!gui_attach(region, ring, size_w[cur_size], size_h[cur_size])) { printf("desktop: the display refused the ring\n"); udisplay_give(); return 1; }
     // GUI_M_WINDOW too: a resize or a focus change from the page means the
     // canvas may have been cleared, and the scene is drawn again
     gui_events(EVENTS);
@@ -1261,7 +1275,7 @@ int main(int argc, char **argv) {
                 continue;
             }
             aside = 0;
-            gui_attach(region, RING, wk.sw, wk.sh);
+            gui_attach(region, ring, wk.sw, wk.sh);
             gui_events(EVENTS);
             gui_cursor(saver_active() ? GUI_PTR_NONE : GUI_PTR_ARROW);
             wk_repoint();

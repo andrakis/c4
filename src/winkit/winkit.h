@@ -32,7 +32,10 @@
 
 // the largest screen the kit lays out for (arrays sized by it), a path,
 // and the window chrome's measures, which every look shares
-enum { WK_MAX_W = 1280, WK_MAX_H = 1024, WK_PATH = 256, WK_NAME = 64 };
+// WK_MAX_W x WK_MAX_H: the largest screen the kit lays itself out on, the
+// largest of c4pc's modes (pc/screen.c MODES); a larger display is used
+// only that far
+enum { WK_MAX_W = 2560, WK_MAX_H = 1600, WK_PATH = 256, WK_NAME = 64 };
 enum { BORDER = 4, TITLE_H = 18, MENU_H = 20 };
 
 // ---- what the kit and its windows share -----------------------------------
@@ -253,7 +256,8 @@ void ui_check(int x, int y, char *label, int on);  // a check box and its label
 // so that it is over it. ui_drop_mouse takes every press and move while
 // one is open: 0 not the drop's, 1 the drop's, 2 the drop's and its choice
 // changed (d->sel). ui_drop_key: Up, Down, Enter, Esc on a focused one.
-struct ui_drop { int open, sel, n, hover; char **items; };
+// up: its list opens above the box (one near the window's foot)
+struct ui_drop { int open, sel, n, hover; char **items; int up; };
 void ui_drop(int x, int y, int w, struct ui_drop *d);
 void ui_drop_list(int x, int y, int w, struct ui_drop *d);
 int  ui_drop_mouse(int ev, int px, int py, int x, int y, int w, struct ui_drop *d);

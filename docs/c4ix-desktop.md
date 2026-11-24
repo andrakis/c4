@@ -2025,11 +2025,14 @@ display"; docs/c4pc.md, "The screen").
 - [x] **The screen's own sizes.** Where the display has modes of its own
       (CAPS 32: c4pc on a PC, VMware's SVGA II or the BGA), the desktop
       starts in the one the screen is in, and Settings' Screen size lists
-      them all, stepped through with `<` and `>` and taken with Apply: the
+      them all in a dropdown (winkit's ui_drop, its list opening upward
+      over the window: `up`), the one chosen taken with Apply: the
       screen is put in that mode (GUI_MODE) and the desktop drawn at it,
       pixel for pixel, picture, windows and taskbar laid out again.
       desktop.cfg remembers it. Without modes (the page), the three sizes
-      and their radio buttons as before.
+      and their radio buttons as before. The kit lays itself out up to
+      2560x1600 now (WK_MAX_W, WK_MAX_H were 1280x1024), and the desktop's
+      ring grows to hold a tile of the picture at the largest mode.
 - [x] Pinned by test-c4pc on c4pc-host: `doom` in the Terminal on a
       screen of its own, Alt+Tab to the desktop (its screen, the taskbar
       button), Alt+Tab back and Doom's frames arriving; Settings from

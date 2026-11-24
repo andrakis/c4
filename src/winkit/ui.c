@@ -412,23 +412,27 @@ void ui_drop(int x, int y, int w, struct ui_drop *d) {
     k = 0;
     while (k < 4) { d_rect(x + w - 15 + k, y + 9 + k, 8 - 2 * k, 1, C_DARK); ++k; }
 }
+// the list's top: under the box, or over it
+static int drop_top(int y, struct ui_drop *d) { return d->up ? y - d->n * 18 - 4 : y + 22; }
 void ui_drop_list(int x, int y, int w, struct ui_drop *d) {
-    int k;
+    int k, t;
     if (!d->open) return;
-    d_rect(x, y + 22, w, d->n * 18 + 4, C_WHITE);
-    d_recto(x, y + 22, w, d->n * 18 + 4, C_DARK);
+    t = drop_top(y, d);
+    d_rect(x, t, w, d->n * 18 + 4, C_WHITE);
+    d_recto(x, t, w, d->n * 18 + 4, C_DARK);
     k = 0;
     while (k < d->n) {
-        if (k == d->hover) d_rect(x + 2, y + 24 + k * 18, w - 4, 18, C_SEL);
-        d_text(x + 6, y + 27 + k * 18, k == d->hover ? C_WHITE : C_DARK, F_SANS, d->items[k]);
+        if (k == d->hover) d_rect(x + 2, t + 2 + k * 18, w - 4, 18, C_SEL);
+        d_text(x + 6, t + 5 + k * 18, k == d->hover ? C_WHITE : C_DARK, F_SANS, d->items[k]);
         ++k;
     }
 }
 int ui_drop_mouse(int ev, int px, int py, int x, int y, int w, struct ui_drop *d) {
-    int k;
+    int k, t;
     if (d->open) {
-        if (ui_hit(px, py, x, y + 24, w, d->n * 18)) {
-            k = (py - y - 24) / 18;
+        t = drop_top(y, d);
+        if (ui_hit(px, py, x, t + 2, w, d->n * 18)) {
+            k = (py - t - 2) / 18;
             if (k >= d->n) k = d->n - 1;
             d->hover = k;
             if (ev != E_DOWN && ev != E_UP) return 1;

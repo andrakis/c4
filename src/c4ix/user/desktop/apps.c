@@ -38,7 +38,7 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 // /etc/desktop.cfg), beside a preview drawn in the colours in use. The
 // screen's size too, which the display takes at once (display_set); where
 // the sizes are the screen's own modes (c4pc on a PC), as many as it has,
-// one stepped to with < and > and taken with Apply. And
+// one chosen from a dropdown and taken with Apply. And
 // in a third column the interface's font, its face and size, with a
 // sample: every window's titles, menus and dialogs are drawn in it.
 // Under it, C4IX's accelerators (c4ix_accel.h): the machine's switch for
@@ -47,8 +47,21 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 
 static char *dflt_label;
 static char sbuf[16];
-static int set_pick = 0 - 1;       // the mode stepped to, not yet applied (-1: the one in use)
-static int pick() { return set_pick >= 0 && set_pick < display_count() ? set_pick : display_cur(); }
+// the screen's modes: the one chosen, not yet applied, and the list's names
+enum { SET_MODES = 32 };
+static struct ui_drop set_drop;
+static char *set_names[SET_MODES];
+static void drop_fill() {
+    int i;
+    set_drop.n = display_count() < SET_MODES ? display_count() : SET_MODES;
+    i = 0;
+    while (i < set_drop.n) { set_names[i] = display_name(i); ++i; }
+    set_drop.items = set_names;
+    set_drop.up = 1;                   // the group is near the window's foot
+    if (set_drop.sel < 0 || set_drop.sel >= set_drop.n) set_drop.sel = display_cur();
+}
+// where its box is in the client area: the Screen size group's (settings_draw)
+static int drop_y() { return 36 + theme_count() * 20 + 102 + 18; }
 // the second column's width, and where the third starts and how wide it is
 // and where the accelerators' group is, under the font's sample
 enum { SET_COL = 222, SET_X3 = 432, SET_COL3 = 146, SET_ACC = 250 };
@@ -59,7 +72,7 @@ int settings_open() {
     w = win_first();
     while (w) { if (w->used && w->kind == K_SETTINGS) { win_raise(w->id); return w->id; } w = w->next; }
     dflt_label = "Defaults";
-    set_pick = 0 - 1;
+    set_drop.open = 0; set_drop.sel = display_cur();
     return win_open(K_SETTINGS, "Settings", 590, 450, 0);
 }
 
@@ -90,11 +103,10 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     y = y + 102;
     ui_group(ox + 8, y, 180, 60, "Screen size");
     if (display_modes()) {
-        // the screen's modes: < the one stepped to > and Apply
-        ui_button(ox + 18, y + 18, 22, 22, "<", 0, 0);
-        d_text(ox + 46, y + 22, pick() == display_cur() ? C_DARK : C_TITLE, F_SANS, display_name(pick()));
-        ui_button(ox + 112, y + 18, 22, 22, ">", 0, 0);
-        ui_button(ox + 138, y + 18, 44, 22, "Apply", 0, pick() != display_cur());
+        // the screen's modes: a dropdown (its list drawn last, over the rest) and Apply
+        drop_fill();
+        ui_drop(ox + 18, oy + drop_y(), 114, &set_drop);
+        ui_button(ox + 138, oy + drop_y(), 44, 22, "Apply", 0, set_drop.sel != display_cur());
     } else {
         i = 0;
         while (i < display_count()) { ui_radio(ox + 18 + (i % 2) * 84, y + 16 + (i / 2) * 20, display_name(i), i == display_cur()); ++i; }
@@ -160,10 +172,17 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         d_text(x + 10, y + 40, C_SHADOW, F_SANS, "unpacking and CRC");
     } else d_text(x + 10, y + 24, C_SHADOW, F_SANS, "Not on this machine");
     ui_button(ox + 8, oy + ch - 34, 86, 24, dflt_label, 0, 0);
+    if (display_modes()) ui_drop_list(ox + 18, oy + drop_y(), 114, &set_drop);
 }
 
 void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     int n, i, sy, k;
+    // the modes' dropdown: every press and move while it is open
+    if (display_modes()) {
+        drop_fill();
+        k = set_drop.open;
+        if (ui_drop_mouse(ev, x, y, 18, drop_y(), 114, &set_drop) || k) { mark_win_dirty(w); return; }
+    }
     if (ev != E_DOWN) return;
     n = theme_count();
     i = 0;
@@ -180,11 +199,9 @@ void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         ++i;
     }
     // the screen's size (settings_draw)
-    if (display_modes()) {
-        k = pick();
-        if (ui_hit(x, y, 18, sy + 102 + 18, 22, 22)) { if (k > 0) set_pick = k - 1; mark_win_dirty(w); return; }
-        if (ui_hit(x, y, 112, sy + 102 + 18, 22, 22)) { if (k + 1 < display_count()) set_pick = k + 1; mark_win_dirty(w); return; }
-        if (ui_hit(x, y, 138, sy + 102 + 18, 44, 22)) { set_pick = 0 - 1; if (k != display_cur()) display_set(k); else mark_win_dirty(w); return; }
+    if (display_modes() && ui_hit(x, y, 138, drop_y(), 44, 22)) {
+        if (set_drop.sel != display_cur()) display_set(set_drop.sel); else mark_win_dirty(w);
+        return;
     }
     i = 0;
     while (!display_modes() && i < display_count()) {
@@ -222,6 +239,8 @@ void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
 // Up and Down walk the schemes; Esc or Enter closes
 void settings_key(struct win *w, int code, int ch, int mods) {
     int s, w2;
+    // the modes' list open: its keys (Esc shuts it, not the window)
+    if (display_modes() && set_drop.open) { ui_drop_key(&set_drop, code); mark_win_dirty(w); return; }
     s = theme_scheme();
     w2 = theme_wall();
     if (code == KEY_UP && s > 0) { theme_set(s - 1, theme_bg()); theme_set_wall(w2); }

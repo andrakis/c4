@@ -345,27 +345,32 @@ n=$(( $(pre 3) - $(pre 2) ))
 grep -a -E "panic|illegal" $W/alttab.out | head -3
 # The screen's modes (gui.c MODE; pc.c and screen.c on a PC, here --modes'
 # list taken as asked): the desktop starts in the screen's mode, Settings
-# lists them, and a size stepped to and applied is the display's, the
-# picture, windows and taskbar drawn again at it -- up to 1280x1024, then
-# down to 800x600. The clicks are where Go, Settings and its buttons are
-# at 1024x768 (the texts say if they moved)
+# lists them in a dropdown, and a size chosen and applied is the display's,
+# the picture, windows and taskbar drawn again at it -- up to 1920x1080,
+# wider than the window kit once went (WK_MAX_W) and with a tile of the
+# picture over half the desktop's first ring, its taskbar at the foot, then
+# down to 800x600 (1920x1080's picture takes 8-17 s of the machine's
+# time to scale and send, here). The clicks are where Go, Settings, its dropdown, the
+# list (opening upward) and Apply are at 1024x768 (the texts say if they moved)
 echo "  ---   the screen's modes: Settings' screen size, up and down"
 { echo "30000 click 30 755"; echo "30500 click 80 549"
-  for t in 32000 32200 32400 32600; do echo "$t click 251 411"; done
-  echo "33200 click 287 411"; echo "40000 shot $W/modes-up.png"
-  for t in 40100 40300 40500 40700 40900; do echo "$t click 157 411"; done
-  echo "41200 click 287 411"; echo "48000 shot $W/modes-down.png"; echo "48100 quit"; } > $W/modes-events.txt
-timeout 600 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --modes --events $W/modes-events.txt --texts $W/modes-texts.txt \
-  --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/modes.out 2> $W/modes.err
-grep -qE "^154 406 <$" $W/modes-texts.txt && grep -qE "^174 405 1024x768$" $W/modes-texts.txt &&
-  ok "Settings: the screen's modes, from the one it is in (1024x768)" || bad "Settings' screen size is not where the test clicks ($W/modes-texts.txt)"
-for s in "up 1280 1024" "down 800 600"; do
+  echo "32000 click 180 432"; echo "32500 click 180 390"; echo "33000 click 288 432"; echo "52000 shot $W/modes-up.png"
+  echo "52100 click 180 432"; echo "52600 click 180 212"; echo "53100 click 288 432"; echo "60000 shot $W/modes-down.png"
+  echo "60100 quit"; } > $W/modes-events.txt
+timeout 600 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --modes --events $W/modes-events.txt --texts $W/modes-texts.txt   --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/modes.out 2> $W/modes.err
+grep -qE "^151 426 1024x768$" $W/modes-texts.txt && grep -qE "^152 386 1920x1080$" $W/modes-texts.txt &&
+  ok "Settings: the screen's modes in a dropdown, from the one it is in (1024x768)" ||
+  bad "Settings' screen size is not where the test clicks ($W/modes-texts.txt)"
+for s in "up 1920 1080" "down 800 600"; do
   read -r d mw mh <<< "$s"
   r=( $(png_lit $W/modes-$d.png 2> /dev/null) )
   [ "${r[0]:-0}" = $mw ] && [ "${r[1]:-0}" = $mh ] && [ "${r[2]:-0}" -ge 50 ] &&
     ok "the desktop at ${mw}x$mh: the display that size, ${r[2]}% of it drawn" ||
     bad "the desktop at ${mw}x$mh: ${r[0]:-?}x${r[1]:-?}, ${r[2]:-?}% drawn ($W/modes-$d.png)"
 done
+grep -qE "^[0-9]+ 10[5-7][0-9] Go$" $W/modes-texts.txt && ok "at 1920x1080 the taskbar is along the screen's foot" ||
+  bad "at 1920x1080 the taskbar is not at the foot ($W/modes-texts.txt)"
+grep -a -E "panic|illegal|killed" $W/modes.out | head -3
 # C4IX with more than 256 MB (a VM of 512 MB and more): the MMU's user
 # window above memory (src/c4ix/mmu.c mmu_wbase), so swap is on, where it
 # once kept the identity map and System Monitor said the MMU was off; and

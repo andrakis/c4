@@ -316,6 +316,13 @@ static int installable() {
         k = 0;
         while (k + 7 < n) { if (!memcmp(buf + k, " / ext2", 7)) return 0; ++k; }
     }
+    // a guest of c4pc's hypervisor with a disk: install needs no CD there
+    // (the hypervisor's window is a device's: uioperm first, under the MMU)
+    if ((__c4_info() & C4I_HV_BIT) && (__c4_info() & VD_C4I_MMU)) uioperm(UIOPERM_DEV);
+    if ((__c4_info() & C4I_HV_BIT) && *(int *)0x560 > 0 && (n = uslurp("/proc/disks", buf, 511)) > 0) {
+        buf[n] = 0;
+        if (!memcmp(buf, "hd0 ", 4)) return 1;
+    }
     k = 2;
     while (k < 10) {
         name[0] = '0' + k; name[1] = ':'; ustrcpy(name + 2, ".c4pc-drive");

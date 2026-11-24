@@ -109,7 +109,8 @@ enum { PTR_ARROW = 0, PTR_TEXT = 1, PTR_RESIZE = 2, PTR_LOCK = 8, PTR_COLS = 9 }
 // the C4IX desktop's window kinds
 enum { ICON_TERM = 1, ICON_INFO = 2, ICON_FILES = 3, ICON_TASKS = 4, ICON_NOTE = 5,
        ICON_CALC = 6, ICON_MSG = 7, ICON_INPUT = 8, ICON_EDIT = 9, ICON_SETTINGS = 10,
-       ICON_CLOCK = 11, ICON_FILEBOX = 12 };          // (the dialogs are drawn with none)
+       ICON_CLOCK = 11, ICON_FILEBOX = 12,            // (the dialogs are drawn with none)
+       ICON_VMS = 13 };                               // Machines (c4pc's hypervisor)
 
 // ---- classes ----------------------------------------------------------------
 //

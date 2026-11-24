@@ -1,6 +1,17 @@
 // C4IX userland: install -- C4IX onto a PC's disk, to boot from it.
 //
-//   install [-y] [hdN]    hd0 by default; -y does not ask first
+//   install [-y] [-h] [-s 0|256|512] [hdN]
+//                         hd0 by default; -y does not ask first; -h boots
+//                         the C4PC hypervisor first (it does when install
+//                         runs in the hypervisor's control C4IX)
+//
+// On c4pc's hypervisor (docs/c4pc-hypervisor.md), from its control C4IX
+// (VM 0): the disk's menu starts the hypervisor's entry by default, and
+// the systems vm create makes machines of are copied onto it too
+// (vm images, into its /vm/images), so that it needs the CD no more. In a
+// guest: no GRUB (the hypervisor starts a guest's kernel itself), no CD,
+// no swap; the machine then boots from its disk with --root hd0p1 (the
+// control's Machines: Options, Boots from: disk).
 //
 // What is on the disk now is ERASED: install says so, with the disk's
 // size, and goes on only when "yes" is typed. Then the disk holds the
@@ -25,9 +36,9 @@
 
 #include "c4ix_user.h"
 
-enum { C4I_MMU = 0x80000, DISK_COUNT = 0x188, DISK_EJECT = 0x190 };
+enum { C4I_MMU = 0x80000, C4I_HV = 0x400000, HV_ID = 0x560, DISK_COUNT = 0x188, DISK_EJECT = 0x190 };
 enum { SYS_MOUNT = 248, SYS_UMOUNT = 249, SYS_MKFS = 250, SYS_SYNC = 252, SYS_CHMOD = 253, SYS_BLKIO = 255 };
-enum { RUN = 64, BUFSZ = 32768, CORE_MAX = 2047 * 512, PATHW = 256, START = 2048, NAMEW = 64 };
+enum { RUN = 64, BUFSZ = 262144, CORE_MAX = 2047 * 512, PATHW = 256, START = 2048, NAMEW = 64 };
 
 static char buf[BUFSZ];
 static char core[CORE_MAX];
@@ -141,6 +152,25 @@ static int read_all(char *name, char *to, int max) {
     while (got < max && (r = uread(fd, to + got, max - got)) > 0) got = got + r;
     uclose(fd);
     return got;
+}
+// the title of the menu's hypervisor entry (menuentry "C4PC hypervisor..."),
+// in a buffer of its own; 0 if it has none
+static char hv_title[128];
+static char *default_hv(char *cfg) {
+    char *p;
+    int k;
+    p = cfg;
+    while (*p) {
+        if (!ustrncmp(p, "menuentry \"C4PC hypervisor", 26)) {
+            p = p + 11; k = 0;
+            while (*p && *p != '"' && k < 127) { hv_title[k] = *p; ++k; ++p; }
+            hv_title[k] = 0;
+            return hv_title;
+        }
+        while (*p && *p != 10) ++p;
+        if (*p) ++p;
+    }
+    return 0;
 }
 // FROM to TO, a file, its bytes as they are; a program's mode 0755. 0, or
 // -1. (A big one goes to the disk as it is written, past the first MB,
@@ -273,15 +303,20 @@ static int swap_fit(int sectors, int want) {
 int main(int argc, char **argv) {
     char *disk, *p, *menu;
     char dev1[8];
-    int k, yes, d, sectors, ro, p1, n, fd, lba, coresz, cfgn, i, files, store, swmb;
+    int k, yes, d, sectors, ro, p1, n, fd, lba, coresz, cfgn, i, files, store, swmb, guest, hvdef;
+    char *av[4];
     if (__c4_info() & C4I_MMU) uioperm(UIOPERM_DEV);
     yes = 0; disk = "hd0"; swmb = 0 - 1;
+    // the hypervisor's: a guest of it, or its control machine (VM 0)
+    guest = (__c4_info() & C4I_HV) && *(int *)HV_ID > 0;
+    hvdef = (__c4_info() & C4I_HV) && !guest;
     k = 1;
     while (k < argc) {
         if (!ustrcmp(argv[k], "-y")) yes = 1;
+        else if (!ustrcmp(argv[k], "-h")) hvdef = 1;
         else if (!ustrcmp(argv[k], "-s") && k + 1 < argc) { ++k; swmb = uatoi(argv[k]); }
         else if (argv[k][0] == 'h' && argv[k][1] == 'd' && argv[k][2] >= '0' && argv[k][2] <= '7' && !argv[k][3]) disk = argv[k];
-        else { ufprintf(STDERR, "usage: install [-y] [-s 0|256|512] [hdN]   (hd0 by default: cat /proc/disks; -s the swap partition's MB)\n"); return 1; }
+        else { ufprintf(STDERR, "usage: install [-y] [-h] [-s 0|256|512] [hdN]   (hd0 by default: cat /proc/disks; -h the hypervisor first; -s the swap partition's MB)\n"); return 1; }
         ++k;
     }
     d = disk[2] - '0';
@@ -298,8 +333,11 @@ int main(int argc, char **argv) {
     if (ro) { ufprintf(STDERR, "install: %s is read-only\n", disk); return 1; }
     if (disk_busy(disk)) { ufprintf(STDERR, "install: %s, or a partition of it, is mounted: umount it first\n", disk); return 1; }
     ustrcpy(src, "/mnt/c4pc");
-    if (!boot_disc()) { ufprintf(STDERR, "install: c4pc's boot disc (the CD it booted from) is not in a drive: boot from it to install\n"); return 1; }
-    if ((cfgn = read_all(menu, text, 12000)) <= 0) { ufprintf(STDERR, "install: the boot disc has no %s: this system cannot be installed from it\n", menu); return 1; }
+    if (guest) { hvdef = 0; cfgn = 0; swmb = 0; }       // the hypervisor boots it: no GRUB, no CD; no swap of the PC's
+    else {
+        if (!boot_disc()) { ufprintf(STDERR, "install: c4pc's boot disc (the CD it booted from) is not in a drive: boot from it to install\n"); return 1; }
+        if ((cfgn = read_all(menu, text, 12000)) <= 0) { ufprintf(STDERR, "install: the boot disc has no %s: this system cannot be installed from it\n", menu); return 1; }
+    }
     wait_unpack();
     files = 0;
     kb_all = size_tree("/", 1, &files) + 8192;            // and c4pc, the kernel
@@ -328,11 +366,17 @@ int main(int argc, char **argv) {
         uprintf("  disk with it; the store itself is erased.\n");
     }
     uprintf("\n");
-    uprintf("  It becomes GRUB to boot from and one ext2 partition, %d MB, holding\n", p1 / 2048);
+    if (guest) uprintf("  It becomes one ext2 partition, %d MB, holding\n", p1 / 2048);
+    else uprintf("  It becomes GRUB to boot from and one ext2 partition, %d MB, holding\n", p1 / 2048);
     uprintf("  the whole system (%d files, %d MB) and your files", files, kb_all / 1024);
     if (swmb) uprintf(",\n  and a swap partition of %d MB.\n", swmb); else uprintf(", and no swap.\n");
     uprintf("\n");
-    if (!yes) {
+    if (hvdef) {
+        uprintf("  It boots the C4PC hypervisor first (its control C4IX, this one), and the\n");
+        uprintf("  systems Machines makes machines of are copied onto it, from the CD.\n");
+        uprintf("\n");
+    }
+    if (!yes && !guest) {
         uprintf("  Swap partition, MB (where pages go when memory is short): Enter for %d,\n", swmb);
         uprintf("  or 512, 256 or 0: ");
         n = uread(0, line, PATHW - 1);
@@ -349,6 +393,8 @@ int main(int argc, char **argv) {
             uprintf("  ext2 %d MB, swap %d MB.\n", p1 / 2048, swmb);
         }
         uprintf("\n");
+    }
+    if (!yes) {
         uprintf("  Type yes to erase %s and install, anything else to stop: ", disk);
         n = uread(0, line, PATHW - 1);
         if (n < 0) n = 0;
@@ -372,10 +418,16 @@ int main(int argc, char **argv) {
     }
     // GRUB: core.img into the sectors before the first partition, then
     // boot.img and the partition table in sector 0
-    if ((coresz = read_all("grub/c4pc-core.img", core, CORE_MAX)) <= 512) return 1;
-    if (coresz == CORE_MAX) { ufprintf(STDERR, "install: GRUB's core.img is too big to fit before sector 2048\n"); return 1; }
-    if (read_all("grub/c4pc-boot.img", buf, 512) != 512) { ufprintf(STDERR, "install: GRUB's boot.img is not 512 bytes\n"); return 1; }
-    uprintf("install: GRUB, %d KB, into %s's first sectors\n", (coresz + 1023) / 1024, disk);
+    if (guest) {
+        // no GRUB: a table with no boot code, nothing before the partition
+        i = 0; while (i < 512) { buf[i] = 0; ++i; }
+        coresz = 0;
+    } else {
+        if ((coresz = read_all("grub/c4pc-core.img", core, CORE_MAX)) <= 512) return 1;
+        if (coresz == CORE_MAX) { ufprintf(STDERR, "install: GRUB's core.img is too big to fit before sector 2048\n"); return 1; }
+        if (read_all("grub/c4pc-boot.img", buf, 512) != 512) { ufprintf(STDERR, "install: GRUB's boot.img is not 512 bytes\n"); return 1; }
+        uprintf("install: GRUB, %d KB, into %s's first sectors\n", (coresz + 1023) / 1024, disk);
+    }
     n = (coresz + 511) / 512;
     i = coresz;
     while (i < n * 512) { core[i] = 0; ++i; }
@@ -414,27 +466,45 @@ int main(int argc, char **argv) {
     umkdir("/mnt/install/tmp");
     umkdir("/mnt/install/mnt");
     // c4pc and the kernel, and the menu: the boot disc's for a disk, @ROOT@
-    // the partition
+    // the partition (none in a guest: the hypervisor starts its kernel)
     umkdir("/mnt/install/boot");
     umkdir("/mnt/install/boot/grub");
+    if (!guest) {
     uprintf("install: c4pc and the kernel into /boot\n");
     text[cfgn] = 0;
     if (copy_boot(text) < 0) return 1;
     if ((fd = uopen("/mnt/install/boot/grub/grub.cfg", O_WR + O_CREATE + O_TRUNCATE)) < 0) { ufprintf(STDERR, "install: grub.cfg cannot be made\n"); return 1; }
+    // the hypervisor's entry first: GRUB's default by its title
+    if (hvdef && (p = default_hv(text))) {
+        write(fd, "set default=\"", 13); write(fd, p, ustrlen(p)); write(fd, "\"\n", 2);
+    }
     i = 0;
     while (text[i]) {
         if (!ustrncmp(text + i, "@ROOT@", 6)) { write(fd, dev1, ustrlen(dev1)); i = i + 6; }
         else { k = i; while (text[k] && text[k] != '@') ++k; if (k == i) k = i + 1; write(fd, text + i, k - i); i = k; }
     }
     uclose(fd);
-    uprintf("install:   /boot/grub/grub.cfg\n");
+    uprintf("install:   /boot/grub/grub.cfg%s\n", hvdef ? " (the hypervisor first)" : "");
+    // the hypervisor's systems, for Machines (vm images)
+    if (hvdef) {
+        uprintf("install: the hypervisor's systems into /vm/images\n");
+        av[0] = "vm"; av[1] = "images"; av[2] = "/mnt/install/vm/images"; av[3] = 0;
+        if ((k = spawn("/bin/vm", 3, av)) < 0 || uwait(k) != 0)
+            ufprintf(STDERR, "install: they were not all copied: vm images, once booted from the disk with the CD in, copies them\n");
+    }
+    }
     ksys(SYS_SYNC, 0, 0, 0);
     if (ksys(SYS_UMOUNT, (int)"/mnt/install", 0, 0) < 0) ufprintf(STDERR, "install: /mnt/install could not be unmounted: it is written, but shut down before you boot from it\n");
     uprintf("\n");
     uprintf("  install: done: %d files, %d directories, %d MB", n_files, n_dirs, kb_done / 1024);
     if (n_bad) uprintf(" (%d left out: above)", n_bad);
-    uprintf(".\n  C4IX boots from %s now: take the CD out (or boot from the disk first,\n", disk);
-    uprintf("  the VM's BIOS settings) and reboot. / is %s's: every change is kept.\n", dev1);
+    if (guest) {
+        uprintf(".\n  Shut this machine down. In the control's Machines, its Options: Boots\n");
+        uprintf("  from, disk. It starts from %s then: / is %s's, every change kept.\n", disk, dev1);
+    } else {
+        uprintf(".\n  C4IX boots from %s now: take the CD out (or boot from the disk first,\n", disk);
+        uprintf("  the VM's BIOS settings) and reboot. / is %s's: every change is kept.\n", dev1);
+    }
     uprintf("\n");
     return 0;
 }

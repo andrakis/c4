@@ -9,9 +9,12 @@
 // with a minute's history, its disks, and its screen small), Console (its
 // screen larger; Attach gives it the PC's screen, keyboard and mouse
 // until Ctrl+Alt+Home), Hardware and Options (vm.cfg, a row each: a click
-// edits it, for the next start). Create VM asks a name, the memory, a
-// new disk image's size and the CD (the C4PC disc, or an ISO file), and
-// runs `vm create` in a Terminal, which shows the image being written.
+// edits it, for the next start), and Log (c4pc's: the PC's own, or what a
+// machine's console said). Create VM asks a name, the system (C4IX's
+// desktop or its text console, C4KE, C4DOS, or C4IX with an ISO file as
+// its CD), the memory and a new disk image's size, and runs `vm create`
+// in a Terminal, which shows the image being written. A start that fails
+// says why: `vm up`'s words, kept in /vm/NAME/start.log.
 //
 // The machine manager's window (HV_BASE) is read directly: state, info,
 // start, stop, attach and THUMB, its screen scaled into our memory. What
@@ -21,11 +24,12 @@
 #include "desktop.h"
 
 enum { R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
-enum { C_START = 5, C_STOP = 6, C_ATTACH = 7, C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_THUMB = 16 };
+enum { C_START = 5, C_STOP = 6, C_ATTACH = 7, C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_THUMB = 16, C_LOG = 17 };
 enum { S_FREE = 0, S_MADE = 1, S_RUN = 2, S_HALT = 3, S_NONE = 9 };
 enum { MAXM = 16, NAMEW = 32, HIST = 60, TREE_W = 160, TOOL_H = 34, TAB_Y = 40, PAGE_Y = 62, ROW_H = 22,
        TW = 192, TH = 144, CW = 384, CH = 288, STRIP = 36, IMG_ID = 300,
-       A_NAME = 40, A_MB = 41, A_DISK = 42, A_ISO = 43, A_EDIT = 50, N_KEYS = 7 };
+       A_NAME = 40, A_MB = 41, A_DISK = 42, A_SYS = 43, A_EDIT = 50, N_KEYS = 10, N_TABS = 5,
+       K_SYSTEM = 4, K_BOOTFROM = 5, LOGW = 32768, LOG_MAX = 600 };
 
 struct machines {
     int n, sel, tab;                     // sel: 0 the PC, 1.. a machine
@@ -41,15 +45,21 @@ struct machines {
     char status[120];
     int shown;                           // which machine's screen the images are (its id), 0 none
     char nm[NAMEW]; int nmb, ndisk;      // Create VM's answers so far
+    char nsys[128];
 };
 
 static struct machines *S(struct win *w) { return (struct machines *)w->st; }
 static char buf[160], info_buf[512], cfg[2048], path[128], vmpath[96];
 static int thumb[CW * CH];
-static char *tabs[4];
-static char *keys[N_KEYS] = { "mb", "disk", "cdrom", "kernel", "boot", "args", "autostart" };
-static char *key_label[N_KEYS] = { "Memory (MB)", "Hard disk (hd0)", "CD/DVD drive", "Kernel", "Boot archive",
-                                   "Kernel arguments", "Start at boot" };
+static char *tabs[N_TABS];
+// Hardware's rows (0-3) and Options' (4-9): vm.cfg's keys ("bootfrom" is
+// boot's and args' --root together)
+static char *keys[N_KEYS] = { "mb", "mmu", "disk", "cdrom", "system", "bootfrom", "kernel", "boot", "args", "autostart" };
+static char *key_label[N_KEYS] = { "Memory (MB)", "MMU (memory protection)", "Hard disk (hd0)", "CD/DVD drive",
+                                   "System", "Boots from", "Kernel", "Boot archive", "Kernel arguments", "Start at boot" };
+static char logbuf[LOGW + 1];
+static int log_at[LOG_MAX];
+static char start_log[1024], why_title[64];
 
 static int hv(int c, int a0, int a1, int a2, int a3) {
     *(int *)R_A0 = a0; *(int *)R_A1 = a1; *(int *)R_A2 = a2; *(int *)R_A3 = a3;
@@ -236,6 +246,7 @@ static int run_vm(struct machines *t, char *a1, char *a2) {
 }
 
 static void start_one(struct machines *t, int k) {
+    int fd, o1, o2;
     if (k < 1 || k >= t->n || t->state[k] == S_RUN) return;
     if (t->pid) { say(t, "Wait: another machine is being started."); return; }
     if (!t->cfg[k] && t->id[k]) {                       // made by `vm new`: as it was made
@@ -245,7 +256,14 @@ static void start_one(struct machines *t, int k) {
     }
     // from its vm.cfg, as it says now: what was made of it before, gone first
     if (t->id[k]) hv(C_DELETE, t->id[k], 0, 0, 0);
-    if ((t->pid = run_vm(t, "up", mname(t, k))) < 0) { t->pid = 0; say(t, "vm did not run (is /bin/vm there?)"); return; }
+    // what vm up says, into /vm/NAME/start.log (its output and errors)
+    upathjoin(path, 128, "/vm", mname(t, k));
+    upathjoin(path, 128, path, "start.log");
+    fd = uopen(path, O_WR + O_CREATE + O_TRUNCATE);
+    if (fd >= 0) { o1 = udup(1); o2 = udup(2); udup2(fd, 1); udup2(fd, 2); }
+    t->pid = run_vm(t, "up", mname(t, k));
+    if (fd >= 0) { udup2(o1, 1); udup2(o2, 2); uclose(o1); uclose(o2); uclose(fd); }
+    if (t->pid < 0) { t->pid = 0; say(t, "vm did not run (is /bin/vm there?)"); return; }
     ui_cpy(t->job, mname(t, k));
     ui_cpy(t->status, mname(t, k)); ui_cat(t->status, ": starting (vm up reads its kernel and boot archive)...");
 }
@@ -265,10 +283,45 @@ int machines_open() {
     if (i < 0) return i;
     w = win_get(i);
     if (!(__c4_info() & C4I_HV_BIT)) say(S(w), "No hypervisor here: GRUB's \"C4PC hypervisor\" entries boot one.");
-    else { refresh(S(w)); say(S(w), "Ready."); }
+    else {
+        // the hypervisor's window is a device's: the desktop may read it
+        // only once it has asked (under the MMU; VMware's clipboard asked
+        // already, elsewhere nothing had)
+        if (__c4_info() & 0x80000) uioperm(UIOPERM_DEV);
+        refresh(S(w)); say(S(w), "Ready.");
+    }
     S(w)->sel = S(w)->n > 1 ? 1 : 0;
     mark_dirty();
     return i;
+}
+
+// c4pc's log into logbuf, ended by a 0 (C_LOG writes it)
+static void log_fetch() { if (hv(C_LOG, (int)logbuf, LOGW + 1, 0, 0) < 0) logbuf[0] = 0; }
+// /vm/NAME/start.log, its last 400 bytes from a line's start, into start_log
+static void why(char *name) {
+    int n, k;
+    char *p;
+    upathjoin(path, 128, "/vm", name);
+    upathjoin(path, 128, path, "start.log");
+    start_log[0] = 0;
+    if ((n = uslurp(path, logbuf, LOGW)) <= 0) return;
+    logbuf[n] = 0;
+    while (n > 0 && (logbuf[n - 1] == 10 || logbuf[n - 1] == 13 || logbuf[n - 1] == ' ')) logbuf[--n] = 0;
+    k = n > 400 ? n - 400 : 0;
+    if (k) { while (logbuf[k] && logbuf[k] != 10) ++k; if (logbuf[k]) ++k; }
+    p = logbuf + k;
+    k = 0;
+    while (*p && k < (int)sizeof start_log - 1) { start_log[k] = *p == 10 ? ' ' : *p; ++k; ++p; }
+    start_log[k] = 0;
+    // the newlines, kept as "  " between its lines, for the message's wrapping
+    ui_cpy(logbuf, "");
+}
+// the last of the lines in S (newlines turned to spaces by why: its last sentence)
+static char *last_line(char *s) {
+    char *p, *q;
+    p = s; q = s;
+    while (*p) { if (p[0] == 'v' && p[1] == 'm' && p[2] == ':' && p > s) q = p; ++p; }
+    return q;
 }
 
 void machines_tick(struct win *w) {
@@ -278,10 +331,18 @@ void machines_tick(struct win *w) {
     if (!(__c4_info() & C4I_HV_BIT)) return;
     if (t->pid && (r = uwaitpid(t->pid, st, UWNOHANG)) != 0) {
         ui_cpy(t->status, t->job);
-        if (r > 0 && !st[0] && !st[1]) ui_cat(t->status, ": started");
-        else ui_cat(t->status, ": did not start -- run vm up in a Terminal to see why");
         t->pid = 0;
+        if (r > 0 && !st[0] && !st[1]) ui_cat(t->status, ": started");
+        else {
+            // why: what vm up said (start.log), its last lines
+            why(t->job);
+            ui_cat(t->status, ": did not start: ");
+            ui_ncpy(t->status + ui_len(t->status), last_line(start_log), 118 - ui_len(t->status));
+            ui_cpy(why_title, t->job); ui_cat(why_title, " did not start");
+            msgbox(w, why_title, start_log[0] ? start_log : "vm up said nothing (vm up NAME in a Terminal)", 0, A_NONE);
+        }
     }
+    if (t->tab == 4) log_fetch();
     refresh(t);
     if (t->restart) {
         k = 1;
@@ -356,9 +417,10 @@ static void draw_summary(struct machines *t, int x, int y, int w, int h) {
         k = 1; gy = 0; while (k < t->n) { if (t->state[k] == S_RUN) ++gy; ++k; }
         ui_num(buf, gy); field(x + 12, y + 82, w, "Running", buf);
         d_text(x + 12, y + 112, C_DARK, F_SANS, "Create VM makes one; choose it on the left.");
+        d_text(x + 12, y + 130, C_DARK, F_SANS, "Log: what c4pc and the machines have said.");
         return;
     }
-    ui_group(x, y, w - TW - 24, 170, "Status");
+    ui_group(x, y, w - TW - 24, 190, "Status");
     state_text(t, k, buf); field(x + 12, y + 22, w, "State", buf);
     buf[0] = 0; if (t->id[k]) ui_num(buf, t->id[k]); else ui_cpy(buf, "-");
     field(x + 12, y + 42, w, "ID", buf);
@@ -372,10 +434,15 @@ static void draw_summary(struct machines *t, int x, int y, int w, int h) {
         line_get(cfg, "cdrom", buf, 60); if (!buf[0]) ui_cpy(buf, "none"); else if (same(buf, "pc")) ui_cpy(buf, "the PC's CD drive");
         field(x + 12, y + 122, w, "CD/DVD", buf);
         line_get(cfg, "autostart", buf, 8); field(x + 12, y + 142, w, "Start at boot", same(buf, "yes") ? "yes" : "no");
+        line_get(cfg, "system", buf, 30); if (!buf[0]) ui_cpy(buf, "-"); field(x + 12, y + 162, w, "System", buf);
     } else d_text(x + 12, y + 102, C_DARK, F_SANS, "made by vm new: no vm.cfg");
-    ui_group(x + w - TW - 16, y, TW + 16, 170, "Screen");
+    ui_group(x + w - TW - 16, y, TW + 16, 190, "Screen");
     screen_box(t, x + w - TW - 8, y + 18, TW, TH);
-    gy = y + 180;
+    if (t->state[k] == S_RUN && hv(C_INFO, t->id[k], (int)info_buf, sizeof info_buf, 0) >= 0) {
+        line_get(info_buf, "screen", buf, 20);
+        d_text(x + w - TW - 8, y + 18 + TH + 6, C_DARK, F_SANS, same(buf, "text") ? "its text console" : "its display");
+    }
+    gy = y + 200;
     if (h - (gy - y) > 60) {
         ui_group(x, gy, w, h - (gy - y), "CPU: instructions a second, the last minute");
         graph(t->hist + k * HIST, t->nhist[k], x + 8, gy + 18, w - 16, h - (gy - y) - 26);
@@ -389,7 +456,12 @@ static void draw_console(struct machines *t, int x, int y, int w, int h) {
     d_text(x + (w - 300) / 2, y + CH + 48, C_DARK, F_SANS, "Ctrl+Alt+Home brings this desktop back.");
 }
 
-// Hardware (rows 0-2) and Options (3-6): vm.cfg's lines
+// "Boots from": the system's archive, or its disk (boot -)
+static void bootfrom_text(char *out) {
+    line_get(cfg, "boot", out, 70);
+    ui_cpy(out, same(out, "-") ? "its disk (--root hd0p1)" : "the system's archive");
+}
+// Hardware (rows 0-3) and Options (4-9): vm.cfg's lines
 static void draw_cfg(struct machines *t, int x, int y, int w, int first, int last) {
     int k, r;
     if (t->sel == 0) { d_text(x + 8, y + 8, C_DARK, F_SANS, "Choose a machine."); return; }
@@ -401,7 +473,9 @@ static void draw_cfg(struct machines *t, int x, int y, int w, int first, int las
     r = 0; k = first;
     while (k <= last) {
         line_get(cfg, keys[k], buf, 70);
-        if (!buf[0]) ui_cpy(buf, k == 0 ? "256" : k == 6 ? "no" : k == 4 || k == 2 || k == 1 ? "none" : "(default)");
+        if (k == K_BOOTFROM) bootfrom_text(buf);
+        else if (!buf[0]) ui_cpy(buf, k == 0 ? "256" : k == 1 ? "yes" : k == 9 ? "no" : k == 2 || k == 3 || k == 7 ? "none" :
+                                k == 8 ? "(none: the console)" : "(not said)");
         d_text(x + 8, y + 24 + r * ROW_H, C_DARK, F_SANS, key_label[k]);
         d_text(x + 180, y + 24 + r * ROW_H, C_DARK, F_SANS, buf);
         ++r; ++k;
@@ -409,11 +483,55 @@ static void draw_cfg(struct machines *t, int x, int y, int w, int first, int las
     d_text(x + 4, y + (last - first + 1) * ROW_H + 34, C_DARK, F_SANS, "A click on a row changes it; the machine has it at its next start.");
 }
 
+// does log line P (to its newline) belong to machine NAME: "vmN NAME" in it
+static int log_mine(char *p, char *name) {
+    int n, k;
+    n = ui_len(name);
+    while (*p && *p != 10) {
+        if (p[0] == 'v' && p[1] == 'm' && p[2] >= '0' && p[2] <= '9') {
+            k = 2; while (p[k] >= '0' && p[k] <= '9') ++k;
+            if (p[k] == ' ' && !memcmp(p + k + 1, name, n) && (p[k + 1 + n] == ':' || p[k + 1 + n] == ' ' || p[k + 1 + n] == '\'' || p[k + 1 + n] == 10 || !p[k + 1 + n])) return 1;
+        }
+        ++p;
+    }
+    return 0;
+}
+// Log: c4pc's (the PC chosen), or the lines of it that are a machine's,
+// the last that fit, a line each
+static void draw_log(struct machines *t, int x, int y, int w, int h) {
+    int n, k, rows, cols, first, c;
+    char *p, line[160];
+    d_rect(x, y, w, h, C_DARK);
+    if (!logbuf[0]) log_fetch();
+    n = 0; p = logbuf;
+    while (*p) {
+        if (t->sel == 0 || log_mine(p, mname(t, t->sel))) {
+            // more lines than are kept: the oldest go
+            if (n == LOG_MAX) { k = 0; while (k < LOG_MAX - 1) { log_at[k] = log_at[k + 1]; ++k; } --n; }
+            log_at[n] = p - logbuf; ++n;
+        }
+        while (*p && *p != 10) ++p;
+        if (*p) ++p;
+    }
+    rows = (h - 8) / 14; cols = (w - 8) / 7;
+    if (cols > 159) cols = 159;
+    first = n > rows ? n - rows : 0;
+    if (!n) d_text(x + 6, y + 6, 0xa0a0a0, F_SANS, t->sel ? "Nothing from this machine in c4pc's log yet." : "The log is empty.");
+    k = first;
+    while (k < n) {
+        p = logbuf + log_at[k]; c = 0;
+        while (p[c] && p[c] != 10 && c < cols) { line[c] = p[c]; ++c; }
+        line[c] = 0;
+        d_text(x + 4, y + 4 + (k - first) * 14, 0xd0d0d0, F_MONO, line);
+        ++k;
+    }
+}
+
 void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     struct machines *t;
     int k, y, rx, rw, bx;
     t = S(w);
-    tabs[0] = "Summary"; tabs[1] = "Console"; tabs[2] = "Hardware"; tabs[3] = "Options";
+    tabs[0] = "Summary"; tabs[1] = "Console"; tabs[2] = "Hardware"; tabs[3] = "Options"; tabs[4] = "Log";
     d_rect(ox, oy, cw, ch, C_FACE);
     // the toolbar
     ui_button(ox + 6, oy + 5, 100, 24, "Create VM", 0, 0);
@@ -430,7 +548,7 @@ void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     k = 0;
     while (k < t->n) {
         if (k == t->sel) d_rect(ox + 6, y - 1, TREE_W - 4, ROW_H - 2, C_SEL);
-        if (k == 0) { d_icon(ICON_TASKS, ox + 10, y + 1); d_text(ox + 30, y + 3, k == t->sel ? C_WHITE : C_DARK, F_BOLD, "c4pc"); }
+        if (k == 0) { d_icon(K_VMS, ox + 10, y + 1); d_text(ox + 30, y + 3, k == t->sel ? C_WHITE : C_DARK, F_BOLD, "c4pc"); }
         else {
             d_rect(ox + 14, y + 2, 1, ROW_H - 6, C_SHADOW);
             icon(ox + 22, y + 2, t->state[k] == S_RUN);
@@ -445,11 +563,12 @@ void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     // the page
     rx = ox + TREE_W + 10; rw = cw - TREE_W - 14;
     d_bevel(rx, oy + PAGE_Y, rw, ch - PAGE_Y - 26, B_RAISED);
-    ui_tabs(rx + 4, oy + TAB_Y, tabs, 4, t->tab);
+    ui_tabs(rx + 4, oy + TAB_Y, tabs, N_TABS, t->tab);
     if (t->tab == 0) draw_summary(t, rx + 8, oy + PAGE_Y + 10, rw - 16, ch - PAGE_Y - 44);
     else if (t->tab == 1) draw_console(t, rx + 8, oy + PAGE_Y + 8, rw - 16, ch - PAGE_Y - 40);
-    else if (t->tab == 2) draw_cfg(t, rx + 8, oy + PAGE_Y + 10, rw - 16, 0, 2);
-    else draw_cfg(t, rx + 8, oy + PAGE_Y + 10, rw - 16, 3, 6);
+    else if (t->tab == 2) draw_cfg(t, rx + 8, oy + PAGE_Y + 10, rw - 16, 0, 3);
+    else if (t->tab == 3) draw_cfg(t, rx + 8, oy + PAGE_Y + 10, rw - 16, 4, 9);
+    else draw_log(t, rx + 8, oy + PAGE_Y + 8, rw - 16, ch - PAGE_Y - 40);
     d_bevel(ox + 2, oy + ch - 22, cw - 4, 20, B_SUNKEN);
     d_text(ox + 8, oy + ch - 18, C_DARK, F_SANS, t->status);
 }
@@ -460,8 +579,40 @@ static void edit_row(struct win *w, int k) {
     struct machines *t;
     t = S(w);
     if (t->sel < 1 || !t->cfg[t->sel] || cfg_read(mname(t, t->sel)) < 0) return;
+    if (k == K_SYSTEM) { msgbox(w, mname(t, t->sel), "A machine's system is chosen when it is made (Create VM).", 0, A_NONE); return; }
+    if (k == K_BOOTFROM) {
+        msgbox(w, mname(t, t->sel), "Boot it from its own disk (once install, in it, has put C4IX on hd0)? No: from its system's archive.", 1, A_EDIT + k);
+        return;
+    }
     line_get(cfg, keys[k], buf, 120);
     inputbox(w, mname(t, t->sel), key_label[k], buf, A_EDIT + k);
+}
+
+// "Boots from": DISK, boot - and --root hd0p1 first in args; or the system's
+// archive again, and no --root. 1 if vm.cfg was written
+static int set_bootfrom(char *name, int disk) {
+    char args[200], out[220], sys[40], *p;
+    int k, n0;
+    if (cfg_read(name) < 0) return 0;
+    line_get(cfg, "args", args, 200);
+    line_get(cfg, "system", sys, 40);
+    // args less any --root and its word
+    out[0] = 0;
+    if (disk) ui_cpy(out, "--root hd0p1");
+    p = args;
+    while (*p) {
+        while (*p == ' ') ++p;
+        if (!*p) break;
+        k = 0; while (p[k] && p[k] != ' ') ++k;
+        if (k == 6 && !memcmp(p, "--root", 6)) { p = p + k; while (*p == ' ') ++p; while (*p && *p != ' ') ++p; continue; }
+        if (out[0]) ui_cat(out, " ");
+        n0 = ui_len(out);
+        if (n0 + k < 210) { memcpy(out + n0, p, k); out[n0 + k] = 0; }
+        p = p + k;
+    }
+    if (!cfg_set(name, "args", out)) return 0;
+    if (disk) return cfg_set(name, "boot", "-");
+    return cfg_set(name, "boot", same(sys, "c4dos") ? "/vm/images/c4dos.tar" : "/vm/images/c4ix.tar");
 }
 
 void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
@@ -472,6 +623,7 @@ void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     bx = cw - 6 - 5 * 84;
     rx = TREE_W + 10; rw = cw - TREE_W - 14;
     if (ui_hit(x, y, 6, 5, 100, 24)) { t->nm[0] = 0; inputbox(w, "Create VM", "Name (letters and digits):", "", A_NAME); return; }
+    if (t->tab == 4 && t->sel >= 0) logbuf[0] = 0;
     if (y >= 5 && y < 29 && x >= bx) {
         k = (x - bx) / 84;
         if (k == 0) start_one(t, t->sel);
@@ -488,17 +640,17 @@ void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         if (ev == E_DBL && k > 0 && k < t->n && t->state[k] == S_RUN) hv(C_ATTACH, t->id[k], 0, 0, 0);
         return;
     }
-    k = ui_tab_hit(x, y, rx + 4, TAB_Y, tabs, 4);
-    if (k >= 0) { t->tab = k; t->shown = 0; grab(t); return; }
+    k = ui_tab_hit(x, y, rx + 4, TAB_Y, tabs, N_TABS);
+    if (k >= 0) { t->tab = k; t->shown = 0; logbuf[0] = 0; grab(t); return; }
     if (t->tab == 1 && t->sel > 0 && ui_hit(x, y, rx + 8 + (rw - 16 - 220) / 2, PAGE_Y + 8 + CH + 14, 220, 26)) {
         if (t->state[t->sel] == S_RUN) hv(C_ATTACH, t->id[t->sel], 0, 0, 0);
         else say(t, "It is not running: Start it first.");
         return;
     }
     if (t->tab == 2 || t->tab == 3) {
-        first = t->tab == 2 ? 0 : 3;
+        first = t->tab == 2 ? 0 : 4;
         k = (y - PAGE_Y - 10 - 24) / ROW_H;
-        if (y >= PAGE_Y + 34 && k >= 0 && k <= (t->tab == 2 ? 2 : 3)) edit_row(w, first + k);
+        if (y >= PAGE_Y + 34 && k >= 0 && k <= (t->tab == 2 ? 3 : 5)) edit_row(w, first + k);
     }
 }
 
@@ -507,7 +659,7 @@ void machines_key(struct win *w, int code, int ch, int mods) {
     t = S(w);
     if (code == KEY_UP && t->sel > 0) { --t->sel; t->shown = 0; }
     else if (code == KEY_DOWN && t->sel < t->n - 1) { ++t->sel; t->shown = 0; }
-    else if (code == KEY_TAB && (mods & M_CTRL)) t->tab = (t->tab + 1) % 4;
+    else if (code == KEY_TAB && (mods & M_CTRL)) { t->tab = (t->tab + 1) % N_TABS; logbuf[0] = 0; }
     else return;
     grab(t);
 }
@@ -527,24 +679,35 @@ void machines_answer(struct win *w, int action, int yes) {
     char *s;
     char cmd[160];
     t = S(w);
+    // Boots from: yes its disk, no its system's archive
+    if (action == A_EDIT + K_BOOTFROM && t->sel > 0) {
+        if (set_bootfrom(mname(t, t->sel), yes)) {
+            ui_cpy(t->status, mname(t, t->sel)); ui_cat(t->status, yes ? ": boots from its disk" : ": boots from its system's archive");
+            if (t->state[t->sel] == S_RUN) ui_cat(t->status, ", at its next start");
+        } else say(t, "vm.cfg was not written.");
+        mark_win_dirty(w);
+        return;
+    }
     if (!yes) return;
     s = dialog_text();
     if (action == A_NAME) {
         if (!good_name(s)) { msgbox(w, "Create VM", "A name of letters, digits, - and _, up to 23.", 0, A_NONE); return; }
         ui_cpy(t->nm, s);
-        inputbox(w, "Create VM", "Memory (MB):", "256", A_MB);
+        inputbox(w, "Create VM", "System: c4ix, c4ix-text, c4ke, c4dos, or an ISO file:", "c4ix", A_SYS);
+    } else if (action == A_SYS) {
+        if (!s[0] || s[0] == ' ') ui_cpy(s, "c4ix");
+        ui_ncpy(t->nsys, s, 127);
+        inputbox(w, "Create VM", "Memory (MB):", same(s, "c4ix-text") || same(s, "c4ke") ? "128" : "256", A_MB);
     } else if (action == A_MB) {
         t->nmb = uatoi(s);
         if (t->nmb < 16) t->nmb = 16;
-        inputbox(w, "Create VM", "A new disk image, its size in MB:", "1024", A_DISK);
+        inputbox(w, "Create VM", "Disk image, MB (0: none; 512+ to install C4IX):", "0", A_DISK);
     } else if (action == A_DISK) {
         t->ndisk = uatoi(s);
-        inputbox(w, "Create VM", "CD: pc (the C4PC disc), or an ISO file's path:", "pc", A_ISO);
-    } else if (action == A_ISO) {
         // in a Terminal: the image being written shows there, and any error
         ui_cpy(cmd, "vm create "); ui_cat(cmd, t->nm); ui_cat(cmd, " ");
         ui_num(cmd + ui_len(cmd), t->nmb); ui_cat(cmd, " "); ui_num(cmd + ui_len(cmd), t->ndisk);
-        if (s[0] && !same(s, "pc")) { ui_cat(cmd, " "); ui_cat(cmd, s); }
+        ui_cat(cmd, " "); ui_cat(cmd, t->nsys);
         run_command(cmd);
         ui_cpy(t->status, t->nm); ui_cat(t->status, ": being made in a Terminal; then Start.");
     } else if (action >= A_EDIT && action < A_EDIT + N_KEYS && t->sel > 0) {

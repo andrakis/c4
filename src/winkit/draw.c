@@ -239,6 +239,12 @@ void d_icon(int kind, int x, int y) {
         gui_rect(x + 4, y + 2, 8, 4, 0xd0ffd0);
         gui_rect(x + 4, y + 8, 3, 2, C_DARK); gui_rect(x + 9, y + 8, 3, 2, C_DARK);
         gui_rect(x + 4, y + 12, 3, 2, C_DARK); gui_rect(x + 9, y + 12, 3, 2, 0xc02020);
+    } else if (kind == ICON_VMS) {
+        // a rack of three machines, each with its light
+        gui_rect(x + 1, y, 14, 16, 0x384048); gui_recto(x + 1, y, 14, 16, C_DARK);
+        gui_rect(x + 3, y + 2, 10, 3, 0x8090a0); gui_rect(x + 11, y + 3, 1, 1, C_GREEN);
+        gui_rect(x + 3, y + 7, 10, 3, 0x8090a0); gui_rect(x + 11, y + 8, 1, 1, C_GREEN);
+        gui_rect(x + 3, y + 12, 10, 3, 0x8090a0); gui_rect(x + 11, y + 13, 1, 1, 0xe0a000);
     } else if (kind == ICON_CLOCK) {
         gui_disc(x + 8, y + 8, 7, C_DARK); gui_disc(x + 8, y + 8, 6, C_WHITE);
         gui_line(x + 8, y + 8, x + 8, y + 4, C_DARK); gui_line(x + 8, y + 8, x + 11, y + 8, C_DARK);

@@ -14,12 +14,17 @@
  * The guests run on CPU 0's thread, in turn with VM 0: a slice of 4 ms of
  * each runnable guest after each of VM 0's (hv_run, and while VM 0 naps).
  * A guest naps as VM 0 does (STOP_SLEEP: its nap's end on the real clock).
- * Its console is the serial line's, a line at a time ("vm1 NAME: ...").
+ * Its console is the serial line's, a line at a time ("vm1 NAME: ..."),
+ * and the PC's log (pc.c: VM 0 reads it, LOG); it is also a text screen
+ * of its own (vterm.h), which an attached guest with no display ring has
+ * on the PC's screen, the keyboard typing to it (hv_key), as C4IX in
+ * text mode, C4KE or C4DOS's prompt are.
  * Its accelerators are off (theirs keep state a CPU at a time, which VM
  * 0's CPU 0 has already), and it has no swap of the host's.
  */
 #include "../c4pc.h"
 #include "../clib.h"
+#include "vterm.h"
 
 extern u32 pc_heap_free_bytes;
 
@@ -27,7 +32,7 @@ enum { HV_MAX = 8 };
 enum { R_ID = 0x560, R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
 enum { C_NAME = 1, C_MB = 2, C_ARGS = 3, C_NEW = 4, C_START = 5, C_STOP = 6, C_ATTACH = 7, C_DETACH = 8,
        C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_DISK = 12, C_ATTACHED = 13, C_CDROM = 14, C_SEND = 15,
-       C_THUMB = 16 };
+       C_THUMB = 16, C_LOG = 17 };
 enum { S_FREE, S_MADE, S_RUN, S_HALT };
 static const char *STATE_NAME[] = { "free", "made", "running", "halted" };
 
@@ -40,6 +45,8 @@ typedef struct vm {
   drive *pc_cd;                        /* ... or VM 0's CD drive, shared */
   i64 nap_until; int status;
   char line[200]; int ll;              /* its console's line, being gathered */
+  vterm vt;                            /* its console as a text screen */
+  int mmu;                             /* 1 an MMU, 2 none, 0 as c4pc's --mmu says */
   i32 a[4], res;                       /* its own window's arguments and answer */
 } vm;
 static vm vms[HV_MAX];                 /* [0]: the control machine, VM 0 */
@@ -48,6 +55,7 @@ static int attached, hv_mmu, hv_w, hv_h;
 static double hv_mhz;
 static char pend_name[32], pend_args[256];
 static u32 pend_mb = 64;
+static int pend_mmu;
 void hv_out(const char *s);            /* pc.c: to the serial line alone */
 
 static void outn(i64 v) { char b[24]; int k = 0; uint64_t x = v < 0 ? (uint64_t)-v : (uint64_t)v; do b[k++] = (char)('0' + x % 10); while (x /= 10); if (v < 0) b[k++] = '-'; char o[24]; int n = 0; while (k) o[n++] = b[--k]; o[n] = 0; hv_out(o); }
@@ -57,6 +65,7 @@ static int vm_of(machine *m) { int id = m->dv->hv_id; return id >= 0 && id < HV_
 /* a guest's console, a line at a time on the serial line */
 static void guest_byte(machine *m, int b) {
   vm *v = &vms[vm_of(m)];
+  vt_put(&v->vt, b);
   if (b == '\r') return;
   if (b != '\n' && v->ll < (int)sizeof v->line - 1) { v->line[v->ll++] = (char)b; return; }
   v->line[v->ll] = 0;
@@ -155,8 +164,9 @@ static int start(int id) {
   m->accel = m->osaccel = 0;
   m->dv->swap_slots = 0;
   if (v->disk) m->blk[m->nblk++] = v->disk;
-  if (hv_mmu) mmu_new(m);
+  if (v->mmu == 1 || (!v->mmu && hv_mmu)) mmu_new(m);
   m->gui = gui_new(m, hv_w, hv_h);
+  vt_init(&v->vt, 0);
   m->dv->hv_rd = hv_rd; m->dv->hv_wr = hv_wr; m->dv->hv_id = id;
   m->wall = 1; m->wall_base = plat_now_ms();
   /* its arguments: the image's name, then the words of ARGS */
@@ -195,6 +205,42 @@ machine *hv_shown(machine *m0) {
   return m0;
 }
 
+/* does guest V show its text screen: no program has its display (no ring,
+ * nothing flipped) */
+int gui_ring(gui *g);
+u32 gui_flips(gui *g);
+static int text_shown(vm *v) { return v->m && v->m->gui && !gui_ring(v->m->gui) && !gui_flips(v->m->gui); }
+const u16 *hv_text(machine *m, int *cur) {
+  int id = vm_of(m);
+  if (!id || !ctl || m == ctl || vms[id].state != S_RUN || !text_shown(&vms[id])) return 0;
+  *cur = vt_cursor(&vms[id].vt);
+  return vms[id].vt.cells;
+}
+/* a key from the PC's keyboard, for the attached guest if it shows its text
+ * screen: given to it as a terminal would (echoed, backspace taken back,
+ * ^C its SIGINT, ^D its end of input), unless it reads the keys raw */
+int hv_key(int c) {
+  if (!attached || vms[attached].state != S_RUN || !text_shown(&vms[attached])) return 0;
+  vm *v = &vms[attached];
+  machine *g = v->m;
+  v->nap_until = 0;
+  if (g->raw_kbd > 0) { kbd_push(g, c); return 1; }
+  if (c == 4) { g->rx_eof = 1; return 1; }
+  if (c == 3) { if (g->sigh[2]) g->pending_signal = 2; return 1; }
+  if (c == 127 || c == 8) {
+    if (g->rx_tail > g->rx_head && g->rx[g->rx_tail - 1] != 10) { g->rx_tail--; vt_put(&v->vt, '\b'); vt_put(&v->vt, ' '); vt_put(&v->vt, '\b'); }
+    return 1;
+  }
+  kbd_push(g, c);
+  /* echoed, but not an arrow's or Home's escape sequence (ESC [ ... a letter or ~) */
+  static int esc;
+  if (c == 27) esc = 1;
+  else if (esc && ((c >= 64 && c <= 126 && c != 91) || esc > 8)) esc = 0;
+  else if (esc) esc++;
+  else vt_put(&v->vt, c);
+  return 1;
+}
+
 static i32 info(int id, u32 addr, u32 len) {
   if (id < 0 || id >= HV_MAX) return -1;
   vm *v = &vms[id];
@@ -205,6 +251,8 @@ static i32 info(int id, u32 addr, u32 len) {
   PUT("\nmb "); NUM(id ? v->mb : ctl->size >> 20);
   if (id && v->m) { PUT("\ncycles "); NUM((uint64_t)v->m->cycle); }
   if (id && v->state == S_HALT) { PUT("\nstatus "); NUM((u32)v->status); }
+  if (id) { PUT("\nmmu "); PUT(v->mmu == 1 || (!v->mmu && hv_mmu) ? "yes" : "no"); }
+  if (id && v->state == S_RUN) { PUT("\nscreen "); PUT(text_shown(v) ? "text" : "display"); }
   PUT("\nattached "); PUT(attached == id ? "yes" : "no"); PUT("\n");
 #undef PUT
 #undef NUM
@@ -224,7 +272,8 @@ static i32 command(machine *m, i32 c) {
   if (me != 0) return -1;              /* the rest are the control machine's */
   switch (c) {
     case C_NAME: ctl_string((u32)a[0], pend_name, sizeof pend_name); return 0;
-    case C_MB: pend_mb = a[0] < 4 ? 4 : (u32)a[0] > 1024 ? 1024 : (u32)a[0]; return 0;
+    /* A0 MB of memory; A1 its MMU: 1 one, 2 none, 0 as c4pc's --mmu */
+    case C_MB: pend_mb = a[0] < 4 ? 4 : (u32)a[0] > 1024 ? 1024 : (u32)a[0]; pend_mmu = a[1] == 1 || a[1] == 2 ? a[1] : 0; return 0;
     case C_ARGS: ctl_string((u32)a[0], pend_args, sizeof pend_args); return 0;
     case C_NEW: {
       int id = 1;
@@ -238,9 +287,9 @@ static i32 command(machine *m, i32 c) {
       memcpy(g->name, pend_name[0] ? pend_name : "guest", sizeof g->name);
       g->name[sizeof g->name - 1] = 0;
       memcpy(g->args, pend_args, sizeof g->args);
-      g->mb = pend_mb;
+      g->mb = pend_mb; g->mmu = pend_mmu;
       g->state = S_MADE;
-      pend_name[0] = 0; pend_args[0] = 0; pend_mb = 64;
+      pend_name[0] = 0; pend_args[0] = 0; pend_mb = 64; pend_mmu = 0;
       hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(g->name); hv_out(" made\n");
       return id;
     }
@@ -272,7 +321,15 @@ static i32 command(machine *m, i32 c) {
       if (a[2] <= 0 || a[3] <= 0 || a[2] > 640 || a[3] > 480) return -1;
       u32 n = (u32)a[2] * (u32)a[3];
       u32 *px = xmalloc((size_t)n * 4);
-      if (gui_thumb(vms[a[0]].m->gui, px, a[2], a[3]) < 0) { xfree(px); return -1; }
+      if (text_shown(&vms[a[0]])) {
+        /* its text screen: drawn at 640 x 400, then scaled as gui_thumb scales */
+        extern void screen_text_pixels(const u16 *cells, int cur, u32 *out);
+        u32 *t = xmalloc((size_t)640 * 400 * 4);
+        screen_text_pixels(vms[a[0]].vt.cells, vt_cursor(&vms[a[0]].vt), t);
+        for (i32 y = 0; y < a[3]; y++) for (i32 x = 0; x < a[2]; x++)
+          px[(u32)y * (u32)a[2] + (u32)x] = t[(u32)(y * 400 / a[3]) * 640 + (u32)(x * 640 / a[2])];
+        xfree(t);
+      } else if (gui_thumb(vms[a[0]].m->gui, px, a[2], a[3]) < 0) { xfree(px); return -1; }
 #if WB == 4
       u32 got = dev_dma_write(ctl, (u32)a[1], (const u8 *)px, n * 4);
 #else
@@ -284,6 +341,19 @@ static i32 command(machine *m, i32 c) {
 #endif
       xfree(px);
       return got == n * 4 ? 0 : -1;
+    }
+    /* the PC's log (pc.c), its last A1 bytes at most, at A0 in VM 0's
+     * memory, ended by a 0: how many */
+    case C_LOG: {
+      extern u32 pc_log_copy(char *out, u32 max);
+      if (a[1] < 2) return -1;
+      u32 max = (u32)a[1] - 1 > 32768 ? 32768 : (u32)a[1] - 1;
+      char *b = xmalloc(max + 1);
+      u32 n = pc_log_copy(b, max);
+      b[n] = 0;
+      dev_dma_write(ctl, (u32)a[0], (const u8 *)b, n + 1);
+      xfree(b);
+      return (i32)n;
     }
     case C_DELETE: {
       if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state == S_RUN) return -1;

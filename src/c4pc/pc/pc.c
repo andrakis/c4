@@ -59,87 +59,29 @@ static void com1_put(int c) {
   outb(0x3F8, (u8)c);
 }
 
-/* the text screen, kept here (vtext) and shown on the VGA's while it is
- * in text mode; on a framebuffer, screen.c draws it (screen_console) */
-static volatile uint16_t *const VGA = (volatile uint16_t *)0xB8000;
-static uint16_t vtext[2000]; static int vga_real = 1;
-#define VSET(i, v) do { int i_ = (i); vtext[i_] = (uint16_t)(v); if (vga_real) VGA[i_] = vtext[i_]; } while (0)
-static int vx, vy; static uint16_t vattr = 0x0700;
-static int esc_state; static int esc_args[8], esc_n;
+/* the text screen, kept here (pcv: vterm.h) and shown on the VGA's while
+ * it is in text mode; on a framebuffer, screen.c draws it (screen_console) */
+#include "vterm.h"
+static vterm pcv = { .attr = 0x0700, .mirror = (volatile uint16_t *)0xB8000 };
 static void vga_cursor(void) {
-  u32 pos = (u32)(vy * 80 + vx);
+  u32 pos = (u32)vt_cursor(&pcv);
   outb(0x3D4, 0x0F); outb(0x3D5, (u8)pos); outb(0x3D4, 0x0E); outb(0x3D5, (u8)(pos >> 8));
 }
-static void vga_scroll(void) {
-  memmove(vtext, vtext + 80, 80 * 24 * 2);
-  for (int i = 80 * 24; i < 80 * 25; i++) vtext[i] = vattr | ' ';
-  if (vga_real) for (int i = 0; i < 80 * 25; i++) VGA[i] = vtext[i];
-  vy = 24;
-}
-static void vga_clear(int from, int to) { for (int i = from; i < to; i++) VSET(i, vattr | ' '); }
-static const u8 ansi_vga[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
-static void vga_csi(int c) {
-  int a0 = esc_n > 0 ? esc_args[0] : 0, a1 = esc_n > 1 ? esc_args[1] : 0;
-  switch (c) {
-    case 'A': vy -= a0 ? a0 : 1; if (vy < 0) vy = 0; break;
-    case 'B': vy += a0 ? a0 : 1; if (vy > 24) vy = 24; break;
-    case 'C': vx += a0 ? a0 : 1; if (vx > 79) vx = 79; break;
-    case 'D': vx -= a0 ? a0 : 1; if (vx < 0) vx = 0; break;
-    case 'H': case 'f': vy = (a0 ? a0 : 1) - 1; vx = (a1 ? a1 : 1) - 1;
-      if (vy > 24) vy = 24;
-      if (vx > 79) vx = 79;
-      break;
-    case 'J':
-      if (a0 == 2) { vga_clear(0, 2000); }
-      else if (a0 == 1) vga_clear(0, vy * 80 + vx + 1);
-      else vga_clear(vy * 80 + vx, 2000);
-      break;
-    case 'K':
-      if (a0 == 2) vga_clear(vy * 80, vy * 80 + 80);
-      else if (a0 == 1) vga_clear(vy * 80, vy * 80 + vx + 1);
-      else vga_clear(vy * 80 + vx, vy * 80 + 80);
-      break;
-    case 'm':
-      if (!esc_n) { vattr = 0x0700; break; }
-      for (int i = 0; i < esc_n; i++) {
-        int v = esc_args[i];
-        if (v == 0) vattr = 0x0700;
-        else if (v == 1) vattr |= 0x0800;
-        else if (v == 7) vattr = (uint16_t)(((vattr & 0x0f00) << 4) | ((vattr & 0xf000) >> 4));
-        else if (v >= 30 && v <= 37) vattr = (uint16_t)((vattr & 0xf800) | ansi_vga[v - 30] << 8);
-        else if (v >= 40 && v <= 47) vattr = (uint16_t)((vattr & 0x0fff) | ansi_vga[v - 40] << 12);
-        else if (v == 39) vattr = (uint16_t)((vattr & 0xf800) | 0x0700);
-        else if (v == 49) vattr &= 0x0fff;
-      }
-      break;
-  }
-}
-static void vga_put(int c) {
-  if (esc_state == 1) {
-    if (c == '[') { esc_state = 2; esc_n = 0; esc_args[0] = 0; return; }
-    esc_state = 0; return;
-  }
-  if (esc_state == 2) {
-    if (c >= '0' && c <= '9') { if (!esc_n) esc_n = 1; esc_args[esc_n - 1] = esc_args[esc_n - 1] * 10 + (c - '0'); return; }
-    if (c == ';') { if (!esc_n) esc_n = 1; if (esc_n < 8) esc_args[esc_n++] = 0; return; }
-    if (c == '?') return;
-    esc_state = 0;
-    vga_csi(c);
-    vga_cursor();
-    return;
-  }
-  if (c == 27) { esc_state = 1; return; }
-  if (c == '\n') { vx = 0; if (++vy > 24) vga_scroll(); }
-  else if (c == '\r') vx = 0;
-  else if (c == '\b') { if (vx) vx--; }
-  else if (c == '\t') { vx = (vx + 8) & ~7; if (vx > 79) { vx = 0; if (++vy > 24) vga_scroll(); } }
-  else if (c >= 32 || c < 0) {
-    VSET(vy * 80 + vx, vattr | (u8)c);
-    if (++vx > 79) { vx = 0; if (++vy > 24) vga_scroll(); }
-  }
+static void vga_put(int c) { if (vt_put(&pcv, c)) vga_cursor(); }
+/* the PC's log: what the console and the serial line were given, the last
+ * PCLOG bytes of it (VM 0 reads it through the hypervisor: hv.c, C_LOG) */
+enum { PCLOG = 32768 };
+static char pclog[PCLOG];
+static u32 pclog_n;
+u32 pc_log_copy(char *out, u32 max) {
+  u32 have = pclog_n < PCLOG ? pclog_n : PCLOG, n = have < max ? have : max;
+  u32 from = pclog_n - n;
+  for (u32 k = 0; k < n; k++) out[k] = pclog[(from + k) % PCLOG];
+  return n;
 }
 static int vga_dirty, com1_only;
 static void con_put(int c) {
+  if (c != '\r') { pclog[pclog_n % PCLOG] = (char)c; pclog_n++; }
   if (c == '\n') com1_put('\r');
   com1_put(c);
   if (com1_only) return;
@@ -350,6 +292,8 @@ static volatile int hv_detach;          /* Ctrl+Alt+Home: the screen VM 0's agai
 void hv_init(machine *m, double mhz, int mmu_on, int w, int h);
 int hv_run(void);
 machine *hv_shown(machine *m0);
+const u16 *hv_text(machine *m, int *cur);   /* a guest's text screen, if it shows one */
+int hv_key(int c);                          /* a key for an attached text guest: 1 if it took it */
 void hv_attach(int id);           /* Ctrl+Alt+F11: frames a second, on the screen (screen_fps) */
 static int reboot_after;              /* Ctrl+Alt+Del asked: the PC restarts when C4IX ends */
 static volatile u8 scq[256];
@@ -368,6 +312,7 @@ static void kbd_irq(void) {
   if (!up && k_ctrl && k_alt) {
     if (sc == 0x53) { want_reboot++; return; }
     if (sc == 0x3C && vt_text) { vt_text = 0; vt_back = 1; return; }
+    if (sc == 0x47 && hv) { hv_detach = 1; return; }                 /* Home: back to VM 0 from a text guest */
     if (sc == 0x3B) return;
   }
   if (up) return;
@@ -456,7 +401,7 @@ static void display_tick(machine *m) {
   i64 t = plat_now_ms();
   kbd_to_gui = gui_attached(g) && !vt_text;
   while (scq_head != scq_tail) { u8 sc = scq[scq_head % sizeof scq]; scq_head++; key_event(g, sc); }
-  if (vt_text) { kbd_to_gui = 0; screen_console(vtext, vy * 80 + vx); display_ms += plat_now_ms() - t; return; }
+  if (vt_text) { kbd_to_gui = 0; screen_console(pcv.cells, vt_cursor(&pcv)); display_ms += plat_now_ms() - t; return; }
   if (vt_back) { vt_back = 0; g_ctrl = g_alt = 0; gui_redraw_all(g); }
   mouse_poll(g);
   gui_tick(g);
@@ -473,7 +418,11 @@ static void display_tick(machine *m) {
       extern void screen_fps(int); screen_fps(fps);
     }
   }
-  else screen_console(vtext, vy * 80 + vx);
+  else {
+    /* an attached guest with no display ring: its own text screen (hv.c) */
+    int cur; const u16 *cells = hv ? hv_text(m, &cur) : 0;
+    if (cells) screen_console(cells, cur); else screen_console(pcv.cells, vt_cursor(&pcv));
+  }
   display_ms += plat_now_ms() - t;
 }
 
@@ -599,7 +548,7 @@ static int split_args(char *s, char **argv, int max) {
 
 void pc_main(u32 magic, struct mb_info *mb) {
   com1_init();
-  vga_clear(0, 2000);
+  vt_clear(&pcv, 0, 2000);
   cpu_init();
   con_puts(WB == 8 ? "c4pc: the 64-bit c4 machine on a PC\n" : "c4pc: the c4 machine on a PC\n");
   if (magic != 0x2BADB002) { con_puts("c4pc: not started by a multiboot loader\n"); power_off(72); }
@@ -864,8 +813,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
     int vmouse = mouse && vmw_mouse_init();
     con_puts("c4pc: a display of "); con_dec(w); con_puts(" x "); con_dec(h);
     con_puts(vmouse ? ", and VMware's absolute mouse (the pointer leaves at the edge)\n" : mouse ? ", and a mouse\n" : ", and no mouse\n");
-    vga_real = 0;                       /* graphics: the VGA's text is not shown */
-    screen_console(vtext, vy * 80 + vx);
+    pcv.mirror = 0;                     /* graphics: the VGA's text is not shown */
+    screen_console(pcv.cells, vt_cursor(&pcv));
     if (hv) hv_init(m, (double)m->cycles_per_ms / 1000, mmu_on, w, h);
   }
   /* the sound card (snd.c), at the keyboard, on a Sound Blaster 16 (sb16.c):
@@ -927,6 +876,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     while (inq_head != inq_tail) {
       int c = inq[inq_head % sizeof inq]; inq_head++;
       if (have_in) continue;                  /* scripted: the keys are not the program's */
+      if (hv && hv_key(c)) continue;          /* an attached guest's, with a text screen */
       if (c == 4) { m->rx_eof = 1; continue; }
       if (c == 3) { if (m->sigh[2]) m->pending_signal = 2; continue; }
       if (m->raw_kbd > 0) { kbd_push(m, c); continue; }

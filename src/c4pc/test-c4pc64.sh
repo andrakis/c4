@@ -98,14 +98,17 @@ else bad "C4IX and the MMU, 64-bit"; fi
 
 # ---- the desktop, on a display (test-c4pc's, on the 64-bit system) ----
 echo "  ---   the 64-bit desktop, on a display"
+# (the double click at 15 s: the 64-bit desktop is ready at about 9.6 s of
+# the machine's time -- boot 7.3, then its own start -- and at 9 s the
+# click came before it, 2026-11-24)
 cat > $W/gui64-events.txt <<EV
-9000 move 40 330
-9100 packet 1 0 1
-9150 packet 0 1 0
-9250 packet 1 0 1
-9300 packet 0 -1 0
-13000 shot $W/desktop64.png
-13100 quit
+15000 move 40 330
+15100 packet 1 0 1
+15150 packet 0 1 0
+15250 packet 1 0 1
+15300 packet 0 -1 0
+19000 shot $W/desktop64.png
+19100 quit
 EV
 timeout 600 ./c4pc-host64w -s --mmu -m 128 --gui 1024x768 --events $W/gui64-events.txt --texts $W/gui64-texts.txt \
   -d $D $D/c4ix.c4r --desktop > $W/gui64.out 2> $W/gui64.err

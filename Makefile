@@ -3329,13 +3329,24 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 	cd $(C4PC_IMAGES)/disk && { find . -type f -size -300k ! -path './games/*' ! -path './tyrian/*' \
 		! -path './bsdgames/*' ! -path './frotz/*'; echo ./c4ix-root.tgz; } | sort > $(CURDIR)/.c4pc/small.lst
 	tar --format=ustar -C $(C4PC_IMAGES)/disk -cf $@ -T .c4pc/small.lst
+# The hypervisor's other systems, on the ISO for `vm images` (src/c4ix/user/
+# vm.c) to copy into the control C4IX's /vm/images: C4KE's kernel (it boots
+# from C4IX's disk.tar), and C4DOS with grin and the games, its page's own
+# disk (libjs/images/dos, build-images.sh) as one archive, compressed as
+# disk.tar's members are. C4PC_DOS: that disk (main's has the games).
+C4PC_DOS ?= $(abspath $(C4PC_IMAGES)/../../../libjs/images/dos)
+.c4pc/c4dos.tar: $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/packdisk.py
+	mkdir -p .c4pc
+	tar --format=ustar -C $(C4PC_DOS) --exclude=./index.json --exclude=./manifest.json -cf .c4pc/c4dos-raw.tar .
+	python3 $(C4PC_SRC)/pc/packdisk.py .c4pc/c4dos-raw.tar $@
+	rm -f .c4pc/c4dos-raw.tar
 # A GRUB ISO of C4IX on c4pc, the whole disk: for VirtualBox, VMware,
 # Hyper-V (generation 1) and real PCs with a BIOS. GRUB_MKRESCUE: one
 # with the i386-pc modules (~/opt/pctools/bin/grub-mkrescue-pc on helios).
 GRUB_MKRESCUE ?= $(shell command -v grub-mkrescue-pc || echo grub-mkrescue)
 c4pc.iso: c4pc.elf c4pc64.elf .c4pc/diskz.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/grub.cfg \
-          .c4pc/grub/c4pc-core.img $(C4PC_SRC)/pc/grub-disk.cfg $(C4PC_ISO64)
-	rm -rf .c4pc/iso && mkdir -p .c4pc/iso/boot/grub
+          .c4pc/grub/c4pc-core.img $(C4PC_SRC)/pc/grub-disk.cfg $(C4PC_ISO64) .c4pc/c4dos.tar
+	rm -rf .c4pc/iso && mkdir -p .c4pc/iso/boot/grub .c4pc/iso/boot/images
 	cp c4pc.elf c4pc64.elf .c4pc/kernel/c4ix32.c4r .c4pc/iso/boot/
 	cp .c4pc/diskz.tar .c4pc/iso/boot/disk.tar
 	@# the 64-bit system (docs/c4pc-64.md): its machine, kernel and disk
@@ -3345,6 +3356,8 @@ c4pc.iso: c4pc.elf c4pc64.elf .c4pc/diskz.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMA
 	cp $(C4PC_SRC)/pc/grub.cfg .c4pc/iso/boot/grub/
 	cp .c4pc/grub/c4pc-boot.img .c4pc/grub/c4pc-core.img .c4pc/iso/boot/grub/
 	cp $(C4PC_SRC)/pc/grub-disk.cfg .c4pc/iso/boot/grub/disk.cfg
+	@# the hypervisor's systems (vm images): C4KE, and C4DOS with its disk
+	cp $(C4PC_IMAGES)/c4ke32.c4r $(C4PC_DOS)/c4dos32.c4r .c4pc/c4dos.tar .c4pc/iso/boot/images/
 	$(GRUB_MKRESCUE) -o $@ .c4pc/iso -volid C4PC
 # GRUB for a disk C4IX is installed on (src/c4ix/user/install.c,
 # docs/c4ix-install.md), on the ISO for install to write: boot.img for

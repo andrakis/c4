@@ -126,6 +126,19 @@ SYS_BLKIO (255) reads or writes up to 256 sectors of a device from a
 task's buffer, through the kernel's own; a disk's sector 0 written reads
 its partitions again. install.c is its user.
 
+## On the hypervisor
+
+(2026-11-24) Run in c4pc's hypervisor's control C4IX (GRUB's "C4PC
+hypervisor" entry), or with `-h`, install makes the disk's menu start
+the hypervisor's entry first (`set default="C4PC hypervisor..."`, by
+its title) and copies the systems Machines makes machines of onto the
+disk's /vm/images (`vm images`, from the CD): the disk is then the
+hypervisor's, needing no CD. Run in a guest of the hypervisor, it writes
+no GRUB (the hypervisor starts the guest's kernel itself), needs no CD
+and makes no swap partition; the machine then boots from its disk with
+`--root hd0p1` (Machines: Options, Boots from: disk).
+docs/c4pc-hypervisor.md has the rest.
+
 ## Not yet
 
 - The 64-bit system's install: install already picks `disk64.cfg` on a

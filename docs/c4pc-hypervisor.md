@@ -66,19 +66,63 @@ are the plan.
   ISO, VM 0 from the CD; on an installed disk, VM 0 from the disk, and
   `-e vmd`. /vm/NAME/vm.cfg, a line each: kernel FILE, boot FILE (- for
   none: a machine that boots from its own disk, `args --root hd0p1`),
-  mb N, disk FILE, cdrom FILE|pc, args ..., autostart yes|no. `vmd` (vm
-  under another name) starts every machine whose vm.cfg says autostart.
+  mb N, mmu yes|no (yes if it does not say), disk FILE, cdrom FILE|pc,
+  args ... (none: the text console), autostart yes|no, system NAME.
+  `vmd` (vm under another name) starts every machine whose vm.cfg says
+  autostart.
+
+## The systems, and installing the hypervisor
+
+`vm create NAME MB DISK_MB [SYSTEM]` makes a machine of one of four
+systems, their kernels and boot archives in /vm/images:
+
+| SYSTEM | what it is | its files | memory |
+|---|---|---|---|
+| c4ix (the default) | C4IX's desktop | c4ix32.c4r, c4ix.tar | 256 MB |
+| c4ix-text | C4IX at its text console | c4ix32.c4r, c4ix.tar | 128 MB |
+| c4ke | C4KE, at c4sh | c4ke32.c4r, c4ix.tar | 128 MB |
+| c4dos | C4DOS: grin, and the games in \GAMES | c4dos32.c4r, c4dos.tar | 256 MB |
+
+or an ISO file: C4IX's desktop with that ISO as its CD. /vm/images comes
+from the C4PC disc (its /boot/c4ix32.c4r and disk.tar, and its
+/boot/images: C4KE's kernel, C4DOS's kernel and its page's disk with
+the games, libjs/images/dos, compressed as disk.tar is), copied by `vm
+images` -- which vm create and vm up run themselves the first time a
+file is not there -- so that machines start with no CD in the drive.
+(Before, vm create named the disc's own files, and a machine would not
+start once the CD was out.) C4KE has no games of its own: the games are
+C4IX's, C4DOS's and the bare machine's.
+
+A machine with no display ring (C4IX's text console, C4KE, C4DOS before
+grin) has a text screen of its own (pc/vterm.h, as the PC's console):
+Machines shows it, and attached, the PC's screen is it and the keyboard
+types to it, as a terminal (echo, backspace, ^C, ^D).
+
+**Installing the hypervisor** is install, run in the hypervisor's
+control C4IX (GRUB's "C4PC hypervisor" entry on the CD, then the Install
+C4IX icon, or `install` in a Terminal). Run there, install makes the
+disk's menu start the hypervisor's entry by default (GRUB's `set
+default` by its title) and copies /vm/images onto the disk (`vm images
+/mnt/install/vm/images`); `install -h` does so from any entry. The disk
+then boots the control C4IX from itself, vmd starting the machines that
+say autostart, and needs the CD no more. Run in a guest, install puts C4IX
+on the guest's hd0 with no GRUB and no CD (the hypervisor starts a
+guest's kernel itself); then the machine's Options, Boots from: disk
+(boot -, args --root hd0p1 ...) and it starts from its own disk, every
+change kept.
 
 ## Using it
 
 ```
-vm create one 256 1024    # /vm/one: disk0.img of 1 GB, vm.cfg for a first boot from the CD
-mount cdrom               # the C4PC disc at /mnt/cdrom
-vm up one                 # made and started; vm lists the machines
+vm create dos 0 0 c4dos   # /vm/dos: C4DOS (the systems copied to /vm/images from the CD, once)
+vm up dos                 # made and started; vm lists the machines
+vm create one 256 1024    # /vm/one: C4IX's desktop, and disk0.img of 1 GB
+vm up one
 vm attach one             # its screen: Install C4IX onto its hd0, then shut it down
                           # (Ctrl+Alt+Home: back to VM 0's)
                           # vm.cfg: boot -, args --root hd0p1 --desktop --no-top, autostart yes
 vm up one                 # from its own disk now; and at every boot by vmd
+vm log                    # c4pc's log: its own lines, and the guests' consoles
 vm send one ls /          # a line typed at its console; its output is the serial line's
 vm stop one               # SIGTERM: it shuts down (-f: at once); vm delete one
 ```
@@ -99,25 +143,29 @@ the hypervisor is), after Proxmox's look: a tree on the left -- the PC,
 and under it each machine, from /vm/NAME/vm.cfg and from what the
 hypervisor has made, its id and a monitor lit while it runs -- and for
 the one chosen a toolbar (Start, Shutdown, Stop, Restart, Console) and
-four tabs:
+five tabs:
 
 - **Summary**: state, id, memory, the instructions it runs a second and
   a minute's history of them, its disk, CD and start at boot, and its
   screen small (THUMB, once a second).
 - **Console**: its screen larger; Attach (or a double-click in the tree)
   gives it the PC's screen, keyboard and mouse; Ctrl+Alt+Home comes back.
-- **Hardware** (memory, hard disk, CD/DVD) and **Options** (kernel, boot
-  archive, kernel arguments, start at boot): vm.cfg's lines; a click on
-  a row edits it, for the machine's next start.
+- **Hardware** (memory, MMU, hard disk, CD/DVD) and **Options** (system,
+  boots from: its archive or its disk, kernel, boot archive, kernel
+  arguments, start at boot): vm.cfg's lines; a click on a row edits it,
+  for the machine's next start.
+- **Log**: c4pc's log (LOG, 17: the last 32 KB of what its console and
+  serial line were given) -- the PC's whole, or a machine's lines of it
+  (its console, and the hypervisor's words about it).
 
 Start runs `vm up NAME` in the background (it reads the kernel and the
-boot archive, and mounts the C4PC disc first when the kernel is on it);
-Start on a machine made before deletes what was made, so a changed
-vm.cfg counts. Shutdown is SIGTERM, Stop at once, Restart Stop and
-Start. **Create VM** asks a name, the memory, a new disk image's size (0
-for none) and the CD -- `pc`, the C4PC disc in the PC's drive, or an ISO
-file -- and runs `vm create NAME MB DISK_MB [ISO]` in a Terminal, which
-shows the image being written.
+boot archive), its output and errors into /vm/NAME/start.log: a start
+that fails says why, in the status line and a message. Start on a
+machine made before deletes what was made, so a changed vm.cfg counts.
+Shutdown is SIGTERM, Stop at once, Restart Stop and Start. **Create VM**
+asks a name, the system (c4ix, c4ix-text, c4ke, c4dos, or an ISO file),
+the memory and a new disk image's size (0 for none), and runs `vm
+create` in a Terminal, which shows the image being written.
 
 ## Stages
 

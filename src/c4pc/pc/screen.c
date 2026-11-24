@@ -346,6 +346,40 @@ void screen_console(const u16 *cells, int cur) {
   con_cur = cur;
 }
 
+/* an 80 x 25 text screen (vterm.h's cells) as pixels, 8 x 16 a cell, into
+ * OUT (640 x 400): a hypervisor guest's, small in Machines (hv.c, THUMB) */
+void screen_text_pixels(const u16 *cells, int cur, u32 *out) {
+  enum { W = 8, H = 16 };
+  static int size16 = -1, base;
+  if (size16 < 0) {
+    size16 = W * 16 * 2048 / 1233;
+    while (size16 > 64 && font_advance(0, size16, 'M') > W * 64) size16 -= 4;
+    base = (H - size16 / 16) / 2 + font_top(0, size16);
+  }
+  for (int i = 0; i < 2000; i++) {
+    u16 v = cells[i];
+    u32 fg = VGA16[(v >> 8) & 15], bg = VGA16[(v >> 12) & 15];
+    u32 *cell = out + (i / 80) * H * 640 + (i % 80) * W;
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) cell[y * 640 + x] = bg;
+    const glyph *gl = (v & 255) > 32 ? font_glyph(0, size16, v & 255) : 0;
+    if (gl) for (int j = 0; j < gl->h; j++) {
+      int y = base + gl->y0 + j;
+      if (y < 0 || y >= H) continue;
+      for (int k = 0; k < gl->w; k++) {
+        int x = gl->x0 + k, a = gl->a[j * gl->w + k];
+        if (x < 0 || x >= W || !a) continue;
+        u32 o = 0;
+        for (int sh8 = 0; sh8 < 24; sh8 += 8) {
+          u32 f = (fg >> sh8) & 255, b = (bg >> sh8) & 255;
+          o |= ((b * (255 - (u32)a) + f * (u32)a + 127) / 255) << sh8;
+        }
+        cell[y * 640 + x] = o;
+      }
+    }
+    if (i == cur) for (int y = H - 3; y < H - 1; y++) for (int x = 0; x < W; x++) cell[y * 640 + x] = fg;
+  }
+}
+
 /* the pointer: an arrow, 1 black and 2 white */
 static const char *ARROW[] = {
   "1", "11", "121", "1221", "12221", "122221", "1222221", "12222221", "122222221", "1222222221",

@@ -27,7 +27,9 @@ enum { WALL_TX = 8, WALL_TY = 8, WALL_ID = 100 };
 
 static int wall_ok;                      // the tiles are on the display
 static int wall_tw, wall_th;             // a tile's size on the desktop
-static int wall_tile[(WK_MAX_W / WALL_TX) * (WK_MAX_H / WALL_TY)];
+static int *wall_tile, wall_tile_n;      // a tile's pixels, as large as the screen's tiles are
+                                         // (SVGA II's modes go past WK_MAX_W: 1920x1080 overran
+                                         // a buffer of WK_MAX_W x WK_MAX_H's tiles)
 static char *wall_pix;                   // the picture, kept to stretch again
 static char *wall_d;                     // ... its inflated file, freed for another
 static int wall_wide;                    // the picture loaded is the 16:9 one
@@ -44,6 +46,11 @@ static void wall_tiles() {
     if (wk.sw * wall_h >= wk.sh * wall_w) { dw = wk.sw; dh = wall_h * wk.sw / wall_w; }
     else { dh = wk.sh; dw = wall_w * wk.sh / wall_h; }
     offx = (dw - wk.sw) / 2; offy = (dh - wk.sh) / 2;
+    if (wall_tw * wall_th > wall_tile_n) {
+        if (wall_tile) free(wall_tile);
+        if (!(wall_tile = (int *)malloc(wall_tw * wall_th * sizeof(int)))) { wall_tile_n = 0; wall_ok = 0; return; }
+        wall_tile_n = wall_tw * wall_th;
+    }
     ty = 0;
     while (ty < WALL_TY) {
         tx = 0;

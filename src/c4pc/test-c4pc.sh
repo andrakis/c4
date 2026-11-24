@@ -351,13 +351,13 @@ grep -a -E "panic|illegal" $W/alttab.out | head -3
 # at 1024x768 (the texts say if they moved)
 echo "  ---   the screen's modes: Settings' screen size, up and down"
 { echo "30000 click 30 755"; echo "30500 click 80 549"
-  for t in 32000 32200 32400 32600; do echo "$t click 251 411"; done
-  echo "33200 click 287 411"; echo "40000 shot $W/modes-up.png"
-  for t in 40100 40300 40500 40700 40900; do echo "$t click 157 411"; done
-  echo "41200 click 287 411"; echo "48000 shot $W/modes-down.png"; echo "48100 quit"; } > $W/modes-events.txt
+  for t in 32000 32200 32400 32600; do echo "$t click 251 431"; done
+  echo "33200 click 287 431"; echo "40000 shot $W/modes-up.png"
+  for t in 40100 40300 40500 40700 40900; do echo "$t click 157 431"; done
+  echo "41200 click 287 431"; echo "48000 shot $W/modes-down.png"; echo "48100 quit"; } > $W/modes-events.txt
 timeout 600 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --modes --events $W/modes-events.txt --texts $W/modes-texts.txt \
   --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/modes.out 2> $W/modes.err
-grep -qE "^154 406 <$" $W/modes-texts.txt && grep -qE "^174 405 1024x768$" $W/modes-texts.txt &&
+grep -qE "^154 426 <$" $W/modes-texts.txt && grep -qE "^174 425 1024x768$" $W/modes-texts.txt &&
   ok "Settings: the screen's modes, from the one it is in (1024x768)" || bad "Settings' screen size is not where the test clicks ($W/modes-texts.txt)"
 for s in "up 1280 1024" "down 800 600"; do
   read -r d mw mh <<< "$s"

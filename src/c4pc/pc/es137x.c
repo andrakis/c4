@@ -14,6 +14,11 @@
  *     must be set before it is enabled (a converter enabled unset locks
  *     the chip), and has an AC'97 codec: reset, then master, headphone
  *     and PCM out at 0 dB, unmuted.
+ *
+ * What it did is said to c4pc's log (its console: Ctrl+Alt+F1; the
+ * hypervisor's Log): the codec's id and the volumes read back, and for
+ * the first seconds DAC2's position and what was mixed, so a card that
+ * is found but silent (VMware, 2026-11-24) says whether its DMA moves.
  */
 #include "../c4pc.h"
 #include "../clib.h"
@@ -55,6 +60,8 @@ enum {
 #define DIS_R1         (1u << 19)
 #define SRC_STATE      (SRC_DISABLE | DIS_P1 | DIS_P2 | DIS_R1)
 #define CODEC_WIP      (1u << 30)
+#define CODEC_RDY      (1u << 31)
+#define CODEC_PIRD     (1u << 23)
 #define CODEC_WRITE(a, d) ((((u32)(a) & 0x7f) << 16) | ((u32)(d) & 0xffff))
 
 #define RATE 44100
@@ -65,7 +72,18 @@ static u32 io;                         /* the chip's I/O ports */
 static int is1371;
 static u32 played, made, last_pos;
 static snd *card;
+static i64 t_first;                    /* the first poll's time: the log's seconds count from it */
+static int logged;
 u32 es137x_underruns;
+void pc_log(const char *s);
+void pc_logn(i64 v);
+static void say_hex(const char *what, u32 v) {
+  static const char hx[] = "0123456789abcdef";
+  char b[12]; b[0] = '0'; b[1] = 'x';
+  for (int i = 0; i < 8; i++) b[2 + i] = hx[(v >> (28 - 4 * i)) & 15];
+  b[10] = 0;
+  pc_log(what); pc_log(b);
+}
 const char *es137x_why = "no Ensoniq AudioPCI";
 
 /* ---- the ES1371's sample-rate converter and AC'97 codec ---- */
@@ -88,6 +106,20 @@ static void codec1371(u32 reg, u32 v) {
   outl(io + CODEC1371, CODEC_WRITE(reg, v));
   src_ready();
   outl(io + SMPRATE, x);
+}
+/* an AC'97 register read back (snd_es1371_codec_read), or 0xffffffff */
+static u32 codec1371_rd(u32 reg) {
+  for (u32 i = 0; i < 0xa000 && (inl(io + CODEC1371) & CODEC_WIP); i++) { }
+  u32 x = src_ready();
+  outl(io + SMPRATE, (x & SRC_STATE) | 0x00010000);
+  for (u32 i = 0; i < 0xa000 && (inl(io + SMPRATE) & 0x00870000) != 0; i++) { }
+  for (u32 i = 0; i < 0xa000 && (inl(io + SMPRATE) & 0x00870000) != 0x00010000; i++) { }
+  outl(io + CODEC1371, ((reg & 0x7f) << 16) | CODEC_PIRD);
+  src_ready();
+  outl(io + SMPRATE, x);
+  for (u32 i = 0; i < 0xa000 && (inl(io + CODEC1371) & CODEC_WIP); i++) { }
+  for (u32 i = 0; i < 0xa000; i++) { u32 v = inl(io + CODEC1371); if (v & CODEC_RDY) return v & 0xffff; }
+  return 0xffffffffu;
 }
 /* DAC2's rate through the converter (snd_es1371_dac2_rate): its integer
  * and fraction registers, 0x75's low byte kept (0 after the RAM's clearing) */
@@ -191,6 +223,17 @@ const char *es137x_init(snd *s) {
   outl(io + CONTROL, ctrl | DAC2_EN);
   card = s;
   played = made = last_pos = 0;
+  t_first = 0; logged = 0;
+  pc_log("c4pc: es137x: ports at "); pc_logn((i64)io); say_hex(", id ", id);
+  pc_log(" (pci "); pc_logn((i64)bus); pc_log(":"); pc_logn((i64)dev); pc_log("."); pc_logn((i64)fn); pc_log(")\n");
+  if (is1371) {
+    pc_log("c4pc: es137x: AC'97 codec"); say_hex(" vendor ", codec1371_rd(0x7c) << 16 | codec1371_rd(0x7e));
+    say_hex(", master ", codec1371_rd(0x02)); say_hex(", PCM ", codec1371_rd(0x18));
+    say_hex(", powerdown ", codec1371_rd(0x26)); pc_log("\n");
+  }
+  say_hex("c4pc: es137x: CONTROL ", inl(io + CONTROL)); say_hex(", STATUS ", inl(io + STATUS));
+  say_hex(", SERIAL ", inl(io + SERIAL)); if (is1371) say_hex(", SMPRATE ", inl(io + SMPRATE));
+  pc_log("\n");
   const char *t = is1371 ? ((id >> 16) == 0x5880 ? "Ensoniq AudioPCI (CT5880)" : (id & 0xffff) == 0x1102 ? "Ensoniq AudioPCI (EV1938)" : "Ensoniq AudioPCI ES1371")
                          : "Ensoniq AudioPCI ES1370";
   char *p = desc;
@@ -210,6 +253,18 @@ void es137x_poll(void) {
   played += (pos - last_pos + RING) % RING;
   last_pos = pos;
   if ((i32)(made - played) < 0) { made = played; es137x_underruns++; }
+  /* the first seconds, once a second: is DAC2 moving */
+  if (logged < 4) {
+    i64 now = plat_now_ms();
+    if (!t_first) t_first = now;
+    if (now - t_first >= (i64)logged * 1000) {
+      pc_log("c4pc: es137x: "); pc_logn(now - t_first); pc_log(" ms: DAC2 at frame "); pc_logn((i64)pos);
+      pc_log(", "); pc_logn((i64)played); pc_log(" played, "); pc_logn((i64)made); pc_log(" mixed, ");
+      pc_logn((i64)es137x_underruns); say_hex(" underruns; CONTROL ", inl(io + CONTROL));
+      say_hex(", STATUS ", inl(io + STATUS)); pc_log("\n");
+      logged++;
+    }
+  }
   u32 ahead = made - played;
   if (ahead >= FILL) return;
   u32 n = FILL - ahead;

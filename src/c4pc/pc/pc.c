@@ -92,6 +92,7 @@ static char hwinfo[2048]; static u32 hwinfo_n;
 static void hw_str(const char *s) { while (*s && hwinfo_n < sizeof hwinfo - 1) hwinfo[hwinfo_n++] = *s++; hwinfo[hwinfo_n] = 0; }
 static void hw_num(i64 v) { char b[24]; int k = 0; if (v < 0) { hw_str("-"); v = -v; } do b[k++] = (char)('0' + v % 10); while (v /= 10); while (k) { char c[2] = { b[--k], 0 }; hw_str(c); } }
 i64 pc_idle_total;                      /* ms CPU 0 was idle, waiting (its load: hv.c's HOST) */
+static blkdev **host_blks; static int host_nblk, host_c4on = 1;   /* HOST's diskioN, pidleN */
 static int vga_dirty, com1_only;
 static void con_put_(int c);
 /* the console's flags (com1_only, log_skip, from_vm0) and its screen are
@@ -804,6 +805,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   if (noosaccel) m->osaccel = 0;
   if (mmu_on) mmu_new(m);
   for (int i = 0; i < nblk; i++) m->blk[m->nblk++] = blks[i];
+  host_blks = blks; host_nblk = nblk;
   /* swap: the first IDE disk's partition of type 82h (install makes one),
    * else the host's memory, 256 MB of it, or with all the memory
    * C4IX's, as much as c4pc can spare */
@@ -879,8 +881,9 @@ void pc_main(u32 magic, struct mb_info *mb) {
    * CPU on a processor of its own (par.c); with none, the machine's CPUs
    * take turns on this one (smp.c) */
   /* Under the hypervisor every processor is started: VM 0's CPUs on the
-   * first (--cpus N; half of them, rounded up, when it does not say), the
-   * machines on the rest (hv.c hv_pool) */
+   * first (--cpus N; 2 of 4 or more when it does not say, else 1), the
+   * machines on the rest (hv.c hv_pool). The user: the control needs
+   * little, the machines want the processors */
   int par = 0, vm0 = 1, npc = 1;
   if (cpus > 1 || hv) {
     extern int ap_start(int, const char **);
@@ -890,7 +893,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (mbl + sizeof *mb > 0x7000 && mbl < 0x8000) why = "the loader's information is where the processors would start";
     else n = ap_start(hv ? 32 : cpus, &why);
     npc = n;
-    vm0 = !hv ? n : cpus >= 1 ? (cpus < n ? cpus : n) : (n + 1) / 2;
+    vm0 = !hv ? n : cpus >= 1 ? (cpus < n ? cpus : n) : n >= 4 ? 2 : 1;
     if (vm0 > 1) {
       smp_new(m, vm0, quantum);
       par = 1;
@@ -902,6 +905,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (hv) { extern void hv_pool(int, int); hv_pool(vm0, npc); }
   }
   int c4on = par || (hv && npc > vm0) ? npc : 1;
+  host_c4on = c4on;
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU" : " MB arena");
   con_puts(mem_all ? " (the PC's memory but c4pc's own; -m N for less), running " : ", running ");
@@ -1138,6 +1142,25 @@ u32 pc_host_info(char *out, u32 max) {
   { char d[24]; int j = 0; v = pc_idle_total; do d[j++] = (char)('0' + v % 10); while (v /= 10); while (j) b[k++] = d[--j]; }
   b[k++] = '\n';
   for (int j = 0; j < k && n < max - 1; j++) out[n++] = b[j];
+  /* the PC's disks' bytes, all and each (ata.c), and each processor's idle ms */
+  {
+    extern unsigned long long ata_io_rd, ata_io_wr; extern i64 plat_idle_ms(int);
+    char l[96];
+#define LNUM(x) do { char d_[24]; int j_ = 0; unsigned long long x_ = (x); do d_[j_++] = (char)('0' + x_ % 10); while (x_ /= 10); while (j_) l[q++] = d_[--j_]; } while (0)
+#define LSTR(s) do { const char *s_ = (s); while (*s_) l[q++] = *s_++; } while (0)
+#define LOUT() do { for (int j_ = 0; j_ < q && n < max - 1; j_++) out[n++] = l[j_]; } while (0)
+    int q = 0;
+    LSTR("io "); LNUM(ata_io_rd); LSTR(" "); LNUM(ata_io_wr); LSTR("\n"); LOUT();
+    for (int i = 0; i < host_nblk; i++) {
+      q = 0; LSTR("diskio"); LNUM((unsigned long long)i); LSTR(" "); LNUM(host_blks[i]->io_rd); LSTR(" "); LNUM(host_blks[i]->io_wr); LSTR("\n"); LOUT();
+    }
+    for (int i = 0; i < host_c4on; i++) {
+      q = 0; LSTR("pidle"); LNUM((unsigned long long)i); LSTR(" "); LNUM((unsigned long long)(i ? plat_idle_ms(i) : pc_idle_total)); LSTR("\n"); LOUT();
+    }
+#undef LNUM
+#undef LSTR
+#undef LOUT
+  }
   out[n] = 0;
   return n;
 }

@@ -117,7 +117,18 @@ static int rw_dma(ata *d, int write, u32 lba, u32 k, u8 *buf) {
   if (!write) memcpy(buf, ide_dma_buf, k * 512);
   return 0;
 }
+static int rw_(blkdev *b, int write, u32 lba, u32 n, u8 *buf);
+/* every transfer counted: the disk's, and all of them (HOST's io, diskioN) */
+unsigned long long ata_io_rd, ata_io_wr;
 static int rw(blkdev *b, int write, u32 lba, u32 n, u8 *buf) {
+  int r = rw_(b, write, lba, n, buf);
+  if (!r) {
+    unsigned long long by = (unsigned long long)n * 512;
+    if (write) { b->io_wr += by; ata_io_wr += by; } else { b->io_rd += by; ata_io_rd += by; }
+  }
+  return r;
+}
+static int rw_(blkdev *b, int write, u32 lba, u32 n, u8 *buf) {
   ata *d = (ata *)b;
   /* by DMA where it can; once that fails, by PIO from then on */
   while (n && d->dma) {

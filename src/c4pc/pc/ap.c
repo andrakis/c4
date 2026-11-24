@@ -41,18 +41,53 @@ int plat_self(void) {
  * time, taken again by the one that holds it as often as it likes */
 static volatile int dl_flag, dl_owner = -1;
 static int dl_depth[MAXCPU];
+/* its account, in TSC ticks a processor: held, waited for, since the last report */
+static uint64_t dl_at[MAXCPU], dl_held[MAXCPU], dl_wait[MAXCPU], dl_since;
 void pc_lock(int on) {
   int me = plat_self();
   if (on > 0) {
     if (__atomic_load_n(&dl_owner, __ATOMIC_ACQUIRE) == me) { dl_depth[me]++; return; }
+    uint64_t t0 = __builtin_ia32_rdtsc();
     while (__atomic_exchange_n(&dl_flag, 1, __ATOMIC_ACQUIRE))
       while (__atomic_load_n(&dl_flag, __ATOMIC_RELAXED)) __builtin_ia32_pause();
     __atomic_store_n(&dl_owner, me, __ATOMIC_RELAXED);
     dl_depth[me] = 1;
+    dl_at[me] = __builtin_ia32_rdtsc();
+    dl_wait[me] += dl_at[me] - t0;
   } else if (__atomic_load_n(&dl_owner, __ATOMIC_ACQUIRE) == me && dl_depth[me] > 0 && --dl_depth[me] == 0) {
+    dl_held[me] += __builtin_ia32_rdtsc() - dl_at[me];
     __atomic_store_n(&dl_owner, -1, __ATOMIC_RELAXED);
     __atomic_store_n(&dl_flag, 0, __ATOMIC_RELEASE);
   }
+}
+/* "processor 0 held it 23%, waited 1%; ..." since the last, for each that
+ * took it; the account starts again */
+int pc_lock_report(char *out, int max) {
+  uint64_t now = __builtin_ia32_rdtsc(), span = dl_since ? now - dl_since : 0;
+  int n = 0;
+  dl_since = now;
+  if (!span) return 0;
+  for (int k = 0; k < MAXCPU; k++) {
+    uint64_t h = dl_held[k], w = dl_wait[k];
+    dl_held[k] = dl_wait[k] = 0;
+    if (!h && !w) continue;
+    char t[96]; int j = 0;
+    const char *a = n ? "; processor " : "processor ";
+    while (*a) t[j++] = *a++;
+    int v[3] = { k, (int)(h * 1000 / span), (int)(w * 1000 / span) };
+    for (int q = 0; q < 3; q++) {
+      if (q == 1) { a = " held it "; while (*a) t[j++] = *a++; }
+      if (q == 2) { a = ", waited "; while (*a) t[j++] = *a++; }
+      int x = v[q], d = q ? 1 : 0;           /* tenths of a percent */
+      char b[12]; int bn = 0;
+      do b[bn++] = (char)('0' + x % 10); while ((x /= 10) || bn <= d);
+      while (bn) { t[j++] = b[--bn]; if (d && bn == 1) t[j++] = '.'; }
+      if (q) t[j++] = '%';
+    }
+    for (int q = 0; q < j && n < max - 1; q++) out[n++] = t[q];
+  }
+  out[n] = 0;
+  return n;
 }
 int pc_lock_depth(void) { int me = plat_self(); return __atomic_load_n(&dl_owner, __ATOMIC_ACQUIRE) == me ? dl_depth[me] : 0; }
 static int ncpu = 1;
@@ -61,6 +96,9 @@ static volatile int up[MAXCPU];
 static void (*volatile fn_of[MAXCPU])(int);
 static volatile int sleeping[MAXCPU];
 static volatile i32 deadline[MAXCPU];        /* plat_now_ms's, 0: none */
+static double idle_us[MAXCPU];               /* each one's time waiting (HOST's pidleN) */
+/* processor k's time waiting, ms (0 is pc.c's own) */
+i64 plat_idle_ms(int k) { return k > 0 && k < MAXCPU ? (i64)(idle_us[k] / 1000) : 0; }
 
 static inline u32 lr(u32 off) { return lapic[off >> 2]; }
 static inline void lw(u32 off, u32 v) { lapic[off >> 2] = v; }
@@ -90,7 +128,9 @@ static void ap_idle(int k) {
     if (f) { fn_of[k] = 0; f(k); continue; }
     sleeping[k] = 1;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    double t0 = plat_now_us();
     if (!fn_of[k]) __asm__ volatile("sti; hlt; cli");
+    idle_us[k] += plat_now_us() - t0;
     sleeping[k] = 0;
   }
 }
@@ -163,6 +203,7 @@ int plat_cpu_start(int k, void (*fn)(int)) {
 void plat_wait(int k, volatile int *kick, int seen, int ms) {
   int me = k >= 0 && k < MAXCPU ? k : 0;
   i64 end = ms < 0 ? 0 : plat_now_ms() + ms;
+  double t0 = me ? plat_now_us() : 0;
   uintptr_t fl;
   __asm__ volatile("pushf; pop %0" : "=r"(fl));
   for (;;) {
@@ -175,6 +216,7 @@ void plat_wait(int k, volatile int *kick, int seen, int ms) {
     deadline[me] = 0;
   }
   sleeping[me] = 0;
+  if (me) idle_us[me] += plat_now_us() - t0;
   if (fl & 0x200) __asm__ volatile("sti");
 }
 void plat_kick(int k, volatile int *kick) {

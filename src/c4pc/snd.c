@@ -55,6 +55,7 @@ struct snd {
   double spk_freq, spk_phase, gain;
   evt *q; u32 qn, qcap, head;
   double offset; i64 frame, latency, slack; int synced; u32 resyncs;
+  u32 late_n; i64 late_most;           /* events applied after their frame had been mixed: how many, the most late (frames) */
   float L[4096], R[4096];
 };
 
@@ -179,7 +180,11 @@ static void render(snd *s, float *L, float *R, u32 n) {
   while (at < n) {
     if (s->head < s->qn) {
       i64 nf = frame_of(s, s->q[s->head].t) - s->frame;
-      if (nf <= 0) { apply(s, &s->q[s->head++]); continue; }
+      if (nf <= 0) {
+        if (nf < 0 && s->live) { s->late_n++; if (-nf > s->late_most) s->late_most = -nf; }
+        apply(s, &s->q[s->head++]);
+        continue;
+      }
       u32 k = n - at;
       if ((i64)k > nf) k = (u32)nf;
       if (k > BLOCK) k = BLOCK;
@@ -214,6 +219,11 @@ void snd_fill(snd *s, int16_t *out, u32 n) {
   }
 }
 
+/* since the last: events late, the most late (ms), resyncs; started again */
+void snd_lateness(snd *s, u32 *n, u32 *most_ms, u32 *resyncs) {
+  *n = s->late_n; *most_ms = (u32)(s->late_most * 1000 / s->rate); *resyncs = s->resyncs;
+  s->late_n = 0; s->late_most = 0; s->resyncs = 0;
+}
 void snd_free(snd *s) {
   if (!s) return;
   for (u32 i = s->head; i < s->qn; i++) if (s->q[i].kind == EV_PCM) xfree(s->q[i].bytes);

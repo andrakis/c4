@@ -26,8 +26,13 @@ const char *sb16_init(snd *s);
 void sb16_poll(void);
 const char *hda_init(snd *s);
 void hda_poll(void);
-extern u32 sb16_underruns, hda_underruns;
+extern u32 sb16_underruns, hda_underruns, es137x_underruns;
 static void (*audio_poll)(void) = sb16_poll;   /* the card under the machine's */
+static int audio_on;
+/* the card polled: under the device lock, when there is one (hv.c's
+ * guests on their processors, whose mixes it renders) */
+static void audio(void) { if (eng_lock_fn) eng_lock_fn(1); audio_poll(); if (eng_lock_fn) eng_lock_fn(-1); }
+void pc_audio(void) { if (audio_on) audio(); }
 
 /* the clock -hz auto sets: this share, in percent, of machine_kips's
  * loop rate (pc_main) */
@@ -88,7 +93,11 @@ static void hw_str(const char *s) { while (*s && hwinfo_n < sizeof hwinfo - 1) h
 static void hw_num(i64 v) { char b[24]; int k = 0; if (v < 0) { hw_str("-"); v = -v; } do b[k++] = (char)('0' + v % 10); while (v /= 10); while (k) { char c[2] = { b[--k], 0 }; hw_str(c); } }
 i64 pc_idle_total;                      /* ms CPU 0 was idle, waiting (its load: hv.c's HOST) */
 static int vga_dirty, com1_only;
-static void con_put(int c) {
+static void con_put_(int c);
+/* the console's flags (com1_only, log_skip, from_vm0) and its screen are
+ * one processor's at a time: the device lock, when there is one */
+static void con_put(int c) { if (eng_lock_fn) eng_lock_fn(1); con_put_(c); if (eng_lock_fn) eng_lock_fn(-1); }
+static void con_put_(int c) {
   if (c != '\r' && !log_skip) {
     if (from_vm0) { vm0log[vm0log_n % PCLOG] = (char)c; vm0log_n++; }
     else { pclog[pclog_n % PCLOG] = (char)c; pclog_n++; }
@@ -99,7 +108,7 @@ static void con_put(int c) {
   vga_put(c);
   vga_dirty = 1;
 }
-static void con_puts(const char *s) { while (*s) con_put(*s++); }
+static void con_puts(const char *s) { if (eng_lock_fn) eng_lock_fn(1); while (*s) con_put(*s++); if (eng_lock_fn) eng_lock_fn(-1); }
 static void con_flush(void) { if (vga_dirty) { vga_cursor(); vga_dirty = 0; } }
 static void con_dec(i64 v) { char t[24]; int n = 0; int neg = v < 0; uint64_t u = neg ? (uint64_t)-v : (uint64_t)v;
   do { t[n++] = (char)('0' + u % 10); u /= 10; } while (u); if (neg) con_put('-'); while (n) con_put(t[--n]); }
@@ -409,7 +418,11 @@ static void key_event(gui *g, u8 sc) {
  * to the screen -- or, while no program has it (no ring, no frame flipped
  * this last second), the console's text screen */
 static i64 display_ms;                  /* the time this takes, for -s */
-static void display_tick(machine *m) {
+static void display_tick_(machine *m);
+/* under the device lock, when there is one: an attached guest's screen,
+ * keys and mouse are its processor's too */
+static void display_tick(machine *m) { if (eng_lock_fn) eng_lock_fn(1); display_tick_(m); if (eng_lock_fn) eng_lock_fn(-1); }
+static void display_tick_(machine *m) {
   gui *g = m->gui;
   i64 t = plat_now_ms();
   kbd_to_gui = gui_attached(g) && !vt_text;
@@ -547,7 +560,7 @@ void cpu_init_ap(void) {
 struct mb_info { u32 flags, mem_lower, mem_upper, boot_device, cmdline, mods_count, mods_addr; };
 struct mb_mod { u32 start, end, string, reserved; };
 
-static void on_byte(machine *m, int b) { (void)m; from_vm0 = 1; con_put(b); from_vm0 = 0; }
+static void on_byte(machine *m, int b) { (void)m; if (eng_lock_fn) eng_lock_fn(1); from_vm0 = 1; con_put(b); from_vm0 = 0; if (eng_lock_fn) eng_lock_fn(-1); }
 
 static int split_args(char *s, char **argv, int max) {
   int n = 0;
@@ -855,7 +868,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     /* the Ensoniq AudioPCI: VMware's ES1371 for many guest types (es137x.c) */
     { extern const char *es137x_init(snd *); extern void es137x_poll(void);
       if (!how && (how = es137x_init(s))) audio_poll = es137x_poll; }
-    if (how) { m->snd = s; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); hw_str("sound "); hw_str(how); hw_str("\n"); }
+    if (how) { m->snd = s; audio_on = 1; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); hw_str("sound "); hw_str(how); hw_str("\n"); }
     else {
       extern const char *hda_why, *es137x_why;
       con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h; "); con_puts(hda_why);
@@ -865,28 +878,36 @@ void pc_main(u32 magic, struct mb_info *mb) {
   /* the processors: the PC's others started (ap.c), each the machine's
    * CPU on a processor of its own (par.c); with none, the machine's CPUs
    * take turns on this one (smp.c) */
-  int par = 0;
-  if (cpus > 1) {
+  /* Under the hypervisor every processor is started: VM 0's CPUs on the
+   * first (--cpus N; half of them, rounded up, when it does not say), the
+   * machines on the rest (hv.c hv_pool) */
+  int par = 0, vm0 = 1, npc = 1;
+  if (cpus > 1 || hv) {
     extern int ap_start(int, const char **);
     const char *why = "";
     int n = 1;
     u32 mbl = (u32)(uintptr_t)mb;
     if (mbl + sizeof *mb > 0x7000 && mbl < 0x8000) why = "the loader's information is where the processors would start";
-    else n = ap_start(cpus, &why);
-    if (n > 1) {
-      smp_new(m, n, quantum);
+    else n = ap_start(hv ? 32 : cpus, &why);
+    npc = n;
+    vm0 = !hv ? n : cpus >= 1 ? (cpus < n ? cpus : n) : (n + 1) / 2;
+    if (vm0 > 1) {
+      smp_new(m, vm0, quantum);
       par = 1;
-      con_puts("c4pc: "); con_dec(n); con_puts(" processors, each the machine's CPU on one of the PC's own\n");
-    } else {
+      con_puts("c4pc: "); con_dec(vm0); con_puts(" processors, each the machine's CPU on one of the PC's own\n");
+    } else if (cpus > 1) {
       smp_new(m, cpus, quantum);
       con_puts("c4pc: "); con_dec(cpus); con_puts(" CPUs taking turns on this processor ("); con_puts(why); con_puts(")\n");
     }
+    if (hv) { extern void hv_pool(int, int); hv_pool(vm0, npc); }
   }
+  int c4on = par || (hv && npc > vm0) ? npc : 1;
   if (have_in) { for (u32 i = 0; i < in_len; i++) kbd_push(m, in[i]); m->rx_eof = 1; }
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU" : " MB arena");
   con_puts(mem_all ? " (the PC's memory but c4pc's own; -m N for less), running " : ", running ");
   con_puts(img_name); con_puts("\n");
-  /* the processors: what the CPU says of itself, and how many c4pc runs on */
+  /* the processors: what the firmware lists (the MADT: acpi.c), else what
+   * the CPU says of its package, and how many c4pc runs on */
   {
     u32 a, b, c, d, w[12];
     cpuid_(0x80000000u, &a, &b, &c, &d);
@@ -901,7 +922,13 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (a >= 0xB) { cpuid_(0xB, &a, &b, &c, &d); __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0xB), "c"(1)); logical = (int)(b & 0xffff); }
     if (!logical) { cpuid_(1, &a, &b, &c, &d); logical = (int)((b >> 16) & 0xff); }
     extern int plat_cpus(void);
-    hw_str("processors "); hw_num(logical > 0 ? logical : 1); hw_str(" (the CPU says), c4pc on "); hw_num(par ? plat_cpus() : 1); hw_str("\n");
+    extern int acpi_ncpu;
+    const char *says = " (the CPU says), c4pc on ";
+    if (acpi_ncpu > 0) {
+      logical = acpi_ncpu; says = " (the firmware's tables), c4pc on ";
+      con_puts("c4pc: the firmware lists "); con_dec(acpi_ncpu); con_puts(" processors; c4pc runs on "); con_dec(c4on); con_puts("\n");
+    }
+    hw_str("processors "); hw_num(logical > 0 ? logical : 1); hw_str(says); hw_num(c4on); hw_str("\n");
     if (tsc_per_ms) { hw_str("clock "); hw_num(tsc_per_ms / 1000); hw_str(" MHz\n"); }
     if (clock_vmw) hw_str("host VMware\n");
   }
@@ -970,8 +997,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
      * second; scripted, or with --fast, as fast as it goes */
     i64 slice = paced ? (i64)m->cycles_per_ms * 4 : 20000000;
     int r = machine_run(m, left < slice ? left : slice);
-    if (m->snd) audio_poll();
-    if (m->gui) display_tick(hv ? hv_shown(m) : m);
+    if (m->snd) audio();
+    if (m->gui) { display_tick(hv ? hv_shown(m) : m); if (m->snd) audio(); }
     if (hv) { if (hv_detach) { hv_detach = 0; hv_attach(0); } hv_run(); }
     /* -s at the keyboard: every 10 s, on COM1 alone, how the PC kept up */
     if (stats && paced) {
@@ -984,7 +1011,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         con_puts("c4pc: "); con_dec((ran - rep_cyc) / dt); con_puts("k inst/s, ");
         con_dec((display_ms - rep_disp) * 100 / dt); con_puts("% drawing to the screen, ");
         con_dec((idle_ms - rep_idle) * 100 / dt); con_puts("% idle");
-        if (m->snd) { con_puts(", "); con_dec(sb16_underruns + hda_underruns); con_puts(" sound underruns"); }
+        if (m->snd) { con_puts(", "); con_dec(sb16_underruns + hda_underruns + es137x_underruns); con_puts(" sound underruns"); }
         con_puts("\n");
         /* the other processors' requests of CPU 0, since the boot (par.c) */
         if (m->smp && m->smp->par) { static char b[700]; par_stats(m->smp, b, sizeof b); con_puts("c4pc: "); con_puts(b); con_puts("\n"); }
@@ -1004,7 +1031,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
       if (have_in) { con_puts("c4pc: blocked on input with nothing left to read\n"); status = 8; break; }
       con_flush();
       i64 t = plat_now_ms();
-      if (m->snd) audio_poll();
+      if (m->snd) audio();
       idle0(m);                               /* until a key, the next tick, or another CPU asking */
       parked += plat_now_ms() - t;
       pc_idle_total += plat_now_ms() - t;
@@ -1019,7 +1046,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         if (m->pit_ms && m->pit_next < until) until = m->pit_next;
         if (until > now + 100) until = now + 100;
         while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
-          if (m->snd) audio_poll();
+          if (m->snd) audio();
           /* the hypervisor's guests run while VM 0 naps; their screen is kept */
           if (hv) { int ran = hv_run(); if (m->gui) display_tick(hv_shown(m)); if (hv_detach) { hv_detach = 0; hv_attach(0); } if (ran) continue; }
           idle0(m);
@@ -1033,7 +1060,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         con_flush();
         i64 until = plat_now_ms() + (ahead < 100 ? ahead : 100);
         while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
-          if (m->snd) audio_poll();
+          if (m->snd) audio();
           idle0(m);
         }
         /* input during a nap: the guest wakes now, and its clock gets only
@@ -1095,10 +1122,10 @@ void pc_main(u32 magic, struct mb_info *mb) {
 
 void ram_sink(drive *d, const char *name, blob *b) { (void)d; (void)name; (void)b; }
 /* the hypervisor's messages and its guests' consoles (hv.c): the serial line alone */
-void hv_out(const char *s) { com1_only = !hv_loud; con_puts(s); com1_only = 0; }
+void hv_out(const char *s) { if (eng_lock_fn) eng_lock_fn(1); com1_only = !hv_loud; con_puts(s); com1_only = 0; if (eng_lock_fn) eng_lock_fn(-1); }
 /* a guest's console line: the serial line's, not c4pc's log (each guest
  * keeps its own: hv.c) */
-void hv_out_quiet(const char *s) { log_skip = 1; hv_out(s); log_skip = 0; }
+void hv_out_quiet(const char *s) { if (eng_lock_fn) eng_lock_fn(1); log_skip = 1; hv_out(s); log_skip = 0; if (eng_lock_fn) eng_lock_fn(-1); }
 /* the hardware lines, and how long CPU 0 was up and idle */
 u32 pc_host_info(char *out, u32 max) {
   u32 n = 0;

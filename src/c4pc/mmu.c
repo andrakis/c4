@@ -471,7 +471,8 @@ int mmu_block(mmu *u, word op) {
   u->part.has = 0;
   void *outer = u->jb;
   c4_jmp_buf jb;
-  if (c4_setjmp(jb)) block_fault(u, outer, op, sp, d, s, n, k);   /* a fault in a load or store below */
+  int lk = eng_lock_mark();
+  if (c4_setjmp(jb)) { eng_lock_back(lk); block_fault(u, outer, op, sp, d, s, n, k); }   /* a fault in a load or store below */
   u->jb = &jb;
   if (op == OP_MSET) {
     word v = s & 0xff;
@@ -648,8 +649,8 @@ static void stack_fault(mmu *u, word sp) {
 
 /* the catches: a fault in a load or store raises it (mmu.js sRd, pRd32 ...) */
 #define CATCH_BEGIN(u) \
-  void *outer_ = (u)->jb; c4_jmp_buf jb_; \
-  if (c4_setjmp(jb_)) { (u)->jb = outer_; raise_(u); return 0; } \
+  void *outer_ = (u)->jb; c4_jmp_buf jb_; int lk_ = eng_lock_mark(); \
+  if (c4_setjmp(jb_)) { eng_lock_back(lk_); (u)->jb = outer_; raise_(u); return 0; } \
   (u)->jb = &jb_;
 #define CATCH_END(u) ((u)->jb = outer_)
 __attribute__((noinline)) static word p_rd32(mmu *u, word x) { CATCH_BEGIN(u) word v = mmu_ld32(u, x); CATCH_END(u); return v; }
@@ -747,8 +748,9 @@ int mmu_run(mmu *u, i64 max_cycles) {
  * raised from the instruction's own registers */
 __attribute__((noinline)) static int sys_user(mmu *u, word op, word ip, word sp, word bp, word a) {
   machine *m = u->m;
-  void *outer = u->jb; c4_jmp_buf jb;
+  void *outer = u->jb; c4_jmp_buf jb; int lk = eng_lock_mark();
   if (c4_setjmp(jb)) {
+    eng_lock_back(lk);
     u->jb = outer;
     m->pc = ip; m->sp = sp; m->bp = bp; m->a = a;
     u->fpc = ip;
@@ -762,8 +764,9 @@ __attribute__((noinline)) static int sys_user(mmu *u, word op, word ip, word sp,
 }
 __attribute__((noinline)) static void opcd_user(mmu *u, word op, word ip, word sp, word bp, word a) {
   machine *m = u->m;
-  void *outer = u->jb; c4_jmp_buf jb;
+  void *outer = u->jb; c4_jmp_buf jb; int lk = eng_lock_mark();
   if (c4_setjmp(jb)) {
+    eng_lock_back(lk);
     u->jb = outer;
     m->pc = ip; m->sp = sp; m->bp = bp; m->a = a;
     u->fpc = ip;

@@ -46,10 +46,24 @@ const char OPNAMES[] =
 
 _Static_assert(sizeof OPNAMES - 1 == INS_SIZE * 5, "is_rom (c4pc.h) counts the names as INS_SIZE of 5 bytes");
 
+/* The device lock: pc/hv.c sets it while guests run on processors of
+ * their own. Every machine's device registers, rare opcodes and console
+ * are then one processor's at a time -- their scratch buffers, the font
+ * cache, the drives' caches, the disks are the PC's, not a machine's --
+ * while their instructions run side by side. A fault out of a device (a
+ * DMA its task's space refuses) jumps past the unlock: the catch it lands
+ * in gives back what was taken since its eng_lock_mark (mmu.c, par.c) */
+void (*eng_lock_fn)(int on);
+int (*eng_lock_depth_fn)(void);
+int eng_lock_mark(void) { return eng_lock_depth_fn ? eng_lock_depth_fn() : 0; }
+void eng_lock_back(int d) { if (eng_lock_fn) while (eng_lock_depth_fn() > d) eng_lock_fn(-1); }
+
 void machine_emit(machine *m, const u8 *b, u32 n) {
   if (m->par_ap && !m->serving) { par_emit(m, b, n); return; }   /* the console is CPU 0's */
+  if (eng_lock_fn) eng_lock_fn(1);
   m->dv->uart_activity += n;
   dev_con_bytes(m, b, n);
+  if (eng_lock_fn) eng_lock_fn(-1);
 }
 void machine_emits(machine *m, const char *s) { machine_emit(m, (const u8 *)s, (u32)strlen(s)); }
 
@@ -107,6 +121,29 @@ static void rom_store(machine *m, word x, word v);
 /* A word at a device register (they are 32 bits wide and 4 bytes apart at
  * either word size): the register's value, sign-extended; a store keeps
  * its low 32 bits. Memory past the arena reads 0 and drops the store. */
+/* a device's register read: 1, and *v, if there is one at r */
+static int dev_rd(machine *m, u32 r, word *v) {
+  if (r >= DEV_BASE && r < DEV_END) { *v = dev_read32(m, r); return 1; }
+  if (r >= 0x400 && r < 0x480 && m->gui) { *v = gui_rd(m->gui, m, r & ~3u); return 1; }     /* bus.js: the display */
+  if (r >= 0x480 && r < 0x500 && m->snd) { *v = snd_read32(m->snd, r & ~3u); return 1; }     /* ... and the sound card */
+  if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) { *v = blk_read32(m, r & ~3u); return 1; } /* ... and the disks */
+  if (r >= HV_BASE && r < HV_END && m->dv->hv_rd) { *v = m->dv->hv_rd(m, r & ~3u); return 1; }   /* ... and the hypervisor */
+  return 0;
+}
+static int dev_wr(machine *m, u32 r, word v) {
+  if (r >= DEV_BASE && r < DEV_END) { dev_write32(m, r, (i32)v); return 1; }
+  if (r >= 0x400 && r < 0x480 && m->gui) { gui_wr(m->gui, m, r & ~3u, (i32)v); return 1; }
+  if (r >= 0x480 && r < 0x500 && m->snd) { snd_write32(m->snd, r & ~3u, (i32)v); return 1; }
+  if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) { blk_write32(m, r & ~3u, (i32)v); return 1; }
+  if (r >= HV_BASE && r < HV_END && m->dv->hv_wr) { m->dv->hv_wr(m, r & ~3u, (i32)v); return 1; }
+  return 0;
+}
+static int dev_wr8(machine *m, uword a, i32 v) {
+  if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, (u32)a & ~3u, v & 0xff); return 1; }
+  if (a >= 0x400 && a < 0x480 && m->gui) { gui_wr(m->gui, m, (u32)a & ~3u, v & 0xff); return 1; }
+  if (a >= 0x480 && a < 0x500 && m->snd) { snd_write32(m->snd, (u32)a & ~3u, v & 0xff); return 1; }
+  return 0;
+}
 static word arena_rd32(machine *m, uword a) {
   if (a < 0x1000) {
     u32 r = (u32)a;
@@ -114,11 +151,10 @@ static word arena_rd32(machine *m, uword a) {
      * read here: the command itself was asked of CPU 0, and is done */
     if (m->par_ap && !m->serving && (r == BLK_BASE || r == BLK_BASE + 0x1c) && m->dv->nblk) return blk_read32(m, r);
     if (AP_DEV(m, r)) return par_rd32(m, r & ~3u);
-    if (r >= DEV_BASE && r < DEV_END) return dev_read32(m, r);
-    if (r >= 0x400 && r < 0x480 && m->gui) return gui_rd(m->gui, m, r & ~3u);     /* bus.js: the display */
-    if (r >= 0x480 && r < 0x500 && m->snd) return snd_read32(m->snd, r & ~3u);     /* ... and the sound card */
-    if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) return blk_read32(m, r & ~3u); /* ... and the disks */
-    if (r >= HV_BASE && r < HV_END && m->dv->hv_rd) return m->dv->hv_rd(m, r & ~3u);   /* ... and the hypervisor */
+    word v; int h;
+    if (eng_lock_fn) { eng_lock_fn(1); h = dev_rd(m, r, &v); eng_lock_fn(-1); }
+    else h = dev_rd(m, r, &v);
+    if (h) return v;
   }
   if (!(a & (WB - 1))) return a <= m->size - WB ? m->w[a >> WSH] : 0;
   if (a > m->size - WB) return 0;
@@ -128,11 +164,10 @@ static void arena_wr32(machine *m, uword a, word v) {
   if (a < 0x1000) {
     u32 r = (u32)a;
     if (AP_DEV(m, r)) { par_wr(m, r & ~3u, (i32)v, 0); return; }
-    if (r >= DEV_BASE && r < DEV_END) { dev_write32(m, r, (i32)v); return; }
-    if (r >= 0x400 && r < 0x480 && m->gui) { gui_wr(m->gui, m, r & ~3u, (i32)v); return; }
-    if (r >= 0x480 && r < 0x500 && m->snd) { snd_write32(m->snd, r & ~3u, (i32)v); return; }
-    if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) { blk_write32(m, r & ~3u, (i32)v); return; }
-    if (r >= HV_BASE && r < HV_END && m->dv->hv_wr) { m->dv->hv_wr(m, r & ~3u, (i32)v); return; }
+    int h;
+    if (eng_lock_fn) { eng_lock_fn(1); h = dev_wr(m, r, v); eng_lock_fn(-1); }
+    else h = dev_wr(m, r, v);
+    if (h) return;
   }
   if (!(a & (WB - 1))) { if (a <= m->size - WB) m->w[a >> WSH] = v; return; }
   if (a > m->size - WB) return;
@@ -143,9 +178,12 @@ static word bus_rd32(machine *m, uword a) { return a < 0x10 ? 0 : arena_rd32(m, 
 static i32 bus_rd8s(machine *m, uword a) { return a < 0x10 || a >= m->size ? 0 : (int8_t)m->u8[a]; }
 static void bus_wr8(machine *m, uword a, i32 v) {
   if (a < 0x1000 && AP_DEV(m, (u32)a)) { par_wr(m, (u32)a, v & 0xff, 1); return; }
-  if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, (u32)a & ~3u, v & 0xff); return; }
-  if (a >= 0x400 && a < 0x480 && m->gui) { gui_wr(m->gui, m, (u32)a & ~3u, v & 0xff); return; }
-  if (a >= 0x480 && a < 0x500 && m->snd) { snd_write32(m->snd, (u32)a & ~3u, v & 0xff); return; }
+  if (a < 0x1000) {
+    int h;
+    if (eng_lock_fn) { eng_lock_fn(1); h = dev_wr8(m, a, v); eng_lock_fn(-1); }
+    else h = dev_wr8(m, a, v);
+    if (h) return;
+  }
   if (a < m->size) m->u8[a] = (u8)v;
 }
 
@@ -593,6 +631,7 @@ void eng_opv_trap(machine *m, word op) {
 }
 
 /* the rare opcodes (c4m.js sys) */
+static int sys_ops(machine *m, word op, word sp);
 static int sys(machine *m, word op) {
   word sp = m->sp;
   /* Under the MMU, the opcodes that run the machine rather than the task
@@ -602,6 +641,15 @@ static int sys(machine *m, word op) {
     return pm_trap(m, op);
   if (m->par_ap && !m->serving) { int r = par_sys(m, op); if (r >= 0) return r; }
   if (op >= OP_CPUI && op <= OP_IPI && m->smp) return smp_op(m, op);
+  /* the rest under the device lock, when there is one (above): never the
+   * CPUs' own (their waits), nor another's asking (CPU 0 answers it) */
+  if (!eng_lock_fn) return sys_ops(m, op, sp);
+  eng_lock_fn(1);
+  int r = sys_ops(m, op, sp);
+  eng_lock_fn(-1);
+  return r;
+}
+static int sys_ops(machine *m, word op, word sp) {
   switch (op) {
     case OP_OPEN:
       if (m->mode) return pm_trap(m, op);

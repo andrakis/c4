@@ -132,7 +132,7 @@ typedef struct {
   u32 *hs, *hg; u32 hmask, g;    /* address -> index + 1, by generation */
 } hold_t;
 extern hold_t acc_holds[32];
-#define acc_hold (acc_holds[m->cpu_id])   /* the running CPU's: m is the operation's machine */
+#define acc_hold (acc_holds[m->acc_k])    /* the running processor's: m is the operation's machine */
 void hold_begin(hold_t *h);
 void hold_put(hold_t *h, i32 a, i32 v);
 void hold_set(hold_t *h, i32 a, i32 v);
@@ -144,7 +144,7 @@ void hold_write8(machine *m, hold_t *h);
 void hold_write32(machine *m, hold_t *h);
 /* a scratch of n words of the module's own (grown, never shrunk) */
 i32 *acc_scratch_k(int cpu, int which, u32 n);
-#define acc_scratch(which, n) acc_scratch_k(m->cpu_id, (which), (n))   /* ... the running CPU's */
+#define acc_scratch(which, n) acc_scratch_k(m->acc_k, (which), (n))    /* ... the running processor's */
 
 #define ACC_MODULE(name) extern const acc_fn acc_##name[]; extern const int acc_##name##_n
 ACC_MODULE(doom); ACC_MODULE(duke3d); ACC_MODULE(quake); ACC_MODULE(rott);

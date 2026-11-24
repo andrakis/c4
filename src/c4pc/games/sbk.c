@@ -18,14 +18,14 @@ static void sink_init(sink_t *o, machine *m, int held) {
 }
 static inline i32 get(sink_t *o, i32 a) {
   i32 v;
-  if (o->held && hold_get(&acc_holds[o->m->cpu_id], a, &v)) return v;
+  if (o->held && hold_get(&acc_holds[o->m->acc_k], a, &v)) return v;
   return rd32(&o->r32, a);
 }
-static inline void put(sink_t *o, i32 a, i32 v) { if (o->held) hold_set(&acc_holds[o->m->cpu_id], a, v); else wr32(&o->w32, a, v); }
+static inline void put(sink_t *o, i32 a, i32 v) { if (o->held) hold_set(&acc_holds[o->m->acc_k], a, v); else wr32(&o->w32, a, v); }
 static void done(sink_t *o) {
   if (!o->held) return;
-  hold_probe(o->m, &acc_holds[o->m->cpu_id], 4);
-  hold_write32(o->m, &acc_holds[o->m->cpu_id]);
+  hold_probe(o->m, &acc_holds[o->m->acc_k], 4);
+  hold_write32(o->m, &acc_holds[o->m->acc_k]);
 }
 /* RGBA_RGB's blend of p over v at alpha a, as blit.c has it */
 static inline i32 blend(i32 p, i32 v, i32 a) {

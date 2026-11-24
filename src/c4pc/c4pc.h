@@ -322,6 +322,7 @@ struct machine {
   machine *dv;
   struct smp *smp;
   int cpu_id, cpu_state;               /* CPU_OFF ... (smp.c) */
+  int acc_k;                           /* the accelerators' hold and scratch: the PC processor's it runs on (accel.h) */
   word local[64];                      /* the CPU-local window, 64 words from 0x800 */
   volatile int ipi_pending;
   int ipi_at_trap;                     /* for tests: an IPI only as a trap enters its handler */
@@ -562,4 +563,11 @@ void *xmalloc(size_t n);               /* zeroed; fatal when there is none */
 void *xrealloc(void *p, size_t n);
 char *xstrdup(const char *s);
 void xfree(void *p);
+/* the device lock (engine.c): set by pc/hv.c while guests run on
+ * processors of their own; eng_lock_mark/back undo what a fault jumped
+ * past (mmu.c's catches, par.c's) */
+extern void (*eng_lock_fn)(int on);
+extern int (*eng_lock_depth_fn)(void);
+int eng_lock_mark(void);
+void eng_lock_back(int depth);
 #endif

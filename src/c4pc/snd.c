@@ -214,6 +214,15 @@ void snd_fill(snd *s, int16_t *out, u32 n) {
   }
 }
 
+void snd_free(snd *s) {
+  if (!s) return;
+  for (u32 i = s->head; i < s->qn; i++) if (s->q[i].kind == EV_PCM) xfree(s->q[i].bytes);
+  xfree(s->q);
+  for (int c = 0; c < CHANNELS; c++) xfree(s->v[c].data);
+  xfree(s->opl);
+  xfree(s);
+}
+
 static void put32(u8 *p, u32 v) { p[0] = (u8)v; p[1] = (u8)(v >> 8); p[2] = (u8)(v >> 16); p[3] = (u8)(v >> 24); }
 u8 *snd_wav(snd *s, u32 *plen) {
   double end = snd_now(s);

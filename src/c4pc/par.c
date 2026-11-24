@@ -185,7 +185,8 @@ static void bus_fn(machine *m, void *a) {
   void *outer = u ? u->jb : 0;
   c4_jmp_buf jb;
   if (u) {
-    if (c4_setjmp(jb)) { u->jb = outer; q->fault = 1; return; }
+    int lk = eng_lock_mark();
+    if (c4_setjmp(jb)) { eng_lock_back(lk); u->jb = outer; q->fault = 1; return; }
     u->jb = &jb;
   }
   if (q->kind == 0) q->r = eng_bus_rd32(m, q->addr);

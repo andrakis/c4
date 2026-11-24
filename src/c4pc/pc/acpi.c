@@ -42,6 +42,7 @@ static u8 reset_ok, reset_val; static u32 reset_port;
 static int button_ok;
 static u32 gpe0, gpe0_len, gpe1, gpe1_len;
 int acpi_irq = -1;                    /* the SCI's IRQ, or -1: polled, or none */
+int acpi_ncpu;                        /* the processors the MADT lists, enabled or able to be; 0 if none */
 static volatile int presses, spurious;
 static int polled;
 
@@ -134,6 +135,17 @@ void acpi_init(void (*log)(const char *)) {
   if (ebda >= 0x80000 && ebda < 0xA0000) rsdp = rsdp_in(ebda, ebda + 1024);
   if (!rsdp) rsdp = rsdp_in(0xE0000, 0x100000);
   if (!rsdp) { log("c4pc: no ACPI: off and the power button by QEMU's and Bochs's ports alone\n"); return; }
+  /* the processors: the MADT's local APICs (type 0) and x2APICs (type 9),
+   * each enabled (flag 0) or able to be (flag 1). CPUID says how many a
+   * package has: a VM of 4 processors of 2 cores each said 2 */
+  const u8 *madt = table(rsdp, "APIC");
+  if (madt) {
+    u32 len = rd32(madt + 4);
+    for (u32 o = 44; o + 2 <= len && madt[o + 1] >= 2; o += madt[o + 1]) {
+      if (madt[o] == 0 && madt[o + 1] >= 8 && (rd32(madt + o + 4) & 3)) acpi_ncpu++;
+      if (madt[o] == 9 && madt[o + 1] >= 16 && (rd32(madt + o + 8) & 3)) acpi_ncpu++;
+    }
+  }
   const u8 *f = table(rsdp, "FACP");
   if (!f) { log("c4pc: ACPI without a FADT\n"); return; }
   u32 flen = rd32(f + 4);

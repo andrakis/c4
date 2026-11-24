@@ -26,6 +26,8 @@ void snd_write32(snd *s, u32 addr, i32 v);
 double snd_now(snd *s);
 /* live: n frames of 16-bit stereo, now's events placed latency frames on */
 void snd_fill(snd *s, i16 *out, u32 n);
+/* the card and all it holds freed (a guest's, when it halts: pc/hv.c) */
+void snd_free(snd *s);
 /* offline: the session as a WAV file's bytes (*len), to free */
 u8 *snd_wav(snd *s, u32 *len);
 /* "N OPL writes, M samples played" */

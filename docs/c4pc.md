@@ -190,12 +190,25 @@ sample for sample.
 On a PC the card is fitted at the keyboard when there is a Sound Blaster
 16 (pc/sb16.c: the DSP's reset at 0x220 or 0x240, version 4 or more, the
 16-bit DMA channel its mixer names): `c4pc: sound: SB16 at 220h, DSP
-4.5, 16-bit DMA 5`. The mixer's output goes round a ring of 8,192 frames
-at 44,100 Hz by the DSP's auto-initialised DMA, and the run loop, after
-every slice and at every tick it waits through, reads how far the DMA
-has got and mixes the ring 2,048 frames (46 ms) ahead of it again; no
-interrupt reaches the CPU. The card's now is then the real clock, and the
-events of now go 10 ms after the last frame made. QEMU (`-device sb16`),
+4.5, 16-bit DMA 5`. Its mixer's master and voice are put at full (the
+reset leaves them at -14 dB). The mixer's output goes round a ring of
+8,192 frames at 44,100 Hz by the DSP's auto-initialised DMA, and the run
+loop, after every slice, every frame drawn, every guest's slice and at
+every tick it waits through, reads how far the DMA has got and mixes the
+ring a lead ahead of it again (pc/aring.h, shared by the three cards); no
+interrupt reaches the CPU. The lead is 40 ms, longer only while the polls
+come further apart: twice the most the DMA moved between two of them in
+the last second or two. The card's now is then the real clock, and the
+events of now go 10 ms after the last frame made. c4pc's log says how it
+keeps up five seconds in, every 30 s after, and for each second it fell
+behind: `c4pc: hda: 40 ms ahead (least 31), polls every 4 ms (most 22),
+the DMA's steps 7 to 256 frames, 0 underruns (0 in all)`.
+
+Under the hypervisor (`--hv`) each guest has a sound card of its own when
+VM 0 has one, and the card under them plays the attached guest's mix
+(hv_snd_fill in pc/hv.c), VM 0's while none is attached; the mixes not
+heard are made all the same, into nothing, so that their events are
+applied as they come. QEMU (`-device sb16`),
 DOSBox, DOSBox-X and VMware (`sound.virtualDev = "sb16"` in the VM's
 .vmx) have one; `--no-sound` leaves it be.
 
@@ -210,8 +223,10 @@ In its audio function group every pin that can output and is connected
 walked back through its connections to a DAC, every node on the way
 powered, its input chosen and its amplifiers unmuted at 0 dB, and every
 such DAC put on stream 1, 44.1 kHz, 16 bits, stereo. The first output
-stream reads the same ring as the SB16's, its two halves a buffer
-descriptor list of two, and the poll goes by its link position (LPIB):
+stream reads the same ring as the SB16's, a buffer descriptor list of 32
+entries of 256 frames (with two halves VMware's LPIB moved a half at a
+time, and what was mixed past it had been played: late and choppy), and
+the poll goes by its link position (LPIB):
 `c4pc: sound: HD Audio, codec 1af4:0012, outputs: 1` under QEMU.
 `--debug-sound` prints the codec's nodes, their connections and their
 pins' configurations. A PC with neither runs silent, and says why.

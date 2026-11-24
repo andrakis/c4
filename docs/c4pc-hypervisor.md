@@ -39,13 +39,22 @@ are the plan.
 | 16 THUMB | a running guest's screen scaled to A2 x A3 (at most 640x480), a word a pixel at A1 | VM 0 |
 
 - **Every processor**: under `--hv` c4pc starts all the PC's processors.
-  VM 0's CPUs have the first (`--cpus N`; half of them, rounded up, when
-  it does not say: 4 of 8, 1 of 2), each on one of its own (par.c), and
+  VM 0's CPUs have the first (`--cpus N`; 2 of 4 or more when it does
+  not say, else 1), each on one of its own (par.c), and
   the machines the rest (hv.c's pool: "c4pc: hv: the machines on
   processors 4 to 7"): a guest goes to the pool's processor with fewest
   on it, whose worker (guest_ap) runs its guests' slices of 4 ms in turn
   and naps until the soonest wakes or it is kicked (started, resumed,
-  typed at, stopped). A guest's CPUs take turns there (smp.c). On a PC
+  typed at, stopped). A guest of several CPUs has as many of the pool's
+  processors to itself when that many have nothing on them (claim): par.c,
+  its own instance, CPU k on processor procs[k] (par_start_on), its CPU 0
+  run by its first processor's worker, which answers the others' requests
+  while it naps or parks (par_after, par_wait0), and the others given to
+  theirs as a job (par_ap_take). At its halt they leave their loops
+  (par_shutdown, par_aps) before its memory goes; a pause holds them
+  (par_pause). With too few free, its CPUs take turns on one (smp.c), and
+  the log says so; with every processor another's alone, a guest runs on
+  processor 0 in turn with VM 0, said too. On a PC
   of one processor, or with VM 0 on all of them, the guests run on
   processor 0 in turn with VM 0, a slice of each after each of VM 0's
   and while VM 0 naps (hv_run). A guest naps as VM 0 does, on the real

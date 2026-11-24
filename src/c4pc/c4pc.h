@@ -371,6 +371,11 @@ void smp_cpu_reset(machine *m);        /* as at power-on, and when a CPU is star
 /* the parallel engine (par.c): the CPUs other than 0 on the host's own,
  * how many the machine then has */
 int par_start(smp *s);
+int par_start_on(smp *s, const int *procs);   /* CPU k on processor procs[k] (hv.c's guests) */
+int par_aps(smp *s);                          /* CPUs past 0 still in their loops */
+void par_pause(smp *s, int on);
+void par_wait0(smp *s, int ms);
+int par_ap_take(int pk);                       /* a pool processor runs the guest CPU it was given */
 int par_run0(smp *s, i64 max_cycles);
 int par_op(machine *m, word op);
 int par_sys(machine *m, word op);       /* a STOP, or -1 for sys's own way */

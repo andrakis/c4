@@ -58,6 +58,12 @@ typedef struct pcpu {
 
 struct par {
   smp *s;
+  /* the processor each CPU runs on: CPU k on processor k for VM 0 (and
+   * c4pc-host's threads); a guest of the hypervisor's has those it was
+   * given, its CPU 0 on its worker's (pc/hv.c) */
+  int proc[MAXCPU];
+  volatile int aps_in;                   /* CPUs past 0 inside ap_main: 0 once the machine's end has reached them */
+  volatile int paused;                   /* the hypervisor's pause: CPUs past 0 wait */
   volatile int halt, door;
   int seen_door;
   i64 idle_cycles;
@@ -73,8 +79,8 @@ struct par {
 #define LD(x) __atomic_load_n(&(x), __ATOMIC_SEQ_CST)
 #define ST(x, v) __atomic_store_n(&(x), (v), __ATOMIC_SEQ_CST)
 
-static void ring0(par *p) { __atomic_add_fetch(&p->door, 1, __ATOMIC_SEQ_CST); plat_kick(0, &p->c[0].kick); }
-static void kick(par *p, int k) { plat_kick(k, &p->c[k].kick); }
+static void ring0(par *p) { __atomic_add_fetch(&p->door, 1, __ATOMIC_SEQ_CST); plat_kick(p->proc[0], &p->c[0].kick); }
+static void kick(par *p, int k) { plat_kick(p->proc[k], &p->c[k].kick); }
 
 /* ---- the machine's time ----
  * CPU 0's cycles and what passed while it was parked; the others read it
@@ -99,7 +105,7 @@ static void ask(machine *m, void (*fn)(machine *, void *), void *arg) {
     int seen = LD(me->kick);
     if (LD(me->req) != R_ASK) break;
     if (LD(p->halt)) { m->dv->halted = 1; return; }
-    plat_wait(m->cpu_id, &me->kick, seen, 100);
+    plat_wait(p->proc[m->cpu_id], &me->kick, seen, 100);
   }
   ST(me->req, R_IDLE);
 }
@@ -140,7 +146,7 @@ static void post(machine *m, u32 a, i32 v, int w8) {
     int seen = LD(me->kick);
     if (t - LD(me->pq_head) < PQLEN || LD(p->halt)) break;
     ring0(p);
-    plat_wait(m->cpu_id, &me->kick, seen, 5);
+    plat_wait(p->proc[m->cpu_id], &me->kick, seen, 5);
   }
   me->pq_addr[t & (PQLEN - 1)] = a | (w8 ? 0x10000u : 0);
   me->pq_val[t & (PQLEN - 1)] = v;
@@ -227,7 +233,7 @@ int par_sys(machine *m, word op) {
       int seen = LD(me->kick);
       i64 left = ms - (plat_now_ms() - t0);
       if (left <= 0 || LD(me->ipi) || LD(p->halt)) break;
-      plat_wait(m->cpu_id, &me->kick, seen, (int)left);
+      plat_wait(p->proc[m->cpu_id], &me->kick, seen, (int)left);
     }
     m->a = 0;
     return STOP_BUDGET;
@@ -371,9 +377,30 @@ static void poll(par *p, machine *m) {
 }
 
 /* ---- a CPU other than 0 (ap.js main) ---- */
-static par *the_par;
-static void ap_main(int k) {
-  par *p = the_par; smp *s = p->s;
+/* which machine's CPU each processor runs: set before it is started */
+static par *volatile ap_par[MAXCPU];
+static volatile int ap_cpu[MAXCPU];
+static void ap_loop(par *p, int k, int pk);
+static void ap_main(int pk) {
+  par *p = ap_par[pk];
+  ap_loop(p, ap_cpu[pk], pk);
+  __atomic_sub_fetch(&p->aps_in, 1, __ATOMIC_SEQ_CST);   /* counted in by par_start_on */
+}
+/* a processor of the hypervisor's pool given a guest's CPU by
+ * par_start_on(.., procs): it runs it until the machine's end. 0: none */
+int par_ap_take(int pk) {
+  if (pk <= 0 || pk >= MAXCPU) return 0;
+  par *p = ap_par[pk];
+  if (!p) return 0;
+  int k = ap_cpu[pk];
+  ap_par[pk] = 0;
+  ap_loop(p, k, pk);
+  __atomic_sub_fetch(&p->aps_in, 1, __ATOMIC_SEQ_CST);
+  return 1;
+}
+/* CPU k, on processor pk */
+static void ap_loop(par *p, int k, int pk) {
+  smp *s = p->s;
   machine *m = s->cpu[k];
   pcpu *me = &p->c[k];
   for (;;) {
@@ -382,7 +409,7 @@ static void ap_main(int k) {
       int seen = LD(me->kick);
       if (LD(p->halt)) return;
       if (LD(me->state) == S_RUN) break;
-      plat_wait(k, &me->kick, seen, 1000);
+      plat_wait(pk, &me->kick, seen, 1000);
     }
     machine *m0 = s->cpu[0];
     m->accel = m0->accel; m->osaccel = m0->osaccel; m->no_fpu = m0->no_fpu;
@@ -398,6 +425,8 @@ static void ap_main(int k) {
        * the instruction loop */
       int r = machine_run(m, 65536);
       flush_posted(p, m);
+      /* paused (the hypervisor's): until resumed, or the end */
+      while (LD(p->paused) && !LD(p->halt) && !LD(m->dv->halted)) { int sn = LD(me->kick); plat_wait(pk, &me->kick, sn, 50); }
       if (r != STOP_CPUHALT) poll(p, m);
       ST(me->cycles, (i32)m->cycle);
       if (LD(m->dv->halted) || LD(p->halt)) return;
@@ -421,7 +450,7 @@ static void ap_main(int k) {
           if (LD(m->w[wi]) != m->wait_val) { count(&p->n_park_word); break; }
           if (m->ipi_pending || LD(p->halt) || plat_now_ms() - t0 >= 1000) break;
           double w0 = plat_now_us();
-          plat_wait(k, &me->kick, seen, 10);
+          plat_wait(pk, &me->kick, seen, 10);
           if (plat_now_us() - w0 >= 9000 && !tmo) { tmo = 1; count(&p->n_park_tmo); }
         }
         addf(&p->park_us, plat_now_us() - tu);
@@ -432,18 +461,21 @@ static void ap_main(int k) {
         if (LD(me->ipi)) { ST(me->ipi, 0); m->ipi_pending = 1; }
       } else if (r == STOP_INPUT) {
         int seen = LD(me->kick);
-        plat_wait(k, &me->kick, seen, 5);   /* a key may come; ask again soon */
+        plat_wait(pk, &me->kick, seen, 5);   /* a key may come; ask again soon */
       }
     }
   }
 }
 
 /* the CPUs other than 0 on CPUs of the host's: how many the machine has */
-int par_start(smp *s) {
+int par_start(smp *s) { return par_start_on(s, 0); }
+/* ... on the processors PROCS gives, CPU k on PROCS[k] (0: k's own) */
+int par_start_on(smp *s, const int *procs) {
   par *p = xmalloc(sizeof *p);
+  memset(p, 0, sizeof *p);
   int n = s->n > MAXCPU ? MAXCPU : s->n;
+  for (int k = 0; k < MAXCPU; k++) p->proc[k] = procs && k < n ? procs[k] : k;
   p->s = s;
-  the_par = p;
   s->par = p;
   machine *m0 = s->cpu[0];
   ST(p->c[0].state, S_RUN);
@@ -451,7 +483,13 @@ int par_start(smp *s) {
   for (int k = 1; k < n; k++) {
     machine *m = s->cpu[k];
     m->par_ap = 1;                       /* no device interrupts here: CPU 0 takes them */
-    if (!plat_cpu_start(k, ap_main)) { n = k; break; }
+    ap_cpu[p->proc[k]] = k;
+    __atomic_add_fetch(&p->aps_in, 1, __ATOMIC_SEQ_CST);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    ap_par[p->proc[k]] = p;
+    /* the hypervisor's processors take theirs (par_ap_take); the others
+     * are started on it */
+    if (!procs && !plat_cpu_start(p->proc[k], ap_main)) { __atomic_sub_fetch(&p->aps_in, 1, __ATOMIC_SEQ_CST); n = k; break; }
   }
   s->n = n;
   ST(s->time_ms, time_ms(p));
@@ -522,7 +560,7 @@ static i64 sleep_sync(par *p, i64 ms) {
     int seen = LD(p->c[0].kick);
     i64 left = end - (plat_now_ms() - t0);
     if (left <= 0 || ipi_for0(p) || LD(p->halt)) break;
-    if (LD(p->door) == p->seen_door) plat_wait(0, &p->c[0].kick, seen, (int)left);
+    if (LD(p->door) == p->seen_door) plat_wait(p->proc[0], &p->c[0].kick, seen, (int)left);
     service(p);
   }
   return plat_now_ms() - t0;
@@ -542,7 +580,7 @@ static void park_sync(par *p, int ms) {
     if ((w = WOKEN())) break;
     i64 left = ms - (plat_now_ms() - t0);
     if (left <= 0) break;
-    if (LD(p->door) == p->seen_door) plat_wait(0, &c->kick, seen, (int)left);
+    if (LD(p->door) == p->seen_door) plat_wait(p->proc[0], &c->kick, seen, (int)left);
   }
 #undef WOKEN
   p->idle_cycles += (plat_now_ms() - t0) * m0->cycles_per_ms;
@@ -625,7 +663,7 @@ void par_idle0(smp *s) {
   par *p = s->par;
   int seen = LD(p->c[0].kick);
   if (LD(p->door) != p->seen_door) return;
-  plat_wait(0, &p->c[0].kick, seen, 2);
+  plat_wait(p->proc[0], &p->c[0].kick, seen, 2);
 }
 
 /* -s: what the other CPUs asked and how they waited, a line */
@@ -669,3 +707,14 @@ void par_shutdown(smp *s) {
   ST(p->halt, 1);
   for (int k = 1; k < s->n; k++) kick(p, k);
 }
+/* how many of its CPUs past 0 are still in their loops */
+int par_aps(smp *s) { return LD(s->par->aps_in); }
+/* the hypervisor's pause: CPUs past 0 wait after their slice, or go on */
+void par_pause(smp *s, int on) {
+  par *p = s->par;
+  ST(p->paused, on ? 1 : 0);
+  if (!on) for (int k = 1; k < s->n; k++) kick(p, k);
+}
+/* CPU 0 with nothing to run (a guest's worker: pc/hv.c): up to ms, at
+ * most 10, the others answered meanwhile; ended early by an IPI for it */
+void par_wait0(smp *s, int ms) { sleep_sync(s->par, ms > 0 ? ms : 1); }

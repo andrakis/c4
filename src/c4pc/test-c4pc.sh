@@ -283,6 +283,89 @@ PNG
   [ "${lit:-0}" -ge 30 ] && ok "the desktop's windowed $nm draws its window ($lit% of its middle lit)" ||
     bad "the desktop's windowed $nm: its window is black (${lit:-?}% lit; $W/win-$nm.png)"
 done
+# A PNG's size and how much of it is lit (pixels brighter than near-black,
+# every 8th each way): "W H PERCENT"
+png_lit () {
+  python3 - "$1" << 'PNG'
+import sys, zlib, struct
+d = open(sys.argv[1], "rb").read()
+w, h = struct.unpack(">II", d[16:24])
+i, z = 8, b""
+while i < len(d):
+    n, t = struct.unpack(">I4s", d[i:i + 8])
+    if t == b"IDAT": z += d[i + 8:i + 8 + n]
+    i += 12 + n
+raw = zlib.decompress(z)
+lit = tot = 0
+for y in range(0, h, 8):
+    row = raw[y * (1 + w * 3) + 1:(y + 1) * (1 + w * 3)]
+    for x in range(0, w, 8):
+        tot += 1
+        if sum(row[x * 3:x * 3 + 3]) > 90: lit += 1
+print(w, h, lit * 100 // tot)
+PNG
+}
+# Alt+Tab (gui.c's screens and SWITCH, C4IX's sys.c "The display", the
+# desktop's shell.c): doom typed into the desktop's Terminal takes the whole
+# display, on a screen of its own (1); Alt+Tab parks it and gives the
+# desktop its screen (0) back, a button on the taskbar naming the game;
+# Alt+Tab there brings Doom back, drawing on from where it was
+echo "  ---   Alt+Tab: fullscreen Doom, the desktop, Doom again"
+cat > $W/alttab-events.txt <<EV
+40000 type doom|
+90000 stats
+90200 keydown 18 0 4
+90250 keydown 9 0 4
+90300 keyup 9 0 4
+90350 keyup 18 0 0
+95000 stats
+100200 keydown 18 0 4
+100250 keydown 9 0 4
+100300 keyup 9 0 4
+100350 keyup 18 0 0
+105000 stats
+115000 stats
+115100 shot $W/alttab.png
+115200 quit
+EV
+timeout 600 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --events $W/alttab-events.txt --texts $W/alttab-texts.txt \
+  --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/alttab.out 2> $W/alttab.err
+# each stats line as "SCREEN PRESENTS"
+at=( $(grep "^c4pc: at " $W/alttab.err | awk '{ sub(",", "", $6); print $6 ":" $7 }') )
+scr () { echo "${at[$1]:-x:0}" | cut -d: -f1; }
+pre () { echo "${at[$1]:-x:0}" | cut -d: -f2; }
+[ "$(scr 0)" = 1 ] && [ "$(pre 0)" -gt 0 ] && ok "doom has the whole display, on a screen of its own ($(pre 0) frames)" ||
+  bad "doom on the whole display: screen $(scr 0), $(pre 0) frames ($W/alttab.err)"
+[ "$(scr 1)" = 0 ] && ok "Alt+Tab: the desktop's screen is back" || bad "Alt+Tab: screen $(scr 1), not the desktop's"
+grep -qE "^[0-9]+ [0-9]+ doom$" $W/alttab-texts.txt && ok "the desktop's taskbar has a button for the parked doom" ||
+  bad "no taskbar button for the parked doom ($W/alttab-texts.txt)"
+n=$(( $(pre 3) - $(pre 2) ))
+[ "$(scr 2)" = 1 ] && [ "$(scr 3)" = 1 ] && [ $n -gt 20 ] && ok "Alt+Tab in the desktop: doom's screen again, and $n frames in the next 10 s" ||
+  bad "Alt+Tab back to doom: screens $(scr 2) $(scr 3), $n frames in 10 s"
+grep -a -E "panic|illegal" $W/alttab.out | head -3
+# The screen's modes (gui.c MODE; pc.c and screen.c on a PC, here --modes'
+# list taken as asked): the desktop starts in the screen's mode, Settings
+# lists them, and a size stepped to and applied is the display's, the
+# picture, windows and taskbar drawn again at it -- up to 1280x1024, then
+# down to 800x600. The clicks are where Go, Settings and its buttons are
+# at 1024x768 (the texts say if they moved)
+echo "  ---   the screen's modes: Settings' screen size, up and down"
+{ echo "30000 click 30 755"; echo "30500 click 80 549"
+  for t in 32000 32200 32400 32600; do echo "$t click 251 411"; done
+  echo "33200 click 287 411"; echo "40000 shot $W/modes-up.png"
+  for t in 40100 40300 40500 40700 40900; do echo "$t click 157 411"; done
+  echo "41200 click 287 411"; echo "48000 shot $W/modes-down.png"; echo "48100 quit"; } > $W/modes-events.txt
+timeout 600 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --modes --events $W/modes-events.txt --texts $W/modes-texts.txt \
+  --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/modes.out 2> $W/modes.err
+grep -qE "^154 406 <$" $W/modes-texts.txt && grep -qE "^174 405 1024x768$" $W/modes-texts.txt &&
+  ok "Settings: the screen's modes, from the one it is in (1024x768)" || bad "Settings' screen size is not where the test clicks ($W/modes-texts.txt)"
+for s in "up 1280 1024" "down 800 600"; do
+  read -r d mw mh <<< "$s"
+  r=( $(png_lit $W/modes-$d.png 2> /dev/null) )
+  [ "${r[0]:-0}" = $mw ] && [ "${r[1]:-0}" = $mh ] && [ "${r[2]:-0}" -ge 50 ] &&
+    ok "the desktop at ${mw}x$mh: the display that size, ${r[2]}% of it drawn" ||
+    bad "the desktop at ${mw}x$mh: ${r[0]:-?}x${r[1]:-?}, ${r[2]:-?}% drawn ($W/modes-$d.png)"
+done
 # C4IX with more than 256 MB (a VM of 512 MB and more): the MMU's user
 # window above memory (src/c4ix/mmu.c mmu_wbase), so swap is on, where it
 # once kept the identity map and System Monitor said the MMU was off; and

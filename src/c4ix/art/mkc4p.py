@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # mkc4p.py IN.png OUT.c4p.gz [W H] -- an image for C4IX's splash
+# (the 4:3 ones at 800 x 600; the 16:9 ones, *-wide, at 1024 x 576:
+#   mkc4p.py boot-logo.png c4ix.c4p.gz
+#   mkc4p.py boot-logo-wide.jpg c4ix-wide.c4p.gz 1024 576
+#   mkc4p.py hv-boot-logo.jpg hv.c4p.gz
+#   mkc4p.py hv-boot-logo-wide.jpg hv-wide.c4p.gz 1024 576)
 # (src/c4ix/user/splash.c): scaled to W x H (800 x 600), reduced to 256
 # colours with dithering, as the boot screens of the nineties were, and
 # written as "C4P8", width, height, colour count (16-bit little-endian),

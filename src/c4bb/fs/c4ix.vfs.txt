@@ -77,10 +77,14 @@ ARCHIVES = c4ix-root.tgz
 			window.h: c4ix-window.h
 			c4ix_user.h
 		# the boot logo splash shows while the archive unpacks, so it
-		# cannot be in the archive (src/c4ix/art)
+		# cannot be in the archive (src/c4ix/art): 4:3, and 16:9 for a wide
+		# screen; the C4PC hypervisor's control C4IX's own (hv)
 		share/
 			splash/:
 				c4ix.c4p.gz: c4ix-splash.c4p.gz
+				c4ix-wide.c4p.gz: c4ix-splash-wide.c4p.gz
+				hv.c4p.gz: c4ix-splash-hv.c4p.gz
+				hv-wide.c4p.gz: c4ix-splash-hv-wide.c4p.gz
 		# the games that are on the disk, each its own block, its own
 		# directory (games/NAME/c4ix.vfs.txt, src/c4bb/tests/vfs-games.py);
 		# and each one's sources, at their paths in the repository, so the

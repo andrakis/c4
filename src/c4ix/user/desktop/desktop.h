@@ -186,6 +186,7 @@ void display_set(int i);
 
 // ---- wall.c: the desktop's picture ----
 int  wall_load(char *path);
+int  wall_pick();                             // the picture for this desktop and screen shape
 int  wall_draw(int x, int y, int w, int h);   // 0: no picture, fill with C_DESK
 int  wall_shown();
 void wall_resize();                           // the screen changed size: the tiles again

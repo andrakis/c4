@@ -1072,7 +1072,7 @@ int main(int argc, char **argv) {
     notepad_cfg = "/etc/notepad.cfg";
     umkdir("/etc");
     wk_init(&shell);
-    wall_load("/usr/share/splash/c4ix.c4p.gz");
+    wall_pick();                       // the picture for this desktop and screen (wall.c)
     icon_k = 0 - 1;
     printf("desktop: running on the display. Go > Exit Desktop to come back here.\n");
 

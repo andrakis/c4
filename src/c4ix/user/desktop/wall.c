@@ -1,6 +1,10 @@
 // wall.c -- the desktop's picture. docs/c4ix-desktop.md.
 //
-// The boot logo (/usr/share/splash/c4ix.c4p.gz, what splash shows),
+// The boot logo (/usr/share/splash/c4ix.c4p.gz, what splash shows; on a
+// wide screen, 16:9 or so, c4ix-wide.c4p.gz; the C4PC hypervisor's control
+// C4IX's own, hv.c4p.gz and hv-wide.c4p.gz: wall_pick chooses, and
+// chooses again when the screen's shape changes -- the one place that
+// does, for SVGA II's wide modes),
 // over the whole desktop at its own shape: scaled until it covers the
 // screen, what is past an edge cut evenly from both sides (a screen of
 // another shape than the picture's 4:3 no longer stretches it), its tiles
@@ -25,6 +29,8 @@ static int wall_ok;                      // the tiles are on the display
 static int wall_tw, wall_th;             // a tile's size on the desktop
 static int wall_tile[(WK_MAX_W / WALL_TX) * (WK_MAX_H / WALL_TY)];
 static char *wall_pix;                   // the picture, kept to stretch again
+static char *wall_d;                     // ... its inflated file, freed for another
+static int wall_wide;                    // the picture loaded is the 16:9 one
 static int wall_w, wall_h, wall_lut[256];
 
 // Give the display the tiles, stretched from the picture to the screen
@@ -67,7 +73,6 @@ static void wall_tiles() {
 int wall_load(char *path) {
     char *gz, *d;
     int glen, dlen, w, h, n, i;
-    if (wall_ok) return 1;
     if (!(gz = arc_readfile(path, &glen))) return 0;
     i = arc_gunzip(gz, glen, &d, &dlen);
     free(gz);
@@ -82,6 +87,8 @@ int wall_load(char *path) {
         wall_lut[i] = ((d[10 + 3 * i] & 255) << 16) | ((d[11 + 3 * i] & 255) << 8) | (d[12 + 3 * i] & 255);
         ++i;
     }
+    if (wall_d) free(wall_d);
+    wall_d = d;
     wall_pix = d + 10 + 3 * n;
     wall_w = w; wall_h = h;
     wall_tiles();
@@ -89,8 +96,31 @@ int wall_load(char *path) {
     return 1;
 }
 
-// The screen changed size: the tiles again, at the new one.
+// is the screen wide: 16:9 or near it (16:10 counts), not 4:3 or 5:4
+static int wall_screen_wide() { return wk.sw * 100 >= wk.sh * 155; }
+// The picture for this desktop and this screen's shape, loaded: the
+// hypervisor's control C4IX's own or C4IX's, 16:9 on a wide screen (the
+// 4:3 one where there is no 16:9). 1 if one is
+int wall_pick() {
+    char path[64];
+    int hv;
+    hv = (__c4_info() & C4I_HV_BIT) != 0;
+    ui_cpy(path, "/usr/share/splash/"); ui_cat(path, hv ? "hv" : "c4ix");
+    if (wall_screen_wide()) {
+        ui_cat(path, "-wide.c4p.gz");
+        if (wall_load(path)) { wall_wide = 1; return 1; }
+        ui_cpy(path, "/usr/share/splash/"); ui_cat(path, hv ? "hv" : "c4ix");
+    }
+    ui_cat(path, ".c4p.gz");
+    if (wall_load(path)) { wall_wide = 0; return 1; }
+    // the control C4IX's own missing (an older disk): C4IX's
+    return hv && wall_load("/usr/share/splash/c4ix.c4p.gz");
+}
+
+// The screen changed size: the tiles again, at the new one -- or the
+// other picture, where the screen's shape went from 4:3 to wide or back.
 void wall_resize() {
+    if (wall_ok && wall_wide != wall_screen_wide()) { wall_pick(); return; }
     if (wall_ok && (wall_tw != (wk.sw + WALL_TX - 1) / WALL_TX || wall_th != (wk.sh + WALL_TY - 1) / WALL_TY)) wall_tiles();
 }
 

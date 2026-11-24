@@ -10,6 +10,12 @@
 // desktop has a filesystem to start on. It lets go of the display
 // before it exits, so the desktop can take it.
 //
+// The screen's shape chooses the picture -- c4ix.c4p.gz (4:3) or
+// c4ix-wide.c4p.gz (16:9), the C4PC hypervisor's control C4IX hv.c4p.gz
+// or hv-wide.c4p.gz -- and the canvas, 800 wide and as tall as the screen
+// is for that; the picture covers it at its own proportions, what is
+// past an edge cut evenly from both (the wordmark at the top and the band
+// at the bottom stay: the picture's shape is the screen's or near it).
 // IMAGE (/usr/share/splash/c4ix.c4p.gz) is 256 colours, gzipped:
 // "C4P8", width and height (16 bits each, little-endian), the number of
 // colours (16 bits), that many RGB triples, then a byte per pixel, row
@@ -25,7 +31,8 @@
 
 #include "libjs/guest/gui.h"
 
-enum { SW = 800, SH = 600, BAR_Y = 566, BAR_H = 10, SEG = 16, NCOL = 24 };
+enum { SW = 800, BAR_H = 10, SEG = 16, NCOL = 24 };
+static int SH, BAR_Y;
 
 static int ramp[NCOL];
 
@@ -86,27 +93,71 @@ static int alive(int pid) {
     return 0;
 }
 
+// D made S, and S added to D
+static void s_cpy(char *d, char *s) { while (*s) { *d = *s; ++d; ++s; } *d = 0; }
+static void s_cat(char *d, char *s) { while (*d) ++d; s_cpy(d, s); }
+// PX (W x H) covering a canvas of SW x SH at its own proportions, cut
+// evenly where it is past an edge: a new picture, or 0
+static int *cover(int *px, int w, int h) {
+    int *out, x, y, dw, dh, ox, oy, sx, sy;
+    if (!(out = (int *)ualloc(SW * SH * sizeof(int)))) return 0;
+    if (SW * h >= SH * w) { dw = SW; dh = h * SW / w; } else { dh = SH; dw = w * SH / h; }
+    ox = (dw - SW) / 2; oy = (dh - SH) / 2;
+    y = 0;
+    while (y < SH) {
+        sy = (y + oy) * h / dh; if (sy >= h) sy = h - 1;
+        x = 0;
+        while (x < SW) {
+            sx = (x + ox) * w / dw; if (sx >= w) sx = w - 1;
+            out[y * SW + x] = px[sy * w + sx];
+            ++x;
+        }
+        ++y;
+    }
+    return out;
+}
 int main(int argc, char **argv) {
-    int *region, *px, ev[4], pid, i, w, h, phase, k, x;
+    int *region, *px, ev[4], pid, i, w, h, phase, k, x, sw, sh, wide, given;
     char *image;
-    pid = 0;
+    char path[64];
+    pid = 0; given = 0;
     image = "/usr/share/splash/c4ix.c4p.gz";
     i = 1;
     while (i < argc) {
         if (!ustrcmp(argv[i], "-p") && i + 1 < argc) { ++i; pid = 0; k = 0; while (argv[i][k]) { pid = pid * 10 + argv[i][k] - '0'; ++k; } }
-        else image = argv[i];
+        else { image = argv[i]; given = 1; }
         ++i;
     }
     if (!gui_present()) { uprintf("splash: not fitted\n"); return 0; }
+    // the screen's shape: the canvas's, and the picture's
+    sw = *(int *)GUI_W; sh = *(int *)GUI_H;
+    if (sw < 320 || sh < 200) { sw = 800; sh = 600; }
+    SH = SW * sh / sw;
+    if (SH < 400) SH = 400;
+    if (SH > 640) SH = 640;
+    BAR_Y = SH - 34;
+    wide = sw * 100 >= sh * 155;
+    if (!given) {
+        s_cpy(path, "/usr/share/splash/"); s_cat(path, (__c4_info() & 0x400000) ? "hv" : "c4ix");
+        s_cat(path, wide ? "-wide.c4p.gz" : ".c4p.gz");
+        image = path;
+    }
     region = ualloc(65536);
     if (!gui_attach(region, 65536, SW, SH)) { uprintf("splash: the display refused the ring\n"); return 1; }
     if (!pid) gui_events(GUI_M_KEYS | GUI_M_BUTTONS);
     gui_cursor(GUI_PTR_WAIT);
     ramp_init();
 
-    if ((px = load(image, &w, &h))) {
+    // the wide picture missing: the 4:3; the hypervisor's missing: C4IX's
+    if (!given && !(px = load(image, &w, &h))) {
+        s_cpy(path, "/usr/share/splash/"); s_cat(path, (__c4_info() & 0x400000) ? "hv.c4p.gz" : "c4ix.c4p.gz");
+        if (!(px = load(path, &w, &h))) image = "/usr/share/splash/c4ix.c4p.gz";
+    } else if (given) px = load(image, &w, &h);
+    if (!px) px = load(image, &w, &h);
+    if (px && (w != SW || h != SH)) px = cover(px, w, h);
+    if (px) {
         gui_fb(px, 0);
-        gui_flip(w, h);
+        gui_flip(SW, SH);
     } else {
         // no logo: say the name, at least
         gui_clear(0x0b2a3a);

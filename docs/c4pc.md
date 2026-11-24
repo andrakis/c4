@@ -608,9 +608,17 @@ the host has to notice the framebuffer's writes itself, page by page --
 VMware traces them, QEMU/KVM logs them dirty -- and that was most of
 what showing a frame cost. A full FIFO is synced (SVGA_REG_SYNC, then
 BUSY). The pointer is the adapter's own where it has one
-(SVGA_CAP_CURSOR and CURSOR_BYPASS_2: DEFINE_CURSOR's 32 x 32 AND and
-XOR masks, then CURSOR_X/Y/ON as it moves), so a move draws nothing;
-`--soft-pointer` draws ours instead. Whether it is on is kept apart from
+(SVGA_CAP_CURSOR and a cursor bypass: DEFINE_CURSOR's 32 x 32 AND and
+XOR masks), so a move draws nothing; `--soft-pointer` draws ours
+instead. VMware's is moved through the FIFO's own registers (cursor
+bypass 3: SVGA_CAP_EXTENDED_FIFO and the FIFO's CURSOR_BYPASS_3, MIN a
+page, past every register as in Linux's vmwgfx; then FIFO CURSOR_X/Y/ON and CURSOR_COUNT moved
+on): moved through SVGA_REG_CURSOR_X/Y/ON (bypass 2) VMware switched
+its pointer to bypass 2 and back at every move, a round trip and a
+vmware.log line ("Restoring cursor bypass 3 ... 3->2->3 roundtrip")
+about every 10 ms while the mouse moved. The registers are for
+adapters without (QEMU's), ON written at every move, which is what
+moves QEMU's. Whether it is on is kept apart from
 the drawn arrow's state, which a display of another size clears: shared,
 the adapter's arrow was never turned off when a game that wants no
 pointer took the screen, and stayed over Doom in VMware (--debug-mouse

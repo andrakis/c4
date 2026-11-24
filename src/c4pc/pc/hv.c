@@ -32,9 +32,9 @@ enum { HV_MAX = 8 };
 enum { R_ID = 0x560, R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
 enum { C_NAME = 1, C_MB = 2, C_ARGS = 3, C_NEW = 4, C_START = 5, C_STOP = 6, C_ATTACH = 7, C_DETACH = 8,
        C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_DISK = 12, C_ATTACHED = 13, C_CDROM = 14, C_SEND = 15,
-       C_THUMB = 16, C_LOG = 17 };
-enum { S_FREE, S_MADE, S_RUN, S_HALT };
-static const char *STATE_NAME[] = { "free", "made", "running", "halted" };
+       C_THUMB = 16, C_LOG = 17, C_PAUSE = 18, C_RESUME = 19 };
+enum { S_FREE, S_MADE, S_RUN, S_HALT, S_PAUSE };
+static const char *STATE_NAME[] = { "free", "made", "running", "halted", "paused" };
 
 typedef struct vm {
   int state; char name[32]; u32 mb; char args[256];
@@ -44,6 +44,7 @@ typedef struct vm {
   struct xmap *cd; u32 cd_blocks;      /* its CD, an ISO file of VM 0's */
   drive *pc_cd;                        /* ... or VM 0's CD drive, shared */
   i64 nap_until; int status;
+  i64 paused_at;                       /* S_PAUSE: when (its clock stops then, and goes on from there) */
   char line[200]; int ll;              /* its console's line, being gathered */
   vterm vt;                            /* its console as a text screen */
   int mmu;                             /* 1 an MMU, 2 none, 0 as c4pc's --mmu says */
@@ -263,6 +264,17 @@ static i32 info(int id, u32 addr, u32 len) {
   return n;
 }
 
+/* paused guest ID running again: its clock (real time, m->wall) and its
+ * nap moved on by the pause, so that the pause is no time to it */
+static void resume(int id) {
+  vm *v = &vms[id];
+  i64 d = plat_now_ms() - v->paused_at;
+  v->m->wall_base += d;
+  if (v->nap_until) v->nap_until += d;
+  v->state = S_RUN;
+  hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(v->name); hv_out(" resumed\n");
+}
+
 static i32 command(machine *m, i32 c) {
   int me = vm_of(m);
   vm *v = &vms[me];
@@ -304,7 +316,8 @@ static i32 command(machine *m, i32 c) {
       return a[2];
     }
     case C_STOP: {
-      if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state != S_RUN) return -1;
+      if (a[0] <= 0 || a[0] >= HV_MAX || (vms[a[0]].state != S_RUN && vms[a[0]].state != S_PAUSE)) return -1;
+      if (vms[a[0]].state == S_PAUSE) resume(a[0]);
       machine *g = vms[a[0]].m;
       /* SIGTERM, as the power button: C4IX shuts down; or at once (A1) */
       if (a[1] || !g->sigh[15]) { g->halted = 1; g->status = 0; }
@@ -317,7 +330,7 @@ static i32 command(machine *m, i32 c) {
     /* a running guest's screen scaled to A2 x A3, a word a pixel at A1 in
      * VM 0's memory (C4IX's Machines shows it) */
     case C_THUMB: {
-      if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state != S_RUN || !vms[a[0]].m || !vms[a[0]].m->gui) return -1;
+      if (a[0] <= 0 || a[0] >= HV_MAX || (vms[a[0]].state != S_RUN && vms[a[0]].state != S_PAUSE) || !vms[a[0]].m || !vms[a[0]].m->gui) return -1;
       if (a[2] <= 0 || a[3] <= 0 || a[2] > 640 || a[3] > 480) return -1;
       u32 n = (u32)a[2] * (u32)a[3];
       u32 *px = xmalloc((size_t)n * 4);
@@ -355,8 +368,21 @@ static i32 command(machine *m, i32 c) {
       xfree(b);
       return (i32)n;
     }
+    /* a running guest paused: it runs no more, its clock stopped, until
+     * resumed; its memory and screen are kept (not yet onto a disk) */
+    case C_PAUSE: {
+      if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state != S_RUN) return -1;
+      vms[a[0]].state = S_PAUSE; vms[a[0]].paused_at = plat_now_ms();
+      if (attached == a[0]) hv_attach(0);
+      hv_out("c4pc: hv: vm"); outn(a[0]); hv_out(" "); hv_out(vms[a[0]].name); hv_out(" paused\n");
+      return 0;
+    }
+    case C_RESUME:
+      if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state != S_PAUSE) return -1;
+      resume(a[0]);
+      return 0;
     case C_DELETE: {
-      if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state == S_RUN) return -1;
+      if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state == S_RUN || vms[a[0]].state == S_PAUSE) return -1;
       vm *g = &vms[a[0]];
       xfree(g->img); xfree(g->tar);
       g->img = g->tar = 0; g->m = 0;     /* (its machine, halted, is not freed: the engine has no free) */

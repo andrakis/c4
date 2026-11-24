@@ -58,6 +58,12 @@ are the plan.
   LBA48 to 2 TB in c4pc (ata.c) and C4IX counts sectors in an int (1
   TB); an image's size is an int at the 32-bit word (2 GB) until `vm`
   is built with C4IX_LFS. SCSI is a much later goal.
+  The PC's own disk may be far bigger than 2 GB: install, the control
+  C4IX's ext2 and the guests' images on it were checked on a 20 GB IDE
+  disk (2026-11-24; mkfs gives an inode to every 64 KB past 16 GB, 16 KB
+  past 1 GB). **Later**: guest images of 2 GB or more (`vm mkdisk`
+  refuses them now) -- `vm` and the kernel's file positions with
+  C4IX_LFS at the 32-bit word, as docs/c4ix-lfs.md has it.
 - **Attach and detach (Q5)**: `vm attach ID`; Ctrl+Alt+Home, or `detach`
   in a C4IX guest, gives VM 0 back the screen. A detached guest runs on
   headless. Ctrl+Alt+F1/F2 and the rest are the PC's keys as before.
@@ -142,8 +148,8 @@ The control C4IX's desktop has **Machines** in its Go menu (only where
 the hypervisor is), after Proxmox's look: a tree on the left -- the PC,
 and under it each machine, from /vm/NAME/vm.cfg and from what the
 hypervisor has made, its id and a monitor lit while it runs -- and for
-the one chosen a toolbar (Start, Shutdown, Stop, Restart, Console) and
-five tabs:
+the one chosen a toolbar (Start, Shutdown, Stop, Restart, Pause or
+Resume, Console, Delete) and five tabs:
 
 - **Summary**: state, id, memory, the instructions it runs a second and
   a minute's history of them, its disk, CD and start at boot, and its
@@ -162,7 +168,13 @@ Start runs `vm up NAME` in the background (it reads the kernel and the
 boot archive), its output and errors into /vm/NAME/start.log: a start
 that fails says why, in the status line and a message. Start on a
 machine made before deletes what was made, so a changed vm.cfg counts.
-Shutdown is SIGTERM, Stop at once, Restart Stop and Start. **Create VM**
+Shutdown is SIGTERM, Stop at once, Restart Stop and Start. **Pause**
+(PAUSE, 18) stops a running machine where it is -- its memory and screen
+kept, its clock stopped, so it finds no time gone at **Resume** (RESUME,
+19); a paused machine's icon is amber, and it is not attached. **Delete**
+asks, then takes a stopped machine out of the hypervisor and removes
+/vm/NAME, its vm.cfg and disk images (`vm delete NAME`, which asks too,
+or -y; `vm pause ID`, `vm resume ID`). **Create VM**
 asks a name, the system (c4ix, c4ix-text, c4ke, c4dos, or an ISO file),
 the memory and a new disk image's size (0 for none), and runs `vm
 create` in a Terminal, which shows the image being written.
@@ -175,10 +187,12 @@ create` in a Terminal, which shows the image being written.
    VM 0's CD shared, vm.cfg, `vm create`, `vm up`, `vmd`, the GRUB
    entries.
 3. **The Machines app**, Proxmox-like (Q8: the user finds VMware's
-   library annoying). **Built (2026-11-24)**, above. Not yet: a guest's
-   memory in use (the hypervisor knows only what it was given), a disk
-   image added to a machine after it was made (edit Hardware's row), a
-   Delete that removes /vm/NAME, and pausing.
+   library annoying). **Built (2026-11-24)**, above, with Delete and
+   Pause (the same day). Not yet: a guest's memory in use (the
+   hypervisor knows only what it was given), a disk image added to a
+   machine after it was made (edit Hardware's row), a pause kept on the
+   disk (suspend), and freeing a big image faster (a 1.5 GB image's
+   delete takes about 10 s: ext2 frees its blocks one at a time).
 4. **Host-only networking between guests (Q9)**: a virtual NIC in each
    machine (a ring of frames in its page 0 window, as the display's
    ring), and a switch in c4pc that passes frames between them; then a

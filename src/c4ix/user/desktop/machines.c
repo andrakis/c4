@@ -8,7 +8,9 @@
 // tabs -- Summary (its state, memory, the instructions it runs a second
 // with a minute's history, its disks, and its screen small), Console (its
 // screen larger; Attach gives it the PC's screen, keyboard and mouse
-// until Ctrl+Alt+Home), Hardware and Options (vm.cfg, a row each: a click
+// until Ctrl+Alt+Home; Pause stops it where it is, Resume goes on; Delete
+// takes it out and removes /vm/NAME, once asked), Hardware and Options
+// (vm.cfg, a row each: a click
 // edits it, for the next start), and Log (c4pc's: the PC's own, or what a
 // machine's console said). Create VM asks a name, the system (C4IX's
 // desktop or its text console, C4KE, C4DOS, or C4IX with an ISO file as
@@ -24,8 +26,11 @@
 #include "desktop.h"
 
 enum { R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
-enum { C_START = 5, C_STOP = 6, C_ATTACH = 7, C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_THUMB = 16, C_LOG = 17 };
-enum { S_FREE = 0, S_MADE = 1, S_RUN = 2, S_HALT = 3, S_NONE = 9 };
+enum { C_START = 5, C_STOP = 6, C_ATTACH = 7, C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_THUMB = 16, C_LOG = 17,
+       C_PAUSE = 18, C_RESUME = 19 };
+enum { S_FREE = 0, S_MADE = 1, S_RUN = 2, S_HALT = 3, S_PAUSE = 4, S_NONE = 9 };
+// the toolbar's buttons, right to left from Delete: 74 wide, 78 apart
+enum { N_TB = 7, TB = 78, TBW = 74, A_DEL = 45 };
 enum { MAXM = 16, NAMEW = 32, HIST = 60, TREE_W = 160, TOOL_H = 34, TAB_Y = 40, PAGE_Y = 62, ROW_H = 22,
        TW = 192, TH = 144, CW = 384, CH = 288, STRIP = 36, IMG_ID = 300,
        A_NAME = 40, A_MB = 41, A_DISK = 42, A_SYS = 43, A_EDIT = 50, N_KEYS = 10, N_TABS = 5,
@@ -225,7 +230,7 @@ static void refresh(struct machines *t) {
 static void grab(struct machines *t) {
     int w, h, k, s;
     t->shown = 0;
-    if (t->sel < 1 || t->state[t->sel] != S_RUN || (t->tab != 0 && t->tab != 1)) return;
+    if (t->sel < 1 || (t->state[t->sel] != S_RUN && t->state[t->sel] != S_PAUSE) || (t->tab != 0 && t->tab != 1)) return;
     w = t->tab ? CW : TW; h = t->tab ? CH : TH;
     if (hv(C_THUMB, t->id[t->sel], (int)thumb, w, h) < 0) return;
     s = 0; k = 0;
@@ -272,6 +277,47 @@ static void stop_one(struct machines *t, int k, int now) {
     if (k < 1 || k >= t->n || t->state[k] != S_RUN) return;
     hv(C_STOP, t->id[k], now, 0, 0);
     ui_cpy(t->status, mname(t, k)); ui_cat(t->status, now ? ": stopped" : ": shutting down (SIGTERM, as the power button)");
+}
+
+// Pause, or Resume a paused one
+static void pause_one(struct machines *t, int k) {
+    if (k < 1 || k >= t->n) return;
+    ui_cpy(t->status, mname(t, k));
+    if (t->state[k] == S_PAUSE) ui_cat(t->status, hv(C_RESUME, t->id[k], 0, 0, 0) < 0 ? ": not resumed" : ": resumed");
+    else if (t->state[k] == S_RUN) ui_cat(t->status, hv(C_PAUSE, t->id[k], 0, 0, 0) < 0 ? ": not paused" : ": paused (Resume goes on)");
+    else ui_cat(t->status, ": not running");
+}
+
+// Delete: asked first
+static void delete_ask(struct win *w, int k) {
+    struct machines *t;
+    t = S(w);
+    if (k < 1 || k >= t->n) return;
+    if (t->state[k] == S_RUN || t->state[k] == S_PAUSE) { msgbox(w, mname(t, k), "Stop it first: a machine that runs, or is paused, is not deleted.", 0, A_NONE); return; }
+    ui_cpy(why_title, "Delete "); ui_cat(why_title, mname(t, k));
+    ui_cpy(start_log, "Delete "); ui_cat(start_log, mname(t, k));
+    ui_cat(start_log, "? /vm/"); ui_cat(start_log, mname(t, k));
+    ui_cat(start_log, " is removed -- its vm.cfg and its disk images -- and cannot be had back.");
+    msgbox(w, why_title, start_log, 1, A_DEL);
+}
+// the chosen machine gone: out of the hypervisor, /vm/NAME's files, it
+static void delete_one(struct machines *t, int k) {
+    char dir[96], f[64];
+    int n;
+    if (k < 1 || k >= t->n || t->state[k] == S_RUN || t->state[k] == S_PAUSE) return;
+    if (t->id[k] && hv(C_DELETE, t->id[k], 0, 0, 0) < 0) { say(t, "It could not be taken out of the hypervisor."); return; }
+    upathjoin(dir, 96, "/vm", mname(t, k));
+    n = 0;
+    while (ureaddir(dir, 0, f) >= 0 && n < 1000) {
+        upathjoin(path, 128, dir, f);
+        if (uunlink(path) < 0) { ui_cpy(t->status, path); ui_cat(t->status, " could not be removed"); return; }
+        ++n;
+    }
+    uunlink(dir);
+    __c4_opcode(0, 0, 0, 252);              // sync (SYS_SYNC)
+    ui_cpy(t->status, mname(t, k)); ui_cat(t->status, ": deleted");
+    refresh(t);
+    if (t->sel >= t->n) t->sel = t->n - 1;
 }
 
 int machines_open() {
@@ -361,16 +407,17 @@ static void state_text(struct machines *t, int k, char *out) {
     s = t->state[k];
     if (k == 0) ui_cpy(out, "the PC (VM 0, this C4IX)");
     else if (s == S_RUN) ui_cpy(out, "running");
+    else if (s == S_PAUSE) ui_cpy(out, "paused");
     else if (s == S_HALT) ui_cpy(out, "stopped");
     else if (s == S_MADE) ui_cpy(out, "made, not started");
     else ui_cpy(out, "stopped");
     if (k && t->pid && same(t->job, mname(t, k))) ui_cpy(out, "starting...");
 }
 
-// a monitor: its screen green when it runs
-static void icon(int x, int y, int on) {
+// a monitor: its screen green when it runs, amber paused
+static void icon(int x, int y, int st) {
     d_rect(x, y + 1, 16, 11, C_DARK);
-    d_rect(x + 2, y + 3, 12, 7, on ? 0x30c030 : 0x707070);
+    d_rect(x + 2, y + 3, 12, 7, st == S_RUN ? 0x30c030 : st == S_PAUSE ? 0xe0a000 : 0x707070);
     d_rect(x + 6, y + 12, 4, 2, C_SHADOW);
     d_rect(x + 3, y + 14, 10, 1, C_SHADOW);
 }
@@ -400,7 +447,7 @@ static void graph(int *h, int n, int x, int y, int w, int ht) {
 static void screen_box(struct machines *t, int x, int y, int w, int h) {
     int s, k;
     d_rect(x, y, w, h, C_DARK);
-    if (t->sel > 0 && t->shown == t->id[t->sel] && t->state[t->sel] == S_RUN) {
+    if (t->sel > 0 && t->shown == t->id[t->sel] && (t->state[t->sel] == S_RUN || t->state[t->sel] == S_PAUSE)) {
         s = 0; k = 0;
         while (s < h) { d_image(IMG_ID + k, x, y + s); s = s + STRIP; ++k; }
     } else d_text(x + w / 2 - 33, y + h / 2 - 6, 0xa0a0a0, F_SANS, "Not running");
@@ -535,12 +582,14 @@ void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     d_rect(ox, oy, cw, ch, C_FACE);
     // the toolbar
     ui_button(ox + 6, oy + 5, 100, 24, "Create VM", 0, 0);
-    bx = ox + cw - 6 - 5 * 84;
-    ui_button(bx, oy + 5, 80, 24, "Start", 0, 0);
-    ui_button(bx + 84, oy + 5, 80, 24, "Shutdown", 0, 0);
-    ui_button(bx + 168, oy + 5, 80, 24, "Stop", 0, 0);
-    ui_button(bx + 252, oy + 5, 80, 24, "Restart", 0, 0);
-    ui_button(bx + 336, oy + 5, 80, 24, "Console", 0, 0);
+    bx = ox + cw - 6 - N_TB * TB;
+    ui_button(bx, oy + 5, TBW, 24, "Start", 0, 0);
+    ui_button(bx + TB, oy + 5, TBW, 24, "Shutdown", 0, 0);
+    ui_button(bx + 2 * TB, oy + 5, TBW, 24, "Stop", 0, 0);
+    ui_button(bx + 3 * TB, oy + 5, TBW, 24, "Restart", 0, 0);
+    ui_button(bx + 4 * TB, oy + 5, TBW, 24, t->sel > 0 && t->state[t->sel] == S_PAUSE ? "Resume" : "Pause", 0, 0);
+    ui_button(bx + 5 * TB, oy + 5, TBW, 24, "Console", 0, 0);
+    ui_button(bx + 6 * TB, oy + 5, TBW, 24, "Delete", 0, 0);
     // the tree
     d_rect(ox + 4, oy + TOOL_H, TREE_W, ch - TOOL_H - 26, C_WHITE);
     d_bevel(ox + 4, oy + TOOL_H, TREE_W, ch - TOOL_H - 26, B_SUNKEN);
@@ -551,7 +600,7 @@ void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
         if (k == 0) { d_icon(K_VMS, ox + 10, y + 1); d_text(ox + 30, y + 3, k == t->sel ? C_WHITE : C_DARK, F_BOLD, "c4pc"); }
         else {
             d_rect(ox + 14, y + 2, 1, ROW_H - 6, C_SHADOW);
-            icon(ox + 22, y + 2, t->state[k] == S_RUN);
+            icon(ox + 22, y + 2, t->state[k]);
             buf[0] = 0;
             if (t->id[k]) { ui_num(buf, t->id[k]); ui_cat(buf, " "); }
             ui_cat(buf, mname(t, k));
@@ -620,18 +669,20 @@ void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
     int k, rx, rw, bx, first;
     t = S(w);
     if (ev != E_DOWN && ev != E_DBL) return;
-    bx = cw - 6 - 5 * 84;
+    bx = cw - 6 - N_TB * TB;
     rx = TREE_W + 10; rw = cw - TREE_W - 14;
     if (ui_hit(x, y, 6, 5, 100, 24)) { t->nm[0] = 0; inputbox(w, "Create VM", "Name (letters and digits):", "", A_NAME); return; }
     if (t->tab == 4 && t->sel >= 0) logbuf[0] = 0;
     if (y >= 5 && y < 29 && x >= bx) {
-        k = (x - bx) / 84;
+        k = (x - bx) / TB;
         if (k == 0) start_one(t, t->sel);
         else if (k == 1) stop_one(t, t->sel, 0);
         else if (k == 2) stop_one(t, t->sel, 1);
         else if (k == 3 && t->sel > 0 && t->state[t->sel] == S_RUN) { t->restart = t->id[t->sel]; stop_one(t, t->sel, 1); }
         else if (k == 3) start_one(t, t->sel);
-        else if (k == 4) t->tab = 1;
+        else if (k == 4) pause_one(t, t->sel);
+        else if (k == 5) t->tab = 1;
+        else if (k == 6) delete_ask(w, t->sel);
         return;
     }
     if (ui_hit(x, y, 4, TOOL_H, TREE_W, ch - TOOL_H - 26)) {
@@ -679,6 +730,7 @@ void machines_answer(struct win *w, int action, int yes) {
     char *s;
     char cmd[160];
     t = S(w);
+    if (action == A_DEL) { if (yes) delete_one(t, t->sel); mark_win_dirty(w); return; }
     // Boots from: yes its disk, no its system's archive
     if (action == A_EDIT + K_BOOTFROM && t->sel > 0) {
         if (set_bootfrom(mname(t, t->sel), yes)) {

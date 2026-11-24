@@ -9,7 +9,14 @@
 //   vm disk ID IMAGE                   its hd0: IMAGE, a file on a disk here
 //                                      (vm mkdisk), read and written where it lies
 //   vm cdrom ID ISO                    its CD drive: ISO, a file on a disk here
-//   vm start ID | stop ID [-f] | delete ID | info ID
+//   vm start ID | stop ID [-f] | info ID
+//   vm pause ID | resume ID            a running machine stopped where it is
+//                                      (its memory and screen kept, its clock
+//                                      stopped), and on again
+//   vm delete NAME [-y]                the machine gone: out of the hypervisor,
+//                                      and /vm/NAME (vm.cfg, its disk images)
+//                                      removed, once yes is typed (-y: not
+//                                      asked). Not while it runs or is paused
 //   vm attach ID                       the screen, keyboard and mouse ID's;
 //                                      Ctrl+Alt+Home, or `detach` in it, back
 //   vm detach                          the same as `detach`
@@ -52,7 +59,8 @@
 enum { R_ID = 0x560, R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
 enum { C_NAME = 1, C_MB = 2, C_ARGS = 3, C_NEW = 4, C_START = 5, C_STOP = 6, C_ATTACH = 7, C_DETACH = 8,
        C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_DISK = 12, C_ATTACHED = 13, C_CDROM = 14, C_SEND = 15,
-       C_LOG = 17 };
+       C_LOG = 17, C_PAUSE = 18, C_RESUME = 19 };
+enum { S_RUN = 2, S_PAUSE = 4 };
 enum { DISK_COUNT = 0x188, N_SYS = 4, N_IMG = 5, LOGW = 32768 };
 enum { SYS_SYNC = 252, SYS_FMAP = 257, C4I_MMU = 0x80000, C4I_HV = 0x400000, CHUNK = 1048576, ARGW = 256 };
 
@@ -185,6 +193,9 @@ static void list() {
 static int mkdisk(char *path, int mb) {
     int fd, k, n;
     if (mb < 1) { ufprintf(STDERR, "vm: mkdisk FILE MB\n"); return 1; }
+    // a file's size and place are an int at the 32-bit word (C4IX_LFS's
+    // 64-bit ones not in vm yet): an image of 2 GB or more is later work
+    if (sizeof(int) == 4 && mb > 2047) { ufprintf(STDERR, "vm: a disk image is 2047 MB at most for now\n"); return 1; }
     if ((fd = uopen(path, O_WR + O_CREATE + O_TRUNCATE)) < 0) { ufprintf(STDERR, "vm: cannot make %s\n", path); return 1; }
     n = mb * (1048576 / CHUNK);
     k = 0;
@@ -438,9 +449,52 @@ static int show_log() {
     return 0;
 }
 
+// NAME gone: out of the hypervisor if it was made (not while it runs or is
+// paused), and /vm/NAME removed, its files and itself, once YES or asked
+static int delete(char *name, int yes) {
+    char file[64], dir[128], ans[16];
+    int id, st, n, k;
+    id = find(name);
+    if (id == 0) { ufprintf(STDERR, "vm: the control machine is not deleted\n"); return 1; }
+    if (id > 0) {
+        st = hv(C_STATE, id, 0, 0, 0);
+        if (st == S_RUN || st == S_PAUSE) { ufprintf(STDERR, "vm: %s is %s: stop it first (vm stop %s)\n", name, st == S_RUN ? "running" : "paused", name); return 1; }
+    }
+    k = 0;
+    while (name[k]) { if (name[k] == '/') break; ++k; }
+    if (name[k] || name[0] == '.' || !ustrcmp(name, "images")) { ufprintf(STDERR, "vm: %s is not a machine's name\n", name); return 1; }
+    upathjoin(dir, 128, "/vm", name);
+    if (id < 0 && ureaddir(dir, 0, file) < 0) {
+        if (uunlink(dir) < 0) { ufprintf(STDERR, "vm: no machine %s\n", name); return 1; }
+        uprintf("vm: %s deleted\n", name);
+        return 0;
+    }
+    if (!yes && ureaddir(dir, 0, file) >= 0) {
+        uprintf("vm: delete %s: %s and everything in it (its vm.cfg and disk images), for good?\n", name, dir);
+        uprintf("    Type yes to delete it: ");
+        n = uread(0, ans, 15);
+        if (n < 0) n = 0;
+        ans[n] = 0;
+        if (ustrncmp(ans, "yes", 3)) { uprintf("vm: %s kept\n", name); return 1; }
+    }
+    if (id > 0 && hv(C_DELETE, id, 0, 0, 0) < 0) { ufprintf(STDERR, "vm: %s could not be taken out of the hypervisor\n", name); return 1; }
+    // its files (flat: vm create makes no directories in it), then it
+    n = 0;
+    while (ureaddir(dir, 0, file) >= 0 && n < 1000) {
+        upathjoin(path_buf, 256, dir, file);
+        if (uunlink(path_buf) < 0) { ufprintf(STDERR, "vm: %s could not be removed\n", path_buf); return 1; }
+        ++n;
+    }
+    uunlink(dir);
+    ksys(SYS_SYNC, 0, 0, 0);
+    uprintf("vm: %s deleted (%d files)\n", name, n);
+    return 0;
+}
+
 static int usage() {
     ufprintf(STDERR, "usage: vm [new NAME KERNEL BOOT.tar MB [ARGS...] | disk ID IMAGE | cdrom ID ISO |\n");
-    ufprintf(STDERR, "          start ID | stop ID [-f] | attach ID | detach | delete ID | info ID | send ID TEXT |\n");
+    ufprintf(STDERR, "          start ID | stop ID [-f] | pause ID | resume ID | attach ID | detach | delete NAME [-y] |\n");
+    ufprintf(STDERR, "          info ID | send ID TEXT |\n");
     ufprintf(STDERR, "          mkdisk FILE MB | create NAME MB DISK_MB [c4ix|c4ix-text|c4ke|c4dos|ISO] |\n");
     ufprintf(STDERR, "          images | up NAME | autostart | log]\n");
     return 2;
@@ -480,6 +534,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc < 3) return usage();
+    if (!ustrcmp(cmd, "delete")) return delete(argv[2], argc > 3 && !ustrcmp(argv[3], "-y"));
     if ((id = find(argv[2])) < 0) { ufprintf(STDERR, "vm: no machine %s\n", argv[2]); return 1; }
     if (!ustrcmp(cmd, "disk") || !ustrcmp(cmd, "cdrom")) {
         if (argc < 4) return usage();
@@ -502,7 +557,8 @@ int main(int argc, char **argv) {
     if (!ustrcmp(cmd, "start")) k = hv(C_START, id, 0, 0, 0);
     else if (!ustrcmp(cmd, "stop")) k = hv(C_STOP, id, argc > 3 && !ustrcmp(argv[3], "-f"), 0, 0);
     else if (!ustrcmp(cmd, "attach")) k = hv(C_ATTACH, id, 0, 0, 0);
-    else if (!ustrcmp(cmd, "delete")) k = hv(C_DELETE, id, 0, 0, 0);
+    else if (!ustrcmp(cmd, "pause")) k = hv(C_PAUSE, id, 0, 0, 0);
+    else if (!ustrcmp(cmd, "resume")) k = hv(C_RESUME, id, 0, 0, 0);
     else if (!ustrcmp(cmd, "info")) { show(id); return 0; }
     else return usage();
     if (k < 0) { ufprintf(STDERR, "vm: %s %d: no (%d)\n", cmd, id, k); return 1; }

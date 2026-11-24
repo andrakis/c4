@@ -1081,9 +1081,13 @@ int ext2_mkfs(int dev, int bsize, char *label) {
     bpg = bsize * 8;
     ngroups = (blocks - first + bpg - 1) / bpg;
     ipb = bsize / 128;
-    // an inode for every 8 KB, at least 16 a group, at most a bitmap's worth
-    inodes = (blocks / 8) * (bsize / 1024);
-    if (bsize == 1024) inodes = blocks / 8;
+    // an inode for every 8 KB on a disk under 1 GB, 16 KB under 16 GB (as
+    // mke2fs), 64 KB past that: a 20 GB disk at 8 KB had 2.5 million, 320 MB
+    // of inode tables for mkfs to write; at least 16 a group, at most a
+    // bitmap's worth
+    k = blocks / 1024 * (bsize / 1024);         // the MB
+    k = k < 1024 ? 8 : k < 16384 ? 16 : 64;     // KB an inode
+    inodes = blocks / k * (bsize / 1024);
     ipg = (inodes + ngroups - 1) / ngroups;
     ipg = (ipg + ipb - 1) / ipb * ipb;
     if (ipg < 16) ipg = 16;

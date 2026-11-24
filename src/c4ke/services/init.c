@@ -160,7 +160,8 @@ int main (int argc, char **argv) {
 
 	// Skip if no pid, else wait for task to finish.
     // If the task fails to start, await_pid returns non-0.
-	if (!pid || (i = await_pid(pid))) {
+	// (the shell's shutdown is 0, its reboot 82: passed on, not a failure)
+	if (!pid || ((i = await_pid(pid)) && i != 82)) {
 		start_eshell = 1;
 	}
 

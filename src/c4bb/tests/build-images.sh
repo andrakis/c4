@@ -634,8 +634,12 @@ say "C4IX's sources on the disk, and c4m as a C4IX program (c4lc)"
 # with the block of each game that is on the disk (games/NAME/c4ix.vfs.txt)
 python3 -I src/c4bb/tests/vfs-games.py src/c4bb/fs/c4ix.vfs.txt $DISK/c4ix.vfs.txt \
     $(for g in $GAMES; do if ls $DISK/c4ix-$(basename $g)*.c4r > /dev/null 2>&1; then echo $g; fi; done)
-# the boot logo, for splash (src/c4ix/art/mkc4p.py made it from Kiln's PNG)
+# the boot logo, for splash (src/c4ix/art/mkc4p.py made it from Kiln's PNG),
+# 4:3 and 16:9; and the C4PC hypervisor's control C4IX's, both (Kiln's JPEGs)
 cp src/c4ix/art/c4ix.c4p.gz $DISK/c4ix-splash.c4p.gz
+cp src/c4ix/art/c4ix-wide.c4p.gz $DISK/c4ix-splash-wide.c4p.gz
+cp src/c4ix/art/hv.c4p.gz $DISK/c4ix-splash-hv.c4p.gz
+cp src/c4ix/art/hv-wide.c4p.gz $DISK/c4ix-splash-hv-wide.c4p.gz
 for n in $C4IX_USER $C4IX_ARC_USER; do
     cp src/c4ix/user/$n.c $DISK/c4ix-$n.c
 done

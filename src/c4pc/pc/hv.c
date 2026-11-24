@@ -56,6 +56,8 @@ typedef struct vm {
   int cpus;                            /* its CPUs, taking turns (smp.c): 1 to 8 */
   int cpu;                             /* the PC processor it runs on: one of the pool's, or 0 (hv_run) */
   volatile int fin;                    /* halted on its processor: hv_run, on 0, finishes it */
+  u64 rep_cyc;                         /* its instructions at the last report */
+  i64 slept_at, idle_ms;               /* napping since (0: not), and its naps' time all told (INFO's idleN) */
                                        /* (its window's arguments: wins, by its CPU) */
 } vm;
 static vm vms[HV_MAX];                 /* [0]: the control machine, VM 0 */
@@ -243,7 +245,7 @@ static int start(int id) {
   }
   argv[argc] = 0;
   if (machine_boot(m, v->img, v->img_len, argc, argv)) { hv_out("c4pc: hv: vm"); outn(id); hv_out(" did not boot\n"); return -3; }
-  v->m = m; v->nap_until = 0; v->ll = 0; v->fin = 0;
+  v->m = m; v->nap_until = 0; v->ll = 0; v->fin = 0; v->slept_at = 0; v->idle_ms = 0; v->rep_cyc = 0;
   __atomic_thread_fence(__ATOMIC_SEQ_CST);
   __atomic_store_n(&v->state, S_RUN, __ATOMIC_RELEASE);     /* its processor's worker may take it now */
   glog(v, "c4pc: started\n");
@@ -338,7 +340,7 @@ static int hv_key_(int c) {
 static i32 info(int id, u32 addr, u32 len) {
   if (id < 0 || id >= HV_MAX) return -1;
   vm *v = &vms[id];
-  char b[600]; int n = 0;
+  char b[2048]; int n = 0;
 #define PUT(s) do { const char *q_ = (s); while (*q_ && n < (int)sizeof b - 1) b[n++] = *q_++; } while (0)
 #define NUM(x) do { char t_[24]; int k_ = 0; uint64_t x_ = (uint64_t)(x); do t_[k_++] = (char)('0' + x_ % 10); while (x_ /= 10); while (k_ && n < (int)sizeof b - 1) b[n++] = t_[--k_]; } while (0)
   PUT("id "); NUM(id); PUT("\nname "); PUT(id ? v->name : "control"); PUT("\nstate "); PUT(id ? STATE_NAME[v->state] : "running");
@@ -353,6 +355,30 @@ static i32 info(int id, u32 addr, u32 len) {
   if (id) { PUT("\nmmu "); PUT(v->mmu == 1 || (!v->mmu && hv_mmu) ? "yes" : "no"); PUT("\ncpus "); NUM(v->cpus > 0 ? v->cpus : 1); }
   else { PUT("\ncpus "); NUM(ctl->smp ? ctl->smp->n : 1); }
   if (id && v->state == S_RUN) { PUT("\nscreen "); PUT(text_shown(v) ? "text" : "display"); }
+  /* its memory, swap, block devices and idle (Machines' Load tabs) */
+  { machine *im = id ? (v->state == S_RUN || v->state == S_PAUSE ? v->m : 0) : ctl;
+    if (im && im->u8 && im->heap) {
+      PUT("\nheap "); NUM((heap_end(im->heap) - heap_base(im->heap)) / 1024);
+      PUT("\nheapused "); NUM((u32)heap_used(im->heap) / 1024);
+      u32 used = 0;
+      if (im->dv->swap_dev && im->dv->swap_on)
+        for (u32 w = 0; w < (im->dv->swap_slots + 31) / 32; w++) for (u32 x = im->dv->swap_on[w]; x; x &= x - 1) used++;
+      used += imap_count(im->dv->swap_pages);
+      PUT("\nswapslots "); NUM(im->dv->swap_slots); PUT("\nswapused "); NUM(used > im->dv->swap_slots ? im->dv->swap_slots : used);
+      int k = 0;
+      for (; k < im->nblk; k++) {
+        blkdev *bd = im->blk[k];
+        PUT("\nblk"); NUM(k); PUT(" "); NUM(bd->rd); PUT(" "); NUM(bd->wr); PUT(" "); NUM((uint64_t)bd->sectors * 512); PUT(" hd"); NUM(k);
+      }
+      if (im->dv->swap_dev) { PUT("\nblk"); NUM(k); PUT(" "); NUM(im->dv->swap_rd); PUT(" "); NUM(im->dv->swap_wr); PUT(" "); NUM((uint64_t)im->dv->swap_slots * 4096); PUT(" swap"); }
+      int nc = im->smp ? im->smp->n : 1;
+      extern i64 plat_idle_ms(int); extern i64 pc_idle_total;
+      for (k = 0; k < nc && k < 16; k++) {
+        PUT("\nidle"); NUM(k); PUT(" ");
+        if (id) NUM(v->idle_ms + (v->slept_at ? plat_now_ms() - v->slept_at : 0));
+        else NUM(k == 0 ? pc_idle_total : ctl->smp && ctl->smp->par ? plat_idle_ms(k) : pc_idle_total);
+      }
+    } }
   PUT("\nattached "); PUT(attached == id ? "yes" : "no"); PUT("\n");
 #undef PUT
 #undef NUM
@@ -370,6 +396,7 @@ static void resume(int id) {
   i64 d = plat_now_ms() - v->paused_at;
   v->m->wall_base += d;
   if (v->nap_until) v->nap_until += d;
+  v->slept_at = 0;
   v->state = S_RUN;
   wake(v->cpu);
   hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(v->name); hv_out(" resumed\n");
@@ -582,13 +609,14 @@ static void guest_ap(int k) {
       if (v->cpu != k || __atomic_load_n(&v->state, __ATOMIC_ACQUIRE) != S_RUN || v->fin) continue;
       machine *m = v->m;
       if (!m->halted && v->nap_until > now) { if (v->nap_until < soon) soon = v->nap_until; continue; }
+      if (v->slept_at) { v->idle_ms += now - v->slept_at; v->slept_at = 0; }
       int r = m->halted ? STOP_HALT : machine_run(m, (i64)m->cycles_per_ms * 4);
       ran = 1;
       lk(1);
       if (m->gui) gui_tick(m->gui);
       if (r == STOP_HALT || m->halted) v->fin = 1;           /* hv_run finishes it */
-      else if (r == STOP_SLEEP) v->nap_until = m->wall_base + m->nap_until;
-      else if (r == STOP_INPUT) v->nap_until = now + 10;
+      else if (r == STOP_SLEEP) { v->nap_until = m->wall_base + m->nap_until; v->slept_at = plat_now_ms(); }
+      else if (r == STOP_INPUT) { v->nap_until = now + 10; v->slept_at = plat_now_ms(); }
       lk(-1);
       now = plat_now_ms();
     }
@@ -618,9 +646,61 @@ int hv_run(void) {
   lk(-1);
   return r;
 }
+/* every 30 s with a pool, on c4pc's log: the device lock's account, and
+ * each running guest's instructions a second and how its sound kept up */
+static void report(void) {
+  static i64 at;
+  i64 now = plat_now_ms();
+  if (pool_hi <= pool_lo) return;
+  if (!at) { at = now; char b[8]; extern int pc_lock_report(char *, int); pc_lock_report(b, sizeof b); return; }
+  if (now - at < 30000) return;
+  i64 dt = now - at; at = now;
+  extern int pc_lock_report(char *, int);
+  static char b[600];
+  if (pc_lock_report(b, sizeof b)) { hv_out("c4pc: hv: the device lock, the last 30 s: "); hv_out(b); hv_out("\n"); }
+  /* VM 0's sound, to set beside the guests' */
+  if (ctl->snd) {
+    u32 n, most, rs;
+    snd_lateness(ctl->snd, &n, &most, &rs);
+    hv_out("c4pc: hv: vm0 control: its sound: "); outn(n); hv_out(" events late (most "); outn(most);
+    hv_out(" ms), "); outn(rs); hv_out(attached ? " resyncs\n" : " resyncs (heard)\n");
+  }
+  for (int id = 1; id < HV_MAX; id++) {
+    vm *v = &vms[id];
+    if (v->state != S_RUN || !v->m) continue;
+    u64 c = (u64)v->m->cycle;
+    if (v->m->smp) { c = 0; for (int k = 0; k < v->m->smp->n; k++) c += (u64)v->m->smp->cpu[k]->cycle; }
+    u64 d = c >= v->rep_cyc ? c - v->rep_cyc : 0;
+    int first = !v->rep_cyc;
+    v->rep_cyc = c;
+    if (first) continue;
+    hv_out("c4pc: hv: vm"); { char t[12]; int k = 0, x = id; do t[k++] = (char)('0' + x % 10); while (x /= 10); char o[12]; int j = 0; while (k) o[j++] = t[--k]; o[j] = 0; hv_out(o); }
+    hv_out(" "); hv_out(v->name); hv_out(": ");
+    { char t[24]; int k = 0; u64 x = d / (u64)dt; do t[k++] = (char)('0' + x % 10); while (x /= 10); char o[24]; int j = 0; while (k) o[j++] = t[--k]; o[j] = 0; hv_out(o); }
+    hv_out("k instructions a second");
+    if (v->m->snd) {
+      u32 n, most, rs;
+      snd_lateness(v->m->snd, &n, &most, &rs);
+      char o[80]; int j = 0;
+      const char *p = ", its sound: ";
+      while (*p) o[j++] = *p++;
+      u32 vals[3] = { n, most, rs }; const char *w[3] = { " events late (most ", " ms), ", " resyncs" };
+      for (int q = 0; q < 3; q++) {
+        char t[12]; int k = 0; u32 x = vals[q]; do t[k++] = (char)('0' + x % 10); while (x /= 10);
+        while (k) o[j++] = t[--k];
+        for (p = w[q]; *p; ) o[j++] = *p++;
+      }
+      o[j] = 0;
+      hv_out(o);
+      if (attached == id) hv_out(" (heard)");
+    }
+    hv_out("\n");
+  }
+}
 static int hv_run_(void) {
   int busy = 0;
   i64 now = plat_now_ms();
+  report();
   for (int id = 1; id < HV_MAX; id++) {
     vm *v = &vms[id];
     if (v->state != S_RUN) continue;
@@ -628,6 +708,7 @@ static int hv_run_(void) {
     /* on a processor of its own: here only to be finished, once halted */
     if (v->cpu) { if (!v->fin) continue; v->fin = 0; m->halted = 1; }
     if (!m->halted && v->nap_until > now) continue;
+    if (v->slept_at && !v->cpu) { v->idle_ms += now - v->slept_at; v->slept_at = 0; }
     int r = m->halted ? STOP_HALT : machine_run(m, (i64)m->cycles_per_ms * 4);
     busy = 1;
     pc_audio();                     /* the card kept fed between guests' slices */
@@ -648,8 +729,8 @@ static int hv_run_(void) {
       }
       continue;
     }
-    if (r == STOP_SLEEP) v->nap_until = m->wall_base + m->nap_until;
-    else if (r == STOP_INPUT) v->nap_until = now + 10;
+    if (r == STOP_SLEEP) { v->nap_until = m->wall_base + m->nap_until; v->slept_at = plat_now_ms(); }
+    else if (r == STOP_INPUT) { v->nap_until = now + 10; v->slept_at = plat_now_ms(); }
   }
   return busy;
 }

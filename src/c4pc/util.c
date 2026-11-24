@@ -106,6 +106,7 @@ void *smap_del(smap *m, const char *k) {
 /* ---- u32 -> pointer: the same, keyed by number (0 is a key too) ---- */
 struct imap { u32 cap, n, used; u32 *k; u8 *st; void **v; };   /* st: 0 empty, 1 full, 2 tomb */
 static u32 ihash(u32 x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
+u32 imap_count(imap *m) { return m ? m->n : 0; }
 imap *imap_new(void) {
   imap *m = xmalloc(sizeof *m);
   m->cap = 64;

@@ -28,6 +28,9 @@ double snd_now(snd *s);
 void snd_fill(snd *s, i16 *out, u32 n);
 /* the card and all it holds freed (a guest's, when it halts: pc/hv.c) */
 void snd_free(snd *s);
+/* since the last call: events that came after their time had been mixed,
+ * the most late of them (ms), and the times the clocks were set again */
+void snd_lateness(snd *s, u32 *n, u32 *most_ms, u32 *resyncs);
 /* offline: the session as a WAV file's bytes (*len), to free */
 u8 *snd_wav(snd *s, u32 *len);
 /* "N OPL writes, M samples played" */

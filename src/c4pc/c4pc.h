@@ -131,6 +131,8 @@ typedef struct blkdev {
   int (*flush)(struct blkdev *);
   void *ctx;
   char what[48];                       /* for the console */
+  unsigned long long rd, wr;           /* bytes read and written by a machine's BLK commands (INFO's blkN) */
+  unsigned long long io_rd, io_wr;     /* ... by the PC's own driver (ata.c: HOST's diskioN) */
 } blkdev;
 
 /* ---- the MMU's registers, a window at 0x500 (mmu.c, libjs/mmu.js) ---- */
@@ -194,6 +196,7 @@ void imap_set(imap *m, u32 k, void *v);
 void *imap_del(imap *m, u32 k);
 void imap_clear(imap *m, void (*f)(void *));
 void imap_free(imap *m, void (*f)(void *));   /* cleared, and the map itself freed */
+u32 imap_count(imap *m);                         /* the entries it holds */
 
 /* ---- the heap (heap.js) ---- */
 typedef struct heap heap;
@@ -293,6 +296,7 @@ struct machine {
   u8 *tap_in; u32 tap_in_len, tap_in_pos; int tap_in_on;
   /* swap */
   imap *swap_pages; u32 swap_slots; u32 swap_addr; i32 swap_result;
+  unsigned long long swap_rd, swap_wr;  /* bytes to and from its swap device (INFO's last blkN, "swap") */
   /* swap on a disk's partition (dev_swap_disk): its device, first sector,
    * and a bit a slot for those written there since the boot's reset */
   blkdev *swap_dev; u32 swap_lba; u32 *swap_on;

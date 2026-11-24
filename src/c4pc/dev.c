@@ -214,6 +214,7 @@ static int sw_disk_rw(machine *m, int write, u32 slot, u8 *p) {
   blk_take();
   int r = m->dv->swap_dev->rw(m->dv->swap_dev, write, m->dv->swap_lba + slot * 8, 8, p);
   blk_drop();
+  if (!r) { if (write) m->dv->swap_wr += 4096; else m->dv->swap_rd += 4096; }
   return r;
 }
 static int sw_on(machine *m, u32 slot) { return m->dv->swap_on && (m->dv->swap_on[slot >> 5] >> (slot & 31) & 1); }
@@ -811,5 +812,6 @@ void blk_write32(machine *m, u32 a, i32 v) {
     blk_take(); int r = b->rw(b, 1, lba, n, buf); blk_drop();
     if (r) return;
   }
+  if (v == 1) b->rd += (unsigned long long)n * 512; else b->wr += (unsigned long long)n * 512;
   d->blk_result = 0;
 }

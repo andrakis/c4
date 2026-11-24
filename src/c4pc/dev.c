@@ -206,6 +206,7 @@ static i32 kbd_read(machine *m, u32 addr, i32 len, int nonblock, int raw) {
  * own reads: swap_page) is read into swap_pages, and is the page from
  * then until it comes in or is dropped. Block I/O, the kernel's
  * (BLK_CMD) and swap's, one at a time: the processors share the disks */
+unsigned long long blk_counts[4];                    /* BLK_CMD's reads, writes, sectors read, written (-s) */
 static volatile int blk_lk;
 static void blk_take(void) { while (__atomic_exchange_n(&blk_lk, 1, __ATOMIC_ACQUIRE)) { } }
 static void blk_drop(void) { __atomic_store_n(&blk_lk, 0, __ATOMIC_RELEASE); }
@@ -800,6 +801,7 @@ void blk_write32(machine *m, u32 a, i32 v) {
   if (v == 2 && (b->flags & 1)) return;
   static u8 *buf; static u32 cap;
   if (n * 512 > cap) { cap = n * 512; buf = xrealloc(buf, cap); }
+  blk_counts[v == 2 ? 1 : 0]++; blk_counts[v == 2 ? 3 : 2] += n;
   if (v == 1) {
     blk_take(); int r = b->rw(b, 0, lba, n, buf); blk_drop();
     if (r) return;

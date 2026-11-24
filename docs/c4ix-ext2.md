@@ -70,11 +70,24 @@ the disk, or mount it read-only where they are read-only compatible.
   a directory entry added (in a block with room, else a new block) and
   removed (merged into the one before), truncate, unlink, link, rename,
   mkdir and rmdir, the mtime and ctime set from the clock.
-- Consistency: every change is written as it is made, metadata first
-  where an order matters (a block marked used before an inode points at
-  it), so a machine stopped part way leaves a disk e2fsck repairs. The
-  superblock is marked not clean while mounted (s_state), clean at
+- Consistency: every change is on the disk by the end of the operation
+  that made it (ext2_commit, after each of the VFS's): a file's own
+  blocks as they are written, then the bitmaps, then the other metadata,
+  so a block is marked used before anything on the disk points at it,
+  and a machine stopped part way leaves a disk e2fsck repairs. The
+  superblock's counts are written at most once a second (and at sync and
+  unmount); it is marked not clean while mounted (s_state), clean at
   unmount, so a disk never unmounted is checked.
+- Cost (2026-11-24): the metadata cache was written through, so each
+  block a write made wrote its bitmap, its group's descriptors and its
+  indirect block again, and balloc searched the bitmap from its start
+  for every block. `vm mkdisk` of 64 MB made 52,264 disk commands (267
+  MB for 64) and ran 940 M instructions; with the cache written back at
+  the commit, balloc starting from the block after its last, and runs of
+  128 KB, 825 commands (67 MB) and 190 M (c4pc-host -s's "disks:" line;
+  ~/i386probe/e2bench.sh on helios). Copying /bin twice: 9,060 commands
+  to 1,496. `install` is still 2.6 G instructions for its 221 MB, the
+  CPU's more than the disk's: not yet profiled.
 - mkfs: `mkfs hd0` (src/c4ix/user/mkfs.c, the kernel's ext2_mkfs through
   SYS_MKFS), so that a blank disk in a VM can be made one without Linux:
   rev 1, 128-byte inodes, an inode for every 8 KB, sparse superblock

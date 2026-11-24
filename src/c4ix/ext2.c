@@ -9,15 +9,21 @@
 // with an incompatible feature is refused; with a read-only-compatible
 // one this does not know, it mounts read-only.
 //
-// Every change goes to the disk as it is made: a block or inode marked
-// used in its bitmap before anything points at it, a directory entry
-// written after its inode. The group descriptors are written as their
-// counts change; the superblock at sync and unmount, and marked not
-// clean while mounted, so that a disk a machine stopped with gets
-// e2fsck's look. Blocks of metadata (bitmaps, inode tables, directories,
-// indirect blocks) go through a small cache, written through; a file's
-// own blocks are read and written straight between the disk and the
-// caller's buffer, a run of adjacent ones at a time.
+// Every change goes to the disk by the end of the operation that made it
+// (ext2_commit, which the VFS calls after each): a file's own blocks
+// first, as they are written, then the bitmaps, then the rest of the
+// metadata, so a block or inode is marked used before anything on the
+// disk points at it. Blocks of metadata (bitmaps, inode tables,
+// directories, indirect blocks) go through a small cache, kept until the
+// commit (or until the cache needs the room): a 64 KB write that made 16
+// blocks once wrote the bitmap, the group descriptors and the indirect
+// block 16 times each, and now writes each once. The group descriptors
+// are written at the commit after their counts change; the superblock's
+// counts at most once a second, and at sync and unmount (e2fsck puts
+// them right from the bitmaps), and it is marked not clean while
+// mounted, so that a disk a machine stopped with gets e2fsck's look. A
+// file's own blocks are read and written straight between the disk and
+// the caller's buffer, a run of adjacent ones at a time.
 //
 // The VFS (vfs.c) keeps the tree: a mounted directory's vnodes carry
 // their filesystem and inode number, and call here to list, read, write
@@ -27,6 +33,7 @@
 
 enum {
     E2_MAGIC = 0xEF53, E2_ROOT = 2, E2_NDIR = 12, E2_MAXFS = 4, E2_CACHE = 48,
+    E2_RUN_BYTES = 131072,     // ext2_pwrite's runs: a block device command's most (blk.c's BLK_RUN sectors)
     E2_INCOMPAT_FILETYPE = 2, E2_INCOMPAT_KNOWN = 2,
     E2_RO_SPARSE = 1, E2_RO_LARGE = 2, E2_RO_BTREE = 4, E2_RO_KNOWN = 7,
     E2_COMPAT_JOURNAL = 4,
@@ -45,6 +52,9 @@ struct e2fs {
     char *sb;                  // the superblock, 1024 bytes
     char *gdt;                 // the group descriptors, 32 bytes each
     int sb_dirty;
+    int sb_when;               // __time() of the superblock's last write
+    int hint;                  // the block after the one balloc made last: where it looks first
+    char *gd_dirty;            // a flag a block of group descriptors: written at the commit
     int used;
 };
 static struct e2fs e2_mounts[E2_MAXFS];
@@ -55,6 +65,7 @@ static int c_blk[E2_CACHE];
 static int c_age[E2_CACHE];
 static char *c_data[E2_CACHE];
 static int c_size[E2_CACHE];   // the bytes c_data holds: a block of the biggest size it was used for
+static int c_dirty[E2_CACHE];  // changed since the disk had it: written at the commit
 static int c_clock;
 
 static int rd16(char *p) { return (p[0] & 255) | (p[1] & 255) << 8; }
@@ -77,6 +88,15 @@ static int bwrite_from(struct e2fs *fs, int b, int n, char *buf) {
     if (fs->ro) return 0 - 1;
     return blk_write(fs->dev, b * fs->spb, n * fs->spb, buf);
 }
+// cache slot I made free for another block: what it holds written first
+// if it changed. 1, or 0 if the disk refused it
+static int evict(int i) {
+    if (c_fs[i] && c_dirty[i]) {
+        if (bwrite_from(c_fs[i], c_blk[i], 1, c_data[i]) < 0) return 0;
+        c_dirty[i] = 0;
+    }
+    return 1;
+}
 // block B's bytes, cached; 0 if it cannot be read
 static char *bget(struct e2fs *fs, int b) {
     int i, old;
@@ -88,6 +108,7 @@ static char *bget(struct e2fs *fs, int b) {
         if (c_age[i] < c_age[old]) old = i;
         ++i;
     }
+    if (!evict(old)) return 0;
     // a buffer too small for this filesystem's blocks (one an unmounted
     // disk of smaller blocks left) is made again
     if (c_data[old] && c_size[old] < fs->bsize) { free(c_data[old]); c_data[old] = 0; }
@@ -97,15 +118,26 @@ static char *bget(struct e2fs *fs, int b) {
     c_fs[old] = fs; c_blk[old] = b; c_age[old] = c_clock;
     return c_data[old];
 }
-// a cached block written back
+// a cached block changed: written back at the commit
 static int bput(struct e2fs *fs, int b) {
     int i;
+    if (fs->ro) return 0 - 1;
     i = 0;
     while (i < E2_CACHE) {
-        if (c_fs[i] == fs && c_blk[i] == b) return bwrite_from(fs, b, 1, c_data[i]);
+        if (c_fs[i] == fs && c_blk[i] == b) { c_dirty[i] = 1; return 0; }
         ++i;
     }
     return 0 - 1;
+}
+// block B freed: what the cache has of it forgotten, changed or not (it
+// may be a file's next, written straight to the disk)
+static void bforget(struct e2fs *fs, int b) {
+    int i;
+    i = 0;
+    while (i < E2_CACHE) {
+        if (c_fs[i] == fs && c_blk[i] == b) { c_fs[i] = 0; c_age[i] = 0; c_dirty[i] = 0; }
+        ++i;
+    }
 }
 // a block that is about to be overwritten whole: cached, zeroed, not read
 static char *bzero_get(struct e2fs *fs, int b) {
@@ -118,6 +150,8 @@ static char *bzero_get(struct e2fs *fs, int b) {
         if (c_age[i] < c_age[old]) old = i;
         ++i;
     }
+    if (!(c_fs[old] == fs && c_blk[old] == b) && !evict(old)) return 0;
+    c_dirty[old] = 0;
     // a buffer too small for this filesystem's blocks (one an unmounted
     // disk of smaller blocks left) is made again
     if (c_data[old] && c_size[old] < fs->bsize) { free(c_data[old]); c_data[old] = 0; }
@@ -129,18 +163,19 @@ static char *bzero_get(struct e2fs *fs, int b) {
 static void cache_drop(struct e2fs *fs) {
     int i;
     i = 0;
-    while (i < E2_CACHE) { if (c_fs[i] == fs) { c_fs[i] = 0; c_age[i] = 0; } ++i; }
+    while (i < E2_CACHE) { if (c_fs[i] == fs) { c_fs[i] = 0; c_age[i] = 0; c_dirty[i] = 0; } ++i; }
 }
 
 // ---- the superblock and the group descriptors ----
 
 static char *gd(struct e2fs *fs, int g) { return fs->gdt + g * 32; }
-// group G's descriptor written: the block of the table it is in
+// group G's descriptor changed: the block of the table it is in written
+// at the commit
 static void gd_put(struct e2fs *fs, int g) {
-    int b, per;
-    per = fs->bsize / 32;
-    b = g / per;
-    bwrite_from(fs, fs->first_data + 1 + b, 1, fs->gdt + b * fs->bsize);
+    int b;
+    b = g / (fs->bsize / 32);
+    if (fs->gd_dirty) fs->gd_dirty[b] = 1;
+    else bwrite_from(fs, fs->first_data + 1 + b, 1, fs->gdt + b * fs->bsize);
 }
 static int sb_write(struct e2fs *fs) {
     char *buf;
@@ -152,6 +187,7 @@ static int sb_write(struct e2fs *fs) {
     r = blk_write(fs->dev, 2, 2, buf);
     free(buf);
     fs->sb_dirty = 0;
+    fs->sb_when = __time();
     return r;
 }
 static void counts(struct e2fs *fs, int g, int dblocks, int dinodes, int ddirs) {
@@ -212,8 +248,12 @@ static int i_links(char *ib) { return rd16(ib + 26); }
 
 // a free block, near group GOAL; marked used. 0 when there is none
 static int balloc(struct e2fs *fs, int goal) {
-    int g, k, n, bit, byte, b0, nb;
+    int g, k, n, bit, byte, b0, nb, from, h, wrapped;
     char *bm;
+    // the group of the block after the last one made, where it has room
+    // (a file being written: its next block beside its last), else GOAL's
+    h = fs->hint - fs->first_data;
+    if (h >= 0 && fs->hint < fs->blocks && rd16(gd(fs, h / fs->bpg) + 12)) goal = h / fs->bpg;
     k = 0;
     while (k < fs->ngroups) {
         g = (goal + k) % fs->ngroups;
@@ -223,8 +263,11 @@ static int balloc(struct e2fs *fs, int goal) {
         if (!(bm = bget(fs, b0))) continue;
         nb = fs->blocks - fs->first_data - g * fs->bpg;
         if (nb > fs->bpg) nb = fs->bpg;
-        n = 0;
-        while (n < nb) {
+        // from the hint, if it is in this group, to the end, then from the start
+        from = h >= 0 && h / fs->bpg == g ? h % fs->bpg : 0;
+        n = from; wrapped = 0;
+        while (!wrapped || n < from) {
+            if (n >= nb) { if (wrapped || !from) break; wrapped = 1; n = 0; continue; }
             byte = bm[n >> 3] & 255;
             if (byte == 255) { n = (n | 7) + 1; continue; }
             bit = 1 << (n & 7);
@@ -232,6 +275,7 @@ static int balloc(struct e2fs *fs, int goal) {
                 bm[n >> 3] = byte | bit;
                 bput(fs, b0);
                 counts(fs, g, 0 - 1, 0, 0);
+                fs->hint = fs->first_data + g * fs->bpg + n + 1;
                 return fs->first_data + g * fs->bpg + n;
             }
             ++n;
@@ -251,6 +295,7 @@ static void bfree(struct e2fs *fs, int b) {
     bm[n >> 3] = bm[n >> 3] & ~(1 << (n & 7));
     bput(fs, b0);
     counts(fs, g, 1, 0, 0);
+    bforget(fs, b);
 }
 // a free inode, in group GOAL or after it; marked used. 0 when there is none
 static int ialloc(struct e2fs *fs, int goal, int isdir) {
@@ -398,7 +443,7 @@ int ext2_read(struct e2fs *fs, int ino, char *buf, c4off pos, int len) {
     char *blk;
     int k;
     if (iget(fs, ino, ib) < 0) return 0 - 1;
-    if (!(blk = vfs_malloc(16 * fs->bsize))) return 0 - 1;
+    if (!(blk = vfs_malloc(E2_RUN_BYTES))) return 0 - 1;
     k = ext2_read_via(fs, ino, ib, buf, pos, len, blk);
     free(blk);
     return k;
@@ -429,7 +474,7 @@ static int ext2_read_via(struct e2fs *fs, int ino, char *ib, char *buf, c4off po
             // whole blocks: a run of adjacent ones, read at once
             run = 1;
             b0 = b;
-            while (run < 16 && done + (run + 1) * fs->bsize <= len && bmap(fs, ino, ib, lbn + run, 0) == b0 + run) ++run;
+            while (run < E2_RUN_BYTES / fs->bsize && done + (run + 1) * fs->bsize <= len && bmap(fs, ino, ib, lbn + run, 0) == b0 + run) ++run;
             if (bread_to(fs, b0, run, blk) < 0) return 0 - 1;
             memcpy(buf + done, blk, run * fs->bsize);
             done = done + run * fs->bsize;
@@ -455,7 +500,7 @@ int ext2_pwrite(struct e2fs *fs, int ino, char *buf, c4off pos, int len) {
     int done, lbn, off, n, b, run, b0, had;
     if (fs->ro || len < 0) return 0 - 1;
     if (iget(fs, ino, ib) < 0) return 0 - 1;
-    if (!(blk = vfs_malloc(16 * fs->bsize))) return 0 - 1;
+    if (!(blk = vfs_malloc(E2_RUN_BYTES))) return 0 - 1;
     done = 0;
     while (done < len) {
         lbn = (int)((pos + done) / fs->bsize);
@@ -466,7 +511,7 @@ int ext2_pwrite(struct e2fs *fs, int ino, char *buf, c4off pos, int len) {
             // whole blocks: a run of them, where the disk has them side by side
             if (!(b0 = bmap(fs, ino, ib, lbn, 1))) break;
             run = 1;
-            while (run < 16 && done + (run + 1) * fs->bsize <= len && bmap(fs, ino, ib, lbn + run, 1) == b0 + run) ++run;
+            while (run < E2_RUN_BYTES / fs->bsize && done + (run + 1) * fs->bsize <= len && bmap(fs, ino, ib, lbn + run, 1) == b0 + run) ++run;
             memcpy(blk, buf + done, run * fs->bsize);
             if (bwrite_from(fs, b0, run, blk) < 0) break;
             done = done + run * fs->bsize;
@@ -921,6 +966,9 @@ struct e2fs *ext2_mount(int dev, int ro) {
     if (rd32(sb + 44) > fs->base_time) fs->base_time = rd32(sb + 44);
     fs->base_time = fs->base_time - __time() / 1000;
     if (!(rd16(sb + 58) & 1)) klog("ext2: %s: not unmounted cleanly last time: e2fsck it when you can\n", blk_nm(dev));
+    fs->hint = 0;
+    fs->sb_when = __time();
+    if ((fs->gd_dirty = vfs_malloc(fs->gdt_blocks + 1))) memset(fs->gd_dirty, 0, fs->gdt_blocks + 1);
     fs->used = 1;
     if (!fs->ro) {
         // mounted: not clean until it is unmounted, and counted
@@ -934,23 +982,65 @@ struct e2fs *ext2_mount(int dev, int ro) {
 }
 // the superblock's counts written, where they changed: after each
 // operation, so a machine stopped between two leaves them right
+// is block B one of the bitmaps
+static int is_bitmap(struct e2fs *fs, int b) {
+    int g;
+    g = 0;
+    while (g < fs->ngroups) { if (rd32(gd(fs, g)) == b || rd32(gd(fs, g) + 4) == b) return 1; ++g; }
+    return 0;
+}
+// what FS changed, written: the bitmaps, the other cached blocks, the
+// group descriptors. 0, or -1 if the disk refused one
+static int e2_flush(struct e2fs *fs) {
+    int i, pass, bad, per, k;
+    bad = 0;
+    pass = 0;
+    while (pass < 2) {
+        i = 0;
+        while (i < E2_CACHE) {
+            if (c_fs[i] == fs && c_dirty[i] && (pass || is_bitmap(fs, c_blk[i]))) {
+                if (bwrite_from(fs, c_blk[i], 1, c_data[i]) < 0) bad = 1; else c_dirty[i] = 0;
+            }
+            ++i;
+        }
+        ++pass;
+    }
+    if (fs->gd_dirty) {
+        per = fs->bsize / 32;
+        k = 0;
+        while (k < fs->gdt_blocks) {
+            if (fs->gd_dirty[k]) {
+                if (bwrite_from(fs, fs->first_data + 1 + k, 1, fs->gdt + k * fs->bsize) < 0) bad = 1; else fs->gd_dirty[k] = 0;
+            }
+            ++k;
+        }
+    }
+    return bad ? 0 - 1 : 0;
+}
 int ext2_commit(struct e2fs *fs) {
-    if (fs->ro || !fs->sb_dirty) return 0;
-    return sb_write(fs);
+    int r;
+    if (fs->ro) return 0;
+    r = e2_flush(fs);
+    if (fs->sb_dirty && (__time() - fs->sb_when >= 1000 || __time() < fs->sb_when) && sb_write(fs) < 0) r = 0 - 1;
+    return r;
 }
 int ext2_sync(struct e2fs *fs) {
     if (fs->ro) return 0;
+    e2_flush(fs);
     if (fs->sb_dirty) sb_write(fs);
     return blk_flush(fs->dev);
 }
 int ext2_umount(struct e2fs *fs) {
     if (!fs->ro) {
+        e2_flush(fs);
         wr16(fs->sb + 58, rd16(fs->sb + 58) | 1);   // clean
         sb_write(fs);
         blk_flush(fs->dev);
     }
     cache_drop(fs);
     free(fs->sb); free(fs->gdt);
+    if (fs->gd_dirty) free(fs->gd_dirty);
+    fs->gd_dirty = 0;
     fs->used = 0;
     return 0;
 }

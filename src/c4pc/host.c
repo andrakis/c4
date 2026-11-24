@@ -448,6 +448,10 @@ int main(int argc, char **argv) {
     fprintf(stderr, "c4pc: %lld cycles in %.2fs (%lldk inst/s), %lld missed traps, status %d\n",
             (long long)ran, dt, (long long)(dt > 0 ? ran / dt / 1000 : 0), (long long)m->missed_traps, status);
     if (m->smp && m->smp->par) { char b[512]; par_stats(m->smp, b, sizeof b); fprintf(stderr, "c4pc: %s\n", b); }
+    { extern unsigned long long blk_counts[4];
+      if (blk_counts[0] || blk_counts[1])
+        fprintf(stderr, "c4pc: disks: %llu reads (%llu KB), %llu writes (%llu KB)\n", (unsigned long long)blk_counts[0],
+                (unsigned long long)blk_counts[2] / 2, (unsigned long long)blk_counts[1], (unsigned long long)blk_counts[3] / 2); }
     fprintf(stderr, "c4pc: heap %d KB in use at exit, %d KB at most\n", heap_used(m->heap) / 1024, heap_peak(m->heap) / 1024);
   }
   return status & 0xff;

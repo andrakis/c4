@@ -1361,9 +1361,11 @@ int vfs_rename(char *path, char *newname) {
     vn = vfs_walk2(path, 0, 0);   // a link is renamed, not its file
     if (!vn || vn == rootdir || !vn->parent || vn->type == VN_PROC || vfs_child(vn->parent, newname, n)) { sched_unlock(); return -1; }
     if (vn->parent->e2 && ext2_rename(vn->parent->e2, vn->parent->e2ino, vn->name, vn->parent->e2ino, newname) < 0) {
+        ext2_commit(vn->parent->e2);
         sched_unlock();
         return -1;
     }
+    if (vn->parent->e2) ext2_commit(vn->parent->e2);
     vfs_namecpy(vn->name, newname);
     sched_unlock();
     return 0;
@@ -1585,7 +1587,8 @@ int vfs_chmod(char *path, int mode) {
     struct vnode *vn;
     sched_lock();
     if (!(vn = vfs_walk(path, 0, 0)) || vn->type == VN_PROC) { sched_unlock(); return 0 - 1; }
-    if (vn->e2 && ext2_chmod(vn->e2, vn->e2ino, mode) < 0) { sched_unlock(); return 0 - 1; }
+    if (vn->e2 && ext2_chmod(vn->e2, vn->e2ino, mode) < 0) { ext2_commit(vn->e2); sched_unlock(); return 0 - 1; }
+    if (vn->e2) ext2_commit(vn->e2);
     vn->mode = (mode & 4095) | 4096;    // 4096: a mode of its own, even 0000
     sched_unlock();
     return 0;

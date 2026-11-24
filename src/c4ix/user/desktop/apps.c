@@ -36,7 +36,9 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 // Display Properties, cut down: a list of schemes and a row of desktop
 // colours, each applied at once (theme_set, which also remembers them in
 // /etc/desktop.cfg), beside a preview drawn in the colours in use. The
-// screen's size too, which the display takes at once (display_set). And
+// screen's size too, which the display takes at once (display_set); where
+// the sizes are the screen's own modes (c4pc on a PC), as many as it has,
+// one stepped to with < and > and taken with Apply. And
 // in a third column the interface's font, its face and size, with a
 // sample: every window's titles, menus and dialogs are drawn in it.
 // Under it, C4IX's accelerators (c4ix_accel.h): the machine's switch for
@@ -45,6 +47,8 @@ void about_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
 
 static char *dflt_label;
 static char sbuf[16];
+static int set_pick = 0 - 1;       // the mode stepped to, not yet applied (-1: the one in use)
+static int pick() { return set_pick >= 0 && set_pick < display_count() ? set_pick : display_cur(); }
 // the second column's width, and where the third starts and how wide it is
 // and where the accelerators' group is, under the font's sample
 enum { SET_COL = 222, SET_X3 = 432, SET_COL3 = 146, SET_ACC = 250 };
@@ -55,6 +59,7 @@ int settings_open() {
     w = win_first();
     while (w) { if (w->used && w->kind == K_SETTINGS) { win_raise(w->id); return w->id; } w = w->next; }
     dflt_label = "Defaults";
+    set_pick = 0 - 1;
     return win_open(K_SETTINGS, "Settings", 590, 450, 0);
 }
 
@@ -84,8 +89,16 @@ void settings_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
     // the screen's size: two to a row
     y = y + 102;
     ui_group(ox + 8, y, 180, 60, "Screen size");
-    i = 0;
-    while (i < display_count()) { ui_radio(ox + 18 + (i % 2) * 84, y + 16 + (i / 2) * 20, display_name(i), i == display_cur()); ++i; }
+    if (display_modes()) {
+        // the screen's modes: < the one stepped to > and Apply
+        ui_button(ox + 18, y + 18, 22, 22, "<", 0, 0);
+        d_text(ox + 46, y + 22, pick() == display_cur() ? C_DARK : C_TITLE, F_SANS, display_name(pick()));
+        ui_button(ox + 112, y + 18, 22, 22, ">", 0, 0);
+        ui_button(ox + 138, y + 18, 44, 22, "Apply", 0, pick() != display_cur());
+    } else {
+        i = 0;
+        while (i < display_count()) { ui_radio(ox + 18 + (i % 2) * 84, y + 16 + (i / 2) * 20, display_name(i), i == display_cur()); ++i; }
+    }
     // the preview: the desktop, an inactive window, an active one
     x = ox + 200; y = oy + 14;
     d_rect(x, y, SET_COL, 170, C_DESK);
@@ -167,8 +180,14 @@ void settings_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
         ++i;
     }
     // the screen's size (settings_draw)
+    if (display_modes()) {
+        k = pick();
+        if (ui_hit(x, y, 18, sy + 102 + 18, 22, 22)) { if (k > 0) set_pick = k - 1; mark_win_dirty(w); return; }
+        if (ui_hit(x, y, 112, sy + 102 + 18, 22, 22)) { if (k + 1 < display_count()) set_pick = k + 1; mark_win_dirty(w); return; }
+        if (ui_hit(x, y, 138, sy + 102 + 18, 44, 22)) { set_pick = 0 - 1; if (k != display_cur()) display_set(k); else mark_win_dirty(w); return; }
+    }
     i = 0;
-    while (i < display_count()) {
+    while (!display_modes() && i < display_count()) {
         if (ui_hit(x, y, 14 + (i % 2) * 84, sy + 102 + 14 + (i / 2) * 20, 80, 18)) { display_set(i); return; }
         ++i;
     }

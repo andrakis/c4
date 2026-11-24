@@ -790,9 +790,9 @@ desktop waited until it was done. C4IX does the same.
   every key is the game's, so Ctrl-C cannot reach its Terminal. A game
   ends from its menu. A stuck one has to be killed from the page's
   console: Ctrl-C there stops top, and `kill` takes the game's id from
-  `ps`. Its death gives the desktop the display back. Windows' Alt-Tab,
-  which put the game in the background and brought it back later, would
-  need the game to give way as the desktop does.
+  `ps`. Its death gives the desktop the display back. *Since part
+  thirty, Alt+Tab puts the game in the background and brings it back,
+  without the game's help.*
 - **`raycast -G` does not ask.** It is one image for the bare machine and
   C4IX, so it cannot make a C4IX system call. Run under the desktop, it
   still fights it.
@@ -1984,3 +1984,64 @@ Duke Nukem 3D's and Quake's windows could use the same op.
 - **Uploads in folders, and downloads** (463c096, 2026-11-11): an
   upload goes in `/home` or a game's `/home/NAME`; Files' File >
   Download, or `download FILE`, saves a file or a folder as a tar.
+
+## Part thirty: Alt+Tab, and the screen's own sizes (asked for 2026-11-24)
+
+On c4pc in VMware the user wanted to leave a fullscreen game for the
+desktop and come back, and more screen sizes than three. Part thirteen
+left Alt+Tab out: the display served one ring, and coming back to a game
+needed the game's help. Now the display keeps a *screen* for each
+program, and the kernel switches between them (src/c4ix/sys.c, "The
+display"; docs/c4pc.md, "The screen").
+
+- [x] **The display's screens** (libjs/gui-device.js, c4pc's gui.c):
+      SCREEN puts the one shown away whole -- rings, canvas, pictures,
+      pointer shape, size, the keys it was told are down (let go now,
+      and its focus lost) -- and brings another back as it was; SCRDROP
+      forgets one; SWITCH, armed, turns Alt+Tab into a request instead of
+      a key. CAPS says 16. libjs keeps the screens' registers, not their
+      canvases: the page has one, and the game's next frame fills it.
+- [x] **The kernel parks the game.** A program the desktop gives way to
+      gets a screen of its own, and SWITCH is armed while it has the
+      display. Alt+Tab then stops it (TF_PARKED: held, not run, until a
+      signal or the desktop wants it), shows the desktop's screen and
+      gives the desktop the display back as if the game had ended.
+      `udisplay(DISP_PARKED, i)` lists the parked, the last first;
+      `udisplay(DISP_RESUME, id)` gives one the display again, the
+      desktop standing aside as for a game that asks. Up to three at
+      once; one killed while parked has its screen forgotten. The sound
+      card is muted while a game is parked (its AdLib notes stay held:
+      Doom's music droned on), and unmuted when it is back, unless the
+      tray's volume was changed meanwhile.
+- [x] **The desktop's Alt+Tab** (shell.c): held Alt, each Tab steps
+      through the window in front, the parked games and the other windows
+      from the top down (Shift+Tab back), a box in the middle naming the
+      one stepped to; letting Alt go raises it, or resumes the game. So one
+      Alt+Tab goes back to where you were. Esc lets it be. The window kit
+      gained a `keyup` hook in its shell for Alt's release (wmcore.c's
+      `key` hook never saw key-ups; grin's `key` would have misread them).
+- [x] **The taskbar** has a button for each parked game, its task's name,
+      after the windows'; a click resumes it.
+- [x] **The screen's own sizes.** Where the display has modes of its own
+      (CAPS 32: c4pc on a PC, VMware's SVGA II or the BGA), the desktop
+      starts in the one the screen is in, and Settings' Screen size lists
+      them all, stepped through with `<` and `>` and taken with Apply: the
+      screen is put in that mode (GUI_MODE) and the desktop drawn at it,
+      pixel for pixel, picture, windows and taskbar laid out again.
+      desktop.cfg remembers it. Without modes (the page), the three sizes
+      and their radio buttons as before.
+- [x] Pinned by test-c4pc on c4pc-host: `doom` in the Terminal on a
+      screen of its own, Alt+Tab to the desktop (its screen, the taskbar
+      button), Alt+Tab back and Doom's frames arriving; Settings from
+      1024x768 up to 1280x1024 and down to 800x600, the desktop drawn at
+      each. Checked in QEMU with PS/2 keys and the SVGA.
+
+### Not done
+
+- A parked game's clock runs on while it is stopped, so a game that
+  keeps time by it may hurry to catch up when it is back.
+- The page cannot see Alt+Tab (the browser keeps it): libjs has the
+  device's half, not a way to press it.
+- A game running on another CPU is parked at its next trap there, and
+  could draw once more on the desktop's screen before it; the desktop
+  draws everything again on coming back anyway.

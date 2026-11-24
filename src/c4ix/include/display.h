@@ -21,13 +21,22 @@
 // udisplay(DISP_YIELD, 0), and is 2 until it has the display back (0).
 // src/c4ix/sys.c, "The display", has the kernel's half.
 //
+// Alt+Tab: where the display keeps a screen for each program (libjs's,
+// c4pc's), Alt+Tab while a game has it over the desktop parks the game --
+// it is stopped, its screen kept -- and gives the desktop the display
+// back. The desktop lists the parked with udisplay(DISP_PARKED, i), the
+// i'th one's task id or 0 past the last, and gives way to one with
+// udisplay(DISP_RESUME, id), 1 when it did; it then stands aside as for a
+// game that asked. The game goes on as if nothing had happened.
+//
 // C4IX only: a program for the bare machine as well must know where it
 // is before it asks (Wolfenstein 3D's plat-c4ix.c does).
 
 // libjs's display, taken from the desktop and given back (include/display.h)
 #ifndef __C4IX_DISPLAY_H
 #define __C4IX_DISPLAY_H 1
-enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_YIELDS = 1 };
+enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_PARKED = 5,
+       DISP_RESUME = 6, DISP_YIELDS = 1 };
 int  udisplay(int op, int flags);
 int  udisplay_take(int flags);
 void udisplay_give();

@@ -357,8 +357,9 @@ static void kbd_irq(void) {
 int mouse_init(void);
 int mouse_pending(void);
 void mouse_poll(gui *g);
-int screen_from_multiboot(const void *info);
-int screen_bga(int w, int h);
+int screen_init(const void *mb, int w, int h, int nosvga);
+int screen_modes(int *w, int *h, int n);
+int screen_mode(int w, int h);
 void screen_size(int *w, int *h);
 void screen_show(gui *g);
 void screen_console(const uint16_t *cells, int cur);
@@ -417,6 +418,8 @@ static void display_tick(machine *m) {
   if (vt_back) { vt_back = 0; g_ctrl = g_alt = 0; gui_redraw_all(g); }
   mouse_poll(g);
   gui_tick(g);
+  /* a mode asked for (the desktop's Settings): the screen in it, if it can be */
+  { int w, h; if (gui_mode_request(g, &w, &h)) { int ok = screen_mode(w, h); screen_size(&w, &h); gui_mode_now(g, w, h); if (!ok) con_puts("c4pc: the screen has no such mode\n"); } }
   static u32 flips; static i64 flip_at = -100000;
   if (gui_flips(g) != flips) { flips = gui_flips(g); flip_at = t; }
   if (gui_ring(g) || t - flip_at < 1000) {
@@ -590,7 +593,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   cmd[0] = 0;
   if (mb->flags & 4) { const char *s = (const char *)(uintptr_t)mb->cmdline; size_t n = strlen(s); if (n > 1023) n = 1023; memcpy(cmd, s, n); cmd[n] = 0; }
   char *args[64]; int nargs = split_args(cmd, args, 64);
-  u32 mb_arena = 0 /* all: below */; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, acpi = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0, vmware = 1;
+  u32 mb_arena = 0 /* all: below */; i64 maxc = -1; double mhz = -1 /* auto */; int stats = 0, nofpu = 0, fast = 0, realtime = 1, wc = 1, sound = 1, store = 1, store_create = 0, cdrom = 1, acpi = 1, clock_want = -1, mmu_on = 0, noaccel = 0, noosaccel = 0, gui_w = 0, gui_h = 0, cpus = 0, quantum = 0, vmware = 1, nosvga = 0;
   char *pargv[64]; int pargc = 0;
   int a = 0;
   if (nargs && args[0][0] != '-') a = 1;       /* the kernel's own name */
@@ -608,6 +611,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
       if (*p == 'x') p++;
       while (*p >= '0' && *p <= '9') gui_h = gui_h * 10 + (*p++ - '0');
     }
+    else if (!strcmp(args[a], "--no-svga")) nosvga = 1;         /* the BGA or GRUB's framebuffer, not VMware's SVGA II */
+    else if (!strcmp(args[a], "--soft-pointer")) { extern int screen_soft_pointer; screen_soft_pointer = 1; }
     else if (!strcmp(args[a], "--no-accel")) noaccel = 1;
     else if (!strcmp(args[a], "--no-osaccel")) noosaccel = 1;
     else if (!strcmp(args[a], "--fast")) fast = 1;
@@ -815,12 +820,21 @@ void pc_main(u32 magic, struct mb_info *mb) {
     }
   }
   pc_m = m;
-  /* the display: GRUB's framebuffer, or the BGA's at --gui's size */
-  if (screen_from_multiboot(mb) || (gui_w > 0 && gui_h > 0 && screen_bga(gui_w, gui_h))) {
+  /* the display: the SVGA, the BGA or GRUB's framebuffer (screen.c), at
+   * --gui's size or GRUB's */
+  if (screen_init(mb, gui_w, gui_h, nosvga)) {
     int w, h; screen_size(&w, &h);
     { extern void screen_describe(void); screen_describe(); }
     if (wc) { extern const char *screen_wc(void); con_puts("c4pc: the framebuffer: "); con_puts(screen_wc()); con_puts("\n"); }
     m->gui = gui_new(m, w, h);
+    /* the modes it has, for the desktop's Settings (gui.c MODE) */
+    {
+      int mw[32], mh[32], n = screen_modes(mw, mh, 32);
+      gui_set_modes(m->gui, mw, mh, n, w, h);
+      con_puts("c4pc: screen modes");
+      for (int i = 0; i < n; i++) { con_puts(" "); con_dec(mw[i]); con_puts("x"); con_dec(mh[i]); }
+      con_puts("\n");
+    }
     dbg_m = m;
     int mouse = mouse_init();
     if (mouse) outb(0xA1, (u8)(inb(0xA1) & 0xEF));   /* IRQ 12 (the SCI's may be unmasked: acpi.c) */

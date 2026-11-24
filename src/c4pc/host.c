@@ -180,7 +180,10 @@ static void write_png(const char *path, const u32 *px, int w, int h) {
 /* --events FILE: a line each, "MS what ...", MS the machine's own
  * milliseconds (machine_sim_ms), so a run is the same every time:
  *   move X Y | down X Y B | up X Y B | click X Y | key CODE CHAR MODS |
+ *   keydown CODE CHAR MODS | keyup CODE CHAR MODS (a key held: Alt+Tab) |
  *   type TEXT | shot FILE.png | quit |
+ *   stats: the display's counts so far, a line on stderr ("c4pc: at MS
+ *   ms: screen S, N presents, N flips, N commands, N switches") |
  *   packet DX DY BUTTONS: a PS/2 packet's worth, motion and buttons at
  *   once (pc/screen.c mouse_poll), BUTTONS a mask */
 typedef struct { i64 ms; char what[16]; int a, b, c; char s[256]; } gev;
@@ -219,6 +222,13 @@ static int run_events(machine *m) {
     else if (!strcmp(e->what, "click")) { gui_mouse_at(g, e->a, e->b, 0); gui_mouse(g, 0, 0, 1, 0); gui_mouse(g, 0, 0, 0, 0); }
     else if (!strcmp(e->what, "packet")) gui_mouse(g, e->a * 256, e->b * 256, e->c, 0);
     else if (!strcmp(e->what, "key")) { gui_key(g, 1, e->a, e->b, e->c); gui_key(g, 0, e->a, e->b, e->c); }
+    else if (!strcmp(e->what, "keydown")) gui_key(g, 1, e->a, e->b, e->c);
+    else if (!strcmp(e->what, "keyup")) gui_key(g, 0, e->a, e->b, e->c);
+    else if (!strcmp(e->what, "stats")) {
+      u32 c, p, ev, fl; gui_stats(g, &c, &p, &ev, &fl);
+      fprintf(stderr, "c4pc: at %lld ms: screen %d, %u presents, %u flips, %u commands, %u switches\n",
+              (long long)now, gui_screen(g), p, fl, c, gui_switches(g));
+    }
     else if (!strcmp(e->what, "type")) { for (char *p = e->s; *p; p++) type_char(g, *p == '|' ? '\n' : *p); }
     else if (!strcmp(e->what, "shot")) { int w, h; u32 *px = gui_front(g, &w, &h); write_png(e->s, px, w, h); fprintf(stderr, "c4pc: %s at %lld ms\n", e->s, (long long)now); }
     else if (!strcmp(e->what, "quit")) return 1;
@@ -265,6 +275,7 @@ static void on_term(int s) { (void)s; host_terms++; }
 int main(int argc, char **argv) {
   u32 mb = 32; double maxc = -1, mhz = 20; int cpus = 0, quantum = 0, parallel = 0, stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0, c4m_info = 0;
   const char *shot = 0, *wav = 0;
+  int modes = 0;
   drive *drives[16]; int nd = 0;
   const char *cds[4]; int ncd = 0;
   const char *disks[8]; int ndisk = 0;
@@ -307,6 +318,7 @@ int main(int argc, char **argv) {
     }
     else if (!strcmp(f, "--disk") && i + 1 < argc && ndisk < 8) disks[ndisk++] = argv[++i];  /* a disk image as a block device */
     else if (!strcmp(f, "--gui") && i + 1 < argc) { if (sscanf(argv[++i], "%dx%d", &gw, &gh) != 2) usage(); }   /* fit a display (gui.c) */
+    else if (!strcmp(f, "--modes")) modes = 1;      /* ... and give it a PC's list of modes (gui.c MODE), taken as asked */
     else if (!strcmp(f, "--events") && i + 1 < argc) load_events(argv[++i]);
     else if (!strcmp(f, "--shot") && i + 1 < argc) shot = argv[++i];    /* the display as a PNG at the end */
     else if (!strcmp(f, "--wav") && i + 1 < argc) wav = argv[++i];      /* cli.js's: fit a sound card, write what it played */
@@ -356,6 +368,11 @@ int main(int argc, char **argv) {
   }
   if (cpus > 0) smp_new(m, cpus, quantum);
   if (gw > 0 && gh > 0) m->gui = gui_new(m, gw, gh);
+  if (m->gui && modes) {
+    static const int mw[] = { 640, 800, 1024, 1152, 1280, 1280, 1280, 1366, 1440, 1600, 1680, 1920, 1920 };
+    static const int mh[] = { 480, 600, 768, 864, 720, 800, 1024, 768, 900, 1200, 1050, 1080, 1200 };
+    gui_set_modes(m->gui, mw, mh, (int)(sizeof mw / sizeof mw[0]), gw, gh);
+  }
   if (wav) m->snd = snd_new(m, 44100, 0);
   if (!inter && !isatty(0)) {
     int c;
@@ -401,6 +418,7 @@ int main(int argc, char **argv) {
     }
     if (m->gui) {
       gui_tick(m->gui);
+      { int w, h; if (gui_mode_request(m->gui, &w, &h)) gui_mode_now(m->gui, w, h); }   /* --modes: any it lists */
       if (run_events(m)) { status = 0; break; }
       if (r == STOP_INPUT && !inter) { struct timespec ts = {0, 1000000}; nanosleep(&ts, 0); continue; }
     }

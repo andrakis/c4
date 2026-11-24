@@ -321,6 +321,7 @@ struct wk_shell {
     int  (*pointer)(int x, int y);    // PTR_* there, or -1 for the kit's
     void (*answer)(int dialog, int result);                 // a dialog with no owner
     void (*resized)();                // the screen changed size: set the area, relayout
+    int  (*keyup)(int code, int ch, int mods);              // a key let go, before the focused window: 1 took it
 };
 
 void wk_init(struct wk_shell *s);     // after gui_attach: the screen's size from the display

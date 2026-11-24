@@ -912,6 +912,7 @@ static void key_down(int code, int ch, int mods) {
 // A key let go matters only to a canvas: a game holds keys down.
 static void key_up(int code, int ch, int mods) {
     struct win *f;
+    if (shell && shell->keyup && shell->keyup(code, ch, mods)) return;
     if (!(f = focus())) return;
     if (f->cls->key) f->cls->key(f->id, 0, code, ch, mods);
 }

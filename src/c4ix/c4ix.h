@@ -37,9 +37,13 @@ enum { C4IX_IMG_CODE = 0x1f0, C4IX_IMG_DATA = 0x1f4, C4IX_IMG_BSS = 0x1f8, C4IX_
 enum { C4IX_DISK_DRIVE = 0x13c, C4IX_DISK_COUNT = 0x188, C4IX_DISK_RO = 0x18c,
        C4IX_MBOX_BASE = 0x1b4, C4IX_MBOX_LEN = 0x1b8,
        C4IX_GUI_CAPS = 0x400, C4IX_GUI_W = 0x404, C4IX_GUI_H = 0x408,
+       // its screens (sys.c, "The display"): the one shown, one forgotten, Alt+Tab
+       C4IX_GUI_SCREEN = 0x444, C4IX_GUI_SCRDROP = 0x448, C4IX_GUI_SWITCH = 0x44c, C4IX_GUI_CAP_SCREENS = 16,
        C4IX_I_PIT = 0x800, C4IX_I_MBOX = 0x2000, C4IX_I_SND = 0x8000, C4IX_I_FPU = 0x10000, C4IX_I_DRV = 0x40000 };
 // The sound card's RESET (libjs/snd-device.js): every voice and the OPL quiet
 enum { C4IX_SND_RESET = 0x4b8 };
+// ... and its master volume, bit 8 mute (sys.c: quiet while a game is parked)
+enum { C4IX_SND_MASTER = 0x4bc, C4IX_SND_MUTE = 256 };
 // The heap's extent and use (c4bb's HEAP_BASE and HEAP_END, libjs's
 // HEAP_USED, src/c4bb/sim/devices.js), for the CPU snapshot.
 enum { C4IX_HEAP_BASE = 0x144, C4IX_HEAP_END = 0x148, C4IX_HEAP_USED = 0x1c0, C4IX_I_C4MJS = 8 };
@@ -155,7 +159,8 @@ extern int sched_halt_how;
 extern int sched_halting;
 int sched_halt(int how, char *why);
 // SYS_DISPLAY's operations, and TAKE's flag (include/display.h)
-enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_YIELDS = 1 };
+enum { DISP_TAKE = 0, DISP_STATE = 1, DISP_YIELD = 2, DISP_GIVE = 3, DISP_PIN = 4, DISP_PARKED = 5,
+       DISP_RESUME = 6, DISP_YIELDS = 1 };
 // What SYS_STAT and SYS_FSTAT write, a word each, as many as the caller
 // asks for: SYS_STAT's callers from before M7c ask for none, which is
 // the first four.
@@ -202,6 +207,8 @@ int  sys_getcwd(char *buf, int len);
 int  sys_readdir(char *path, int index, char *name);  // <0 end, else isdir
 void sys_pmviolation(int op, int *sp, int *returnpc, int *a);
 void sys_display_drop(int id);
+void sys_display_tick();               // each ms, while disp_armed (sched_tick): Alt+Tab
+extern int disp_armed;
 
 // Set when a syscall could not complete because the calling task had
 // to block. The trap handler rewinds the saved pc by one word so the
@@ -731,7 +738,8 @@ enum {
     TF_HELD = 32,              // held (mmu.c)
     TF_NOPAGE = 64,            // TS_ZOMBIE or TS_VFORK: its pages stay
     TF_PINNED = 128,           // cpumask: only some CPUs may run it
-    TF_PINSOFT = 256           // ... CPU 0 by default, not asked for: its children do not inherit it
+    TF_PINSOFT = 256,          // ... CPU 0 by default, not asked for: its children do not inherit it
+    TF_PARKED = 512            // a game Alt+Tab put in the background: not run (sys.c, "The display")
 };
 #define TF_SET(t, b) ((t)->tflags = (t)->tflags | (b))
 #define TF_CLR(t, b) ((t)->tflags = (t)->tflags & ~(b))

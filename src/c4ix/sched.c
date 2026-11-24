@@ -165,9 +165,9 @@ static int sched_allows(struct task *n, int k) {
     return !m || (m & (1 << k)) != 0;
 }
 
-// Is N held (mmu.c, load control)? Not with a signal to take: it runs
-// to take it.
-#define sched_held(n) (((n)->tflags & (TF_HELD | TF_SIG)) == TF_HELD)
+// Is N held (mmu.c, load control), or parked (sys.c: a game Alt+Tab put
+// in the background)? Not with a signal to take: it runs to take it.
+#define sched_held(n) (((n)->tflags & (TF_HELD | TF_PARKED)) && !((n)->tflags & TF_SIG))
 
 // Whether this CPU may run N: not while another CPU is on its stack,
 // an idle task only on its own CPU, a kernel task only on CPU 0, and a
@@ -369,6 +369,8 @@ static void sched_tick(int now) {
         sched_unblocked(n);
         n = x;
     }
+    // Alt+Tab, while a game has the display over the desktop (sys.c)
+    if (disp_armed) sys_display_tick();
     // the watch: a walk of the whole table, for what should never be
     if (now - sched_watchms < SCHED_WATCH_MS) return;
     sched_watchms = now;
@@ -913,7 +915,7 @@ void sched_setnice(struct task *t, int nice) {
 
 // May the task running here go on running here? Only being held or pinned can
 // say no; anything else sched_mine asks is true of it.
-#define SCHED_STAYS(t) (!((t)->tflags & (TF_HELD | TF_PINNED)) || sched_mine(t))
+#define SCHED_STAYS(t) (!((t)->tflags & (TF_HELD | TF_PARKED | TF_PINNED)) || sched_mine(t))
 
 // A task that has woken and is more favoured than T, this CPU's to run:
 // the most favoured, or 0

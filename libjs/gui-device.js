@@ -35,6 +35,29 @@
 //
 //   0x440 CLOCK    r    the host's local time of day, in seconds since midnight
 //
+//   0x444 SCREEN   r/w  the screen shown (0-3). A write puts the one shown
+//                       away -- its rings, size, framebuffer, event mask,
+//                       pointer shape, the keys it was told are down (let
+//                       go now, and its focus) -- and brings that one back
+//                       as it was, or a new one. The kernel's (C4IX sys.c,
+//                       "The display"): a screen for each program that has
+//                       the whole display, so a game parked by Alt+Tab
+//                       comes back drawing. The page has one canvas: told
+//                       the screen's size and pointer again, and the
+//                       screen's next frame fills it (c4pc keeps each
+//                       screen's canvas and pictures too)
+//   0x448 SCRDROP  w    screen n, put away, forgotten (its program is gone)
+//   0x44C SWITCH   r/w  w: 1 watch for Alt+Tab, 0 not; either clears it.
+//                       r: 1 when Alt+Tab was pressed while watched for,
+//                       which then goes no further
+//   0x450 MODE     r/w  the screen's mode, (w << 16) | h, where the platform
+//                       has modes of its own (c4pc's PC: VMware's SVGA II,
+//                       the BGA); 0 here, where the page scales the display
+//   0x454 MODEIX   w    which of the modes MODEWH reads
+//   0x458 MODEWH   r    that mode, (w << 16) | h; 0 past the last (here, always)
+//
+// CAPS also says 16, the screens; 32, modes (never here).
+//
 // In the frames the host makes (FB, FBREF) the height word carries the
 // mode in bits 16 and up: h | (mode << 16).
 //
@@ -55,7 +78,13 @@ export const GUI = {
   CAPS: 0x400, W: 0x404, H: 0x408, RINGLEN: 0x40c, RING: 0x410, BELL: 0x414,
   EVMASK: 0x418, IRQ: 0x41c, MOUSE: 0x420, BUTTONS: 0x424, TICKS: 0x428, DROPPED: 0x42c,
   FB: 0x430, FBPITCH: 0x434, FBFLIP: 0x438, FBMODE: 0x43c, CLOCK: 0x440,
+  SCREEN: 0x444, SCRDROP: 0x448, SWITCH: 0x44c, MODE: 0x450, MODEIX: 0x454, MODEWH: 0x458,
 };
+export const CAPS_SCREENS = 16, CAPS_MODES = 32;
+const NSCREENS = 4, KEY_TAB = 9, MOD_ALT = 4;
+// what a screen is: SCREEN puts these away and brings them back
+const SCREEN_STATE = ['w', 'h', 'ringLen', 'ringBase', 'ringSpace', 'mbox', 'evmask', 'irqOn', 'irqCount',
+                      'fbBase', 'fbPitch', 'fbMode', 'unclipped', 'cursor', 'keys'];
 export const CMD = {
   CLEAR: 1, RECT: 2, RECTO: 3, LINE: 4, CIRCLE: 5, TEXT: 6, PIXEL: 7, PRESENT: 8,
   SIZE: 9, IMGDEF: 10, IMG: 11, CLIP: 12, NOCLIP: 13,
@@ -111,6 +140,10 @@ export class GuiDevice {
     this.sizeReq = null;
     this.t0 = Date.now();
     this.commands = 0; this.presents = 0; this.events = 0; this.lostCommands = 0;
+    this.cursor = 0;                     // the last CURSOR, shown again when the screen comes back
+    this.keys = new Set();               // the keys it was told are down
+    this.screen = 0; this.saved = [];    // the screens put away (SCREEN)
+    this.swArmed = 0; this.swReq = 0; this.swTab = 0; this.switches = 0;
   }
 
   attach(machine) {
@@ -120,7 +153,7 @@ export class GuiDevice {
 
   read32(addr) {
     switch (addr) {
-      case GUI.CAPS: return 1 | 2 | 4 | 8;
+      case GUI.CAPS: return 1 | 2 | 4 | 8 | CAPS_SCREENS;
       case GUI.FB: return this.fbBase;
       case GUI.FBPITCH: return this.fbPitch;
       case GUI.FBMODE: return this.fbMode;
@@ -136,6 +169,8 @@ export class GuiDevice {
       case GUI.TICKS: return (Date.now() - this.t0) | 0;
       case GUI.DROPPED: return this.dropped;
       case GUI.CLOCK: { const d = new Date(); return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds(); }
+      case GUI.SCREEN: return this.screen;
+      case GUI.SWITCH: return this.swReq;
       default: return 0;
     }
   }
@@ -175,8 +210,47 @@ export class GuiDevice {
       case GUI.FBMODE: this.fbMode = v & 1; return;
       case GUI.FBFLIP: this.flip((v >>> 16) & 0xffff, v & 0xffff); return;
       case GUI.IRQ: this.irqOn = v ? 1 : 0; return;
+      case GUI.SCREEN: this.screenTo(v | 0); return;
+      case GUI.SCRDROP: if (v >= 0 && v < NSCREENS && v !== this.screen) this.saved[v] = null; return;
+      case GUI.SWITCH: this.swArmed = v & 1; this.swReq = 0; return;
       default: return;
     }
+  }
+
+  // The one shown put away (the keys it was told are down let go, and its
+  // focus), screen N's brought back, or a new one the display's size; the
+  // page told its size and pointer, and the next frame is its
+  screenTo(n) {
+    if (n < 0 || n >= NSCREENS || n === this.screen) return;
+    this.pull();
+    for (const code of this.keys) this.post(EV.KEYUP, [code, 0, 0]);
+    this.keys = new Set();
+    for (let b = 0; b < 3; b++) if ((this.buttons >> b) & 1) this.post(EV.UP, [this.mouseX, this.mouseY, b]);
+    this.post(EV.FOCUS, [0]);
+    const keep = {};
+    for (const k of SCREEN_STATE) keep[k] = this[k];
+    this.saved[this.screen] = keep;
+    const back = this.saved[n];
+    if (back) { for (const k of SCREEN_STATE) this[k] = back[k]; this.saved[n] = null; }
+    else {
+      this.ringLen = 0; this.ringBase = 0; this.ringSpace = 0; this.mbox = null; this.evmask = 2 | 4 | 8;
+      this.irqOn = 0; this.irqCount = 0; this.fbBase = 0; this.fbPitch = 0; this.fbMode = 0;
+      this.unclipped = true; this.cursor = 0; this.keys = new Set();
+    }
+    this.screen = n;
+    this.switches++;
+    this.queue.push(4, CMD.SIZE, this.w, this.h, 3, CMD.CURSOR, this.cursor);
+    this.post(EV.FOCUS, [1]);
+  }
+
+  // an event into the ring, as event() sends one
+  post(type, payload) {
+    if (!this.mbox || !(this.evmask & MASK[type])) return;
+    this.events++;
+    if (!this.mbox.send(type, payload)) { this.dropped++; return; }
+    if (type === EV.KEYDOWN) this.keys.add(payload[0]);
+    else if (type === EV.KEYUP) this.keys.delete(payload[0]);
+    if (this.irqOn) this.irqCount++;
   }
 
   // Take every command the guest has written.
@@ -190,6 +264,7 @@ export class GuiDevice {
       if (f.type === CMD.BLIT8) { this.blit8Checked(f.payload); continue; }
       if (f.type === CMD.CLIP) { const [x, y, w, h] = f.payload; this.unclipped = x <= 0 && y <= 0 && x + w >= this.w && y + h >= this.h; }
       else if (f.type === CMD.NOCLIP) this.unclipped = true;
+      else if (f.type === CMD.CURSOR) this.cursor = f.payload[0] | 0;
       if (this.queued + this.queue.length + 2 + f.payload.length > QUEUE_LIMIT) { this.lostCommands++; continue; }
       this.queue.push(2 + f.payload.length, f.type);
       for (let i = 0; i < f.payload.length; i++) this.queue.push(f.payload[i]);
@@ -406,8 +481,13 @@ export class GuiDevice {
         break;
       case 'down':    type = EV.DOWN;    payload = [x, y, m.button | 0]; break;
       case 'up':      type = EV.UP;      payload = [x, y, m.button | 0]; break;
-      case 'keydown': type = EV.KEYDOWN; payload = [m.code | 0, m.char | 0, m.mods | 0]; break;
-      case 'keyup':   type = EV.KEYUP;   payload = [m.code | 0, m.char | 0, m.mods | 0]; break;
+      case 'keydown':
+        // Alt+Tab while the kernel watches for it (SWITCH): its, not the program's
+        if ((m.code | 0) === KEY_TAB && (m.mods & MOD_ALT) && this.swArmed) { this.swReq = 1; this.swTab = 1; return; }
+        type = EV.KEYDOWN; payload = [m.code | 0, m.char | 0, m.mods | 0]; break;
+      case 'keyup':
+        if ((m.code | 0) === KEY_TAB && this.swTab) { this.swTab = 0; return; }
+        type = EV.KEYUP;   payload = [m.code | 0, m.char | 0, m.mods | 0]; break;
       case 'resize':  type = EV.RESIZE;  payload = [m.w | 0, m.h | 0]; this.w = m.w | 0; this.h = m.h | 0; break;
       case 'focus':   type = EV.FOCUS;   payload = [m.focus ? 1 : 0]; break;
       case 'wheel':   type = EV.WHEEL;   payload = [x, y, m.dy | 0]; break;
@@ -417,10 +497,7 @@ export class GuiDevice {
     if (type === EV.MOVE || type === EV.REL) this.buttons = m.buttons | 0;
     if (type === EV.DOWN) this.buttons |= 1 << (m.button | 0);
     if (type === EV.UP) this.buttons &= ~(1 << (m.button | 0));
-    if (!this.mbox || !(this.evmask & MASK[type])) return;
-    this.events++;
-    if (!this.mbox.send(type, payload)) { this.dropped++; return; }
-    if (this.irqOn) this.irqCount++;
+    this.post(type, payload);
   }
 
   irqPending() { return this.irqCount > 0; }
@@ -430,6 +507,6 @@ export class GuiDevice {
     return { w: this.w, h: this.h, attached: !!this.mbox, commands: this.commands,
              presents: this.presents, events: this.events, dropped: this.dropped,
              lostCommands: this.lostCommands, flips: this.flips, flipMs: Math.round(this.flipMs),
-             coveredDrops: this.coveredDrops };
+             coveredDrops: this.coveredDrops, screen: this.screen, switches: this.switches };
   }
 }

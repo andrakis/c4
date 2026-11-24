@@ -29,7 +29,12 @@ enum {
   CAPS = 0x400, W = 0x404, H = 0x408, RINGLEN = 0x40c, RING = 0x410, BELL = 0x414,
   EVMASK = 0x418, IRQ = 0x41c, MOUSE = 0x420, BUTTONS = 0x424, TICKS = 0x428, DROPPED = 0x42c,
   FB = 0x430, FBPITCH = 0x434, FBFLIP = 0x438, FBMODE = 0x43c, CLOCK = 0x440,
+  SCREEN = 0x444, SCRDROP = 0x448, SWITCH = 0x44c, MODE = 0x450, MODEIX = 0x454, MODEWH = 0x458,
 };
+/* CAPS: the command ring, events, a framebuffer, text; screens (SCREEN,
+ * SCRDROP, SWITCH); modes of the screen's own (MODE: a platform with them) */
+enum { CAPS_BASE = 1 | 2 | 4 | 8, CAPS_SCREENS = 16, CAPS_MODES = 32 };
+enum { NSCREENS = 4, NMODES = 32, KEY_TAB = 9, MOD_ALT = 4 };
 enum {
   C_CLEAR = 1, C_RECT = 2, C_RECTO = 3, C_LINE = 4, C_CIRCLE = 5, C_TEXT = 6, C_PIXEL = 7, C_PRESENT = 8,
   C_SIZE = 9, C_IMGDEF = 10, C_IMG = 11, C_CLIP = 12, C_NOCLIP = 13, C_TEXT2 = 14, C_CURSOR = 15, C_BLIT8 = 16,
@@ -48,15 +53,20 @@ static const struct { int face, k100; } FONTMAP[9] = {
 
 typedef struct { int w, h; u32 *px; u8 *alpha; } image;
 
+/* A screen: everything one program set the display to -- its rings, its
+ * canvas, its pictures, its pointer, its size -- from w to scr_end, which
+ * SCREEN puts away whole and brings back whole. The kernel has a screen
+ * for each program that has had the whole display (src/c4ix/sys.c, "The
+ * display"): the desktop's, a game's. Put away, a screen is neither drawn
+ * on nor sent events; brought back, it is shown as it was, and its program
+ * goes on drawing where it left off. */
 struct gui {
   machine *m;
   int w, h;                            /* W and H: the display's size */
   i32 ring_len, ring_base; u32 ring_space;
   int mb; u32 tg_at, tg_cap, th_at, th_cap; i32 seq;   /* the rings, by word index */
   i32 evmask, irq_on, irq_count;
-  i32 mouse_x, mouse_y, buttons, dropped;
   i32 fb_base, fb_pitch, fb_mode;
-  i64 t0;
   int size_req;
   /* the canvas */
   u32 *back, *front; int cw, ch;
@@ -66,11 +76,25 @@ struct gui {
   int cursor;
   int bx0, by0, bx1, by1;              /* the back drawn on since the last present */
   int fx0, fy0, fx1, fy1;              /* the front changed since the platform last looked */
+  u8 keys[32];                         /* the keys it was told are down, a bit each */
+  int scr_end;
+  /* ---- the display's own ---- */
+  i32 mouse_x, mouse_y, buttons, dropped;
+  i64 t0;
   /* the pointer, in the canvas */
   int px, py, pfx, pfy;                /* and its fraction, in 1/256 */
   u32 commands, presents, events, lost, flips;
   i32 *frames; u32 fcap;               /* frames taken from the ring, to draw */
+  /* the screens: the one shown, the others put away; Alt+Tab, watched for
+   * (SWITCH armed), pressed, and its Tab's release still to be swallowed */
+  int screen; u8 *saved[NSCREENS];
+  int sw_armed, sw_req, sw_tab;
+  u32 switches;
+  /* the platform's modes (pc.c, screen.c), the one it is in, one asked for */
+  int nmodes, mode_w[NMODES], mode_h[NMODES], mode_ix, mode_cw, mode_ch, mode_req, req_w, req_h;
 };
+#define SCR_AT __builtin_offsetof(struct gui, w)
+#define SCR_LEN (__builtin_offsetof(struct gui, scr_end) - SCR_AT)
 
 /* ---- memory ----
  * The rings, the pixels and the palettes are the guest's words (libjs/
@@ -461,7 +485,58 @@ static void send(gui *g, i32 type, const i32 *pl, int n) {
   if (!g->mb || !(g->evmask & MASK[type])) return;
   g->events++;
   if (!mb_send(g, type, pl, n)) { g->dropped++; return; }
+  if ((type == EV_KEYDOWN || type == EV_KEYUP) && pl[0] >= 0 && pl[0] < 256) {
+    u8 bit = (u8)(1 << (pl[0] & 7));
+    if (type == EV_KEYDOWN) g->keys[pl[0] >> 3] |= bit; else g->keys[pl[0] >> 3] &= (u8)~bit;
+  }
   if (g->irq_on) g->irq_count++;
+}
+
+/* ---- the screens ---- */
+/* the one shown is put away: the keys and buttons it was told are down
+ * let go, and its focus gone, so that it finds nothing held when it is
+ * back; what it drew and did not ring for, drawn */
+static void screen_leave(gui *g) {
+  pull(g);
+  for (int c = 0; c < 256; c++)
+    if (g->keys[c >> 3] & (1 << (c & 7))) { i32 pl[3] = {c, 0, 0}; send(g, EV_KEYUP, pl, 3); }
+  memset(g->keys, 0, sizeof g->keys);
+  for (int b = 0; b < 3; b++)
+    if ((g->buttons >> b) & 1) { i32 pl[3] = {g->px, g->py, b}; send(g, EV_UP, pl, 3); }
+  i32 f = 0; send(g, EV_FOCUS, &f, 1);
+}
+static void image_free(void *p) { image *im = p; xfree(im->px); xfree(im->alpha); xfree(im); }
+/* a screen put away, forgotten: its canvas and pictures freed */
+static void screen_free(u8 *saved) {
+  gui t;
+  memcpy((u8 *)&t + SCR_AT, saved, SCR_LEN);
+  xfree(t.back); xfree(t.front);
+  imap_free(t.images, image_free);
+  xfree(saved);
+}
+/* screen N shown: the one shown put away, N's brought back as it was (a
+ * new one, the size the display was, if it has none) and all of it shown */
+static void screen_to(gui *g, int n) {
+  if (n < 0 || n >= NSCREENS || n == g->screen) return;
+  int w = g->cw, h = g->ch;
+  screen_leave(g);
+  u8 *keep = xmalloc(SCR_LEN);
+  memcpy(keep, (u8 *)g + SCR_AT, SCR_LEN);
+  g->saved[g->screen] = keep;
+  if (g->saved[n]) { memcpy((u8 *)g + SCR_AT, g->saved[n], SCR_LEN); xfree(g->saved[n]); g->saved[n] = 0; }
+  else {
+    memset((u8 *)g + SCR_AT, 0, SCR_LEN);
+    g->w = w; g->h = h;
+    g->evmask = 2 | 4 | 8;
+    g->images = imap_new();
+    canvas_new(g, w, h);
+  }
+  g->screen = n;
+  g->switches++;
+  if (g->px >= g->cw) g->px = g->cw - 1;
+  if (g->py >= g->ch) g->py = g->ch - 1;
+  g->fx0 = 0; g->fy0 = 0; g->fx1 = g->cw; g->fy1 = g->ch;
+  i32 f = 1; send(g, EV_FOCUS, &f, 1);
 }
 
 /* ---- the platform's side ---- */
@@ -488,7 +563,7 @@ void gui_release(gui *g) {
 
 i32 gui_read32(gui *g, u32 a) {
   switch (a) {
-    case CAPS: return 1 | 2 | 4 | 8;
+    case CAPS: return CAPS_BASE | CAPS_SCREENS | (g->nmodes ? CAPS_MODES : 0);
     case FB: return g->fb_base;
     case FBPITCH: return g->fb_pitch;
     case FBMODE: return g->fb_mode;
@@ -504,6 +579,10 @@ i32 gui_read32(gui *g, u32 a) {
     case TICKS: return (i32)(plat_now_ms() - g->t0);
     case DROPPED: return g->dropped;
     case CLOCK: return plat_clock_secs();
+    case SCREEN: return g->screen;
+    case SWITCH: return g->sw_req;
+    case MODE: return g->nmodes ? (i32)((u32)g->mode_cw << 16 | (u32)g->mode_ch) : 0;
+    case MODEWH: return g->mode_ix >= 0 && g->mode_ix < g->nmodes ? (i32)((u32)g->mode_w[g->mode_ix] << 16 | (u32)g->mode_h[g->mode_ix]) : 0;
     default: return 0;
   }
 }
@@ -537,6 +616,15 @@ void gui_write32(gui *g, u32 a, i32 v) {
     case FBMODE: g->fb_mode = v & 1; return;
     case FBFLIP: pull(g); flip(g, (int)(((u32)v >> 16) & 0xffff), (int)(v & 0xffff)); return;
     case IRQ: g->irq_on = v ? 1 : 0; return;
+    case SCREEN: screen_to(g, v); return;
+    case SCRDROP: if (v >= 0 && v < NSCREENS && v != g->screen && g->saved[v]) { screen_free(g->saved[v]); g->saved[v] = 0; } return;
+    case SWITCH: g->sw_armed = v & 1; g->sw_req = 0; return;
+    case MODE: {
+      int w = (int)(((u32)v >> 16) & 0xffff), h = (int)(v & 0xffff);
+      for (int i = 0; i < g->nmodes; i++) if (g->mode_w[i] == w && g->mode_h[i] == h) { g->req_w = w; g->req_h = h; g->mode_req = 1; }
+      return;
+    }
+    case MODEIX: g->mode_ix = v; return;
     default: return;
   }
 }
@@ -590,7 +678,12 @@ void gui_mouse(gui *g, int dx256, int dy256, int buttons, int wheel) {
 void gui_mouse_at(gui *g, int x, int y, int buttons) {
   gui_mouse(g, (x - g->px) * 256 - g->pfx, (y - g->py) * 256 - g->pfy, buttons, 0);
 }
+/* Alt+Tab, while the kernel watches for it (SWITCH armed: a program has
+ * the whole display over the desktop), is not the program's: it asks the
+ * kernel to switch (SWITCH reads 1), and its Tab's release goes nowhere */
 void gui_key(gui *g, int down, int code, int ch, int mods) {
+  if (code == KEY_TAB && down && (mods & MOD_ALT) && g->sw_armed) { g->sw_req = 1; g->sw_tab = 1; return; }
+  if (code == KEY_TAB && !down && g->sw_tab) { g->sw_tab = 0; return; }
   i32 pl[3] = {code, ch, mods};
   send(g, down ? EV_KEYDOWN : EV_KEYUP, pl, 3);
 }
@@ -601,6 +694,23 @@ int gui_locked(gui *g) { return g->cursor == PTR_LOCK; }
 int gui_attached(gui *g) { return g->mb && (g->evmask & 4); }
 int gui_ring(gui *g) { return g->mb; }
 u32 gui_flips(gui *g) { return g->flips; }
+u32 gui_switches(gui *g) { return g->switches; }
+int gui_screen(gui *g) { return g->screen; }
+
+/* the platform's modes (screen_modes), and the one it is in */
+void gui_set_modes(gui *g, const int *w, const int *h, int n, int cw, int ch) {
+  if (n > NMODES) n = NMODES;
+  for (int i = 0; i < n; i++) { g->mode_w[i] = w[i]; g->mode_h[i] = h[i]; }
+  g->nmodes = n < 0 ? 0 : n;
+  g->mode_cw = cw; g->mode_ch = ch;
+}
+/* a mode the guest asked for (MODE), taken: 1 and its size */
+int gui_mode_request(gui *g, int *w, int *h) {
+  if (!g->mode_req) return 0;
+  g->mode_req = 0; *w = g->req_w; *h = g->req_h;
+  return 1;
+}
+void gui_mode_now(gui *g, int w, int h) { g->mode_cw = w; g->mode_ch = h; }
 
 u32 *gui_front(gui *g, int *w, int *h) { *w = g->cw; *h = g->ch; return g->front; }
 /* the whole display to be shown again (pc.c: back from the text console) */

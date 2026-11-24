@@ -124,7 +124,7 @@ static void rom_store(machine *m, word x, word v);
 /* a device's register read: 1, and *v, if there is one at r */
 static int dev_rd(machine *m, u32 r, word *v) {
   if (r >= DEV_BASE && r < DEV_END) { *v = dev_read32(m, r); return 1; }
-  if (r >= 0x400 && r < 0x480 && m->gui) { *v = gui_read32(m->gui, r & ~3u); return 1; }     /* bus.js: the display */
+  if (r >= 0x400 && r < 0x480 && m->gui) { *v = gui_rd(m->gui, m, r & ~3u); return 1; }     /* bus.js: the display */
   if (r >= 0x480 && r < 0x500 && m->snd) { *v = snd_read32(m->snd, r & ~3u); return 1; }     /* ... and the sound card */
   if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) { *v = blk_read32(m, r & ~3u); return 1; } /* ... and the disks */
   if (r >= HV_BASE && r < HV_END && m->dv->hv_rd) { *v = m->dv->hv_rd(m, r & ~3u); return 1; }   /* ... and the hypervisor */
@@ -132,7 +132,7 @@ static int dev_rd(machine *m, u32 r, word *v) {
 }
 static int dev_wr(machine *m, u32 r, word v) {
   if (r >= DEV_BASE && r < DEV_END) { dev_write32(m, r, (i32)v); return 1; }
-  if (r >= 0x400 && r < 0x480 && m->gui) { gui_write32(m->gui, r & ~3u, (i32)v); return 1; }
+  if (r >= 0x400 && r < 0x480 && m->gui) { gui_wr(m->gui, m, r & ~3u, (i32)v); return 1; }
   if (r >= 0x480 && r < 0x500 && m->snd) { snd_write32(m->snd, r & ~3u, (i32)v); return 1; }
   if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) { blk_write32(m, r & ~3u, (i32)v); return 1; }
   if (r >= HV_BASE && r < HV_END && m->dv->hv_wr) { m->dv->hv_wr(m, r & ~3u, (i32)v); return 1; }
@@ -140,7 +140,7 @@ static int dev_wr(machine *m, u32 r, word v) {
 }
 static int dev_wr8(machine *m, uword a, i32 v) {
   if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, (u32)a & ~3u, v & 0xff); return 1; }
-  if (a >= 0x400 && a < 0x480 && m->gui) { gui_write32(m->gui, (u32)a & ~3u, v & 0xff); return 1; }
+  if (a >= 0x400 && a < 0x480 && m->gui) { gui_wr(m->gui, m, (u32)a & ~3u, v & 0xff); return 1; }
   if (a >= 0x480 && a < 0x500 && m->snd) { snd_write32(m->snd, (u32)a & ~3u, v & 0xff); return 1; }
   return 0;
 }

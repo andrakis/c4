@@ -257,17 +257,22 @@ word par_rd32(machine *m, u32 a) {
     }
   }
   struct bus_q q = { 0, a, 0, 0, 0 };
+  mmu *u = m->dma_ctx;                  /* the asking task's: a fault clears dma_ctx (mmu.c fault) */
   asked(a < 2048 ? a >> 2 : 1023);
   ask(m, bus_fn, &q);
-  if (q.fault) mmu_rethrow(m->dma_ctx);
+  if (q.fault) mmu_rethrow(u);
   return q.r;
 }
 void par_wr(machine *m, u32 a, i32 v, int w8) {
   if (posted(a & ~3u)) { post(m, a, v, w8); return; }
   struct bus_q q = { w8 ? 2 : 1, a, v, 0, 0 };
+  /* the asking task's space, kept: the device's fault cleared dma_ctx on
+   * its way out (mmu.c fault), and rethrown through 0 it was a crash --
+   * the display's RING from splash on another CPU, its pages not yet in */
+  mmu *u = m->dma_ctx;
   asked(a < 2048 ? a >> 2 : 1023);
   ask(m, bus_fn, &q);
-  if (q.fault) mmu_rethrow(m->dma_ctx);
+  if (q.fault) mmu_rethrow(u);
 }
 void par_emit(machine *m, const u8 *b, u32 n) { struct emit_q q = { b, n }; ask(m, emit_fn, &q); }
 

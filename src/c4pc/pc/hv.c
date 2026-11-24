@@ -254,7 +254,11 @@ static int start(int id) {
   return 0;
 }
 
-void hv_attach(int id) {
+static void hv_attach_(int id);
+/* under the device lock: the guest's screen is redrawn while it may be
+ * drawing on its own processor (pc.c's Ctrl+Alt+Home calls it unlocked) */
+void hv_attach(int id) { lk(1); hv_attach_(id); lk(-1); }
+static void hv_attach_(int id) {
   if (id < 0 || id >= HV_MAX) return;
   if (id && (vms[id].state != S_RUN || !vms[id].m || !vms[id].m->gui)) return;
   if (attached == id) return;

@@ -378,6 +378,46 @@ grep -qE "^1213 74[0-9] CPU" $W/modes-texts.txt && ok "at 1366x768 the taskbar r
 grep -qE "^[0-9]+ 10[5-7][0-9] Go$" $W/modes-texts.txt && ok "at 1920x1080 the taskbar is along the screen's foot" ||
   bad "at 1920x1080 the taskbar is not at the foot ($W/modes-texts.txt)"
 grep -a -E "panic|illegal|killed" $W/modes.out | head -3
+# The picture at 1920x1080, the mode changed back and forth without a
+# restart: 1024x768, 1920x1080, 1366x768, 1920x1080, 1280x720, 1920x1080.
+# A tile the display's ring refused once left the last size's tiles in its
+# place, a grid with dark gaps, which no later redraw mended (a VMware user,
+# 2026-11-24: wall.c now sends it again, smaller if need be). At the end,
+# right of the windows, no column or row of the picture dark, and the
+# taskbar across the whole width (its CPU meter at x 1767)
+echo "  ---   the picture at 1920x1080, the mode changed back and forth"
+wall_gaps () {
+python3 - "$1" << 'PNG'
+import sys, zlib, struct
+d = open(sys.argv[1], "rb").read()
+w, h = struct.unpack(">II", d[16:24])
+i, z = 8, b""
+while i < len(d):
+    n, t = struct.unpack(">I4s", d[i:i + 8])
+    if t == b"IDAT": z += d[i + 8:i + 8 + n]
+    i += 12 + n
+raw = zlib.decompress(z)
+rows = [raw[y * (1 + w * 3) + 1:(y + 1) * (1 + w * 3)] for y in range(h)]
+lit = lambda x, y: sum(rows[y][x * 3:x * 3 + 3]) > 90
+x0 = w * 2 // 5                     # right of the desktop's windows
+cols = sum(1 for x in range(x0, w) if sum(lit(x, y) for y in range(0, h - 40, 8)) * 4 < len(range(0, h - 40, 8)))
+rws = sum(1 for y in range(0, h * 4 // 5) if sum(lit(x, y) for x in range(x0, w, 8)) * 4 < len(range(x0, w, 8)))
+print(w, h, cols, rws)
+PNG
+}
+{ echo "30000 click 30 755"; echo "30500 click 80 549"; t=32000
+  for y in 390 320 390 266 390; do
+    echo "$t click 180 432"; echo "$(( t + 500 )) click 180 $y"; echo "$(( t + 1000 )) click 288 432"; t=$(( t + 20000 ))
+  done
+  echo "$t shot $W/wall-1920.png"; echo "$(( t + 100 )) quit"; } > $W/wall-events.txt
+timeout 900 ./c4pc-host -s --mmu -m 128 --gui 1024x768 --modes --events $W/wall-events.txt --texts $W/wall-texts.txt \
+  --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/wall.out 2> $W/wall.err
+r=( $(wall_gaps $W/wall-1920.png 2> /dev/null) )
+[ "${r[0]:-0}" = 1920 ] && [ "${r[1]:-0}" = 1080 ] && [ "${r[2]:-1}" = 0 ] && [ "${r[3]:-1}" = 0 ] &&
+  ok "after five changes, 1920x1080: the picture whole (no dark column or row right of the windows)" ||
+  bad "after five changes: ${r[0]:-?}x${r[1]:-?}, ${r[2]:-?} dark columns, ${r[3]:-?} dark rows ($W/wall-1920.png)"
+grep -qE "^1767 1059 CPU" $W/wall-texts.txt && ok "at 1920x1080 the taskbar spans the width (its CPU meter at x 1767)" ||
+  bad "at 1920x1080 the taskbar does not span the width ($W/wall-texts.txt)"
 # VMware's absolute pointer (pc/vmware.c; QEMU's vmport has the same) on a
 # display that does not fill the screen: `gui` (640x480, until QMP's quit) on a 1366x768 mode
 # of the SVGA II (QEMU's -vga vmware), scaled by 1.6 and centred, 171

@@ -1174,6 +1174,9 @@ static void shutdown_screen() {
 // GUI_M_REL: the mouse's motion while it is locked to the display, which
 // only a canvas that asked for it (window.h's L) has it be (term.c)
 enum { RING = 262144, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW | GUI_M_REL };
+static int ring;                   // the display's ring, in bytes (ring_size)
+// its command half, in words: what one frame -- a picture's tile -- may take (wall.c)
+int desk_ring_words() { return ring / 2 / sizeof(int) - 3; }
 static int ring_size() {
     int i, t, n;
     n = RING;
@@ -1191,7 +1194,7 @@ void desk_unlock() { gui_cursor(GUI_PTR_ARROW); wk_repoint(); }
 
 int main(int argc, char **argv) {
     int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
-    int last_input, last_frame, aside, ev[4], ring;
+    int last_input, last_frame, aside, ev[4];
 
     if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
     // Run in the background (init --desktop has the console's shell run

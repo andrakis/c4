@@ -2033,6 +2033,17 @@ display"; docs/c4pc.md, "The screen").
       and their radio buttons as before. The kit lays itself out up to
       2560x1600 now (WK_MAX_W, WK_MAX_H were 1280x1024), and the desktop's
       ring grows to hold a tile of the picture at the largest mode.
+- [x] **The picture whole at any size.** A tile of the picture the
+      display's ring refused (gui_frame said no: with 8-byte words a
+      1280x1024 tile is 160 KB, more than the first ring's half) was
+      dropped, and the display kept the last size's tiles in its place: a
+      grid with dark gaps, which no redraw mended (a VMware user at
+      1920x1080). wall.c now makes as many tiles as keep each to half the
+      ring (8 x 8, or 12 x 12 and more), checks each IMGDEF, and sends the
+      refused again at the next redraw, smaller if they are refused again.
+      The tiles' image ids are 1000 up. test-c4pc changes the mode five
+      times and looks for dark columns and rows at 1920x1080; test-c4pc64
+      does the same for the 64-bit desktop.
 - [x] Pinned by test-c4pc on c4pc-host: `doom` in the Terminal on a
       screen of its own, Alt+Tab to the desktop (its screen, the taskbar
       button), Alt+Tab back and Doom's frames arriving; Settings from

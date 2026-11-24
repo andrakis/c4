@@ -902,6 +902,244 @@ static int e2_overlap(int a, int b) {
     return 0;
 }
 
+
+// ---- the check: a disk not unmounted cleanly, at its mount ----
+//
+// What e2fsck -p does without asking, so that a machine stopped part way
+// (the power cut, a VM stopped, c4pc's guests stopped at once) leaves a
+// disk that adds up again before it is used:
+//   1. every inode in use (a mode, links, no deletion time) and the blocks
+//      it reaches, through its indirect blocks, marked; a pointer past the
+//      disk cleared; a block two inodes claim counted (said, not mended)
+//   2. every directory's entries: one naming a free inode removed; the
+//      references to each inode counted ("." and ".." among them)
+//   3. the bitmaps and every group's and the superblock's counts made what
+//      1 found: blocks leaked freed, blocks in use marked
+//   4. an inode in use that no entry names put in /lost+found as #INO;
+//      then each inode's link count its references
+// Said on the console, as the boot goes (kprintf). Not done: a directory's
+// own structure mended, a block two inodes claim given to one.
+static int has_super(int g);
+static int e2_flush(struct e2fs *fs);
+static char *ck_bm;            // the blocks found in use, a bit each
+static char *ck_st;            // each inode: 0 free, 1 a file, 2 a directory, 3 reserved
+static char *ck_ref;           // each inode's references, two bytes
+static char *ck_lvl[4];        // an indirect block of each level, read
+static int ck_dup, ck_bad, ck_ents, ck_quiet;
+
+static int ck_get(int i) { return (ck_ref[2 * i] & 255) | (ck_ref[2 * i + 1] & 255) << 8; }
+static void ck_set(int i, int v) { if (v > 65535) v = 65535; ck_ref[2 * i] = v; ck_ref[2 * i + 1] = v >> 8; }
+static void ck_mark(int b) {
+    if (ck_bm[b >> 3] & (1 << (b & 7))) { if (!ck_quiet) ++ck_dup; return; }
+    ck_bm[b >> 3] = ck_bm[b >> 3] | (1 << (b & 7));
+}
+static int ck_valid(struct e2fs *fs, int b) { return b >= fs->first_data && b < fs->blocks; }
+// indirect block B of LEVEL (1 single), and the blocks under it, marked;
+// a pointer past the disk cleared
+static void ck_walk(struct e2fs *fs, int b, int level) {
+    char *p;
+    int k, c, ch;
+    ck_mark(b);
+    p = ck_lvl[level];
+    if (bread_to(fs, b, 1, p) < 0) return;
+    ch = 0; k = 0;
+    while (k < fs->ppb) {
+        c = rd32(p + 4 * k);
+        if (c) {
+            if (!ck_valid(fs, c)) { wr32(p + 4 * k, 0); ++ck_bad; ch = 1; }
+            else if (level > 1) ck_walk(fs, c, level - 1);     // (its buffer is the level below's)
+            else ck_mark(c);
+        }
+        ++k;
+    }
+    if (ch && !fs->ro) bwrite_from(fs, b, 1, p);
+}
+// the references to each inode counted from every directory's entries; an
+// entry naming an inode not in use removed
+static void ck_count(struct e2fs *fs) {
+    char ib[256];
+    char *p;
+    int ino, nb, lbn, b, off, e, rl;
+    memset(ck_ref, 0, 2 * (fs->inodes + 1));
+    ino = 1;
+    while (ino <= fs->inodes) {
+        if (ck_st[ino] == 2 && iget(fs, ino, ib) >= 0) {
+            nb = (i_size(ib) + fs->bsize - 1) / fs->bsize;
+            lbn = 0;
+            while (lbn < nb) {
+                if ((b = bmap(fs, ino, ib, lbn, 0)) && (p = bget(fs, b))) {
+                    off = 0;
+                    while (off + 8 <= fs->bsize) {
+                        e = rd32(p + off); rl = rd16(p + off + 4);
+                        if (rl < 8 || (rl & 3) || off + rl > fs->bsize) break;    // a broken block: the rest left
+                        if (e) {
+                            if (e > fs->inodes || !ck_st[e]) { wr32(p + off, 0); bput(fs, b); ++ck_ents; }
+                            else ck_set(e, ck_get(e) + 1);
+                        }
+                        off = off + rl;
+                    }
+                }
+                ++lbn;
+            }
+        }
+        ++ino;
+    }
+}
+static void ck_num(char *to, int v) {
+    char t[12];
+    int n, k;
+    n = 0;
+    if (!v) t[n++] = '0';
+    while (v) { t[n++] = '0' + v % 10; v = v / 10; }
+    k = 0;
+    while (n) { to[k] = t[--n]; ++k; }
+    to[k] = 0;
+}
+static void ck_free() {
+    int k;
+    if (ck_bm) free(ck_bm);
+    if (ck_st) free(ck_st);
+    if (ck_ref) free(ck_ref);
+    k = 1; while (k < 4) { if (ck_lvl[k]) free(ck_lvl[k]); ck_lvl[k] = 0; ++k; }
+    ck_bm = 0; ck_st = 0; ck_ref = 0;
+}
+static void e2_check(struct e2fs *fs) {
+    char ib[256], name[16];
+    char *bm;
+    int ino, mode, used, k, b, g, base, nb, rsv, itb, fb, fi, dirs, tfb, tfi, on, old, nfixb, nfixi, lf, orph, links, ft;
+    kprintf("ext2: %s was not unmounted cleanly: checking it...\n", blk_nm(fs->dev));
+    ck_bm = vfs_malloc(fs->blocks / 8 + 1);
+    ck_st = vfs_malloc(fs->inodes + 1);
+    ck_ref = vfs_malloc(2 * (fs->inodes + 1));
+    ck_lvl[1] = vfs_malloc(fs->bsize); ck_lvl[2] = vfs_malloc(fs->bsize); ck_lvl[3] = vfs_malloc(fs->bsize);
+    if (!ck_bm || !ck_st || !ck_ref || !ck_lvl[1] || !ck_lvl[2] || !ck_lvl[3]) {
+        kprintf("ext2: %s: no memory to check it: e2fsck it when you can\n", blk_nm(fs->dev));
+        ck_free();
+        return;
+    }
+    memset(ck_bm, 0, fs->blocks / 8 + 1);
+    memset(ck_st, 0, fs->inodes + 1);
+    ck_dup = 0; ck_bad = 0; ck_ents = 0; ck_quiet = 0;
+    // the groups' own blocks: the superblock and descriptors (and those
+    // kept for growing: resize_inode), the bitmaps, the inode tables
+    b = 0; while (b < fs->first_data) { ck_mark(b); ++b; }
+    rsv = (rd32(fs->sb + 92) & 0x10) ? rd16(fs->sb + 206) : 0;
+    itb = (fs->ipg * fs->isize + fs->bsize - 1) / fs->bsize;
+    g = 0;
+    while (g < fs->ngroups) {
+        base = fs->first_data + g * fs->bpg;
+        if (!fs->sparse || has_super(g)) { k = 0; while (k < 1 + fs->gdt_blocks + rsv && base + k < fs->blocks) { ck_mark(base + k); ++k; } }
+        ck_mark(rd32(gd(fs, g))); ck_mark(rd32(gd(fs, g) + 4));
+        k = 0; while (k < itb) { ck_mark(rd32(gd(fs, g) + 8) + k); ++k; }
+        ++g;
+    }
+    // 1: the inodes, and their blocks
+    kprintf("ext2: %s: 1, the inodes (%d) and their blocks\n", blk_nm(fs->dev), fs->inodes);
+    ino = 1;
+    while (ino <= fs->inodes) {
+        if (iget(fs, ino, ib) < 0) { ++ino; continue; }
+        mode = i_mode(ib);
+        used = mode && i_links(ib) > 0 && !rd32(ib + 20);
+        if (ino < fs->first_ino && ino != E2_ROOT) { ck_st[ino] = 3; if (ino != 7) used = 0; }
+        else if (used) ck_st[ino] = (mode & S_IFMT) == S_IFDIR ? 2 : 1;
+        if (used && !((mode & S_IFMT) == S_IFLNK && !rd32(ib + 28))) {
+            ck_quiet = ino == 7;                 // resize_inode's blocks are the groups' kept ones
+            on = 0; k = 0;
+            while (k < 15) {
+                b = rd32(ib + 40 + 4 * k);
+                if (b) {
+                    if (!ck_valid(fs, b)) { wr32(ib + 40 + 4 * k, 0); ++ck_bad; on = 1; }
+                    else if (k < E2_NDIR) ck_mark(b);
+                    else ck_walk(fs, b, k - 11);
+                }
+                ++k;
+            }
+            if (on && !fs->ro) iput(fs, ino, ib);
+            ck_quiet = 0;
+        }
+        ++ino;
+    }
+    // 2: the directories' entries
+    kprintf("ext2: %s: 2, the directories\n", blk_nm(fs->dev));
+    ck_count(fs);
+    // 3: the bitmaps and the counts, as found
+    kprintf("ext2: %s: 3, the bitmaps and counts\n", blk_nm(fs->dev));
+    nfixb = 0; nfixi = 0; tfb = 0; tfi = 0;
+    g = 0;
+    while (g < fs->ngroups) {
+        base = fs->first_data + g * fs->bpg;
+        nb = fs->blocks - base; if (nb > fs->bpg) nb = fs->bpg;
+        fb = 0; fi = 0; dirs = 0;
+        if ((bm = bget(fs, rd32(gd(fs, g))))) {
+            on = 0; k = 0;
+            while (k < nb) {
+                b = base + k;
+                if (ck_bm[b >> 3] & (1 << (b & 7))) { if (!(bm[k >> 3] & (1 << (k & 7)))) { bm[k >> 3] = bm[k >> 3] | (1 << (k & 7)); ++nfixb; on = 1; } }
+                else { ++fb; if (bm[k >> 3] & (1 << (k & 7))) { bm[k >> 3] = bm[k >> 3] & ~(1 << (k & 7)); ++nfixb; on = 1; } }
+                ++k;
+            }
+            if (on) bput(fs, rd32(gd(fs, g)));
+        }
+        if ((bm = bget(fs, rd32(gd(fs, g) + 4)))) {
+            on = 0; k = 0;
+            while (k < fs->ipg) {
+                ino = g * fs->ipg + k + 1;
+                old = bm[k >> 3] & (1 << (k & 7));
+                if (ck_st[ino] == 2) ++dirs;
+                if (ck_st[ino]) { if (!old) { bm[k >> 3] = bm[k >> 3] | (1 << (k & 7)); ++nfixi; on = 1; } }
+                else { ++fi; if (old) { bm[k >> 3] = bm[k >> 3] & ~(1 << (k & 7)); ++nfixi; on = 1; } }
+                ++k;
+            }
+            if (on) bput(fs, rd32(gd(fs, g) + 4));
+        }
+        if (rd16(gd(fs, g) + 12) != fb || rd16(gd(fs, g) + 14) != fi || rd16(gd(fs, g) + 16) != dirs) {
+            wr16(gd(fs, g) + 12, fb); wr16(gd(fs, g) + 14, fi); wr16(gd(fs, g) + 16, dirs);
+            gd_put(fs, g);
+        }
+        tfb = tfb + fb; tfi = tfi + fi;
+        ++g;
+    }
+    wr32(fs->sb + 12, tfb); wr32(fs->sb + 16, tfi);
+    fs->sb_dirty = 1;
+    e2_flush(fs);
+    // 4: what no entry names, into lost+found; the link counts
+    kprintf("ext2: %s: 4, lost files and link counts\n", blk_nm(fs->dev));
+    lf = ext2_lookup(fs, E2_ROOT, "lost+found");
+    if (lf && ck_st[lf] != 2) lf = 0;
+    orph = 0;
+    ino = fs->first_ino;
+    while (ino <= fs->inodes) {
+        if ((ck_st[ino] == 1 || ck_st[ino] == 2) && !ck_get(ino) && ino != lf) {
+            if (!lf && (lf = ext2_mkdir(fs, E2_ROOT, "lost+found", 448))) ck_st[lf] = 2;
+            if (lf && iget(fs, ino, ib) >= 0) {
+                mode = i_mode(ib) & S_IFMT;
+                ft = mode == S_IFDIR ? 2 : mode == S_IFLNK ? 7 : 1;
+                name[0] = '#'; ck_num(name + 1, ino);
+                if (dir_add(fs, lf, name, ino, ft) >= 0) { if (mode == S_IFDIR) set_dotdot(fs, ino, lf); ++orph; }
+            }
+        }
+        ++ino;
+    }
+    if (orph) ck_count(fs);
+    links = 0;
+    ino = 1;
+    while (ino <= fs->inodes) {
+        if ((ck_st[ino] == 1 || ck_st[ino] == 2) && ck_get(ino) && iget(fs, ino, ib) >= 0 && i_links(ib) != ck_get(ino)) {
+            wr16(ib + 26, ck_get(ino));
+            iput(fs, ino, ib);
+            ++links;
+        }
+        ++ino;
+    }
+    e2_flush(fs);
+    kprintf("ext2: %s: checked: %d blocks' and %d inodes' bits put right, %d entries of free inodes removed,\n",
+        blk_nm(fs->dev), nfixb, nfixi, ck_ents);
+    kprintf("ext2: %s:   %d pointers past the disk cleared, %d link counts set, %d lost files in /lost+found\n",
+        blk_nm(fs->dev), ck_bad, links, orph);
+    if (ck_dup) kprintf("ext2: %s:   %d blocks claimed twice: e2fsck it when you can\n", blk_nm(fs->dev), ck_dup);
+    ck_free();
+}
+
 struct e2fs *ext2_mount(int dev, int ro) {
     struct e2fs *fs;
     char *sb;
@@ -965,11 +1203,13 @@ struct e2fs *ext2_mount(int dev, int ro) {
     fs->base_time = rd32(sb + 48);
     if (rd32(sb + 44) > fs->base_time) fs->base_time = rd32(sb + 44);
     fs->base_time = fs->base_time - __time() / 1000;
-    if (!(rd16(sb + 58) & 1)) klog("ext2: %s: not unmounted cleanly last time: e2fsck it when you can\n", blk_nm(dev));
+    if (!(rd16(sb + 58) & 1) && fs->ro) klog("ext2: %s: not unmounted cleanly last time: e2fsck it when you can\n", blk_nm(dev));
     fs->hint = 0;
     fs->sb_when = __time();
     if ((fs->gd_dirty = vfs_malloc(fs->gdt_blocks + 1))) memset(fs->gd_dirty, 0, fs->gdt_blocks + 1);
     fs->used = 1;
+    // not unmounted cleanly: checked, and put right, before it is used
+    if (!fs->ro && !(rd16(sb + 58) & 1)) e2_check(fs);
     if (!fs->ro) {
         // mounted: not clean until it is unmounted, and counted
         wr16(sb + 58, rd16(sb + 58) & ~1);

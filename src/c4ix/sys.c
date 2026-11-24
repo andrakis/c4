@@ -423,7 +423,11 @@ static int sys_waitpid(int pid, int *st, int opts) {
 // game that asks: the game's screen is shown again as it left it, and the
 // game runs on from where it stopped, never having known. A parked game
 // that dies, or is killed, has its screen forgotten (GUI_SCRDROP).
-// DISP_NPARK at once; a fourth Alt+Tab is the game's to keep.
+// DISP_NPARK at once; a fourth game's Alt+Tab does nothing. While a game
+// is parked the sound card is muted (its master's bit 8): a game stopped
+// mid-tune leaves the AdLib's notes held, a drone under the desktop (Doom
+// measured so); resumed, it is unmuted, unless the desktop's volume
+// control set the master meanwhile.
 enum { DISP_GRACE = 1000, DISP_NPARK = 3, DISP_NSCR = 4 };
 static int disp_holder, disp_hyields, disp_hscr;    // who has it; gives way?; its screen
 static int disp_prev, disp_pyields, disp_pscr;      // who gave way to it
@@ -433,6 +437,7 @@ static int disp_npark;                              // the last parked first
 static int disp_shown;                              // the screen the display shows
 static int disp_caps;                               // 1 it keeps screens, -1 not, 0 not yet asked
 int disp_armed;                                     // GUI_SWITCH armed: sched_tick looks
+static int disp_snd = 0 - 1;                        // the master before a park muted it, or -1
 
 static int disp_screens() {
     if (!disp_caps) disp_caps = host_has(C4IX_I_GUI) && (*(int *)C4IX_GUI_CAPS & C4IX_GUI_CAP_SCREENS) ? 1 : 0 - 1;
@@ -447,12 +452,28 @@ static void disp_show(int s) {
 static void disp_forget(int s) {
     if (disp_screens() && s != disp_shown) *(int *)C4IX_GUI_SCRDROP = s;
 }
+// The sound muted while a game is parked; back as it was when none is,
+// unless something else set the master since
+static void disp_quiet() {
+    int v;
+    if (!host_has(C4IX_I_SND)) return;
+    if (disp_npark && disp_snd < 0 && disp_holder && !disp_prev) {
+        disp_snd = *(int *)C4IX_SND_MASTER;
+        *(int *)C4IX_SND_MASTER = disp_snd | C4IX_SND_MUTE;
+    } else if (disp_snd >= 0 && !(disp_npark && !disp_prev)) {
+        v = *(int *)C4IX_SND_MASTER;
+        if (v == (disp_snd | C4IX_SND_MUTE)) *(int *)C4IX_SND_MASTER = disp_snd;
+        disp_snd = 0 - 1;
+    }
+}
+
 // Alt+Tab watched for while a game has the display over one who gave way
 static void disp_arm() {
     int on;
     if (!disp_screens()) return;
     on = disp_holder && disp_prev ? 1 : 0;
     if (on != disp_armed) { disp_armed = on; *(int *)C4IX_GUI_SWITCH = on; }
+    disp_quiet();
 }
 // a screen nobody has: not the holder's, nor who gave way's, nor a parked game's
 static int disp_free_screen() {

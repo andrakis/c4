@@ -622,8 +622,13 @@ static const char *ARROW[] = {
 #define AW 11
 #define AH 17
 static int px_, py_, shown;
+/* the adapter's pointer on (SVGA_REG_CURSOR_ON). Its own flag: `shown' is
+ * the drawn arrow's, cleared whenever the display is placed again -- a
+ * game's display of another size -- and with it the adapter's arrow was
+ * never turned off, and stayed over Doom (VMware, 2026-11-24) */
+static int hw_on;
 /* the text console is on the screen: the adapter's pointer off */
-static void pointer_gone(void) { if (sv_hwcur && shown) sv_pointer(0, 0, 0); shown = 0; }
+static void pointer_gone(void) { if (sv_hwcur && hw_on) sv_pointer(0, 0, 0); hw_on = 0; shown = 0; }
 static void pointer_draw(int x, int y) {
   for (int j = 0; j < AH; j++) for (int i = 0; ARROW[j][i]; i++) {
     char c = ARROW[j][i];
@@ -648,10 +653,14 @@ static void sv_cursor_define(void) {
   }
   fifo_cmd(c, 8 + 64);
 }
+extern int mouse_debug;
 static void sv_pointer(int x, int y, int on) {
+  static int was = -1;
   sv_wr(SV_CURID, 1);
   if (on) { sv_wr(SV_CURX, (u32)x); sv_wr(SV_CURY, (u32)y); }
   sv_wr(SV_CURON, on ? 1 : 0);
+  if (mouse_debug && on != was) pc_log(on ? "c4pc: the adapter's pointer on\n" : "c4pc: the adapter's pointer off\n");
+  was = on;
 }
 
 /* the next look copies all of the display, not what changed: another
@@ -688,8 +697,8 @@ void screen_show(gui *g) {
     copy(px, ox + x0 * num / den, oy + y0 * num / den, ox + (x1 * num + den - 1) / den, oy + (y1 * num + den - 1) / den);
   if (sv_hwcur) {
     /* the adapter's pointer: moved, shown or hidden, and nothing drawn */
-    if (shape >= 0 && (!shown || sx != px_ || sy != py_)) { sv_pointer(sx, sy, 1); px_ = sx; py_ = sy; shown = 1; }
-    else if (shape < 0 && shown) { sv_pointer(0, 0, 0); shown = 0; }
+    if (shape >= 0 && (!hw_on || sx != px_ || sy != py_)) { sv_pointer(sx, sy, 1); px_ = sx; py_ = sy; hw_on = 1; }
+    else if (shape < 0 && hw_on) { sv_pointer(0, 0, 0); hw_on = 0; }
     flush();
     return;
   }
@@ -840,7 +849,8 @@ int screen_mode(int w, int h) {
   if (!drv) return 0;
   if (w == sw && h == sh) return 1;
   if (!mode_ok(w, h)) return 0;
-  if (sv_hwcur && shown) sv_pointer(0, 0, 0);
+  if (sv_hwcur && hw_on) sv_pointer(0, 0, 0);
+  hw_on = 0;                         /* shown again, defined again, after the mode */
   if (drv == DRV_SVGA) sv_set(w, h); else bga_set(w, h);
   nrect = 0;
   bufs();

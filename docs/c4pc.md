@@ -586,7 +586,20 @@ what showing a frame cost. A full FIFO is synced (SVGA_REG_SYNC, then
 BUSY). The pointer is the adapter's own where it has one
 (SVGA_CAP_CURSOR and CURSOR_BYPASS_2: DEFINE_CURSOR's 32 x 32 AND and
 XOR masks, then CURSOR_X/Y/ON as it moves), so a move draws nothing;
-`--soft-pointer` draws ours instead. The BGA's modes are set the same
+`--soft-pointer` draws ours instead. Whether it is on is kept apart from
+the drawn arrow's state, which a display of another size clears: shared,
+the adapter's arrow was never turned off when a game that wants no
+pointer took the screen, and stayed over Doom in VMware (--debug-mouse
+logs each change; test-c4pc checks the desktop, then doom).
+
+*The display from another CPU* (par.c, gui.c). A register access on
+another CPU is served on CPU 0's thread with the asker's machine, and
+the device now reaches guest memory through that machine's MMU context
+(gui.c `dm`), not CPU 0's: checked against CPU 0's task's space, splash's
+ring on the 8-processor desktop in VMware was refused ("splash: the
+display refused the ring"). A fault found there is rethrown on the asking
+CPU with the context kept from before the request: mmu.c's fault clears
+dma_ctx, and rethrown through that, c4pc crashed. The BGA's modes are set the same
 way (its largest from GETCAPS, its memory from BAR 0's size); GRUB's
 framebuffer alone (Hyper-V, a real PC) has one mode, GRUB's.
 

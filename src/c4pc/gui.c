@@ -62,6 +62,7 @@ typedef struct { int w, h; u32 *px; u8 *alpha; } image;
  * goes on drawing where it left off. */
 struct gui {
   machine *m;
+  machine *ask;                        /* the CPU whose load or store this is (gui_rd, gui_wr), or 0 */
   int w, h;                            /* W and H: the display's size */
   i32 ring_len, ring_base; u32 ring_space;
   int mb; u32 tg_at, tg_cap, th_at, th_cap; i32 seq;   /* the rings, by word index */
@@ -100,6 +101,13 @@ struct gui {
  * The rings, the pixels and the palettes are the guest's words (libjs/
  * guest/gui.c): on the 64-bit machine 8 bytes each, a value in the low 32
  * bits, and text still four characters to a word. Indexes are words. */
+/* The machine whose task's space the device reaches into: the CPU that
+ * asked. Another CPU's register access is served on CPU 0's thread with
+ * the asker's machine (par.c), whose dma_ctx is the asking task's; CPU 0's
+ * own (g->m) is whatever CPU 0 runs. With it a program on another CPU --
+ * splash, on the 8-processor desktop in VMware -- had its ring's address
+ * checked against CPU 0's task's space, and was refused */
+static inline machine *dm(gui *g) { return g->ask ? g->ask : g->m; }
 static inline i32 rdw(gui *g, u32 idx) { return idx < (g->m->size >> WSH) ? (i32)g->m->w[idx] : 0; }
 static inline void wrw(gui *g, u32 idx, i32 v) { if (idx < (g->m->size >> WSH)) g->m->w[idx] = (word)v; }
 /* n words' low 32 bits, from the bytes of n words as read */
@@ -301,7 +309,7 @@ static i32 mb_drain(gui *g) {
  * fault, if it may not), or against the space that attached the ring when
  * the host drains on its own: 0 if that refuses it */
 static int guest_read(gui *g, u32 addr, u32 len, u8 *out) {
-  machine *m = g->m;
+  machine *m = dm(g);
   if (!m->dma_ctx && g->ring_space) {
     for (u32 k = 0; k < len;) {
       u32 va = addr + k, r = len - k < 4096 - (va & 4095) ? len - k : 4096 - (va & 4095);
@@ -354,11 +362,11 @@ static void flip(gui *g, int w, int h) {
   u32 *buf = xmalloc((size_t)w * h * 4);
 #if WB == 4
   for (int l = 0; l < lines; l++)
-    if (dev_dma_read(g->m, (u32)g->fb_base + (u32)l * (u32)pitch, (u32)run * 4, (u8 *)(buf + (size_t)l * run)) != (u32)run * 4) { xfree(buf); return; }
+    if (dev_dma_read(dm(g), (u32)g->fb_base + (u32)l * (u32)pitch, (u32)run * 4, (u8 *)(buf + (size_t)l * run)) != (u32)run * 4) { xfree(buf); return; }
 #else
   u8 *raw = xmalloc((size_t)run * WB);
   for (int l = 0; l < lines; l++) {
-    if (dev_dma_read(g->m, (u32)g->fb_base + (u32)l * (u32)pitch, (u32)run * WB, raw) != (u32)run * WB) { xfree(raw); xfree(buf); return; }
+    if (dev_dma_read(dm(g), (u32)g->fb_base + (u32)l * (u32)pitch, (u32)run * WB, raw) != (u32)run * WB) { xfree(raw); xfree(buf); return; }
     words32(buf + (size_t)l * run, raw, (u32)run);
   }
   xfree(raw);
@@ -597,10 +605,10 @@ void gui_write32(gui *g, u32 a, i32 v) {
       i32 len = g->ring_len & ~(2 * WB - 1);
       if ((v & (WB - 1)) || len < 256) { g->ring_base = 0; g->mb = 0; return; }
       /* the task's own memory to write, or its page fault */
-      i64 pa = dev_dma(g->m, (u32)v, len, 1, 1);
+      i64 pa = dev_dma(dm(g), (u32)v, len, 1, 1);
       if (pa < 0x1000 || pa + len > g->m->size) { g->ring_base = 0; g->mb = 0; return; }
       g->ring_base = v;
-      g->ring_space = g->m->dma_ctx ? (u32)mmu_ptbr(g->m->dma_ctx) : 0;
+      g->ring_space = dm(g)->dma_ctx ? (u32)mmu_ptbr(dm(g)->dma_ctx) : 0;
       u32 half = (u32)len >> 1;
       g->tg_at = (u32)pa >> WSH; g->tg_cap = (half >> WSH) - 3;
       g->th_at = ((u32)pa + half) >> WSH; g->th_cap = (half >> WSH) - 3;
@@ -635,6 +643,7 @@ void gui_irq_taken(gui *g) { g->irq_count = 0; }
 /* after a slice (the worker's drain and its size request): what the guest
  * wrote and did not ring for, and a size it asked for */
 void gui_tick(gui *g) {
+  g->ask = 0;                          /* CPU 0's own (an asker's fault may have unwound past gui_wr) */
   pull(g);
   if (g->size_req) { g->size_req = 0; resize(g, g->w, g->h); }
 }
@@ -738,3 +747,10 @@ int gui_pointer(gui *g, int *x, int *y) {
 void gui_stats(gui *g, u32 *commands, u32 *presents, u32 *events, u32 *flips) {
   *commands = g->commands; *presents = g->presents; *events = g->events; *flips = g->flips;
 }
+
+/* a register read or written by machine M's CPU (engine.c): its task's
+ * space is the one the device reaches into (dm). A fault in it unwinds
+ * past the clearing (par.c's bus_fn, mmu_rethrow): each access sets it
+ * afresh, and gui_tick clears it */
+i32 gui_rd(gui *g, machine *m, u32 a) { g->ask = m; i32 v = gui_read32(g, a); g->ask = 0; return v; }
+void gui_wr(gui *g, machine *m, u32 a, i32 v) { g->ask = m; gui_write32(g, a, v); g->ask = 0; }

@@ -511,6 +511,8 @@ i32 plat_clock_secs(void);             /* the local time of day, in seconds sinc
 gui *gui_new(machine *m, int w, int h);
 i32 gui_read32(gui *g, u32 a);
 void gui_write32(gui *g, u32 a, i32 v);
+i32 gui_rd(gui *g, machine *m, u32 a);          /* ... as machine M's CPU, whose task's space the device reaches */
+void gui_wr(gui *g, machine *m, u32 a, i32 v);
 int gui_irq_pending(gui *g);
 void gui_irq_taken(gui *g);
 void gui_tick(gui *g);

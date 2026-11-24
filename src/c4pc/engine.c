@@ -115,7 +115,7 @@ static word arena_rd32(machine *m, uword a) {
     if (m->par_ap && !m->serving && (r == BLK_BASE || r == BLK_BASE + 0x1c) && m->dv->nblk) return blk_read32(m, r);
     if (AP_DEV(m, r)) return par_rd32(m, r & ~3u);
     if (r >= DEV_BASE && r < DEV_END) return dev_read32(m, r);
-    if (r >= 0x400 && r < 0x480 && m->gui) return gui_read32(m->gui, r & ~3u);     /* bus.js: the display */
+    if (r >= 0x400 && r < 0x480 && m->gui) return gui_rd(m->gui, m, r & ~3u);     /* bus.js: the display */
     if (r >= 0x480 && r < 0x500 && m->snd) return snd_read32(m->snd, r & ~3u);     /* ... and the sound card */
     if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) return blk_read32(m, r & ~3u); /* ... and the disks */
     if (r >= HV_BASE && r < HV_END && m->dv->hv_rd) return m->dv->hv_rd(m, r & ~3u);   /* ... and the hypervisor */
@@ -129,7 +129,7 @@ static void arena_wr32(machine *m, uword a, word v) {
     u32 r = (u32)a;
     if (AP_DEV(m, r)) { par_wr(m, r & ~3u, (i32)v, 0); return; }
     if (r >= DEV_BASE && r < DEV_END) { dev_write32(m, r, (i32)v); return; }
-    if (r >= 0x400 && r < 0x480 && m->gui) { gui_write32(m->gui, r & ~3u, (i32)v); return; }
+    if (r >= 0x400 && r < 0x480 && m->gui) { gui_wr(m->gui, m, r & ~3u, (i32)v); return; }
     if (r >= 0x480 && r < 0x500 && m->snd) { snd_write32(m->snd, r & ~3u, (i32)v); return; }
     if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) { blk_write32(m, r & ~3u, (i32)v); return; }
     if (r >= HV_BASE && r < HV_END && m->dv->hv_wr) { m->dv->hv_wr(m, r & ~3u, (i32)v); return; }
@@ -144,7 +144,7 @@ static i32 bus_rd8s(machine *m, uword a) { return a < 0x10 || a >= m->size ? 0 :
 static void bus_wr8(machine *m, uword a, i32 v) {
   if (a < 0x1000 && AP_DEV(m, (u32)a)) { par_wr(m, (u32)a, v & 0xff, 1); return; }
   if (a >= DEV_BASE && a < DEV_END) { dev_write32(m, (u32)a & ~3u, v & 0xff); return; }
-  if (a >= 0x400 && a < 0x480 && m->gui) { gui_write32(m->gui, (u32)a & ~3u, v & 0xff); return; }
+  if (a >= 0x400 && a < 0x480 && m->gui) { gui_wr(m->gui, m, (u32)a & ~3u, v & 0xff); return; }
   if (a >= 0x480 && a < 0x500 && m->snd) { snd_write32(m->snd, (u32)a & ~3u, v & 0xff); return; }
   if (a < m->size) m->u8[a] = (u8)v;
 }

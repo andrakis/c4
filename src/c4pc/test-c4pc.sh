@@ -471,6 +471,74 @@ QMP
     ok "the pointer at (300, 600) and (1100, 420) lands at ${at[0]} and ${at[1]} on the display (80,375 and 580,262)" ||
     bad "the pointer at (300, 600) and (1100, 420) lands at ${at[0]:-?} and ${at[1]:-?}, not 80,375 and 580,262 ($W/serialptr.txt)"
 fi
+# The display's registers from another CPU (par.c, gui.c): the desktop's
+# boot on 4 CPUs on threads, splash attaching its ring from whichever CPU
+# it runs on. The device checked the ring's address against CPU 0's task's
+# space, not the asker's, and refused it ("splash: the display refused the
+# ring", VMware on 8 processors); checked as the asker's, its pages not yet
+# in faulted, and the fault rethrown through a cleared dma_ctx crashed
+echo "  ---   the display from another CPU: splash on 4 CPUs on threads"
+printf '30000 quit\n' > $W/par-events.txt
+timeout 300 ./c4pc-host -s --mmu -m 256 --cpus 4 --parallel --gui 1024x768 --events $W/par-events.txt \
+  --tar $W/disk.tar $W/kernel/c4ix32.c4r --desktop --no-top > $W/par-desk.out 2> $W/par-desk.err
+st=$?
+[ $st = 0 ] && grep -qa "c4ix-splash.c4r) exited 0" $W/par-desk.out && grep -qa "desktop: running" $W/par-desk.out &&
+  ! grep -qa "refused the ring" $W/par-desk.out &&
+  ok "splash takes the display's ring on 4 CPUs, and the desktop starts" ||
+  bad "splash or the desktop on 4 CPUs: status $st ($W/par-desk.out)"
+# The SVGA II's own pointer (screen.c) off when a program on the whole
+# display wants none: the desktop (the arrow), then doom typed into its
+# Terminal (GUI_PTR_NONE, a display of its own, 640x400). The pointer's
+# state was the drawn arrow's, cleared whenever a display of another size
+# was placed, and so the adapter's arrow was never turned off: it stayed
+# over Doom (VMware, 2026-11-24). --debug-mouse logs each change
+if [ -n "${NO_QEMU:-}" ] || [ ! -x "$Q" ]; then
+  echo "  skip  the SVGA's pointer over a game (no qemu-system-i386)"
+else
+  echo "  ---   the SVGA's own pointer, off over Doom"
+  accel=""; [ -r /dev/kvm ] && [ -w /dev/kvm ] && accel="-accel kvm -cpu host"
+  rm -f $W/serialhw.txt $W/qmphw.sock
+  timeout 300 "$Q" $accel -machine vmport=off -vga vmware -m 512 -display none -no-reboot -serial file:$W/serialhw.txt \
+    -qmp unix:$W/qmphw.sock,server=on,wait=off -device isa-debug-exit,iobase=0xf4,iosize=4 -kernel c4pc.elf \
+    -append "--no-cdrom --mmu --debug-mouse --gui 1024x768 -- --desktop --no-top" -initrd "$W/kernel/c4ix32.c4r,$W/disk.tar drive" > /dev/null 2>&1 &
+  qh=$!
+  python3 - $W/serialhw.txt $W/qmphw.sock << 'QMP'
+import json, os, socket, sys, time
+log, sock = sys.argv[1], sys.argv[2]
+def text():
+    try: return open(log, "rb").read()
+    except OSError: return b""
+def until(want, secs):
+    t0 = time.time()
+    while time.time() - t0 < secs:
+        if want(text()): return True
+        time.sleep(0.5)
+    return False
+t0 = time.time()
+while not os.path.exists(sock) and time.time() - t0 < 30: time.sleep(0.2)
+s = socket.socket(socket.AF_UNIX); s.connect(sock); f = s.makefile("rw")
+def cmd(c):
+    f.write(json.dumps(c) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if "return" in r or "error" in r: return r
+f.readline(); cmd({"execute": "qmp_capabilities"})
+until(lambda b: b"desktop: running" in b, 200)
+time.sleep(10)
+for k in ("d", "o", "o", "m", "ret"):
+    cmd({"execute": "send-key", "arguments": {"keys": [{"type": "qcode", "data": k}]}}); time.sleep(0.2)
+# doom's display: the desktop told it lost the focus (the screen switched),
+# then a resize to doom's 640x480 (--debug-mouse's event log)
+until(lambda b: b" : 0 sent" in b and b"640 480 sent" in b[b.rfind(b" : 0 sent"):], 120)
+time.sleep(3)
+cmd({"execute": "quit"})
+QMP
+  wait $qh 2> /dev/null
+  ptr=$(tr -d '\r' < $W/serialhw.txt | grep -a -o -E "c4pc: the adapter's pointer (on|off)|event 7 [^#]*: 0 sent" | sed 's/^event 7.*/switched/' | tr '\n' '|')
+  echo "$ptr" | grep -q "pointer on|.*switched|" && echo "$ptr" | grep -qE "switched\|c4pc: the adapter's pointer off\|$" &&
+    ok "the SVGA's pointer on over the desktop, off once doom has the display" ||
+    bad "the SVGA's pointer over the desktop and doom: ${ptr:0:300} ($W/serialhw.txt)"
+fi
 # C4IX with more than 256 MB (a VM of 512 MB and more): the MMU's user
 # window above memory (src/c4ix/mmu.c mmu_wbase), so swap is on, where it
 # once kept the identity map and System Monitor said the MMU was off; and

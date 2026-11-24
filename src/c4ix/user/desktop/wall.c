@@ -1,7 +1,10 @@
 // wall.c -- the desktop's picture. docs/c4ix-desktop.md.
 //
 // The boot logo (/usr/share/splash/c4ix.c4p.gz, what splash shows),
-// stretched over the whole desktop. It goes to the display once (and
+// over the whole desktop at its own shape: scaled until it covers the
+// screen, what is past an edge cut evenly from both sides (a screen of
+// another shape than the picture's 4:3 no longer stretches it), its tiles
+// rounded up so that the last column and row reach the screen's edge. It goes to the display once (and
 // again when the screen changes size), as WALL_TX x WALL_TY tiles the
 // display keeps (d_imgdef: each tile has
 // to fit the command ring), and every redraw of the desktop's
@@ -28,19 +31,25 @@ static int wall_w, wall_h, wall_lut[256];
 // as it is now (nearest pixel: the logo is made at 800x600, so it is 1:1
 // there). A new screen size needs nothing new from memory.
 static void wall_tiles() {
-    int tx, ty, x, y, sx, sy;
-    wall_tw = wk.sw / WALL_TX;
-    wall_th = wk.sh / WALL_TY;
+    int tx, ty, x, y, sx, sy, dw, dh, offx, offy;
+    wall_tw = (wk.sw + WALL_TX - 1) / WALL_TX;
+    wall_th = (wk.sh + WALL_TY - 1) / WALL_TY;
+    // the picture's size on the screen: covering it, at its own shape
+    if (wk.sw * wall_h >= wk.sh * wall_w) { dw = wk.sw; dh = wall_h * wk.sw / wall_w; }
+    else { dh = wk.sh; dw = wall_w * wk.sh / wall_h; }
+    offx = (dw - wk.sw) / 2; offy = (dh - wk.sh) / 2;
     ty = 0;
     while (ty < WALL_TY) {
         tx = 0;
         while (tx < WALL_TX) {
             y = 0;
             while (y < wall_th) {
-                sy = (ty * wall_th + y) * wall_h / wk.sh;
+                sy = (ty * wall_th + y + offy) * wall_h / dh;
+                if (sy >= wall_h) sy = wall_h - 1;
                 x = 0;
                 while (x < wall_tw) {
-                    sx = (tx * wall_tw + x) * wall_w / wk.sw;
+                    sx = (tx * wall_tw + x + offx) * wall_w / dw;
+                    if (sx >= wall_w) sx = wall_w - 1;
                     wall_tile[y * wall_tw + x] = wall_lut[wall_pix[sy * wall_w + sx] & 255];
                     ++x;
                 }
@@ -82,7 +91,7 @@ int wall_load(char *path) {
 
 // The screen changed size: the tiles again, at the new one.
 void wall_resize() {
-    if (wall_ok && (wall_tw != wk.sw / WALL_TX || wall_th != wk.sh / WALL_TY)) wall_tiles();
+    if (wall_ok && (wall_tw != (wk.sw + WALL_TX - 1) / WALL_TX || wall_th != (wk.sh + WALL_TY - 1) / WALL_TY)) wall_tiles();
 }
 
 // The picture over X, Y, W, H, or 0 if there is none to draw.

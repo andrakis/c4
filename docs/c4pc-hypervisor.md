@@ -144,25 +144,37 @@ stop, start again, mount: the file read back from the image.
 
 ## Machines
 
-The control C4IX's desktop has **Machines** in its Go menu (only where
-the hypervisor is), after Proxmox's look: a tree on the left -- the PC,
-and under it each machine, from /vm/NAME/vm.cfg and from what the
-hypervisor has made, its id and a monitor lit while it runs -- and for
-the one chosen a toolbar (Start, Shutdown, Stop, Restart, Pause or
-Resume, Console, Delete) and five tabs:
+The control C4IX's desktop (only where the hypervisor is: its own colour
+scheme, "Hypervisor") opens **Machines** and System Monitor as it starts,
+and has Machines on the desktop and in the Go menu, after Proxmox's look.
+A tree on the left: c4pc, the PC; under it the control C4IX (VM 0, this
+one: shown, its log and screen, not changed) and each machine, from
+/vm/NAME/vm.cfg and from what the hypervisor has made, its id and a
+monitor lit while it runs (amber, paused). For the one chosen a toolbar
+(Start, Shutdown, Stop, Restart, Pause or Resume, Attach, Delete) and six
+tabs:
 
-- **Summary**: state, id, memory, the instructions it runs a second and
-  a minute's history of them, its disk, CD and start at boot, and its
-  screen small (THUMB, once a second).
-- **Console**: its screen larger; Attach (or a double-click in the tree)
-  gives it the PC's screen, keyboard and mouse; Ctrl+Alt+Home comes back.
-- **Hardware** (memory, MMU, hard disk, CD/DVD) and **Options** (system,
-  boots from: its archive or its disk, kernel, boot archive, kernel
-  arguments, start at boot): vm.cfg's lines; a click on a row edits it,
-  for the machine's next start.
-- **Log**: c4pc's log (LOG, 17: the last 32 KB of what its console and
-  serial line were given) -- the PC's whole, or a machine's lines of it
-  (its console, and the hypervisor's words about it).
+- **Summary**: its state and settings, compact, with its instructions a
+  second and a minute of them beside; under them its screen, as large as
+  the window lets it (THUMB, once a second; the control C4IX's too). For
+  c4pc: its processor, processors, memory and disks (HOST, 21), the
+  machines, and CPU 0's time busy.
+- **Console**: its screen larger, and Attach (as the toolbar's, or a
+  double-click in the tree): the PC's screen, keyboard and mouse;
+  Ctrl+Alt+Home comes back.
+- **Hardware** (memory, CPUs, MMU, hard disk, swap and CD images) and
+  **Options** (boots from its archive or its disk, kernel, boot archive,
+  arguments, start at boot): a form -- dropdowns for a choice, a field
+  edged in red while it holds what it may not (memory 16 to 1024 MB; a
+  file that is not there), Browse... for a file (the kit's file box) --
+  and Apply writes vm.cfg, for the machine's next start. For c4pc,
+  Hardware is what c4pc found of the PC.
+- **Load**: each of its CPUs' instructions a second, the last minute (a
+  machine of several CPUs: them taking turns on CPU 0's thread, smp.c);
+  for c4pc, CPU 0's time busy.
+- **Log**: its own: c4pc's (its boot, the hypervisor's words), the
+  control C4IX's console, or a machine's console (LOG, 17: A2 0, 1, or
+  its id + 1), scrolled with the bar, the wheel or Page Up and Down.
 
 Start runs `vm up NAME` in the background (it reads the kernel and the
 boot archive), its output and errors into /vm/NAME/start.log: a start
@@ -171,13 +183,27 @@ machine made before deletes what was made, so a changed vm.cfg counts.
 Shutdown is SIGTERM, Stop at once, Restart Stop and Start. **Pause**
 (PAUSE, 18) stops a running machine where it is -- its memory and screen
 kept, its clock stopped, so it finds no time gone at **Resume** (RESUME,
-19); a paused machine's icon is amber, and it is not attached. **Delete**
-asks, then takes a stopped machine out of the hypervisor and removes
-/vm/NAME, its vm.cfg and disk images (`vm delete NAME`, which asks too,
-or -y; `vm pause ID`, `vm resume ID`). **Create VM**
-asks a name, the system (c4ix, c4ix-text, c4ke, c4dos, or an ISO file),
-the memory and a new disk image's size (0 for none), and runs `vm
-create` in a Terminal, which shows the image being written.
+19); a paused machine is not attached. **Delete** asks, then takes a
+stopped machine out of the hypervisor and removes /vm/NAME, its vm.cfg
+and disk images (`vm delete NAME`, which asks too, or -y; `vm pause ID`,
+`vm resume ID`). **Create VM** is one form: a name, the system (a
+dropdown: C4IX's desktop or text console, C4KE, C4DOS, C4IX with an ISO
+file as its CD), the memory, the CPUs, a disk image's and a swap image's
+size, start at boot; it runs `vm create NAME MB DISK SYSTEM [cpus=N]
+[swap=MB] [autostart]` in a Terminal, which shows the images being
+written.
+
+A machine that halts with status 82 (C4IX's reboot, C4DOS's REBOOT,
+c4sh's reboot) starts again; one halted gives its arena and screen back
+(c4pc's engine frees nothing else). Its accelerators are on (hv.c says
+why that is safe; not for a machine of several CPUs while VM 0 runs on
+several of the PC's processors). Its swap is an image (`vm mkswap NAME
+MB`, vm.cfg's swap line). The control C4IX's Shut Down and Restart, with
+machines running, shut them down first in Machines' window, with how each
+goes, Stop them now and Cancel; and however VM 0 ends (`shutdown` in a
+Terminal, the power button, VMware's Shut Down Guest), c4pc asks each
+machine still running to shut down and runs them until they have, a
+minute at most, on the screen, before the PC powers off.
 
 ## Stages
 

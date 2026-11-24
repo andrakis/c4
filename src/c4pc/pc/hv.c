@@ -19,8 +19,10 @@
  * of its own (vterm.h), which an attached guest with no display ring has
  * on the PC's screen, the keyboard typing to it (hv_key), as C4IX in
  * text mode, C4KE or C4DOS's prompt are.
- * Its accelerators are off (theirs keep state a CPU at a time, which VM
- * 0's CPU 0 has already), and it has no swap of the host's.
+ * Its accelerators are on (2026-11-24): their state is a CPU's, held for
+ * an operation alone (accel.h's acc_hold and scratch, by m->cpu_id), and
+ * a guest's CPU 0 runs in turn with VM 0's on CPU 0's thread, never at
+ * once. Its swap is an image of VM 0's (SWAP, 20), or none.
  */
 #include "../c4pc.h"
 #include "../clib.h"
@@ -32,7 +34,7 @@ enum { HV_MAX = 8 };
 enum { R_ID = 0x560, R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
 enum { C_NAME = 1, C_MB = 2, C_ARGS = 3, C_NEW = 4, C_START = 5, C_STOP = 6, C_ATTACH = 7, C_DETACH = 8,
        C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_DISK = 12, C_ATTACHED = 13, C_CDROM = 14, C_SEND = 15,
-       C_THUMB = 16, C_LOG = 17, C_PAUSE = 18, C_RESUME = 19 };
+       C_THUMB = 16, C_LOG = 17, C_PAUSE = 18, C_RESUME = 19, C_SWAP = 20, C_HOST = 21 };
 enum { S_FREE, S_MADE, S_RUN, S_HALT, S_PAUSE };
 static const char *STATE_NAME[] = { "free", "made", "running", "halted", "paused" };
 
@@ -41,13 +43,16 @@ typedef struct vm {
   u8 *img; u32 img_len; u8 *tar; u32 tar_len;
   machine *m; drive *drives[4];
   blkdev *disk;                        /* its hd0, a file of VM 0's (hv_disk) */
+  blkdev *swap;                        /* its swap: a file of VM 0's, or 0 */
   struct xmap *cd; u32 cd_blocks;      /* its CD, an ISO file of VM 0's */
   drive *pc_cd;                        /* ... or VM 0's CD drive, shared */
   i64 nap_until; int status;
   i64 paused_at;                       /* S_PAUSE: when (its clock stops then, and goes on from there) */
   char line[200]; int ll;              /* its console's line, being gathered */
   vterm vt;                            /* its console as a text screen */
+  char log[16384]; u32 logn;           /* its console, kept (LOG) */
   int mmu;                             /* 1 an MMU, 2 none, 0 as c4pc's --mmu says */
+  int cpus;                            /* its CPUs, taking turns on CPU 0's thread (smp.c): 1 to 8 */
   i32 a[4], res;                       /* its own window's arguments and answer */
 } vm;
 static vm vms[HV_MAX];                 /* [0]: the control machine, VM 0 */
@@ -56,7 +61,8 @@ static int attached, hv_mmu, hv_w, hv_h;
 static double hv_mhz;
 static char pend_name[32], pend_args[256];
 static u32 pend_mb = 64;
-static int pend_mmu;
+static int pend_mmu, pend_cpus = 1;
+static int stopping;                   /* hv_stop_all: a guest that asks to restart halts instead */
 void hv_out(const char *s);            /* pc.c: to the serial line alone */
 
 static void outn(i64 v) { char b[24]; int k = 0; uint64_t x = v < 0 ? (uint64_t)-v : (uint64_t)v; do b[k++] = (char)('0' + x % 10); while (x /= 10); if (v < 0) b[k++] = '-'; char o[24]; int n = 0; while (k) o[n++] = b[--k]; o[n] = 0; hv_out(o); }
@@ -64,13 +70,18 @@ static void outn(i64 v) { char b[24]; int k = 0; uint64_t x = v < 0 ? (uint64_t)
 static int vm_of(machine *m) { int id = m->dv->hv_id; return id >= 0 && id < HV_MAX ? id : 0; }
 
 /* a guest's console, a line at a time on the serial line */
+void hv_out_quiet(const char *s);       /* pc.c: to the serial line, not c4pc's log */
+static void glog(vm *v, const char *s) { while (*s) { v->log[v->logn % sizeof v->log] = *s++; v->logn++; } }
 static void guest_byte(machine *m, int b) {
   vm *v = &vms[vm_of(m)];
   vt_put(&v->vt, b);
   if (b == '\r') return;
+  v->log[v->logn % sizeof v->log] = (char)b; v->logn++;
   if (b != '\n' && v->ll < (int)sizeof v->line - 1) { v->line[v->ll++] = (char)b; return; }
   v->line[v->ll] = 0;
-  hv_out("vm"); outn(vm_of(m)); hv_out(" "); hv_out(v->name); hv_out(": "); hv_out(v->line); hv_out("\n");
+  { void (*o)(const char *) = hv_out_quiet;
+    o("vm"); { char d[8]; int k = 0, x = vm_of(m); do d[k++] = (char)('0' + x % 10); while (x /= 10); char e[8]; int j = 0; while (k) e[j++] = d[--k]; e[j] = 0; o(e); }
+    o(" "); o(v->name); o(": "); o(v->line); o("\n"); }
   v->ll = 0;
 }
 
@@ -147,6 +158,15 @@ static blkdev *xmap_blk(struct xmap *x, const char *name) {
 /* the CD's 2048-byte blocks */
 static int xmap_cd_rd(void *ctx, u32 lba, u32 n, u8 *buf) { return xmap_rw(ctx, 0, lba * 4, n * 4, buf); }
 
+/* a halted guest's memory given back: its arena and its screen's canvas
+ * (the machine itself, small, is kept for its counts: the engine has no
+ * free of the rest), so that starting it again, or another, has the room */
+static void release(vm *v) {
+  machine *m = v->m;
+  if (!m || !m->u8) return;
+  xfree(m->u8); m->u8 = 0;
+  if (m->gui) { extern void gui_release(gui *g); gui_release(m->gui); m->gui = 0; }
+}
 static int start(int id) {
   vm *v = &vms[id];
   if (v->state != S_MADE && v->state != S_HALT) return -1;
@@ -162,10 +182,16 @@ static int start(int id) {
   }
   machine *m = machine_new(v->mb << 20, v->drives, nd, hv_mhz);
   m->on_byte = guest_byte;
-  m->accel = m->osaccel = 0;
+  m->accel = m->osaccel = 1;
   m->dv->swap_slots = 0;
+  if (v->swap) { extern void dev_swap_disk(machine *, blkdev *, u32, u32); dev_swap_disk(m, v->swap, 0, v->swap->sectors); }
   if (v->disk) m->blk[m->nblk++] = v->disk;
   if (v->mmu == 1 || (!v->mmu && hv_mmu)) mmu_new(m);
+  if (v->cpus > 1) smp_new(m, v->cpus, 0);  /* its CPUs take turns (machine_run runs them) */
+  /* its CPUs past 0 keep their accelerators' state where VM 0's on the
+   * PC's other processors keep theirs (accel.h, by cpu_id): with VM 0 on
+   * several at once (par.c), such a guest has none */
+  if (v->cpus > 1 && ctl->smp && ctl->smp->par) m->accel = m->osaccel = 0;
   m->gui = gui_new(m, hv_w, hv_h);
   vt_init(&v->vt, 0);
   m->dv->hv_rd = hv_rd; m->dv->hv_wr = hv_wr; m->dv->hv_id = id;
@@ -184,6 +210,7 @@ static int start(int id) {
   argv[argc] = 0;
   if (machine_boot(m, v->img, v->img_len, argc, argv)) { hv_out("c4pc: hv: vm"); outn(id); hv_out(" did not boot\n"); return -3; }
   v->m = m; v->state = S_RUN; v->nap_until = 0; v->ll = 0;
+  glog(v, "c4pc: started\n");
   hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(v->name); hv_out(" started, "); outn(v->mb); hv_out(" MB\n");
   return 0;
 }
@@ -245,14 +272,19 @@ int hv_key(int c) {
 static i32 info(int id, u32 addr, u32 len) {
   if (id < 0 || id >= HV_MAX) return -1;
   vm *v = &vms[id];
-  char b[200]; int n = 0;
+  char b[600]; int n = 0;
 #define PUT(s) do { const char *q_ = (s); while (*q_ && n < (int)sizeof b - 1) b[n++] = *q_++; } while (0)
 #define NUM(x) do { char t_[24]; int k_ = 0; uint64_t x_ = (uint64_t)(x); do t_[k_++] = (char)('0' + x_ % 10); while (x_ /= 10); while (k_ && n < (int)sizeof b - 1) b[n++] = t_[--k_]; } while (0)
   PUT("id "); NUM(id); PUT("\nname "); PUT(id ? v->name : "control"); PUT("\nstate "); PUT(id ? STATE_NAME[v->state] : "running");
   PUT("\nmb "); NUM(id ? v->mb : ctl->size >> 20);
   if (id && v->m) { PUT("\ncycles "); NUM((uint64_t)v->m->cycle); }
+  /* each CPU's instructions so far (Machines' Load): the guest's, or VM 0's */
+  { machine *cm = id ? v->m : ctl;
+    if (cm && cm->smp) for (int k = 0; k < cm->smp->n && k < 16; k++) { PUT("\ncpu"); NUM(k); PUT(" "); NUM((uint64_t)cm->smp->cpu[k]->cycle); }
+    else if (cm) { PUT("\ncpu0 "); NUM((uint64_t)cm->cycle); } }
   if (id && v->state == S_HALT) { PUT("\nstatus "); NUM((u32)v->status); }
-  if (id) { PUT("\nmmu "); PUT(v->mmu == 1 || (!v->mmu && hv_mmu) ? "yes" : "no"); }
+  if (id) { PUT("\nmmu "); PUT(v->mmu == 1 || (!v->mmu && hv_mmu) ? "yes" : "no"); PUT("\ncpus "); NUM(v->cpus > 0 ? v->cpus : 1); }
+  else { PUT("\ncpus "); NUM(ctl->smp ? ctl->smp->n : 1); }
   if (id && v->state == S_RUN) { PUT("\nscreen "); PUT(text_shown(v) ? "text" : "display"); }
   PUT("\nattached "); PUT(attached == id ? "yes" : "no"); PUT("\n");
 #undef PUT
@@ -285,7 +317,8 @@ static i32 command(machine *m, i32 c) {
   switch (c) {
     case C_NAME: ctl_string((u32)a[0], pend_name, sizeof pend_name); return 0;
     /* A0 MB of memory; A1 its MMU: 1 one, 2 none, 0 as c4pc's --mmu */
-    case C_MB: pend_mb = a[0] < 4 ? 4 : (u32)a[0] > 1024 ? 1024 : (u32)a[0]; pend_mmu = a[1] == 1 || a[1] == 2 ? a[1] : 0; return 0;
+    case C_MB: pend_mb = a[0] < 4 ? 4 : (u32)a[0] > 1024 ? 1024 : (u32)a[0]; pend_mmu = a[1] == 1 || a[1] == 2 ? a[1] : 0;
+      pend_cpus = a[2] < 1 ? 1 : a[2] > 8 ? 8 : a[2]; return 0;
     case C_ARGS: ctl_string((u32)a[0], pend_args, sizeof pend_args); return 0;
     case C_NEW: {
       int id = 1;
@@ -299,9 +332,9 @@ static i32 command(machine *m, i32 c) {
       memcpy(g->name, pend_name[0] ? pend_name : "guest", sizeof g->name);
       g->name[sizeof g->name - 1] = 0;
       memcpy(g->args, pend_args, sizeof g->args);
-      g->mb = pend_mb; g->mmu = pend_mmu;
+      g->mb = pend_mb; g->mmu = pend_mmu; g->cpus = pend_cpus;
       g->state = S_MADE;
-      pend_name[0] = 0; pend_args[0] = 0; pend_mb = 64; pend_mmu = 0;
+      pend_name[0] = 0; pend_args[0] = 0; pend_mb = 64; pend_mmu = 0; pend_cpus = 1;
       hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(g->name); hv_out(" made\n");
       return id;
     }
@@ -330,11 +363,11 @@ static i32 command(machine *m, i32 c) {
     /* a running guest's screen scaled to A2 x A3, a word a pixel at A1 in
      * VM 0's memory (C4IX's Machines shows it) */
     case C_THUMB: {
-      if (a[0] <= 0 || a[0] >= HV_MAX || (vms[a[0]].state != S_RUN && vms[a[0]].state != S_PAUSE) || !vms[a[0]].m || !vms[a[0]].m->gui) return -1;
+      if (a[0] == 0 ? !ctl->gui : (a[0] < 0 || a[0] >= HV_MAX || (vms[a[0]].state != S_RUN && vms[a[0]].state != S_PAUSE) || !vms[a[0]].m || !vms[a[0]].m->gui)) return -1;
       if (a[2] <= 0 || a[3] <= 0 || a[2] > 640 || a[3] > 480) return -1;
       u32 n = (u32)a[2] * (u32)a[3];
       u32 *px = xmalloc((size_t)n * 4);
-      if (text_shown(&vms[a[0]])) {
+      if (a[0] && text_shown(&vms[a[0]])) {
         /* its text screen: drawn at 640 x 400, then scaled as gui_thumb scales */
         extern void screen_text_pixels(const u16 *cells, int cur, u32 *out);
         u32 *t = xmalloc((size_t)640 * 400 * 4);
@@ -342,7 +375,7 @@ static i32 command(machine *m, i32 c) {
         for (i32 y = 0; y < a[3]; y++) for (i32 x = 0; x < a[2]; x++)
           px[(u32)y * (u32)a[2] + (u32)x] = t[(u32)(y * 400 / a[3]) * 640 + (u32)(x * 640 / a[2])];
         xfree(t);
-      } else if (gui_thumb(vms[a[0]].m->gui, px, a[2], a[3]) < 0) { xfree(px); return -1; }
+      } else if (gui_thumb(a[0] ? vms[a[0]].m->gui : ctl->gui, px, a[2], a[3]) < 0) { xfree(px); return -1; }
 #if WB == 4
       u32 got = dev_dma_write(ctl, (u32)a[1], (const u8 *)px, n * 4);
 #else
@@ -358,11 +391,19 @@ static i32 command(machine *m, i32 c) {
     /* the PC's log (pc.c), its last A1 bytes at most, at A0 in VM 0's
      * memory, ended by a 0: how many */
     case C_LOG: {
-      extern u32 pc_log_copy(char *out, u32 max);
-      if (a[1] < 2) return -1;
+      /* A2: 0 c4pc's own, 1 VM 0's console, ID + 1 guest ID's */
+      extern u32 pc_log_copy(char *out, u32 max, int which);
+      if (a[1] < 2 || a[2] < 0 || a[2] > HV_MAX) return -1;
       u32 max = (u32)a[1] - 1 > 32768 ? 32768 : (u32)a[1] - 1;
       char *b = xmalloc(max + 1);
-      u32 n = pc_log_copy(b, max);
+      u32 n;
+      if (a[2] <= 1) n = pc_log_copy(b, max, a[2]);
+      else {
+        vm *g = &vms[a[2] - 1];
+        u32 have = g->logn < sizeof g->log ? g->logn : (u32)sizeof g->log;
+        n = have < max ? have : max;
+        for (u32 k = 0; k < n; k++) b[k] = g->log[(g->logn - n + k) % sizeof g->log];
+      }
       b[n] = 0;
       dev_dma_write(ctl, (u32)a[0], (const u8 *)b, n + 1);
       xfree(b);
@@ -381,15 +422,28 @@ static i32 command(machine *m, i32 c) {
       if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state != S_PAUSE) return -1;
       resume(a[0]);
       return 0;
+    /* what c4pc found of the PC (pc.c: processor, memory, disks, display,
+     * sound) and CPU 0's time up and idle, "key value" lines, at A0 */
+    case C_HOST: {
+      extern u32 pc_host_info(char *out, u32 max);
+      if (a[1] < 2) return -1;
+      u32 max = (u32)a[1] > 4096 ? 4096 : (u32)a[1];
+      char *b = xmalloc(max);
+      u32 n = pc_host_info(b, max);
+      dev_dma_write(ctl, (u32)a[0], (const u8 *)b, n + 1);
+      xfree(b);
+      return (i32)n;
+    }
     case C_DELETE: {
       if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state == S_RUN || vms[a[0]].state == S_PAUSE) return -1;
       vm *g = &vms[a[0]];
+      release(g);
       xfree(g->img); xfree(g->tar);
       g->img = g->tar = 0; g->m = 0;     /* (its machine, halted, is not freed: the engine has no free) */
       g->state = S_FREE;
       return 0;
     }
-    case C_DISK: case C_CDROM: {
+    case C_DISK: case C_CDROM: case C_SWAP: {
       if (a[0] <= 0 || a[0] >= HV_MAX || vms[a[0]].state == S_RUN || vms[a[0]].state == S_FREE) return -1;
       if (c == C_CDROM && !a[2]) {
         /* VM 0's first CD drive (`vm cdrom ID pc`): both read the disc */
@@ -400,6 +454,7 @@ static i32 command(machine *m, i32 c) {
       struct xmap *x = xmap_new((u32)a[1], (u32)a[2], (u32)a[3]);
       if (!x) return -2;
       if (c == C_DISK) vms[a[0]].disk = xmap_blk(x, vms[a[0]].name);
+      else if (c == C_SWAP) vms[a[0]].swap = xmap_blk(x, vms[a[0]].name);
       else { vms[a[0]].cd = x; vms[a[0]].cd_blocks = (u32)a[3] / 4; }
       return 0;
     }
@@ -451,7 +506,16 @@ int hv_run(void) {
       v->state = S_HALT; v->status = m->status;
       if (v->ll) guest_byte(m, '\n');
       hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(v->name); hv_out(" halted, status "); outn(v->status); hv_out("\n");
-      if (attached == id) hv_attach(0);
+      glog(v, v->status == 82 ? "c4pc: halted to restart\n" : "c4pc: halted\n");
+      int back = attached == id;
+      if (back) hv_attach(0);
+      release(v);
+      /* 82, C4IX's restart (reboot; C4DOS's REBOOT, c4sh's reboot): it
+       * starts again, unless VM 0 is shutting the machines down */
+      if (v->status == 82 && !stopping) {
+        hv_out("c4pc: hv: vm"); outn(id); hv_out(" "); hv_out(v->name); hv_out(" restarting\n");
+        if (start(id) == 0 && back) hv_attach(id);
+      }
       continue;
     }
     if (r == STOP_SLEEP) v->nap_until = m->wall_base + m->nap_until;
@@ -459,6 +523,46 @@ int hv_run(void) {
   }
   return busy;
 }
+/* VM 0 has ended (C4IX shut down or restarted, however it was asked):
+ * every guest still running is asked to shut down as its power button
+ * asks (SIGTERM; a paused one resumed first, one that takes no SIGTERM
+ * stopped), and pc.c runs them until they halt. How many were asked */
+int hv_stop_all(void) {
+  int n = 0;
+  if (!ctl) return 0;
+  stopping = 1;
+  if (attached) hv_attach(0);
+  for (int id = 1; id < HV_MAX; id++) {
+    vm *v = &vms[id];
+    if (v->state == S_PAUSE) resume(id);
+    if (v->state != S_RUN) continue;
+    if (v->m->sigh[15]) v->m->pending_signal = 15; else { v->m->halted = 1; v->m->status = 0; }
+    v->nap_until = 0;
+    n++;
+  }
+  return n;
+}
+/* how many guests run still; NAMES (if not 0) has their names, ", " between */
+int hv_running(char *names, int len) {
+  int n = 0, k = 0;
+  for (int id = 1; id < HV_MAX; id++) {
+    if (vms[id].state != S_RUN) continue;
+    if (names && k < len - 40) {
+      if (n) { names[k++] = ','; names[k++] = ' '; }
+      for (const char *p = vms[id].name; *p && k < len - 8; p++) names[k++] = *p;
+    }
+    n++;
+  }
+  if (names) names[k] = 0;
+  return n;
+}
+/* those that did not halt in time: stopped at once */
+void hv_stop_rest(void) {
+  for (int id = 1; id < HV_MAX; id++)
+    if (vms[id].state == S_RUN) { vms[id].m->halted = 1; vms[id].m->status = 0; }
+  hv_run();
+}
+
 /* the soonest a napping guest wakes (ms, the real clock), or -1 */
 i64 hv_next_wake(void) {
   i64 best = -1;

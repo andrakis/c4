@@ -23,7 +23,7 @@
 //   vm send ID TEXT...                 TEXT and a newline typed at ID's console
 //   vm mkdisk FILE MB                  a disk image of MB, all of its blocks
 //                                      written (a guest's disk must have them)
-//   vm create NAME MB DISK_MB [SYSTEM|ISO]
+//   vm create NAME MB DISK_MB [SYSTEM|ISO] [cpus=N] [swap=MB] [autostart]
 //                                      /vm/NAME: a disk image (none for 0) and
 //                                      vm.cfg, for SYSTEM (c4ix by default):
 //                                        c4ix       C4IX's desktop
@@ -38,6 +38,9 @@
 //                                      says; `vmd` (or vm autostart) every one
 //                                      whose vm.cfg says "autostart yes"
 //   vm log                             c4pc's log: what it and the guests said
+//
+//   vm mkswap NAME MB                  /vm/NAME/swap.img of MB, its swap from
+//                                      its next start (vm.cfg's swap line)
 //
 // vm.cfg, a line each: kernel FILE, boot FILE (the boot archive; - for none:
 // a machine that boots from its disk, args --root hd0p1), mb N, mmu yes|no
@@ -59,7 +62,7 @@
 enum { R_ID = 0x560, R_A0 = 0x564, R_A1 = 0x568, R_A2 = 0x56c, R_A3 = 0x570, R_CMD = 0x574, R_RES = 0x578, R_COUNT = 0x57c };
 enum { C_NAME = 1, C_MB = 2, C_ARGS = 3, C_NEW = 4, C_START = 5, C_STOP = 6, C_ATTACH = 7, C_DETACH = 8,
        C_STATE = 9, C_INFO = 10, C_DELETE = 11, C_DISK = 12, C_ATTACHED = 13, C_CDROM = 14, C_SEND = 15,
-       C_LOG = 17, C_PAUSE = 18, C_RESUME = 19 };
+       C_LOG = 17, C_PAUSE = 18, C_RESUME = 19, C_SWAP = 20 };
 enum { S_RUN = 2, S_PAUSE = 4 };
 enum { DISK_COUNT = 0x188, N_SYS = 4, N_IMG = 5, LOGW = 32768 };
 enum { SYS_SYNC = 252, SYS_FMAP = 257, C4I_MMU = 0x80000, C4I_HV = 0x400000, CHUNK = 1048576, ARGW = 256 };
@@ -254,7 +257,7 @@ static int find(char *s) {
 // the machine NAME's vm.cfg made and started: 0, or 1
 static int up(char *name) {
     char kernel[128], boot[128], mb[16], disk[128], cd[128], v[16], *img, *tar, *av[3];
-    int ilen, tlen, id, k, n, sectors, *t, mmu;
+    int ilen, tlen, id, k, n, sectors, *t, mmu, cpus;
     upathjoin(path_buf, 256, "/vm", name);
     upathjoin(path_buf, 256, path_buf, "vm.cfg");
     if ((k = uslurp(path_buf, cfg, sizeof cfg - 1)) <= 0) { ufprintf(STDERR, "vm: no %s\n", path_buf); return 1; }
@@ -269,6 +272,7 @@ static int up(char *name) {
     if (!cfg_get("boot", boot, 128)) ustrcpy(boot, "-");
     if (!cfg_get("mb", mb, 16)) ustrcpy(mb, "256");
     mmu = !cfg_get("mmu", v, 16) || ustrcmp(v, "no") ? 1 : 2;
+    cpus = cfg_get("cpus", v, 16) ? uatoi(v) : 1;
     if (!cfg_get("args", args_buf, ARGW)) ustrcpy(args_buf, "--desktop --no-top");
     // a system's file in /vm/images not there yet: copied from the disc now
     if (!ustrncmp(kernel, "/vm/images/", 11) && file_size(kernel) <= 0 && is_image(kernel + 11) && images()) return 1;
@@ -276,11 +280,15 @@ static int up(char *name) {
     tar = 0; tlen = 0;
     if (ustrcmp(boot, "-") && !(tar = read_whole(boot, &tlen))) return 1;
     hv(C_NAME, (int)name, 0, 0, 0);
-    hv(C_MB, uatoi(mb), mmu, 0, 0);
+    hv(C_MB, uatoi(mb), mmu, cpus, 0);
     hv(C_ARGS, (int)args_buf, 0, 0, 0);
     if ((id = hv(C_NEW, (int)img, ilen, (int)tar, tlen)) < 0) { ufprintf(STDERR, "vm: %s was not made (%d: no free slot, or no memory for its files)\n", name, id); return 1; }
     if (cfg_get("disk", disk, 128)) {
         if (!(t = extents(disk, &n, &sectors)) || hv(C_DISK, id, (int)t, n, sectors) < 0) { ufprintf(STDERR, "vm: %s: its disk %s was not given\n", name, disk); hv(C_DELETE, id, 0, 0, 0); return 1; }
+    }
+    // its swap: an image of its own (the guest's MMU puts pages out there)
+    if (cfg_get("swap", disk, 128) && disk[0] && ustrcmp(disk, "none")) {
+        if (!(t = extents(disk, &n, &sectors)) || hv(C_SWAP, id, (int)t, n, sectors) < 0) { ufprintf(STDERR, "vm: %s: its swap %s was not given\n", name, disk); hv(C_DELETE, id, 0, 0, 0); return 1; }
     }
     if (cfg_get("cdrom", cd, 128)) {
         if (!ustrcmp(cd, "pc")) {
@@ -399,7 +407,7 @@ static int is_image(char *name) {
 
 // /vm/NAME: its disk image and a vm.cfg for SYSTEM (c4ix if 0), or for
 // C4IX's desktop with the ISO file SYSTEM as its CD
-static int create(char *name, int mb, int dmb, char *system) {
+static int create(char *name, int mb, int dmb, char *system, int cpus, int autostart) {
     int fd, s;
     char disk[128], *iso;
     s = 0; iso = 0;
@@ -432,7 +440,8 @@ static int create(char *name, int mb, int dmb, char *system) {
     ufprintf(fd, "system %s\nkernel /vm/images/%s\nboot /vm/images/%s\nmb %d\nmmu yes\n", sys_name[s], sys_kernel[s], sys_boot[s], mb);
     if (dmb > 0) ufprintf(fd, "disk %s\n", disk);
     if (iso) ufprintf(fd, "cdrom %s\n", iso);
-    ufprintf(fd, "args %s\nautostart no\n", sys_args[s]);
+    ufprintf(fd, "args %s\nautostart %s\n", sys_args[s], autostart ? "yes" : "no");
+    if (cpus > 1) ufprintf(fd, "cpus %d\n", cpus);
     uclose(fd);
     uprintf("vm: %s made: %s. vm up %s starts it\n", path_buf, sys_label[s], name);
     return 0;
@@ -491,12 +500,41 @@ static int delete(char *name, int yes) {
     return 0;
 }
 
+// /vm/NAME/swap.img of MB, and vm.cfg's swap line set to it: 0, or 1
+static int mkswap(char *name, int mb) {
+    char img[128], *out, *p, *q;
+    int fd, k, done;
+    upathjoin(path_buf, 256, "/vm", name);
+    upathjoin(path_buf, 256, path_buf, "vm.cfg");
+    if ((k = uslurp(path_buf, cfg, sizeof cfg - 1)) < 0) { ufprintf(STDERR, "vm: no %s\n", path_buf); return 1; }
+    cfg[k] = 0;
+    upathjoin(img, 128, "/vm", name);
+    upathjoin(img, 128, img, "swap.img");
+    if (mkdisk(img, mb)) return 1;
+    // vm.cfg again, its swap line this image
+    if (!(out = (char *)ualloc(sizeof cfg + 160))) return 1;
+    p = cfg; q = out; done = 0;
+    while (*p) {
+        if (!ustrncmp(p, "swap", 4) && (p[4] == ' ' || p[4] == 9 || p[4] == 10)) { while (*p && *p != 10) ++p; if (*p) ++p; continue; }
+        while (*p && *p != 10) { *q = *p; ++q; ++p; }
+        if (*p) { *q = *p; ++q; ++p; }
+    }
+    *q = 0;
+    if (q > out && q[-1] != 10) ustrcat(out, "\n");
+    ustrcat(out, "swap "); ustrcat(out, img); ustrcat(out, "\n");
+    if ((fd = uopen(path_buf, O_WR + O_CREATE + O_TRUNCATE)) < 0) { ufprintf(STDERR, "vm: cannot write %s\n", path_buf); return 1; }
+    write(fd, out, ustrlen(out));
+    uclose(fd);
+    uprintf("vm: %s: swap %s, %d MB, from its next start\n", name, img, mb);
+    return 0;
+}
+
 static int usage() {
     ufprintf(STDERR, "usage: vm [new NAME KERNEL BOOT.tar MB [ARGS...] | disk ID IMAGE | cdrom ID ISO |\n");
     ufprintf(STDERR, "          start ID | stop ID [-f] | pause ID | resume ID | attach ID | detach | delete NAME [-y] |\n");
     ufprintf(STDERR, "          info ID | send ID TEXT |\n");
-    ufprintf(STDERR, "          mkdisk FILE MB | create NAME MB DISK_MB [c4ix|c4ix-text|c4ke|c4dos|ISO] |\n");
-    ufprintf(STDERR, "          images | up NAME | autostart | log]\n");
+    ufprintf(STDERR, "          mkdisk FILE MB | create NAME MB DISK_MB [c4ix|c4ix-text|c4ke|c4dos|ISO] [cpus=N] [swap=MB] [autostart] |\n");
+    ufprintf(STDERR, "          images | mkswap NAME MB | up NAME | autostart | log]\n");
     return 2;
 }
 
@@ -509,8 +547,27 @@ int main(int argc, char **argv) {
     k = ustrlen(argv[0]);
     if (k >= 3 && !ustrcmp(argv[0] + k - 3, "vmd")) return there() ? autostart() : 0;
     if (k >= 7 && !ustrcmp(argv[0] + k - 7, "vmd.c4r")) return there() ? autostart() : 0;
-    if (argc > 1 && !ustrcmp(argv[1], "create")) return argc == 5 || argc == 6 ? create(argv[2], uatoi(argv[3]), uatoi(argv[4]), argc == 6 ? argv[5] : 0) : usage();
+    if (argc > 1 && !ustrcmp(argv[1], "create")) {
+        // NAME MB DISK_MB [SYSTEM|ISO], then cpus=N, swap=MB, autostart
+        char *sys;
+        int cpus, swapmb, autos, a;
+        if (argc < 5) return usage();
+        sys = 0; cpus = 1; swapmb = 0; autos = 0;
+        a = 5;
+        if (a < argc && ustrncmp(argv[a], "cpus=", 5) && ustrncmp(argv[a], "swap=", 5) && ustrcmp(argv[a], "autostart")) { sys = argv[a]; ++a; }
+        while (a < argc) {
+            if (!ustrncmp(argv[a], "cpus=", 5)) cpus = uatoi(argv[a] + 5);
+            else if (!ustrncmp(argv[a], "swap=", 5)) swapmb = uatoi(argv[a] + 5);
+            else if (!ustrcmp(argv[a], "autostart")) autos = 1;
+            else return usage();
+            ++a;
+        }
+        if (cpus < 1 || cpus > 8) { ufprintf(STDERR, "vm: cpus=1 to 8\n"); return 1; }
+        if (create(argv[2], uatoi(argv[3]), uatoi(argv[4]), sys, cpus, autos)) return 1;
+        return swapmb > 0 ? mkswap(argv[2], swapmb) : 0;
+    }
     if (argc > 1 && !ustrcmp(argv[1], "images")) return argc == 3 ? vm_images(argv[2]) : images();
+    if (argc > 1 && !ustrcmp(argv[1], "mkswap")) return argc == 4 ? mkswap(argv[2], uatoi(argv[3])) : usage();
     if (!there()) { ufprintf(STDERR, "vm: no hypervisor (c4pc --hv: GRUB's \"C4PC hypervisor\")\n"); return 1; }
     if (argc < 2) { list(); return 0; }
     cmd = argv[1];

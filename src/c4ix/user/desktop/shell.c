@@ -13,7 +13,7 @@
 #define printf uprintf
 #include "wkgui.h"
 
-enum { START_W = 200, N_ICONS = 7, K_INSTALL = 0 - 9 };
+enum { START_W = 200, N_ICONS = 8, K_INSTALL = 0 - 9, T_HV = 9 };
 // the sound card's master volume (libjs/guest/snd.h), written here and
 // not through snd.c: the desktop is linked whole by the host's Makefile
 // too, without the card's functions
@@ -50,7 +50,9 @@ static int cur_vol, cur_mute;      // the volume, 0-100 as the tray shows it, an
 static int cur_font, cur_fsize;    // the interface's face and size (the kit's, wk_font_use)
 
 static void theme_init() {
-    cur_scheme = T_MODERN; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5; wk.style = S_FLAT;
+    // the hypervisor's control C4IX looks its own (Settings can change it)
+    cur_scheme = (__c4_info() & C4I_HV_BIT) ? T_HV : T_MODERN;
+    cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5; wk.style = S_FLAT;
     cur_size = 1; cur_vol = 100; cur_mute = 0; cur_font = 0; cur_fsize = 1;
 }
 static void theme_apply() { wk_scheme_use(cur_scheme, cur_bg); wk_font_use(cur_font, cur_fsize); }
@@ -225,10 +227,10 @@ void saver_preview() {
 
 // ---- the desktop: its picture, and its icons ----------------------------------------
 
-static char *icon_labels[N_ICONS] = { "Filesystem", "Terminal", "Text Editor", "IDE", "Calculator", "System Monitor", "Install C4IX" };
-static int icon_kinds[N_ICONS] = { 0, K_TERM, K_NOTE, K_EDIT, K_CALC, K_TASKS, K_INSTALL };
+static char *icon_labels[N_ICONS] = { "Filesystem", "Terminal", "Text Editor", "IDE", "Calculator", "System Monitor", "Machines", "Install C4IX" };
+static int icon_kinds[N_ICONS] = { 0, K_TERM, K_NOTE, K_EDIT, K_CALC, K_TASKS, K_VMS, K_INSTALL };
 // the icons shown: Install C4IX's only where it can be (installable)
-static int n_icons = N_ICONS - 1;
+static int n_icons = N_ICONS - 2;
 
 // is one of BUF's lines WANT
 static int has_line(char *buf, char *want) {
@@ -321,6 +323,9 @@ static int installable() {
     if ((__c4_info() & C4I_HV_BIT) && (__c4_info() & VD_C4I_MMU)) uioperm(UIOPERM_DEV);
     if ((__c4_info() & C4I_HV_BIT) && *(int *)0x560 > 0 && (n = uslurp("/proc/disks", buf, 511)) > 0) {
         buf[n] = 0;
+        // a disk with a partition already has it: install has been
+        k = 0;
+        while (k + 6 < n) { if (!memcmp(buf + k, "hd0p1 ", 6)) return 0; ++k; }
         if (!memcmp(buf, "hd0 ", 4)) return 1;
     }
     k = 2;
@@ -709,7 +714,11 @@ static void start_pick(struct go_item *it) {
     if (it->kind > 0) launch(it->kind);
     else if (it->kind == GO_RUN) inputbox(0, "Run", "Program to run:", "", A_RUN);
     else if (it->kind == GO_OFF) running = 0;
-    else if (it->kind == GO_CMD) run_command(it->cmd);
+    else if (it->kind == GO_CMD) {
+        // with the hypervisor's machines running, they shut down first (machines.c)
+        if ((ui_eq(it->cmd, "shutdown") || ui_eq(it->cmd, "reboot")) && machines_before_power(it->cmd)) return;
+        run_command(it->cmd);
+    }
 }
 
 // A press: as a move first (a touch has none before it), then a row that
@@ -1039,8 +1048,12 @@ int main(int argc, char **argv) {
     gui_events(EVENTS);
     volume_apply();
     n_start = sizeof(start_items) / sizeof(start_items[0]);
-    // Install C4IX, on the desktop and in Go, only booted from c4pc's disc
-    if (installable()) n_icons = N_ICONS;
+    // Machines on the desktop where the hypervisor is; Install C4IX, on the
+    // desktop and in Go, only booted from c4pc's disc
+    n_icons = N_ICONS - 2;
+    if (__c4_info() & C4I_HV_BIT) ++n_icons;
+    else { icon_labels[N_ICONS - 2] = icon_labels[N_ICONS - 1]; icon_kinds[N_ICONS - 2] = icon_kinds[N_ICONS - 1]; }
+    if (installable()) ++n_icons;
     else {
         k = 0;
         while (k < n_start && !(start_items[k].kind == GO_CMD && ui_eq(start_items[k].cmd, "install"))) ++k;
@@ -1064,6 +1077,8 @@ int main(int argc, char **argv) {
     printf("desktop: running on the display. Go > Exit Desktop to come back here.\n");
 
     term_open(0);
+    // the hypervisor's control C4IX: its System Monitor and Machines, at once
+    if (__c4_info() & C4I_HV_BIT) { launch(K_TASKS); machines_open(); }
     running = 1; wk_redraw_all();
     clock_min = 0 - 1; last_tick = 0; last_draw = 0;
     start_ms = now_ms(); second_draw = 0;

@@ -446,6 +446,15 @@ static void figure(int x, int y, int w, char *label, int v) {
 static void swapbox(struct tasks *t, int x, int y, int w, int h) {
     int used, fill;
     ui_group(x, y, w, h, "Swap");
+    if (t->swap <= 0 && (__c4_info() & 0x80000)) {
+        // the MMU on, and no disk for swap: c4pc's install -s, or a
+        // hypervisor guest's swap image (vm mkswap)
+        d_text(x + 12, y + 20, C_DARK, F_SANS, "No swap: this machine");
+        d_text(x + 12, y + 36, C_DARK, F_SANS, "has no swap disk.");
+        d_text(x + 12, y + 56, C_DARK, F_SANS, "(install -s; a VM's:");
+        d_text(x + 12, y + 72, C_DARK, F_SANS, "vm mkswap NAME MB)");
+        return;
+    }
     if (t->swap <= 0) {
         d_text(x + 12, y + 20, C_DARK, F_SANS, "Enable MMU in");
         d_text(x + 12, y + 36, C_DARK, F_SANS, "Configuration for swap.");

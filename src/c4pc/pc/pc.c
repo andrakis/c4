@@ -71,17 +71,28 @@ static void vga_put(int c) { if (vt_put(&pcv, c)) vga_cursor(); }
 /* the PC's log: what the console and the serial line were given, the last
  * PCLOG bytes of it (VM 0 reads it through the hypervisor: hv.c, C_LOG) */
 enum { PCLOG = 32768 };
-static char pclog[PCLOG];
-static u32 pclog_n;
-u32 pc_log_copy(char *out, u32 max) {
-  u32 have = pclog_n < PCLOG ? pclog_n : PCLOG, n = have < max ? have : max;
-  u32 from = pclog_n - n;
-  for (u32 k = 0; k < n; k++) out[k] = pclog[(from + k) % PCLOG];
+static char pclog[PCLOG], vm0log[PCLOG];
+static u32 pclog_n, vm0log_n;
+static int from_vm0, log_skip;          /* the byte is VM 0's console's; not for the log (a guest's: its own) */
+/* the last MAX bytes at most of c4pc's own log (WHICH 0) or VM 0's console's (1) */
+u32 pc_log_copy(char *out, u32 max, int which) {
+  char *r = which ? vm0log : pclog; u32 got = which ? vm0log_n : pclog_n;
+  u32 have = got < PCLOG ? got : PCLOG, n = have < max ? have : max;
+  u32 from = got - n;
+  for (u32 k = 0; k < n; k++) out[k] = r[(from + k) % PCLOG];
   return n;
 }
+/* what c4pc found of the PC, a "key value" line each (hv.c's HOST) */
+static char hwinfo[2048]; static u32 hwinfo_n;
+static void hw_str(const char *s) { while (*s && hwinfo_n < sizeof hwinfo - 1) hwinfo[hwinfo_n++] = *s++; hwinfo[hwinfo_n] = 0; }
+static void hw_num(i64 v) { char b[24]; int k = 0; if (v < 0) { hw_str("-"); v = -v; } do b[k++] = (char)('0' + v % 10); while (v /= 10); while (k) { char c[2] = { b[--k], 0 }; hw_str(c); } }
+i64 pc_idle_total;                      /* ms CPU 0 was idle, waiting (its load: hv.c's HOST) */
 static int vga_dirty, com1_only;
 static void con_put(int c) {
-  if (c != '\r') { pclog[pclog_n % PCLOG] = (char)c; pclog_n++; }
+  if (c != '\r' && !log_skip) {
+    if (from_vm0) { vm0log[vm0log_n % PCLOG] = (char)c; vm0log_n++; }
+    else { pclog[pclog_n % PCLOG] = (char)c; pclog_n++; }
+  }
   if (c == '\n') com1_put('\r');
   com1_put(c);
   if (com1_only) return;
@@ -288,6 +299,7 @@ static volatile int kbd_to_gui;
 static volatile int want_reboot, vt_text, vt_back;
 static volatile int show_fps;
 static int hv;                          /* --hv: VM 0 of the hypervisor (hv.c) */
+static int hv_loud;                     /* the hypervisor's messages on the screen too (its guests shutting down) */
 static volatile int hv_detach;          /* Ctrl+Alt+Home: the screen VM 0's again */
 void hv_init(machine *m, double mhz, int mmu_on, int w, int h);
 int hv_run(void);
@@ -532,7 +544,7 @@ void cpu_init_ap(void) {
 struct mb_info { u32 flags, mem_lower, mem_upper, boot_device, cmdline, mods_count, mods_addr; };
 struct mb_mod { u32 start, end, string, reserved; };
 
-static void on_byte(machine *m, int b) { (void)m; con_put(b); }
+static void on_byte(machine *m, int b) { (void)m; from_vm0 = 1; con_put(b); from_vm0 = 0; }
 
 static int split_args(char *s, char **argv, int max) {
   int n = 0;
@@ -568,6 +580,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
   if (hi <= lo + (4u << 20)) { con_puts("c4pc: too little memory\n"); power_off(73); }
   pc_malloc_init((void *)(uintptr_t)lo, (void *)(uintptr_t)hi);
   con_puts("c4pc: "); con_dec((hi - lo) >> 20); con_puts(" MB free above the modules, ");
+  hw_str("memory "); hw_num(hi >> 20); hw_str(" MB\n");
   con_dec(nmods); con_puts(" modules\n");
 
   __asm__ volatile("sti");
@@ -723,6 +736,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     for (int i = 0; i < nblk; i++) {
       con_puts("c4pc: block device "); con_dec(i); con_puts(": "); con_puts(blks[i]->what);
       con_puts(", "); con_dec(blks[i]->sectors / 2048); con_puts(" MB\n");
+      hw_str("disk "); hw_num(blks[i]->sectors / 2048); hw_str(" MB, "); hw_str(blks[i]->what); hw_str("\n");
     }
   }
 
@@ -812,6 +826,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (mouse) outb(0xA1, (u8)(inb(0xA1) & 0xEF));   /* IRQ 12 (the SCI's may be unmasked: acpi.c) */
     int vmouse = mouse && vmw_mouse_init();
     con_puts("c4pc: a display of "); con_dec(w); con_puts(" x "); con_dec(h);
+    hw_str("display "); hw_num(w); hw_str(" x "); hw_num(h); hw_str("\n");
     con_puts(vmouse ? ", and VMware's absolute mouse (the pointer leaves at the edge)\n" : mouse ? ", and a mouse\n" : ", and no mouse\n");
     pcv.mirror = 0;                     /* graphics: the VGA's text is not shown */
     screen_console(pcv.cells, vt_cursor(&pcv));
@@ -826,7 +841,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     /* the Ensoniq AudioPCI: VMware's ES1371 for many guest types (es137x.c) */
     { extern const char *es137x_init(snd *); extern void es137x_poll(void);
       if (!how && (how = es137x_init(s))) audio_poll = es137x_poll; }
-    if (how) { m->snd = s; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); }
+    if (how) { m->snd = s; con_puts("c4pc: sound: "); con_puts(how); con_puts("\n"); hw_str("sound "); hw_str(how); hw_str("\n"); }
     else {
       extern const char *hda_why, *es137x_why;
       con_puts("c4pc: no sound: no Sound Blaster 16 at 220h or 240h; "); con_puts(hda_why);
@@ -857,6 +872,25 @@ void pc_main(u32 magic, struct mb_info *mb) {
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU" : " MB arena");
   con_puts(mem_all ? " (the PC's memory but c4pc's own; -m N for less), running " : ", running ");
   con_puts(img_name); con_puts("\n");
+  /* the processors: what the CPU says of itself, and how many c4pc runs on */
+  {
+    u32 a, b, c, d, w[12];
+    cpuid_(0x80000000u, &a, &b, &c, &d);
+    if (a >= 0x80000004u) {
+      for (u32 k = 0; k < 3; k++) cpuid_(0x80000002u + k, &w[4 * k], &w[4 * k + 1], &w[4 * k + 2], &w[4 * k + 3]);
+      char *s = (char *)w; s[47] = 0;
+      while (*s == ' ') s++;
+      hw_str("processor "); hw_str(s); hw_str("\n");
+    }
+    int logical = 0;
+    cpuid_(0, &a, &b, &c, &d);
+    if (a >= 0xB) { cpuid_(0xB, &a, &b, &c, &d); __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0xB), "c"(1)); logical = (int)(b & 0xffff); }
+    if (!logical) { cpuid_(1, &a, &b, &c, &d); logical = (int)((b >> 16) & 0xff); }
+    extern int plat_cpus(void);
+    hw_str("processors "); hw_num(logical > 0 ? logical : 1); hw_str(" (the CPU says), c4pc on "); hw_num(par ? plat_cpus() : 1); hw_str("\n");
+    if (tsc_per_ms) { hw_str("clock "); hw_num(tsc_per_ms / 1000); hw_str(" MHz\n"); }
+    if (clock_vmw) hw_str("host VMware\n");
+  }
   if (machine_boot(m, img, img_len, pargc, pargv)) power_off(75);
   if (par) par_start(m->smp);
 
@@ -959,6 +993,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
       if (m->snd) audio_poll();
       idle0(m);                               /* until a key, the next tick, or another CPU asking */
       parked += plat_now_ms() - t;
+      pc_idle_total += plat_now_ms() - t;
       continue;
     }
     if (paced && m->wall) {
@@ -976,6 +1011,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
           idle0(m);
         }
         idle_ms += plat_now_ms() - now;
+        pc_idle_total += plat_now_ms() - now;
       }
     } else if (paced) {
       i64 ahead = machine_sim_ms(m) - (plat_now_ms() - t0 - parked);
@@ -1010,10 +1046,57 @@ void pc_main(u32 magic, struct mb_info *mb) {
     con_puts("c4pc: heap "); con_dec(heap_used(m->heap) / 1024); con_puts(" KB in use at exit, ");
     con_dec(heap_peak(m->heap) / 1024); con_puts(" KB at most; host memory free "); con_dec(pc_heap_free_bytes >> 10); con_puts(" KB\n");
   }
+  /* the hypervisor's guests still running: shut down cleanly first, each
+   * as its power button asks, on the screen's text console; a minute at
+   * most, then those left are stopped (hv.c) */
+  if (hv) {
+    extern int hv_stop_all(void); extern int hv_running(char *, int); extern void hv_stop_rest(void);
+    int n = hv_stop_all();
+    if (n) {
+      static char names[256];
+      hv_loud = 1; vt_text = 1;
+      con_puts("\nc4pc: hv: the control C4IX has ended; ");
+      con_dec(n); con_puts(n == 1 ? " machine is" : " machines are"); con_puts(" shutting down first (a minute at most)\n");
+      i64 t1 = plat_now_ms(), said = t1;
+      while (hv_running(0, 0) && plat_now_ms() - t1 < 60000) {
+        hv_run();
+        if (m->gui) screen_console(pcv.cells, vt_cursor(&pcv));
+        if (plat_now_ms() - said >= 5000) {
+          said = plat_now_ms();
+          hv_running(names, sizeof names);
+          con_puts("c4pc: hv: still shutting down: "); con_puts(names); con_puts("\n");
+        }
+      }
+      if (hv_running(names, sizeof names)) {
+        con_puts("c4pc: hv: not shut down after a minute, so stopped at once: "); con_puts(names); con_puts("\n");
+        hv_stop_rest();
+      } else con_puts("c4pc: hv: every machine has shut down\n");
+      con_flush();
+      if (m->gui) screen_console(pcv.cells, vt_cursor(&pcv));
+    }
+  }
   if (reboot_after && status == 0) status = STATUS_REBOOT;
   power_off(status);
 }
 
 void ram_sink(drive *d, const char *name, blob *b) { (void)d; (void)name; (void)b; }
 /* the hypervisor's messages and its guests' consoles (hv.c): the serial line alone */
-void hv_out(const char *s) { com1_only = 1; con_puts(s); com1_only = 0; }
+void hv_out(const char *s) { com1_only = !hv_loud; con_puts(s); com1_only = 0; }
+/* a guest's console line: the serial line's, not c4pc's log (each guest
+ * keeps its own: hv.c) */
+void hv_out_quiet(const char *s) { log_skip = 1; hv_out(s); log_skip = 0; }
+/* the hardware lines, and how long CPU 0 was up and idle */
+u32 pc_host_info(char *out, u32 max) {
+  u32 n = 0;
+  for (u32 k = 0; k < hwinfo_n && n < max - 64; k++) out[n++] = hwinfo[k];
+  char b[64]; int k = 0;
+  i64 up = plat_now_ms(), v;
+  const char *t = "uptime "; while (*t) b[k++] = *t++;
+  { char d[24]; int j = 0; v = up; do d[j++] = (char)('0' + v % 10); while (v /= 10); while (j) b[k++] = d[--j]; }
+  t = "\nidle "; while (*t) b[k++] = *t++;
+  { char d[24]; int j = 0; v = pc_idle_total; do d[j++] = (char)('0' + v % 10); while (v /= 10); while (j) b[k++] = d[--j]; }
+  b[k++] = '\n';
+  for (int j = 0; j < k && n < max - 1; j++) out[n++] = b[j];
+  out[n] = 0;
+  return n;
+}

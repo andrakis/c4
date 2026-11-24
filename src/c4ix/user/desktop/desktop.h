@@ -95,6 +95,7 @@ void tasks_tick(struct win *w);
 void tasks_answer(struct win *w, int action, int yes);
 
 // ---- machines.c: Machines, the hypervisor's machines (c4pc --hv) ----
+int machines_before_power(char *cmd);     // Shut Down / Restart with guests running: 1 if Machines took it
 int  machines_open();
 void machines_draw(struct win *w, int ox, int oy, int cw, int ch, int focused);
 void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch);

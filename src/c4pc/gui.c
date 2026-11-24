@@ -477,6 +477,15 @@ gui *gui_new(machine *m, int w, int h) {
   return g;
 }
 
+/* a display no longer wanted (a hypervisor guest halted): its canvas and
+ * itself freed; its images' map is left (small) */
+void gui_release(gui *g) {
+  if (!g) return;
+  if (g->back) xfree(g->back);
+  if (g->front && g->front != g->back) xfree(g->front);
+  xfree(g);
+}
+
 i32 gui_read32(gui *g, u32 a) {
   switch (a) {
     case CAPS: return 1 | 2 | 4 | 8;

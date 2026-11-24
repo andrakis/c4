@@ -399,6 +399,96 @@ void ui_check(int x, int y, char *label, int on) {
     d_text(x + 18, y, C_DARK, F_SANS, label);
 }
 
+// ---- a dropdown ------------------------------------------------------------------
+
+void ui_drop(int x, int y, int w, struct ui_drop *d) {
+    int k;
+    d_rect(x, y, w, 22, C_WHITE);
+    if (ui_style == S_FLAT) d_recto(x, y, w, 22, d->open ? C_TITLE : C_SHADOW);
+    else d_bevel(x, y, w, 22, B_SUNKEN);
+    if (d->sel >= 0 && d->sel < d->n) d_text(x + 5, y + 5, C_DARK, F_SANS, d->items[d->sel]);
+    d_rect(x + w - 20, y + 2, 18, 18, C_FACE);
+    d_bevel(x + w - 20, y + 2, 18, 18, d->open ? B_PRESSED : B_RAISED);
+    k = 0;
+    while (k < 4) { d_rect(x + w - 15 + k, y + 9 + k, 8 - 2 * k, 1, C_DARK); ++k; }
+}
+void ui_drop_list(int x, int y, int w, struct ui_drop *d) {
+    int k;
+    if (!d->open) return;
+    d_rect(x, y + 22, w, d->n * 18 + 4, C_WHITE);
+    d_recto(x, y + 22, w, d->n * 18 + 4, C_DARK);
+    k = 0;
+    while (k < d->n) {
+        if (k == d->hover) d_rect(x + 2, y + 24 + k * 18, w - 4, 18, C_SEL);
+        d_text(x + 6, y + 27 + k * 18, k == d->hover ? C_WHITE : C_DARK, F_SANS, d->items[k]);
+        ++k;
+    }
+}
+int ui_drop_mouse(int ev, int px, int py, int x, int y, int w, struct ui_drop *d) {
+    int k;
+    if (d->open) {
+        if (ui_hit(px, py, x, y + 24, w, d->n * 18)) {
+            k = (py - y - 24) / 18;
+            if (k >= d->n) k = d->n - 1;
+            d->hover = k;
+            if (ev != E_DOWN && ev != E_UP) return 1;
+            if (ev == E_UP && k == d->sel) return 1;    // the press that opened it, let go over the chosen
+            d->open = 0;
+            if (k != d->sel) { d->sel = k; return 2; }
+            return 1;
+        }
+        if (ev == E_DOWN) { d->open = 0; return ui_hit(px, py, x, y, w, 22); }
+        return ev == E_MOVE ? 0 : 1;
+    }
+    if (ev == E_DOWN && ui_hit(px, py, x, y, w, 22)) { d->open = 1; d->hover = d->sel; return 1; }
+    return 0;
+}
+// the open list's mark, or the choice of a shut one, moved by D
+static void k_drop_move(struct ui_drop *d, int dir) {
+    if (d->open) {
+        d->hover = d->hover + dir;
+        if (d->hover < 0) d->hover = 0;
+        if (d->hover >= d->n) d->hover = d->n - 1;
+    } else {
+        d->sel = d->sel + dir;
+        if (d->sel < 0) d->sel = 0;
+        if (d->sel >= d->n) d->sel = d->n - 1;
+    }
+}
+int ui_drop_key(struct ui_drop *d, int code) {
+    if (code == KEY_ESC && d->open) { d->open = 0; return 1; }
+    if (code == KEY_ENTER) {
+        if (!d->open) { d->open = 1; d->hover = d->sel; return 1; }
+        d->open = 0;
+        if (d->hover != d->sel && d->hover >= 0) { d->sel = d->hover; return 2; }
+        return 1;
+    }
+    if (code == KEY_UP || code == KEY_DOWN) {
+        k_drop_move(d, code == KEY_UP ? 0 - 1 : 1);
+        if (!d->open) return 2;
+        return 1;
+    }
+    return 0;
+}
+
+// ---- a field that checks what is typed ----------------------------------------------
+
+void ui_field_bad(int x, int y, int w) {
+    d_recto(x, y, w, 22, 0xd03030);
+    d_recto(x + 1, y + 1, w - 2, 20, 0xd03030);
+}
+int ui_numfield_key(char *text, int max, int *caret, int code, int ch, int mods) {
+    if (ch >= 32 && (ch < '0' || ch > '9') && !(mods & M_CTRL)) return 0;
+    return ui_field_key(text, max, caret, code, ch, mods);
+}
+int ui_num_ok(char *text, int lo, int hi) {
+    int v, k;
+    if (!text[0]) return 0;
+    v = 0; k = 0;
+    while (text[k]) { if (text[k] < '0' || text[k] > '9' || k > 8) return 0; v = v * 10 + text[k] - '0'; ++k; }
+    return v >= lo && v <= hi;
+}
+
 // ---- a splitter ------------------------------------------------------------------
 //
 // The bar between two panes side by side, dragged across to size them.

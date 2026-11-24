@@ -248,6 +248,23 @@ int  ui_key_cut(int code, int ch, int mods);
 int  ui_key_paste(int code, int ch, int mods);
 int  ui_field_hit(int px, int x, int w, char *text, int caret);   // the caret for a click
 void ui_check(int x, int y, char *label, int on);  // a check box and its label
+// A dropdown (ui.c): a box with the chosen item and an arrow; pressed, its
+// list opens below it, drawn by ui_drop_list after the rest of the window
+// so that it is over it. ui_drop_mouse takes every press and move while
+// one is open: 0 not the drop's, 1 the drop's, 2 the drop's and its choice
+// changed (d->sel). ui_drop_key: Up, Down, Enter, Esc on a focused one.
+struct ui_drop { int open, sel, n, hover; char **items; };
+void ui_drop(int x, int y, int w, struct ui_drop *d);
+void ui_drop_list(int x, int y, int w, struct ui_drop *d);
+int  ui_drop_mouse(int ev, int px, int py, int x, int y, int w, struct ui_drop *d);
+int  ui_drop_key(struct ui_drop *d, int code);
+// A field that checks what is typed (ui.c): ui_field_bad edges a field drawn
+// with ui_field in red, for a value the window will not take; a number's
+// field takes digits alone (ui_numfield_key) and ui_num_ok says whether its
+// text is a number from LO to HI
+void ui_field_bad(int x, int y, int w);
+int  ui_numfield_key(char *text, int max, int *caret, int code, int ch, int mods);
+int  ui_num_ok(char *text, int lo, int hi);
 // a splitter: the bar between two panes side by side, dragged across
 void ui_splitter(int x, int y, int w, int h);
 int  ui_split_click(int px, int py, int x, int y, int w, int h, int pos);   // 1: pressed, a drag from POS begun

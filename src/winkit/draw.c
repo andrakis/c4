@@ -19,10 +19,11 @@ struct wk_env wk;
 // Nine colours each: desktop, face, light and shadow edges, the active
 // and inactive title bars (each a gradient's two ends), and the
 // selection, which is the active title's first colour.
-enum { N_SCHEMES = 9, S_COLS = 8 };
+enum { N_SCHEMES = 10, S_COLS = 8 };
 static char *scheme_names[N_SCHEMES] = {
     "Classic Teal", "Granite", "Drizzle", "Sandstone", "Blush", "Pine", "Lavender", "Thunder",
-    "Modern"                          // the flat look's own: cool greys, slate title bars
+    "Modern",                         // the flat look's own: cool greys, slate title bars
+    "Hypervisor"                      // the C4PC hypervisor's control C4IX: dark slate, amber
 };
 static int schemes[N_SCHEMES * S_COLS] = {
     0x008080, 0xc0c0c0, 0xffffff, 0x808080, 0x000080, 0x1084d0, 0x808080, 0xb4b4b4,
@@ -33,7 +34,8 @@ static int schemes[N_SCHEMES * S_COLS] = {
     0x285040, 0xa2c8a9, 0xe2f2e6, 0x5e9a6a, 0x184830, 0x408048, 0x6a8a70, 0x9ab8a0,
     0x504878, 0xaea8d9, 0xeae6f8, 0x6c64a8, 0x504888, 0x8880c8, 0x8880a0, 0xb4b0d0,
     0x202830, 0xa8a8a8, 0xe8e8e8, 0x606060, 0x303848, 0x607088, 0x707070, 0x989898,
-    0x2e3440, 0xeceff4, 0xffffff, 0xa0a8b4, 0x3b4252, 0x3b4252, 0xd8dee9, 0xd8dee9
+    0x2e3440, 0xeceff4, 0xffffff, 0xa0a8b4, 0x3b4252, 0x3b4252, 0xd8dee9, 0xd8dee9,
+    0x1a2128, 0xe6e8eb, 0xffffff, 0x9aa1a9, 0xa85a12, 0xa85a12, 0xd4d8dd, 0xd4d8dd
 };
 
 int wk_scheme_count() { return N_SCHEMES; }

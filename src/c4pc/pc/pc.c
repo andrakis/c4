@@ -888,7 +888,8 @@ void pc_main(u32 magic, struct mb_info *mb) {
   con_puts("c4pc: "); con_dec(m->size >> 20); con_puts(mmu_on ? " MB arena with an MMU" : " MB arena");
   con_puts(mem_all ? " (the PC's memory but c4pc's own; -m N for less), running " : ", running ");
   con_puts(img_name); con_puts("\n");
-  /* the processors: what the CPU says of itself, and how many c4pc runs on */
+  /* the processors: what the firmware lists (the MADT: acpi.c), else what
+   * the CPU says of its package, and how many c4pc runs on */
   {
     u32 a, b, c, d, w[12];
     cpuid_(0x80000000u, &a, &b, &c, &d);
@@ -903,7 +904,13 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (a >= 0xB) { cpuid_(0xB, &a, &b, &c, &d); __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0xB), "c"(1)); logical = (int)(b & 0xffff); }
     if (!logical) { cpuid_(1, &a, &b, &c, &d); logical = (int)((b >> 16) & 0xff); }
     extern int plat_cpus(void);
-    hw_str("processors "); hw_num(logical > 0 ? logical : 1); hw_str(" (the CPU says), c4pc on "); hw_num(par ? plat_cpus() : 1); hw_str("\n");
+    extern int acpi_ncpu;
+    const char *says = " (the CPU says), c4pc on ";
+    if (acpi_ncpu > 0) {
+      logical = acpi_ncpu; says = " (the firmware's tables), c4pc on ";
+      con_puts("c4pc: the firmware lists "); con_dec(acpi_ncpu); con_puts(" processors; c4pc runs on "); con_dec(par ? plat_cpus() : 1); con_puts("\n");
+    }
+    hw_str("processors "); hw_num(logical > 0 ? logical : 1); hw_str(says); hw_num(par ? plat_cpus() : 1); hw_str("\n");
     if (tsc_per_ms) { hw_str("clock "); hw_num(tsc_per_ms / 1000); hw_str(" MHz\n"); }
     if (clock_vmw) hw_str("host VMware\n");
   }

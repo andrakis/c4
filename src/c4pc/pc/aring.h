@@ -68,8 +68,18 @@ static void ar_line(aring *a, double now) {
 static void ar_poll(aring *a, u32 pos) {
   double now = plat_now_us();
   if (!a->t0_us) a->t0_us = a->sec_us = a->rep_us = a->r_first = now;
+  double gap = a->at_us ? now - a->at_us : 0, went = gap * AR_RATE / 1e6;
   u32 step = (pos - a->last_pos + AR_RING) % AR_RING;
-  a->last_pos = pos;
+  /* nearly the ring in less time than it takes: the position read a
+   * little behind the last one (VMware's SB16: "the DMA's steps 2 to
+   * 8174"), not a round played -- taken as one, everything mixed ahead
+   * was thrown away and mixed again: a click. Kept where it was */
+  if (step > AR_RING - 2048 && went < AR_RING - 2048) step = 0;
+  else {
+    a->last_pos = pos;
+    /* a gap longer than the ring: the rounds the clock says went by */
+    while ((double)step + AR_RING / 2 < went) step += AR_RING;
+  }
   a->played += step;
   if (step > a->step_max) a->step_max = step;
   if (step > a->r_step_max) a->r_step_max = step;

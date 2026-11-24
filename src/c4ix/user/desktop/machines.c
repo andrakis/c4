@@ -931,7 +931,7 @@ static void draw_cfgtab(struct machines *t, int x, int y, int w, int focused) {
 }
 
 // Load: each CPU's instructions a second (c4pc: CPU 0's time busy, %)
-// the PC's processors (HOST: "processors N (the CPU says), c4pc on M"): N,
+// the PC's processors (HOST: "processors N (the firmware's tables), c4pc on M"): N,
 // and in *USED how many c4pc runs on
 static int host_cpus(int *used) {
     char *p;
@@ -1243,7 +1243,7 @@ void machines_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
             return;
         }
         if (ev == E_MOVE && ui_scroll_active()) {
-            top = ui_scroll_drag(x, y, y);
+            top = ui_scroll_drag(rx + 8 + rw - 16 - 16, PAGE_Y + 8, y);
             if (top >= 0) { t->ltop = top >= t->ln - t->lrows ? 0 - 1 : top; mark_win_dirty(w); }
             return;
         }

@@ -1,0 +1,203 @@
+// boot.js - put an image in the machine and point the CPU at it.
+//
+// The .c4r parser and relocator are c4bb's (src/c4bb/sim/loader.js:
+// parseC4r, loadImage), used as they are: the four patch types, BSS from
+// the v3 header, 32-bit images only.
+//
+// What differs from c4bb is how main gets called. c4bb's firmware
+// cannot call guest code from the host, so it fakes a return frame and
+// watches for the PC to land on a sentinel. This machine does what c4mp
+// does (src/c4mp/main.c:1-26) and assembles a few real instructions
+// after the image:
+//
+//      IMM 0; PSH; JSR ctor; ADJ 1      each constructor, in order
+//      IMM argc; PSH; IMM argv; PSH
+//      JSR entry; ADJ 2                 main(argc, argv)
+//      PSH                              main's result waits for EXIT
+//      JSR dtor                         each destructor, in reverse
+//      EXIT                             takes the result off the stack
+//
+// Constructors get one argument, 0, as they do on c4bb (c4l.c passes
+// 0 too). The destructors cannot lose the exit code: each JSR/LEV pair
+// leaves the stack where it found it.
+
+import { parseC4r, loadImage } from '../src/c4bb/sim/loader.js';
+import { Arena, MEM_BASE, TLEV_ADDR, OPNAMES_ROM } from '../src/c4bb/sim/arena.js';
+import { Devices, OPNAMES, HEAP_BASE, HEAP_END, CYCLES_PER_MS } from '../src/c4bb/sim/devices.js';
+import { OP, Machine, CPU_HALT_ADDR, NULL_GUARD_OP } from './c4m.js';
+import { Smp } from './smp.js';
+import { ParHost } from './par.js';
+import { Bus } from './bus.js';
+import { Heap } from './heap.js';
+import { SharedHeap } from './sheap.js';
+import { Mmu } from './mmu.js';
+import { accel, setOsAccel } from './accel.js';
+import { fitUnpack } from './unpack.js';
+
+// The whole machine, empty. Both hosts (cli.js, worker.js) build it
+// here so they cannot drift apart.
+//   arenaMb   memory in megabytes (default 32)
+//   drives    [{ files: Map<name, Uint8Array>, writable, sink }] (c4bb's drives),
+//             each fitted with the files its recipes make from the packages
+//             they came in (unpack.js: Quake's pak0.pak from quake106.zip)
+//   unpackLog(message)  told of each such file made, and how long it took
+//   onByte    console sink, one byte at a time
+//   onDownload(name, bytes)  a file the machine hands the person (C4IX's
+//             download: devices.js "download:NAME"); without it, none is taken
+//   mhz       how fast the machine claims to be; TIME is cycles / (mhz * 1000)
+//   gui       a GuiDevice to fit, or null
+//   snd       a SoundDevice (snd-device.js) to fit, or null
+//   cpus      processors (smp.js): c4mp's instruction set, simulated, with
+//             quantum instructions each in turn (default 1000). Without it,
+//             one CPU and no processor opcodes, as before
+//   parallel  ... on threads instead (par.js): a worker per CPU, made by
+//             spawn(url), on an arena in a SharedArrayBuffer, with a heap
+//             whose books are shared too (sheap.js). Where there is no
+//             SharedArrayBuffer (a page not cross-origin isolated), the
+//             simulated engine
+//   mmu       fit an MMU (mmu.js, docs/c4ix-mmu.md) to every CPU, unless
+//             false: one is fitted by default. It does nothing until the
+//             guest turns it on, which only C4IX does
+//   accel     the accelerators (accel.js): on unless false
+//   osAccel   ... an operating system's among them (C4IX's src/c4ix/accel.mjs):
+//             on unless false; the guest may turn them (ACC_OS)
+export function createMachine(opts = {}) {
+  const bytes = (opts.arenaMb || 32) * 1024 * 1024;
+  const par = opts.cpus > 1 && opts.parallel && opts.spawn && typeof SharedArrayBuffer !== 'undefined';
+  const arena = new Arena(par ? new SharedArrayBuffer(bytes) : bytes);
+  for (const d of opts.drives || []) fitUnpack(d.files, { log: opts.unpackLog });
+  const dev = new Devices(arena, {
+    drives: opts.drives,
+    onByte: opts.onByte,
+    onDownload: opts.onDownload,
+    cyclesPerMs: opts.mhz ? Math.max(1, Math.round(opts.mhz * 1000)) : CYCLES_PER_MS,
+    hostNow: opts.hostNow,
+  });
+  const bus = new Bus(arena, opts.gui || null, opts.snd || null);
+  // on threads, a heap every CPU's thread allocates from itself (sheap.js)
+  const machine = new Machine(arena, dev, bus, par ? new SharedHeap(arena, null) : new Heap(0, 0));
+  // the FPU opcode (F3): on unless asked otherwise (fpu: false)
+  machine.noFpu = opts.fpu === false;
+  // the drawing accelerators (accel.js): on unless asked otherwise (accel: false)
+  machine.accel = opts.accel === false ? null : accel;
+  setOsAccel(opts.osAccel !== false);
+  dev.noFpu = machine.noFpu;
+  if (opts.mmu !== false) machine.mmu = new Mmu(machine);
+  if (par) new ParHost(machine, opts.cpus | 0, opts.spawn);
+  else if (opts.cpus) new Smp(machine, opts.cpus | 0, opts.quantum | 0,
+    () => {
+      const m = new Machine(arena, dev, bus, machine.heap);
+      m.noFpu = machine.noFpu;
+      m.accel = machine.accel;
+      if (opts.mmu !== false) m.mmu = new Mmu(m);
+      return m;
+    });
+  if (opts.gui) opts.gui.attach(machine);
+  if (opts.snd) opts.snd.attach(machine);
+  return machine;
+}
+
+export function initRom(arena) {
+  for (let k = 0; k < 4; k++) arena.i32[k] = NULL_GUARD_OP;   // fetched, never read: c4m.js
+  arena.i32[TLEV_ADDR >> 2] = OP.TLEV;
+  arena.i32[CPU_HALT_ADDR >> 2] = OP.CPUH;
+  arena.writeBytes(OPNAMES_ROM, new TextEncoder().encode(OPNAMES));
+}
+
+// The function symbols of an image, for stack traces: [{ off, name }]
+// with off a code word offset, sorted. parseC4r stops before the symbol
+// section ('S', src/c4cc/asm-c4r.c), so this walks to it from the
+// header's lengths. Class 129 is a function (c4m.c's Fun).
+export function parseSymbols(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const w = at => dv.getInt32(at, true);
+  const codeLen = w(17), dataLen = w(21), patchLen = w(25), symbolsLen = w(29), consLen = w(33), desLen = w(37);
+  let p = 41;
+  p += 4 + codeLen * 4;
+  p += 4 + dataLen;
+  p += 4 + patchLen * 12;
+  p += 4 + consLen * 4;
+  p += 4 + desLen * 4;
+  p += 4;                                        // 'S'
+  const out = [];
+  for (let i = 0; i < symbolsLen && p + 17 <= bytes.length; i++) {
+    const cls = w(p + 8);
+    const n = bytes[p + 16];
+    const name = new TextDecoder('latin1').decode(bytes.subarray(p + 17, p + 17 + n));
+    const val = w(p + 17 + n);
+    p += 17 + n + 4;
+    if (cls === 129) out.push({ off: val, name });
+  }
+  return out.sort((a, b) => a.off - b.off);
+}
+
+// opts.mbox: bytes of mailbox below the stack reserve (c4bb's MBOX_*);
+// opts.reserve: host-owned bytes below the mailbox, outside the heap.
+export function boot(machine, imageBytes, argv, opts = {}) {
+  const arena = machine.arena, i32 = arena.i32;
+  initRom(arena);
+  const parsed = parseC4r(imageBytes);
+  const img = loadImage(arena, parsed, MEM_BASE);
+  // for the program's own boot report (devices.js IMG_*)
+  machine.dev.img = { code: img.codeBase, data: img.dataBase, bss: img.dataBase + parsed.data.length, end: img.top };
+
+  // argv strings and pointer table in the reserved area above the stack
+  // (c4bb's layout, loader.js:141-154)
+  let p = arena.stackTop;
+  const enc = new TextEncoder();
+  const ptrs = [];
+  for (const s of argv) {
+    const b = enc.encode(s);
+    arena.writeBytes(p, b);
+    arena.u8[p + b.length] = 0;
+    ptrs.push(p);
+    p += b.length + 1;
+  }
+  p = (p + 3) & ~3;
+  const argvBase = p;
+  for (const q of ptrs) { i32[p >> 2] = q; p += 4; }
+  if (p > arena.size) throw new Error('libjs: argv does not fit in the 4 KB above the stack');
+
+  // the trampoline
+  const tramp = (img.top + 3) & ~3;
+  let w = tramp >> 2;
+  for (const c of img.cons) {
+    i32[w++] = OP.IMM; i32[w++] = 0; i32[w++] = OP.PSH;
+    i32[w++] = OP.JSR; i32[w++] = c; i32[w++] = OP.ADJ; i32[w++] = 1;
+  }
+  i32[w++] = OP.IMM; i32[w++] = argv.length; i32[w++] = OP.PSH;
+  i32[w++] = OP.IMM; i32[w++] = argvBase; i32[w++] = OP.PSH;
+  i32[w++] = OP.JSR; i32[w++] = img.entryAddr; i32[w++] = OP.ADJ; i32[w++] = 2;
+  i32[w++] = OP.PSH;
+  for (let k = img.des.length - 1; k >= 0; k--) { i32[w++] = OP.JSR; i32[w++] = img.des[k]; }
+  i32[w++] = OP.EXIT;
+  const top = w << 2;
+
+  // The heap: everything between the image and a 1 MB stack reserve,
+  // less whatever the host carves out for itself (loader.js:156-165).
+  const mboxLen = (opts.mbox | 0) > 0 ? ((opts.mbox | 0) + 4095) & ~4095 : 0;
+  const reserveLen = (opts.reserve | 0) > 0 ? ((opts.reserve | 0) + 4095) & ~4095 : 0;
+  const heapBase = (top + 4096) & ~4095;
+  const heapEnd = ((arena.stackTop - 1024 * 1024) & ~4095) - mboxLen - reserveLen;
+  if (heapEnd <= heapBase) throw new Error('libjs: the image does not leave room for a heap; use a bigger arena');
+  machine.heap.reset(heapBase, heapEnd);
+  machine.dev.write32(HEAP_BASE, heapBase);
+  machine.dev.write32(HEAP_END, heapEnd);
+  // The boot stack, from the reserve up to the arguments: a kernel that
+  // leaves it for good has it guarded (STACK_GUARD, c4m.js guardHit)
+  machine.dev.stackBase = heapEnd + reserveLen + mboxLen;
+  machine.dev.stackTop = arena.stackTop;
+  machine.dev.stackGuard = 0;
+  if (machine.dev.onGuard) machine.dev.onGuard();
+  const reserve = reserveLen ? { base: heapEnd, len: reserveLen } : null;
+  const mbox = mboxLen ? { base: heapEnd + reserveLen, len: mboxLen } : null;
+  if (mbox) { machine.dev.mbox = mbox; arena.u8.fill(0, mbox.base, mbox.base + mbox.len); }
+
+  try {
+    machine.symbols = parseSymbols(imageBytes).map(s => ({ addr: img.codeBase + s.off * 4, name: s.name }));
+  } catch { machine.symbols = []; }
+  machine.sp = machine.bp = arena.stackTop;
+  machine.pc = tramp;
+  machine.a = 0;
+  return { img, tramp, argvBase, heapBase, heapEnd, mbox, reserve };
+}

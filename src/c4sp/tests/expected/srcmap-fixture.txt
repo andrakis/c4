@@ -1,0 +1,8 @@
+Source map: version 1, 35 bytes
+  1 files
+    0 fixture.c, 291 bytes, crc deadbeef
+  1 functions
+         1    29 main, file 0 line 3
+  2 rows
+         1 0:3
+        11 0:5

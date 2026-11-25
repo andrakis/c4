@@ -1,0 +1,1400 @@
+# Storage on the breadboard: drives, media, and what each rung can reach
+
+Status, 2026-09-30: all three parts are done — M0-M6 (drives, a write
+head, saving from C4DOS and C4KE, the browser's drive panel, staged
+firmware), M7-M12 (the BIOS, `INSTALL`, three power-ons from three
+media) and M13-M16 (the real-time clock, the PIT, per-rung opcode
+budgets, u0-free C4DOS-rung builds). The trackers below are the record
+of that work; "What the machine looked like when this began" describes it
+as it was when Part 1 began (2026-08-28), before any of it. The
+current test targets are listed in
+[../src/c4bb/README.md](../src/c4bb/README.md).
+
+Since, 2026-11-21: a drive opens part of a file, `NAME@OFF+LEN`
+(2026-10-30, "The design" below), deletes one (`DISK_UNLINK`, 0x1cc,
+2026-10-25), and keeps a search list for relative names (`DISK_DIRS`,
+0x1e0, 2026-10-26); those two are C4DOS's and are described in
+[c4dos-design.md](c4dos-design.md). The swap registers (0x11c, 0x158)
+are C4IX's MMU's, in [c4ix-mmu.md](c4ix-mmu.md). test-c4bb-climb builds
+C4IX on four machines and links it on a fifth (2026-11-12, "Four
+machines build C4IX").
+
+## Why
+
+c4bb has **one disk**, it is **read-only**, and everything a session
+builds lives in RAM — C4DOS's RAM disk, then C4KE's ramfs. That is why
+the climb has always had to be one sitting: the moment the machine is
+switched off, or the moment a kernel boots and the RAM disk goes with
+the system that owned it, the work is gone.
+
+It is also the wrong shape for the ladder as an embedder presents it,
+where the progression is the point:
+
+| rung | what the player has just made work | what it needs to keep |
+|---|---|---|
+| a letter on the wire | UART TX | nothing |
+| `Hellorld` | a program in ROM | nothing |
+| firmware | malloc, printf, a heap | nothing |
+| C4DOS | a disk to read, a RAM disk to write | nothing yet |
+| the tools | `dostar x`, c4cc, cpp | the tools it just built |
+| raycaster, editor | enough opcodes to be fun | — |
+| **C4KE** | a kernel it compiled itself | **the kernel, on a medium that survives a reboot** |
+| C4KE's tools and games | traps, preemption | — |
+| **C4IX** | c4sc, b4ke, a linker | **a third medium, and a blank one to write to** |
+| C4IX | protected mode, the lot | — |
+
+Two of those rows are impossible today. Building C4KE and then *booting
+what you built* works only because `dosload` hands one system to the
+next inside a single power-on; there is no medium to put the kernel on,
+no second drive to boot it from, and no way to come back tomorrow.
+
+The player-facing story the user wants is the ordinary one: **the build
+writes to the floppy in drive 2, you eject the C4DOS disk, and the
+machine boots from drive 2.** Each rung needs a little more hardware
+than the last — another drive, a write head, a firmware that knows about
+either — which is exactly the shape of every other rung in this game.
+
+## What the machine looked like when this began
+
+*(2026-08-28, before M1. Every gap listed here has since been closed.)*
+
+- `sim/cli.js` `loadDisk(dir)` walks one directory into a
+  `Map<name, Uint8Array>` and hands it to `Devices`.
+- `sim/devices.js` holds it as `this.files`, and serves
+  `DISK_NAME` / `DISK_FD` / `DISK_ADDR` / `DISK_LEN` / `DISK_CLOSE` —
+  open, read, close. **There is no write register.**
+- `hw/microcode.uc` drives those five registers from the `OPEN`, `READ`
+  and `CLOS` opcodes and nothing else. Guest code never touches them
+  directly; it calls `open()`/`read()`.
+- The web build (`web/app.js`) fetches `images/<dir>/manifest.json` and
+  builds the same map, keyed off a `DISKS` table that maps a program to
+  its disk.
+
+So the disk is a device the CPU already knows how to talk to, and every
+register is memory-mapped. That matters for the design below: `fw.c`
+already reaches `DEV_INTERVAL` and `DEV_HEAP_BASE` with a plain
+`*(int *)ADDR = x`, so **a guest can drive new disk registers with no
+new opcode and no microcode change at all.** C4 has no `write` syscall
+and does not need one.
+
+## The design
+
+**Drives, not a disk.** `Devices` holds an array of media. Drive 0 is
+the boot drive. Two ways to reach another one, both of which a strict-c4
+program can use:
+
+- a **name prefix** — `1:c4ke.c4r` — which is how C4DOS already thinks
+  and costs nothing at all in the machine;
+- a **select register**, `DISK_DRIVE`, for code that would rather set it
+  once, and so that a program can ask how many drives there are and
+  whether the current one is writable.
+
+**Part of a file.** `NAME@OFF+LEN` opens LEN bytes of NAME from OFF as a
+file of their own (shorter past the end), where no file has that whole
+name: `1:c4ix-base.tar@1536+4110`. A read at an offset, with no seek and
+no new register. C4IX reads its root archive's files out of the tar it
+keeps on drive 1 this way (docs/c4ix-design.md, "The root archive, read
+where it is kept"). `Devices.diskOpen`; native c4m has no such form.
+
+**Writing.** Four new registers, mirroring the read side exactly:
+
+    DISK_WNAME   create/truncate on the selected drive -> fd or -1
+    DISK_WADDR   buffer address
+    DISK_WLEN    write N bytes from it -> bytes written
+    DISK_WCLOSE  close and flush
+
+In the CLI a writable drive is a host directory and a write goes
+through to it. In the browser it is an image in IndexedDB, so the disk
+survives a reload — which is the whole point of a medium.
+
+**Ejecting.** A drive can be empty. `DISK_EJECT` empties one; the CLI
+and the web both let you say which directory is in which drive at start,
+and the web adds a picker, because "switch drive 1 to a blank medium" is
+a thing the player does with their hands.
+
+**Firmware stages.** `fw.c4r` is already loaded separately from the
+program image, so a staged firmware is a file name, not a code change:
+`-fw fw-min.c4r`. What each stage does or does not implement is an
+embedder's question, not a c4bb one; the flag is all the machine owes it.
+
+## Milestones
+
+- [x] **M0** This tracker, before any code.
+- [x] **M1** Several drives, read-only. `-d` repeatable, `N:`/`B:` name
+      prefix, `DISK_DRIVE` (0x13c), `DISK_COUNT` (0x188), `DISK_RO`
+      (0x18c), `DISK_EJECT` (0x190). No microcode change: the read
+      registers already existed and now resolve against the selected
+      drive. Which drive *boots* is which image you hand the CLI, so
+      the flag the design asked for turned out not to be needed.
+- [x] **M2** A writable drive. `DISK_WNAME`/`WADDR`/`WLEN`/`WCLOSE`
+      (0x178–0x184), `include/c4bb.h` for guests, and `cli.js -w dir`
+      writing through to a host directory. A file becomes real on
+      close, in one piece.
+- [x] **M3** C4DOS can save: `RUN bbsave.c4r B:` writes every RAM-disk
+      file onto drive 1 (`src/c4dos/bbsave.c`, a transient — C4DOS
+      itself is untouched, the same rung dostar and dosload sit on).
+- [x] **M4** C4KE can save: `save 1:` does the same for the ramfs
+      (`src/c4ke/bin/save.c`), so the C4IX that b4ke just built can be
+      put on a medium and booted on its own.
+- [x] **M5** The browser: a drive panel — what is in each drive, eject,
+      insert, and a medium that survives a reload (IndexedDB).
+  - [x] The machine in the browser has drives rather than *a* disk.
+  - [x] A panel that says what is in each one, and takes a medium out
+        and puts one in.
+  - [x] Writable media that survive a reload, and are still there
+        tomorrow.
+  - [x] The BIOS as a boot option, and a soft reset that honours an
+        eject — otherwise the panel is a display and not a machine,
+        because ejecting and rebooting is the whole climb.
+  - [x] The part that has logic in it tested in node, the way the
+        terminal's screen model already is.
+- [x] **M6** `-fw` and a staged firmware set, so a rung can be denied
+      the hardware it has not built yet. `fw.c4r` is already loaded as
+      a separate file, so this is a flag and a set of cut-down
+      firmwares, not a change to the machine.
+  - [x] One source, not four. A firmware the player has not finished
+        is the same firmware with a piece missing, and two copies that
+        drift are worse than no staging at all.
+  - [x] Each stage must actually LACK what it has not built — the code
+        gone from the image, not a flag that declines to call it.
+  - [x] `-fw` on the CLI, and the set offered in the browser.
+  - [x] Every stage still at rung `base`: this is all before the
+        player has extended the CPU.
+  - [x] A test that each stage does its own job and refuses the next
+        one's.
+
+### Bar, met
+
+`make test-c4bb-storage` (`src/c4bb/tests/test-storage.sh`):
+
+- two drives visible, drive 0 read as before;
+- `dostar x tools-src.tar` then `RUN bbsave.c4r B:` → five files onto
+  drive 1, each `cmp`-identical to the source file that went in;
+- **a second machine, started later, with drive 1 as its drive 0, reads
+  them back** — which is the whole point;
+- and the same save onto a `-d` (read-only) drive is refused.
+
+---
+
+# Part 2 — a BIOS, an install step, and a C4KE you can actually use
+
+Requested 2026-08-28, after the first walkthrough
+(`docs/climbing-the-ladder.md`) worked but showed up five gaps. In
+priority order as agreed: the walkthrough is written down, C4KE is
+missing most of its userland on the disk the player actually boots, `ls`
+is unreadable, `ps`/`top` are too wide, and the firmware should behave
+like a BIOS so that inserting a floppy and rebooting is the whole
+interface.
+
+## The shape it is aiming at
+
+    power on ─► banner
+             ─► probe and report RAM
+             ─► probe drives, boot the first with a boot image
+             ─► no media?  say so, wait, try again  ◄── player inserts a disk
+
+    C4DOS floppy in drive 0, blank in drive 1
+      LADDER          builds the toolchain and C4KE
+      INSTALL 1:      kernel + tools + SOURCES for everything C4KE and
+                      C4IX will need, onto the blank
+      eject, reboot ─► C4KE boots from drive 1
+      build its own tools, `save 1:`  ─► they persist
+      B4KE builds C4IX onto a third medium ─► reboot ─► C4IX
+
+Each rung writes the next rung's disk. Nothing has to be built twice,
+and nothing is lost when the machine stops.
+
+## Milestones
+
+- [x] **M7 — `ls` that understands directories.** ramfs is flat and
+      every name is a full path, so `ls` prints all 151 of them. It
+      should show one level: the files in a directory, and the
+      subdirectories as names ending in `/`. Bar: `ls /bin` on the C4KE
+      root disk fits in 80x25 and `ls` at the root shows directories,
+      not their contents.
+- [x] **M8 — `ps` and `top` that fit.** Most of the width is column
+      titles, not data. Bar: default output ≤ 80 columns with the
+      information that matters kept, and a `-w` for the wide form that
+      exists today.
+- [x] **M9 — C4KE's userland on the disk the player boots.** `top`,
+      `bench`, `innerbench`, `mandel`, `raycast` and the sources
+      `innerbench` needs (`c4.c`, `c4m.c`) are on `c4ke-root` and on
+      none of the climb disks. Bar: after the walkthrough's C4KE boots,
+      those all run.
+- [x] **M10 — the firmware boots like a BIOS.** Banner, a RAM probe it
+      prints, a drive probe, boot the first medium that has a boot
+      image, and a retry loop that says `no valid media` and picks up a
+      disk inserted while it waits. Bar: start the machine with no
+      media, insert one, and it boots without being restarted.
+- [x] **M11 — `INSTALL`.** A C4DOS transient that writes a bootable
+      medium: the kernel, the tools, and the sources for everything the
+      next two rungs will build. Bar: `LADDER`, `INSTALL 1:`, eject,
+      reboot, and C4KE comes up from drive 1 with its own source tree.
+  - [x] A manifest, not a hard-coded list. What belongs on a boot
+        medium is data about a disk, and the transient should not have
+        to be rebuilt to change it.
+  - [x] Sources come from wherever they are. `bbsave` can only write
+        the RAM disk; half of what an installed medium needs was never
+        in it and is still sitting on the C4DOS floppy.
+  - [x] Nothing is written until everything required has been found.
+        A manifest typo must not leave a half-installed disk that
+        boots into something missing.
+  - [x] `boot.cfg`, so the BIOS picks it up with no second copy of a
+        200 KB kernel under another name.
+  - [x] The end-to-end run, in one command, in the suite: build,
+        install, eject, reboot, and be in C4KE.
+- [x] **M12 — the same one rung up.** C4KE builds its tools and saves
+      them; B4KE builds C4IX and installs a C4IX boot disk. Bar: three
+      power-ons, three systems, each booted from a disk the previous
+      one wrote.
+  - [x] `kinstall`, the C4KE-rung counterpart of the C4DOS `install`:
+        the ramfs first, then the drive this system booted from.
+  - [x] A C4IX medium that is a system rather than a kernel — `init`
+        spawns `c4ix-vfsload.c4r` and `c4ix-sh.c4r` with no arguments
+        at all, so a medium without those boots into nothing.
+  - [x] All three power-ons in one command, in the suite, driven by
+        what comes out rather than by a clock.
+
+### M7, M8, M9 — done, with the evidence
+
+**`ls`.** ramfs stays flat; the directory structure is inferred from the
+names. Everything under the prefix is split at the next `/`, files are
+listed by what remains and the first component of anything deeper is
+listed once with a trailing `/`. Root went from 151 full paths to 26
+entries:
+
+    c4sh> ls
+    bench       benchtop    bin/        c4          c4cc        c4ke.vfs
+    c4le        c4m         c4rdump     c4rlink     c4sh        cat
+    echo        eshell      home/       init        innerbench  kill
+    ls          ps          spin        top         type        usr/
+    vfsload     xxd
+    26 entries in /
+    c4sh> ls /usr
+    lib/   lisp/  src/
+    3 entries in /usr/
+
+`ls -a` is the old flat listing. Names that are not absolute — anything
+a tool wrote into the ramfs, like c4rlink's `c4ix.c4r` — show at the top
+level too, which is where they are.
+
+**`ps`.** 170 columns to 56, and the wide one is still there under `-w`:
+
+      PID PPID S P  NI  T%  C%     TIME  CYCLES     MEM  CMD
+        0    0 W K   0 78% 77%     4254   4.0M   1.3M  kernel
+        1    0 R K   9  0%  1%       51  53.0k      0  kernel/idle
+        5    2 R U   9 10% 10%      553 553.2k      0  C4SH
+
+Two things had to change beyond the printing: `print_int_compact`,
+because `print_int_readable` spends ten columns on every number; and
+c4sh's `ps` builtin, which calls `ps()` directly rather than exec'ing
+`ps.c4r`, so it has to parse `-w` itself. **c4sh links ps.c** — a
+rebuilt `ps.c4r` alone changes nothing about what the shell prints,
+which cost an hour to notice.
+
+**The userland.** `top bench benchtop innerbench mandel raycast c4 c4m
+cat echo kill spin type xxd c4le` are now built onto the climb floppy,
+plus `load-c4r.c`, `c4m.c` and `src/c4ke/c4ke.c` under the exact names
+innerbench opens them by. Built in the disk rule with c4cc32 rather than
+copied from `c4ke-root`, because that disk is derived from this one and
+the dependency would be a circle. raycast is the exception: its enums
+have expressions in them, which is a c4lc L11 feature c4cc has not got,
+so the stock-c4 `raycast-dos32.c4r` is what goes on the disk.
+
+Verified by booting C4KE against the climb floppy: `top -b -n 1` prints
+the narrow table, `bench -q` runs, `mandel` renders in 7582 ms.
+
+### M10 — done
+
+`fw.c` has a `main()` now, and it is the BIOS. It runs when the machine
+is started with **no program** — `cli.js -d disk` with nothing after it
+— because then the firmware *is* the program (`loader.js` places it as
+both). An image named on the command line still boots exactly as before;
+that is the machine with something in ROM.
+
+    c4bb -- the breadboard computer
+    firmware: malloc, free, realloc, printf, 1 drives
+    bios: 30 MB RAM ok (0x7000-0x1eff000)
+    bios: drive 0 has c4dos32.c4r
+    bios: booting c4dos32.c4r
+    C4DOS version 0.1
+
+The RAM line is a real probe, not a report: it writes a pattern near
+each end of the heap and reads it back, so a machine configured with
+more memory than it has says so here rather than three minutes into a
+compile.
+
+**A medium is bootable if it has `boot.c4r`, or a `boot.cfg` naming the
+image.** The second exists so a disk that already carries a kernel under
+its own name does not need a second 200 KB copy of it.
+
+**Nothing to boot is not an error.** It says so, waits half a second off
+the machine's own millisecond counter, writes `DISK_RESCAN` for each
+drive and looks again — so a disk put in *while it waits* is picked up:
+
+    bios: drive 0: no boot media
+    bios: insert a bootable disk
+    ... (disk inserted here) ...
+    bios: drive 0 has c4dos32.c4r
+
+**The loader is in the firmware.** `__bios_exec` is a port of `c4l.c`,
+which is the same job in plain c4 — header, code, data, patch table,
+constructors, entry, destructors. Two differences: the word size, and
+that both segments are copied out of the read buffer so nothing depends
+on where it landed. Where c4l has to rewrite its own call site (plain c4
+has no indirect call), the board has `JSRS` and c4lc emits it, so a
+variable holding an address is simply called.
+
+### The reset — asked for while M10 was being built
+
+An operating system that has just written a boot disk needs to say "now
+boot it", and "stop the machine and start it again" is a different and
+much bigger thing on a homebrew computer.
+
+`RESET` (0x198): writing it halts like `POWER`, and the host zeroes the
+arena, resets every CPU latch (`Machine.reset()`), re-reads the media
+and boots the firmware again. **The drives survive** — they are the
+media, and a disk that has just been written is the whole reason to
+reset. A reset always boots the BIOS, never the image named at start,
+for the same reason.
+
+`bb_reboot()` in `include/c4bb.h`, and `src/c4bb/tools/reboot.c` builds
+to an image with no u0, no C4DOS API and no kernel service in it, so the
+same `reboot.c4r` is a C4DOS transient, a C4KE task and a C4IX program.
+
+    A>RUN reboot.c4r
+    rebooting...
+    c4bb: soft reset
+
+    c4bb -- the breadboard computer
+    bios: drive 0 has c4dos32.c4r
+    A>
+
+### raycast, on all three
+
+Shipped as the compiled `raycast-dos32.c4r` (c4lc, `-conforming`, stock
+c4 opcodes plus TIME), which is what makes one image enough. Verified
+rendering under **C4DOS**, under **C4KE**, and under **C4IX** — C4IX
+runs C4KE binaries, so no third build was needed.
+
+### Four things fixed before M11, 2026-08-28
+
+**The BIOS must not need JSRS.** It did: c4lc will happily emit an
+indirect call for a variable holding an address, and the board has the
+opcode — but `JSRS` is c4m's, not c4's, and the BIOS and C4DOS are the
+rungs a player reaches *before* they have extended their CPU. Giving
+those rungs a c4m opcode gives away the milestone. So the firmware uses
+c4l.c's trick instead: a stub function finds its own `ENT` by walking
+back from its caller's return address, overwrites it with `JMP`, and
+remembers the operand slot — an indirect call built out of a direct one
+and a store. `-O` cannot turn the wrappers into tail calls, because a
+tail call replaces the frame the walk depends on; the result is read
+back through a local to stop it.
+
+**And `putchar` is not base c4 either.** `PUTC` is opcode 39, one above
+`EXIT`, and the firmware's own `printf` was using it — the thing that
+*provides* the syscalls cannot need one. It writes the UART's transmit
+register now, which is a plain `SI` and what the hardware actually does.
+
+`src/c4bb/tools/opscan.mjs` is the pin, and it reports what an image
+really uses:
+
+    $ node src/c4bb/tools/opscan.mjs src/c4bb/fw/fw.c4r
+    src/c4bb/fw/fw.c4r: ok, nothing above EXIT
+      uses: LEA IMM JMP JSR BZ BNZ ENT ADJ LEV LI LC SI SC PSH AND EQ NE
+            LT GT LE GE SHL SHR ADD SUB MUL DIV MOD OPEN READ CLOS PRTF EXIT
+
+`make test-c4bb-rungs` is the pin in the suite (M15 below broadened it
+from the BIOS and C4DOS to all four rungs; `test-c4bb-baseops` is still
+an alias for it).
+
+`c4l.c` does the same job and refuses such an image by name, but it is
+built for the host's word size and these are 32-bit. Scanned alongside:
+`dostar`, `dosload` and `reboot` are clean; **C4DOS itself uses `TIME`
+(53)** and nothing else above `EXIT`, which is the CLOCK.SYS rung and
+already deliberate.
+
+**The clock was twenty times too fast.** `CYCLES_PER_MS` was 1000 — "a
+1 MHz machine" — while the simulator really executes fifteen to twenty
+million instructions a second, so a simulated second went past in a
+twentieth of a real one and `top`, which refreshes once a second,
+redrew twenty times. Two changes: the default is 20000 (`cli.js -hz`
+sets it), which is about what this simulator manages; and the
+interactive loop now **paces** execution to the machine's own clock, so
+the match is exact rather than approximate and `sleep()` sleeps.
+Deterministic — nothing about *what* runs changes, only when the host
+lets it — and `--fast` opts out for batch. `top -b -n 3` now refreshes
+three times, 992 ms and 1002 ms apart, and C4KE measures itself at
+"20.000 M" instructions per second.
+
+**Backspace never erased anything.** `devices.js` holds a line in
+`rxFifo` until Enter *precisely so that* not-yet-committed characters
+can be erased — the comment says so — and then nothing ever erased
+them. `cli.js` handles DEL and BS now (terminals disagree about which
+the key sends): pop the last uncommitted byte, echo ` `. Typing
+`lsXX<bs><bs>` reaches the guest as `ls`.
+
+**`b4ke -t` runs `top` alongside the build.** Twelve compiles is five
+minutes of a blank screen; innerbench solved this years ago and a build
+is the same problem. The watcher shows which task is running, what it
+is compiling and how much of the machine it is using, and is stopped
+before the summary so the last thing on screen is the result:
+
+        7    5 W U   9  0%  0%       13 260.7k      0  b4ke -t -f two.b4k
+        8    7 R U   1  0%  0%       40 812.1k      0  top -b
+        9    7 R U   9 99% 98%     5187 103.1M      0  c4sc.c4r -c 200000 compile -O -c -I src/c4ix ...
+
+---
+
+# Part 3 — clocks, and what each rung is allowed to need
+
+Decided with the user 2026-08-28, after the pacing fix landed.
+
+## Clocks
+
+A fixed cycle-derived clock is what makes tests repeatable, and it is
+also a lie: everyone's machine runs the simulator at a different speed,
+so a "second" is whatever the host managed. Both are wanted, for
+different jobs.
+
+- **Simulated ms** (`TIME_MS` / the `TIME` opcode) stays cycle-derived
+  and deterministic. Tests keep pinning it, and `cli.js -hz` sets the
+  rate.
+- **A real-time clock** the guest can read, which is what c4m already
+  has: natively a timestamp call, under plain c4 a read of
+  `/proc/uptime` (`c4m.c:1010`). C4KE measures itself against it, and
+  it is why `top` can refresh once a second on any host.
+- **A programmable interrupt timer**, so a kernel can ask for a tick at
+  a real rate instead of deriving one from a cycle count. Optional: the
+  cycle interrupt stays, and the PIT replaces it for kernels that want
+  wall-clock scheduling.
+
+`src/tests/test_timekeeping.c` is the user's existing experiment with
+the modes (`CRTK_BUILTIN` / `CRTK_UPTIME` / `CRTK_CYCLES`) and is the
+reference for what a guest should be able to choose between.
+
+Both new devices are **registers, not opcodes**, which matters: a
+program at the base-c4 rung can read a clock with an ordinary load and
+does not need the CPU extended to do it.
+
+## What each rung is allowed to need
+
+| rung | budget |
+|---|---|
+| **C4DOS and its programs** | opcodes ≤ `EXIT`, plus the UART and the clock registers, which are devices rather than opcodes |
+| **compilers for the next rung** | c4m level — `JSRS` and up. C4DOS may be stuck with `c4cc` until the player has added them, and that is the point |
+| **C4KE** | c4m level: `JSRS`, traps/`ITH`, a real-time clock query, and optionally the PIT in place of the cycle timer |
+| **C4IX** | the c4th extended opcodes on top. A player can experiment in a c4m-level C4KE for as long as they like before needing them |
+
+The rule of the ladder: **a compiler is allowed to need what the system
+it builds needs.** What must run at the lower rung is the *programs* —
+bench, innerbench, c4m.c, mandel, rps, raycast, c4tui.
+
+### Measured, and it is not free
+
+    $ node src/c4bb/tools/opscan.mjs bench.c4r innerbench.c4r c4m.c4r \
+                                     mandel.c4r rps.c4r raycast.c4r
+    bench.c4r:      USES OPCD (48) at code+22 and 70 more
+    innerbench.c4r: USES OPCD (48) at code+22 and 64 more
+    c4m.c4r:        USES OPCD (48) at code+10 and 108 more
+    mandel.c4r:     USES OPCD (48) at code+22 and 66 more
+    rps.c4r:        USES OPCD (48) at code+22 and 61 more
+    raycast.c4r:    USES TIME (53) at code+5958 and 2 more
+
+Every one of them except raycast is over budget for the same reason:
+**they are linked with `u0.h`**, whose opcode-request machinery is
+`__c4_opcode`, which is `OPCD` (48). raycast is the exception because
+its C4DOS build does not link u0 at all — which is exactly the shape
+the others need. The work is per-program and is not a recompile: they
+use u0 for pids, signals and the kernel task table, none of which
+exists at the C4DOS rung.
+
+### M13 and the PIT device — done
+
+Two registers, both readable and writable with ordinary loads and
+stores, so **a base-c4 program can read a clock and arm a timer without
+the CPU being extended**:
+
+    RTC_MS  0x19c   host milliseconds since power-on
+    PIT_MS  0x1a0   tick every N real ms (0 = off)
+
+`src/tests` proof that the clock is at the right rung — a program that
+reads it and nothing else:
+
+    $ node src/c4bb/sim/cli.js -m 8 clk.c4r
+    rtc: 18 -> 6912 ms (6894 elapsed), sum -204937536
+    $ node src/c4bb/tools/opscan.mjs clk.c4r
+    clk.c4r: ok, nothing above EXIT
+
+And the timer, `src/c4bb/tests/src/bb_pit.c`, four ticks at 100 ms:
+
+    pit: 4 ticks, 100ms apart requested
+    pit: spread over 300ms, real time
+
+Three intervals between four ticks, on the wall clock. One thing that
+had to be fixed to make it real: the jam check lives in
+`machine.boundaryChecks()`, and **turbo.js only calls it when
+`cycleInterval || pendingSignal`** — so the PIT fired in the step engine
+and never in the one that actually runs. `m.dev.pitMs` joins that
+condition. The host clock is consulted every 4096 cycles rather than
+every instruction, which is a fifth of a millisecond at 20 MHz and
+costs nothing measurable.
+
+## Milestones
+
+- [x] **M13 — the real-time clock.** A register the guest reads for
+      host milliseconds, alongside the deterministic simulated one.
+      Bar: `top` refreshes once a real second on a host that runs the
+      simulator at half speed, and the pinned cycle-derived tests are
+      unaffected.
+- [x] **M14 — the programmable interrupt timer.** The device is done
+      and pinned; C4KE is to schedule on it. `PIT_MS` (0x1a0) asks for
+      a tick every N real milliseconds and raises the same
+      `TRAP_HARD_IRQ` the cycle interrupt does, so a kernel that has a
+      handler needs no new one.
+  - [x] Masking preserves the timer's phase, so a kernel that hides
+        from it in every critical path is not a kernel that never
+        gets a tick.
+  - [x] C4KE asks whether the device is there, asks whether it
+        answers, and schedules on it when both say yes.
+  - [x] A machine without it, or with one that does not answer, boots
+        and runs exactly as it did before.
+- [x] **M15 — per-rung opcode budgets in the suite.** `opscan` already
+      took a ceiling; each rung has its own now and it is a test, so
+      "the player must extend the CPU before X" is asserted rather
+      than described.
+  - [x] opscan's walk knows which opcodes carry an operand. It did
+        not, so every "uses:" list for an image containing `JSRS` was
+        partly fiction, and a budget built on it would have been too.
+  - [x] Named rungs, defined once, from what the images actually use
+        rather than from what the story says they use.
+  - [x] Every image is pinned to a rung.
+  - [x] **And each rung's entry image is pinned to NOT fit the rung
+        below.** Without this half the test is decorative: a ceiling
+        nothing reaches asserts nothing about needing to extend the
+        machine.
+  - [x] No rung may bless an opcode c4bb does not have -- nor the
+        machine gain one no rung has.
+- [x] **M16 — u0-free builds of the C4DOS-rung programs.** `c4.c`,
+      `c4m.c`, mandel and rps at opcodes <= EXIT (plus TIME), the way
+      `raycast-dos` already is. **bench and innerbench are not on this
+      list** — they are C4KE and C4IX programs and stay that way.
+  - [x] `c4.c` and `c4m.c`, as separate images from the u0 ones.
+        Running `c4m.c` inside `c4.c4r` inside the board is the
+        software proof of the VM, and it must need no extended opcode
+        to be that.
+  - [x] mandel and rps, from the same sources the C4KE builds use.
+
+## Notes taken while scoping
+
+- **The tools are not missing, the disk is.** `src/c4bb/images/c4ke-root`
+  already carries `top`, `bench`, `innerbench`, `mandel`, `raycast`,
+  `c4.c4r`, `c4m.c4r` and the sources. `c4dos-c4ix32` — the disk the
+  walkthrough boots — carries almost none of it. M9 is mostly a
+  packaging question, and M11 is the answer to it: the player *installs*
+  them rather than the floppy having shipped with them.
+- **Console width is an embedder's decision, not a c4bb one.** The CLI
+  writes to the host terminal and has no width. Widening the game's
+  console to 180x25 and narrowing `ps` are independent, and both are
+  worth doing — the second one helps at any width.
+- **The firmware already has what a BIOS needs except a loader.**
+  `fw.c` has malloc, a printf, and the device registers; what it cannot
+  do is load a `.c4r` and jump into it, which is what `sim/loader.js`
+  does from the host today. `src/c4dos/dosload.c` is that loader in
+  strict c4, so the code to copy exists.
+
+### The cycle columns — implemented 2026-08-28
+
+Both kernels now keep the count in **two words**, decimal carry:
+
+    cycles = cycles_hi * 1000000000 + cycles
+
+Decimal rather than binary because printing it is then two ordinary
+numbers and nothing is ever wider than an `int` — this system has no
+64-bit type and adding one for a counter would be the wrong trade.
+`kernel_add_cycles` (C4KE) and `sched_add_cycles` (C4IX) carry on the
+way in; `print_cycles_compact` / `print_cycles_readable` (C4KE's ps) and
+`upadcycles2` (libc4ix) print the pair, scaling from G because the high
+word is already in billions. A negative delta means the VM's counter
+wrapped between samples and is dropped: it is not a slice anyone ran.
+
+**It is an ABI change, and it touched four places that all had to agree**
+— `include/u0.h` and `include/c4ke.h` (C4KE's exported task record),
+`src/c4ix/c4ix.h`'s `CK_KTE_*` (the same record, spoken by C4IX's C4KE
+compatibility layer), and `TASKINFO_WORDS` for C4IX's own. Getting the
+third wrong segfaults C4IX the moment it runs C4KE's `ps`, which is
+exactly what happened.
+
+**A pre-existing bug found on the way.** `TASKINFO_WORDS` was 9: seven
+integers plus `TASK_NAME_MAX` bytes of name. Sixteen bytes is two words
+on a 64-bit host and **four** on the board — so on 32 bits `utaskinfo`
+wrote two words past the caller's array, every call. It is sized in
+words now, generously, with a comment saying why.
+
+`top`'s per-interval delta also had to learn about the carry: a delta
+taken across one looks negative and is a billion more.
+
+Goldens regenerated and read before committing: `x5-c4m.txt` (the demo's
+ping/pong interleaving moved, twice, because the task struct changed
+size — stable across three runs each time), `ck-ps.txt` and
+`ck-top.txt` (which had not been regenerated since `ps` went narrow).
+
+### Detecting the clock
+
+`c4_info()` on the board sets **`C4I_PIT` (0x800)**, and `bb_has_clock()`
+in `include/c4bb_info.h` tests it. **A separate header, deliberately:**
+everything in `c4bb.h` is a plain load or store and costs no opcode
+above `EXIT`, which is what lets a C4DOS-rung program read the clock;
+asking `c4_info()` is `INFO`, opcode 57, and c4cc compiles every
+function in a header whether it is called or not — `reboot.c4r` went
+over budget the moment the check shared a file with the accessors, and
+`make test-c4bb-rungs` said so. A kernel cannot simply poke `0x19c` to
+find out whether the registers exist: **native c4m has no device window
+there**, so the poke is a wild access rather than a zero. The capability
+is announced, and anything that does not see the bit keeps doing what it
+did before — which is what C4KE will do when it moves onto the PIT.
+
+### M14: C4KE schedules on the timer
+
+The kernel that boots on the board now takes its scheduling tick from
+the wall clock instead of from a count of instructions, and the two
+paragraphs that used to say what the cycle interrupt was for say it
+best:
+
+    c4ke: measuring instructions per second, if this step gets stuck, pass -a to c4m...
+    c4ke: instructions per second roughly: 1.000 M, measurement cycles: 200.265 k
+    c4ke: setting cycle interrupt to 50003 (50.003 k) cycles
+
+became
+
+    c4ke: scheduling on the interval timer, every 10ms of real time
+
+The measurement existed to turn "how fast is this host" into a cycle
+count, and a timer that counts milliseconds has no use for the answer.
+Deleting the question took the board's boot from **726ms and 2.047 G
+cycles to 3ms and 76.5 k cycles** -- a good deal of that was the
+measurement, and the rest is that a kernel booting on a real 10ms tick
+is not being interrupted 20 times on the way up.
+
+**Detection is two questions and both have to be asked.** `__c4_info()`
+answers the first, and it has to: 0x1a0 cannot be probed blind, because
+on every host that is not the board it is ordinary memory, and a store
+there corrupts whatever lives at 0x1a0 rather than doing nothing. Only
+once the capability bit says the window is real is it safe to ask the
+second, which is whether the device behind it behaves -- arm an
+interval, read it back, mask it, read that back. A machine that claims
+the bit and answers something else schedules on the cycle counter
+exactly as before, and so does native c4m, and so does a C4KE running
+nested inside a c4m on the board, because the inner VM's `c4_info()` is
+its own and does not carry the board's bits. `-c nn` is the override,
+and it is the honest one: it says "use the cycle interrupt, at this
+interval", which is a thing to say only if that is what you want.
+
+### What the kernel taught the hardware
+
+Masking. A kernel hides from its own timer on the way into every
+critical path and comes back out on the way from it -- that is what
+`critical_path_start`/`critical_path_end` are, and on a busy kernel it
+happens many times per tick. The PIT as first built restarted its
+countdown on every write of the interval, so **a kernel that took a
+critical path more often than once per period would never be
+interrupted again.** It would mask itself to death, and the symptom
+would have read as "the scheduler stopped", not as a timer bug.
+
+So writing 0 now stops the timer and leaves the deadline where it is,
+and re-arming the same interval resumes toward it; only a genuinely
+different interval starts a new countdown. The cycle interrupt has this
+for free, because its counter is free-running and `cycle % interval`
+does not care when the interval was written -- the PIT had to be told.
+`src/c4bb/tests/src/bb_pit.c` has a second pass for it: the same four
+ticks over the same 300ms, with the wait loop masking and unmasking on
+every turn.
+
+    pit: 100ms apart requested
+    pit: free running -- 4 ticks over 300ms, real time
+    pit: masked every pass -- 4 ticks over 300ms, real time
+
+Not a hypothetical: with the phase-preserving line taken back out, the
+second pass delivers no ticks at all.
+
+Holding. A kept deadline can fall due while the timer is masked -- a
+handler that runs past it on a slow host, or across a GC pause -- and
+then it fires the moment it is re-armed. C4KE re-arms in
+`critical_path_end`, a few instructions before the handler's TLEV, and
+by then it has already set `kernel_task_current` to the task it is
+switching to. A tick in those few instructions saved the half-finished
+handler, on the old task's stack, as the new task's context; the new task
+woke into a TLEV that restored its own frame, over and over, and only the
+next tick ever got the machine out of it. `test-c4ke-mbox` hung that way
+on helios most runs: the shell, after `mbecho`, never read another line.
+No kernel can close that window -- there is no store that unmasks and
+returns at once -- so the board does: the PIT and the mailbox interrupt
+are held from a trap jam to the TLEV that ends the handler
+(`machine.js irqHold`). `test-c4ke-mbox.mjs --slow-clock` runs the
+PIT on the cycle counter at a tenth of `CYCLES_PER_MS` and hangs every
+time without the hold.
+
+### What a faster kernel found: the reaper was on the wrong clock
+
+`test-task-mem` failed the moment C4KE stopped burning cycles on the
+way up, and the failure is worth keeping written down because the bug
+was always there.
+
+    leak: round allocated 24 of 24 blocks     x4
+    fw: malloc(262160) failed: 2 free blocks, 156920 bytes
+    leak: round allocated 18 of 24 blocks
+    test_leak: round 5 only got some of its memory
+
+`test_leak` starts twelve children in turn, each of which allocates 6 MB
+and frees none of it, and it passes only because the kernel takes a dead
+task's memory back. The idle task does that -- and it used to wait a
+second between sweeps. Two things were wrong with that. The small one is
+that the wait bought nothing: `kernel_tasks_zombie` already gates the
+sweep, and one sweep takes it to zero, so the table was never being
+walked without something to find. The large one is that the second is
+measured with `__time()`, which is **derived from the cycle counter** --
+so it is a count of work, not an amount of time. The old kernel spent
+2 G cycles measuring its own speed before it ever scheduled anything,
+and that made the wait look short. The new one boots in 76 k cycles, and
+suddenly twelve dead tasks' worth of heap was sitting there waiting for
+a clock that was barely moving.
+
+So the sweep now happens whenever there is something to sweep. It was
+always safe there: `kernel_task_finish` has already copied the exit code
+into whatever task was waiting on this one, so nothing still needs to
+read the corpse.
+
+This is the shape of thing to expect more of. Anything in C4KE that
+says "after N milliseconds" is really saying "after N cycles", and the
+two have just stopped being interchangeable.
+
+### And one from the machine itself
+
+`test-c4dos-build32` -- C4DOS compiling this kernel on the board --
+failed on the first attempt with
+
+    cpp: c4ke.c:1135: backslash-newline continuation is not supported
+
+The new `critical_path_start`/`critical_path_end` had been written
+across three lines with backslashes, which gcc's preprocessor takes
+without comment. The one that runs on the machine (`src/c4dos/cpp.c`)
+does not, and this kernel has to be buildable by it or the ladder has a
+missing rung. They are one line each now, with a comment saying why.
+
+### M16: the C4DOS rung gets c4, c4m, mandel and rps
+
+All four at opcodes <= EXIT, and none of them needed a second source, a
+`-D` or an `#ifdef` -- which matters, because the compiler that runs on
+the machine has no `#` to read.
+
+**c4 and c4m were already there.** Hand c4cc the plain sources and it
+walks into `c4m.c`'s `#if C4_ONLY` branch -- the one written for
+running under plain c4 -- because c4cc skips `#` lines and compiles the
+code between them. What comes out uses nothing above `EXIT`, and it
+runs:
+
+    $ ./c4m32 load-c4r.c -- c4-dos32.c4r c4m.c load-c4r.c -- hello32.c4r
+    yello
+    exit(0) cycle = 14957271
+
+That chain is the VM proved in software, and it has to be provable at
+this rung or it proves nothing about what the machine could already do
+on the day it booted. On the board, from the C4DOS prompt, with the
+whole stack underneath:
+
+    A>RUN c4.c4r c4m.c load-c4r.c -- mandel.c4r 24x10 -m
+    Custom size: 24x10
+    c4m: unable to open uptime file
+    ......,''''''~~=[&~~',,,
+    .....,'''''~~~=;..==~',,
+    ...
+    exit(0) cycle = 48432715
+
+(The uptime complaint is that branch's clock: it reads `/proc/uptime`,
+because the one host it was written for is a Linux box running real c4,
+and c4 has no `TIME`. Harmless, and it is why the render claims 0ms.) The u0 and preprocessed builds of both are the
+ones one rung up, and they are separate images: those reach `INFO` and
+`JSRS`.
+
+**mandel and rps needed `include/u0lite.h`.** Not a stripped u0 --
+u0's own definitions, copied, of the parts that need no kernel and no
+opcode: `strlen`, `strcmp`, the character tests, and the same linear
+congruential generator. The names match u0's exactly, so a program's
+source does not know which build it is in:
+
+    c4cc -o prog.c4r include/u0.h     prog.c   # the C4KE / C4IX build
+    c4cc -o prog.c4r include/u0lite.h prog.c   # the C4DOS build
+
+That is the whole mechanism. c4cc compiles every function in a source
+it is handed whether it is called or not, so what makes an image
+base-c4 is **which library it was handed**, and nothing else.
+
+One thing was deleted rather than ported. mandel's `main()` used to
+patch `mandelbrot_render()` into a jump to one of two bodies, choosing
+the `__c4_invoke()` one when `__c4_info()` said we were on plain c4,
+where a pure function is called faster. That cost `OPCD`, `INFO` and
+the invoke -- three opcodes the rung does not have -- to buy some
+milliseconds on the one host that is not the interesting one. The
+picture out of both builds is byte-identical.
+
+### M15: four rungs, and a floor under each one
+
+    $ node src/c4bb/tools/opscan.mjs -rungs
+    base   39 opcodes  stock c4, nothing added
+                       the BIOS, C4DOS transients, cpp, c4, c4m, rps
+    dos    40 opcodes  stock c4 plus a clock
+                       C4DOS itself, mandel, raycast -- anything that times itself
+    c4m    65 opcodes  c4m's own opcodes: JSRS, traps, signals, INFO and the rest
+                       c4cc and c4rlink, C4KE and C4IX, and both userlands
+    fused  75 opcodes  c4m plus the ten fused opcodes (docs/fused-opcodes.md)
+                       images built through the fused backend
+
+**The table is written from what the images measurably use, not from
+what the design says they use**, and the difference showed up twice.
+
+- **C4IX's image reaches no further than C4KE's.** Both sit at `c4m`.
+  The plan said the c4th extended opcodes would be needed to get to
+  C4IX; what actually needs them is the *fused build path*, which is a
+  different and later thing. Writing `c4ix` as its own rung would have
+  been pinning a story rather than a program, so there is no such rung.
+- **`c4cc` and `c4rlink` are at `c4m`, not at `dos`.** The compiler the
+  player runs under C4DOS uses `JSRS`, `OPCD`, `INFO`, `STRC` and
+  `MCPY` -- so "C4DOS is stuck with the shipped c4cc until the CPU is
+  extended" is not a design intention to be implemented, it is already
+  true and now asserted.
+
+### The half that makes it an assertion
+
+A ceiling nothing reaches asserts nothing. So each rung's entry image is
+also pinned to **not** fit the rung below:
+
+    $ node src/c4bb/tools/opscan.mjs -needs base c4dos32.c4r
+    c4dos32.c4r: needs more than rung base -- TIME
+    $ node src/c4bb/tools/opscan.mjs -needs dos c4ke32.c4r
+    c4ke32.c4r: needs more than rung dos -- MCPY ITH _OPC OPCD +10 more
+
+and the failure message is written to be read by whoever broke it:
+
+    c4-dos32.c4r: FITS rung base, so it does not require the machine to
+    be extended -- the milestone that says it does is a story, not a fact
+
+`-machine` closes the last gap, in both directions, by reading
+`hw/microcode.uc` rather than keeping a second copy of the list:
+
+    $ node src/c4bb/tools/opscan.mjs -machine
+    opscan: the top rung is exactly the machine -- 75 opcodes, microcode and budget agree
+
+An opcode in the microcode and in no rung is something the player can
+execute that no test notices; an opcode in a rung and not in the
+microcode is a budget permitting an instruction the board would trap
+on. Both were tried, and both are caught:
+
+    opscan: rung 'fused' permits _BLT, which the microcode does not have
+    opscan: the microcode has CAS, which no rung permits
+
+### The bug underneath all of it
+
+opscan's instruction walk was `i += (op <= 7) ? 2 : 1`, which is
+`c4l.c`'s rule. Correct **for c4l**, because c4l stops at the first
+opcode above `EXIT` and so never meets one that takes an operand.
+opscan keeps walking, so it met `JSRS` -- which does take one -- in
+every C4KE and C4IX image, went one word out of phase, and read the
+rest of the image's operands as instructions. That is where the `?-3`
+and `?-4` entries in the old "uses:" lists came from: pieces of
+somebody's address.
+
+    c4ke32.c4r  uses: ?-3 LEA IMM ... C4IV JSRS        <- before
+    c4ke32.c4r  uses: LEA IMM ... C4IV JSRS            <- after
+
+`c4m.c` has the answer in one place -- `c4m_has_operand()`, with the
+comment "One place decides which opcodes carry an operand word" -- and
+opscan asks the same question now. Worth saying plainly: **the budgets
+could not have been built on the old walk.** A tool that reports opcodes
+an image does not contain cannot be used to assert what an image needs.
+
+Two smaller things fell out. `-q` exists so the Makefile need not write
+`| grep -v '^  uses:'`: a pipe hands the recipe *grep's* exit status,
+and a budget test that cannot fail is worse than no budget test. And
+the opcode named in a failure is now the lowest-addressed one rather
+than whichever the iteration happened to reach first, so two runs blame
+the same instruction.
+
+### M11: the climb's second power-on
+
+    bios: drive 0 has c4dos32.c4r
+    bios: booting c4dos32.c4r
+    A>LADDER
+    ... c4cc: wrote 200005 bytes to ram:c4ke.c4r
+    A>RUN install.c4r B:
+    install: reading install.lst
+      c4ke.c4r  200005
+      init.c4r  61911
+      ...
+    install: 46 files, 3768537 bytes onto drive 1, boot.cfg -> c4ke.c4r
+    install: eject drive 0 and reboot to start it
+    A>RUN reboot.c4r 0
+    ejecting drive 0...
+    rebooting...
+    c4bb: soft reset
+
+    bios: drive 1 has c4ke.c4r
+    bios: booting c4ke.c4r
+    c4ke v0.66 starting
+    ...
+    vfsload: 51/51 entries loaded from c4ke.vfs.txt
+    C4SH - The C4 SHell v 0.1a
+
+One machine, two boots, and the second one comes up in a system the
+first one compiled. `make test-c4bb-install` is the pin.
+
+**Why it is not `bbsave`.** bbsave writes the RAM disk, and a RAM disk
+is not a boot medium: half of what the next system needs was never in
+it. The shell, the userland, the archives holding the sources for the
+two rungs above — those are on the C4DOS floppy, and the floppy is the
+thing about to be ejected. So install reads a **list** and fetches each
+name from wherever it actually is, which turns out to be one call:
+C4DOS's own `open()` checks the RAM disk before the disk, so a file
+LADDER just compiled shadows the shipped copy of the same name. That
+precedence is exactly what a build wants, and it was already there.
+
+The manifest, `src/c4dos/fs/install.lst`, is deliberately almost no
+grammar: `boot NAME` names the image the BIOS is to load and is copied
+like any other entry, a leading `?` means copy it if it is there, `#`
+is a comment, everything else is required. What belongs on a boot
+medium is data about a disk, and changing it should not mean rebuilding
+the transient.
+
+**Two passes, and the second one is the point.** Nothing is written
+until every required name has been found:
+
+    A>RUN install.c4r B:          (before LADDER)
+    install: reading install.lst
+      MISSING  c4ke.c4r
+    install: 1 file(s) not found -- nothing written
+             (build them first: LADDER, then INSTALL)
+
+Zero files on the medium. The alternative is a disk that is half an
+operating system — which boots, and then fails somewhere much further
+in, where the reason is far harder to see.
+
+### The eject matters as much as the install
+
+`reboot` takes a drive number now: `RUN reboot.c4r 0` ejects and then
+resets. Without the eject the BIOS finds drive 0 still bootable and you
+come up in exactly the system you were trying to leave.
+
+And that turned up a bug in the simulator. `cli.js` re-read every
+drive's host directory on a soft reset — which put the ejected disk
+back. Restarting a machine does not reload a disk somebody took out of
+it, and the whole climb turns on that, so reset now skips a drive that
+was ejected. Inserting one is `DISK_RESCAN`, which clears the flag,
+because from inside the machine "look again" is what putting a disk in
+looks like.
+
+### A manifest that fits the medium
+
+`vfsload` degrades gracefully on a disk that lacks what its manifest
+names — it skips and reports `44/106` — but c4ke-root's manifest names
+a `.c` beside every binary, and a climb medium carries its sources as
+**archives** instead, because `tar x c4ke-src.tar` inside the running
+system is a step the player takes. Pointed at an installed medium it
+printed two dozen `cannot open` lines on the way up, which on an 80x25
+console is the whole boot.
+
+So `src/c4bb/fs/c4ke-climb.vfs.txt` describes the shape this medium
+actually has, and the boot is clean: **51/51**. The test asserts the
+absence of `vfsload: cannot open` outright, which is what keeps
+`install.lst` and the climb manifest honest about each other — a name
+in one and not the other shows up there.
+
+### M12: three power-ons, three systems
+
+    bios: drive 0 has c4dos32.c4r          <- the shipped floppy
+    A>LADDER
+    A>RUN install.c4r B:
+    install: 60 files, 4101902 bytes onto drive 1, boot.cfg -> c4ke.c4r
+    A>RUN reboot.c4r 0
+
+    bios: drive 1 has c4ke.c4r             <- what C4DOS compiled
+    c4sh> tar x c4ix-src.tar
+    tar: extracted 46 files, 267613 bytes
+    c4sh> b4ke -f c4ix.b4k
+    b4ke: C4IX built
+    b4ke: 13 ran, 0 skipped, 0 failed
+    c4sh> kinstall C:
+    kinstall: 21 files, 822372 bytes onto drive 2, boot.cfg -> c4ix.c4r
+    c4sh> reboot 1
+
+    bios: drive 2 has c4ix.c4r             <- what C4KE compiled
+    vfsload: 28/28 entries loaded from c4ix.vfs.txt
+    c4ix-sh -- 'help' for builtins
+
+Nothing crosses a boot except the media. `make test-c4bb-climb` is the
+pin, and M11's bar is a strict prefix of it, so they share one script
+rather than building the same kernel twice. The pin no longer runs
+`b4ke` on one machine as the transcript above does: it shares the
+build out over four, which is the next section but one.
+
+`kinstall` is `install` one rung up, and the only real difference is
+where a file might be: **the ramfs first, then the drive this system
+booted from.** `c4ix.c4r` is in the ramfs because b4ke just put it
+there; the C4IX userland is on the medium because the rung below
+installed it. That is the same precedence C4DOS gets for free from its
+own `open()`, and the same one `tar.c`'s `slurp` has always used.
+
+It is `kinstall` and not `install` because the C4DOS transient of that
+name is on the same floppy and cannot run here — it talks to a DOS that
+is gone. Two rungs, two programs, two names, the way `bbsave` and
+`save` already are.
+
+**What "bootable" means for C4IX** turned out to be worth checking
+rather than assuming. With no arguments, `init.c` spawns
+`c4ix-vfsload.c4r` and then `c4ix-sh.c4r` — so a medium carrying only
+the kernel boots into a system with nothing to run, and the four C4IX
+images the climb disk used to carry were not the right four. It carries
+all fifteen now, which is 417 KB, and `c4ix-climb.vfs.txt` describes
+that shape the way `c4ke-climb.vfs.txt` describes the rung below:
+**28/28**, no `cannot open` on the way up. (29/29 since 9aa6c24, which
+added `/lib/libc4ix.c4s`: every C4IX program on the disk but hello is
+linked against it.)
+
+### The test had to watch, not count
+
+The first version fed each command when the previous one printed its
+summary, and hung for the full fifteen minutes:
+
+    c4sh> tar x c4ix-src.tar
+    b4ke -f c4ix.b4k
+    tar: extracted 46 files, 267613 bytes
+    c4sh>
+
+`b4ke` was echoed and never ran. **C4KE gives the console to the
+FOCUSED task**, so a line typed while a program is still finishing is
+simply gone — and `tar: extracted` is printed before `tar` hands the
+console back. The fix is to wait for the log to END in a prompt, which
+is the system saying it is idle and listening, and only then type. Two
+polls two seconds apart, because a prompt about to be followed by more
+output is not an idle one.
+
+Waiting on output rather than on a clock is also what makes the test
+usable: a sleep long enough for `b4ke` on a slow host is minutes of
+dead waiting on a fast one, and one short enough for a fast host fails
+on a slow one for no reason at all.
+
+### Four machines build C4IX, 2026-11-12
+
+On one machine the climb took 2,487 s on helios, and 2,392 s of it
+was `b4ke`: thirteen compiles in a row, the longest test in the suite
+and its whole critical path. The compiles do not depend on each other,
+so the test now powers on four machines from the medium C4DOS wrote and
+gives each a share:
+
+    climb   C4DOS, LADDER, install B:, reboot 0   -> C4KE, from drive 1
+    s1..s3  powered on once install B: is done    -> C4KE, from drive 0
+    each    tar x c4ix-src.tar
+            b4ke -f c4ix.b4k <its share>          b4ke: 3 ran, 0 skipped, 0 failed
+            tar c objs.tar <its share>            tar: packed 3 files, ... into objs.tar
+            save 1: objs.tar                      (the climb machine: save 2:)
+
+    link    C4KE medium in drive 0, a blank in drive 1, the four object
+            media in drives 2-5
+            tar x 2:objs.tar ... tar x 5:objs.tar
+            b4ke -f c4ix.b4k                      b4ke: 1 ran, 13 skipped, 0 failed
+            kinstall B:
+            reboot 0                              -> C4IX, from drive 1
+
+**What it still proves.** Every module is compiled by C4KE, inside a
+machine booted from the medium C4DOS wrote, and C4IX boots from a medium
+C4KE wrote after linking those objects. The objects go from machine to
+machine the way anything goes between machines that share nothing: on a
+medium, written by the system that made them and read by the one that
+links them. The host packs nothing; it only puts disks in drives. And
+the link machine runs the whole `c4ix.b4k`, not just the link, so
+**13 skipped** is the check that every module arrived. A module missing
+from every share would be compiled there instead, and that count
+would fail.
+
+Two small tools made that possible, and both are general:
+
+- **`b4ke` takes targets.** `b4ke -f c4ix.b4k mmu.c4o va.c4o` runs only
+  the steps that make those two, as `make a b` would. ECHO lines are
+  not printed then, because "C4IX built" narrates the whole file. A
+  name that no step makes is a failure, so a share with a typo cannot
+  quietly build nothing. `make test-b4ke` pins both.
+- **`tar c`.** C4KE's `tar` could only unpack. `tar c objs.tar a.c4o
+  b.c4o` packs files from the RAM filesystem into one archive there,
+  for `save` to write out. The machine that receives the archive reads
+  it with `tar x 2:objs.tar`, through the drive prefix every `open()`
+  on the board already understands.
+
+Why a fresh machine links rather than the climb machine: a drive's
+contents are read when the machine powers on (and at a reset), the way
+a disk in a drive is. A running machine does not see a file another
+machine has just written to the host directory. Collecting the media
+into a fifth power-on is the honest form of that, and it costs about
+20 s.
+
+The shares are balanced by time, measured one module at a time during
+a suite run (mmu 518 s, vfs 373, sched 347, sys 229 ... host 45; the
+table is in `test-climb.sh`). mmu.c alone is the floor. Four at once,
+each share runs slower than its sum, because the machines share the
+host: mmu alone takes 722-752 s, and the four shares finish within
+about 40 s of each other.
+
+Three runs in a row on helios, 2026-11-12, against the one-machine run
+on c4ix_and_toppings:
+
+| | one machine | four machines |
+|---|---|---|
+| C4DOS ladder and install | 65 s | 60-62 s |
+| C4KE boot and `tar x` | 8 s | 8-10 s |
+| `b4ke` | 2,392 s | 754-795 s, the slowest of four shares |
+| pack, save, power on the link machine, unpack | none | 26 s |
+| link | (in `b4ke`) | 18-20 s |
+| kinstall, C4IX boot, `ls`, shutdown | 20 s | 20 s |
+| **total** | **2,487 s** | **895-936 s** |
+
+The machines pace themselves to the board's 20 MHz clock (`cli.js`
+without `--fast`), so each uses well under a whole host CPU: the test
+averages about 2.7 CPUs over its run (2,485-2,537 s of CPU time in
+895-936 s). The simulators are waited for after they are powered off,
+so the suite runner's CPU figure for this test counts all four.
+
+### M5: the browser gets drives
+
+    drives
+    0:  [climb disk (C4DOS + the whole ladder)  ▾]  69 files, 3.8 MB, RO  [Eject]
+    1:  [medium 1                              ▾]   6 files, 196 KB      [Eject]
+    2:  [— empty —                             ▾]   no medium            [Eject]
+        [ medium 1 (6 files, 196 KB) ▾ ]  [New] [Erase] [Delete]
+
+Three drives, a medium in each or not, and **a medium is a named set of
+files in IndexedDB** rather than a directory on a host. That is the
+whole reason the store exists: the climb writes a boot disk and then
+restarts the machine to boot it, and a disk that evaporates when the
+tab reloads is not a disk.
+
+**The panel had to be a control, not a display.** Ejecting and
+restarting *is* the climb, so two things came with it: `(BIOS)` at the
+top of the program list — which hands the firmware the drives and lets
+it find something to boot, rather than jumping past it into an image —
+and the soft reset, which the CLI has had since M10 and the browser had
+not. `RUN reboot.c4r 0` now works here, and does the same thing: the
+arena is zeroed, the media come back **minus anything ejected**, and
+the BIOS runs rather than whatever was chosen at the start.
+
+A guest that takes a disk out has also just made the panel wrong, so
+`DISK_EJECT` gained an `onEject` hook beside the `onRescan` that was
+already there. The CLI has nothing to redraw and ignores it.
+
+### Two halves, and only one of them needs a browser
+
+`DriveSet` is the logic — which medium is in which drive, what a reset
+does about an eject, what the `Devices` layer should be handed — and it
+has no DOM in it. `DrivePanel` reads that and draws it. The split is
+not tidiness: the rule that **a soft reset must not put back a medium
+somebody took out** is the rule the whole climb rests on, and it is
+testable exactly because it does not live in a click handler.
+
+    $ node src/c4bb/tests/test-drives.mjs
+      ok   a reset does NOT put back what was ejected
+      ok   and does keep what was not
+      ok   a guest eject is the same as the button
+      ok   so the BIOS finds drive 1
+      ok   the medium remembers what was written
+      ...
+    test-drives: OK
+
+It runs inside `make test-c4bb`, beside the terminal's screen model.
+
+The other half genuinely needs a browser, and gets one: `test-web.mjs`
+serves the repo, drives Chromium, and walks the actual story —
+
+    $ C4BB_PLAYWRIGHT=... node src/c4bb/tests/test-web.mjs
+      ok   the panel draws a row per drive
+      ok   every shipped medium is offered
+      ok   drive 0 comes with a disk in it
+      ok   a new blank medium lands in a free drive
+      ok   the BIOS probes the drives and boots one
+      ok   C4DOS came up off the medium in drive 0
+      ok   the machine wrote to the blank medium
+      ok   and it is still there after a reload
+      ok   no errors on the page
+    test-web: OK
+
+Playwright is not vendored here, so `make test-c4bb-web` says so and
+passes when it is absent — a test that cannot run is not a test that
+failed, and `make test-c4bb` has no browser.
+
+### The disk the browser could not reach
+
+The whole ladder lives on `c4dos-c4ix32` at the repo root, and the web
+front-end fetches media out of `images/`. So `build-images.sh` makes a
+copy there, with the manifest the browser reads. Deliberately the
+**same** disk `test-c4bb-climb` boots: two ladders that differed by
+which front-end you used would be one ladder and one demo.
+
+### M6: the firmware, in the stages it gets built in
+
+    $ node src/c4bb/sim/cli.js -m 16 -fw hello -d src/c4bb/images/climb
+    c4bb -- the breadboard computer
+    firmware: malloc, free, realloc, printf, 1 drives
+    bios: no memory test in this firmware
+    bios: this firmware cannot read a drive
+
+    $ ... -fw ram
+    bios: 14 MB RAM ok (0x5000-0xeff000)
+    bios: this firmware cannot read a drive
+
+    $ ... -fw drives
+    bios: 14 MB RAM ok (0x5000-0xeff000)
+    bios: drive 0 has c4dos32.c4r
+    bios: this firmware cannot load an image
+
+    $ ... -fw bios
+    bios: drive 0 has c4dos32.c4r
+    bios: booting c4dos32.c4r
+    C4DOS version 0.1
+
+Four firmwares out of one source, and the third one is the interesting
+one: it can **see** the medium and cannot start it. That is the shape
+the whole game is in — the hardware to look at a disk and the hardware
+to boot one are different things, and the player builds them in that
+order.
+
+**The missing parts are missing.** A stage that still carried the
+loader and declined to call it would be a firmware pretending, and the
+sizes say which is which:
+
+    fw-hello   16319
+    fw-ram     17064
+    fw-drives  20031
+    fw         27445
+
+`make test-c4bb-firmware` checks both halves for all four — that each
+does its own job, that it refuses the next one's, that the sizes go up,
+and that every one of them is still at rung `base`, because all of this
+is before the player has extended the CPU.
+
+`-fw hello|ram|drives|bios`, or a path to any `.c4r`; the browser has
+the same four in a dropdown beside the program.
+
+### A c4lc preprocessor bug, found and worked around
+
+Building the stages needs `#ifdef`, and c4lc's preprocessor gets one
+case wrong. Minimal:
+
+    #ifndef A
+        printf("KEEP outer-then\n");
+    #else
+    #ifndef B
+        printf("DROP inner-then\n");
+    #else
+        printf("DROP inner-else\n");
+    #endif
+    #endif
+
+With neither defined this prints **`KEEP outer-then`** *and*
+**`DROP inner-else`**. The whole `#else` region should be gone.
+
+`c4lc-pp.lisp`'s `#else` flips the current level's skip flag
+unconditionally:
+
+    (list rest (pp:cons (if (head skip) false true) (tail skip)))
+
+`ifdef`, `ifndef` and `if` all guard with `(if skipping true ...)` — a
+new level inside a skipped region stays skipped whatever its condition
+says. `#else` has no such guard, so it turns skipping back ON... which
+is to say OFF, inside a region that must stay off. `#elif` has the same
+shape. (Nesting inside a *taken* `#else` is fine; it is only the
+skipped one that leaks.)
+
+**Not fixed here.** c4lc compiles C4IX and c4or1k, and a change to its
+preprocessor deserves its own pass with `make test-c4lc` and the
+byte-identical C4IX rebuild rather than riding along with a firmware
+change. `fw.c` is written flat instead — one condition per block, never
+a conditional inside another one's `#else` — which is clearer anyway,
+and cost one extra build flag (`FW_SEEONLY`) to say "has drives, has no
+loader" without nesting. *(Since fixed, 25498f0: `#else` and `#elif` now
+inherit an enclosing skip, `pp:any-skip?`; docs/c4lc-design.md, "Beyond
+L11". `fw.c` stays flat.)*
+
+### Testing the browser on the machine that has one
+
+`test-web.mjs` no longer launches a headless browser. It connects over
+CDP to the one the user has open, through the tunnel that runs outward
+from that machine — the same endpoint the embedder's harnesses use.
+
+Getting the page to it took a detail. The embedder is loaded on the
+remote box as `localhost:5189` through a forwarded port, and that port
+is the embedder's. A port proxy, when one is configured
+(`https://PORT.<C4_PROXY_DOMAIN>`, see `src/c4bb/tools/proxy-domain.mjs`),
+reaches `localhost:PORT` here through code-server — so the test tries that first and
+falls back to `http://LAN-IP:PORT`. Both work for c4bb, because unlike
+the embedder it needs no secure context: plain ES modules and **IndexedDB**
+are both fine on a LAN origin, which the test asserts rather than
+assumes, since every medium depends on it.
+
+    test-web: https://8479.<proxy-domain> wants a code-server login; trying the next
+    test-web: http://127.0.0.1:9222 -> http://<lan-ip>:8479/src/c4bb/web/index.html
+      ok   the panel draws a row per drive
+      ok   IndexedDB is available on this origin
+      ok   all four firmware stages are offered
+      ok   the half-built firmware refuses the drive it can see
+      ok   the next stage sees the medium and still cannot start it
+      ok   the BIOS probes the drives and boots one
+      ok   C4DOS came up off the medium in drive 0
+      ok   the machine wrote to the blank medium
+      ok   and it is still there after a reload
+      ok   and Delete really removes it
+      ok   the user's tabs are as we found them
+    test-web: OK
+
+(The code-server session cookie is scoped to whichever subdomain you
+logged in at — logging in at the proxy domain itself sets it for
+every port subdomain under it.)
+
+**It is somebody else's browser**, and two things follow. The tab count
+is taken before and after and asserted equal; only the page the test
+opened is closed, and `browser.close()` on a CDP connection disconnects
+rather than killing anything. And the test cannot assume a clean
+IndexedDB — the media are kept in that browser, which is the point of
+them — so it measures the state it starts in, and deletes the medium it
+made on the way out.
+
+---
+
+## Examined, and now fixed: C4IX's cycle column went negative
+
+Asked for 2026-08-28. The finding, so it does not have to be found
+again.
+
+**It is the accumulator, not the sampling.** `sched.c:272` does
+
+    t->cycles = t->cycles + (__c4_cycles() - t->cycles_in);
+
+and the *delta* is fine even when the counter wraps, because the
+subtraction wraps with it. What overflows is `t->cycles` itself —
+`int cycles` in `c4ix.h:291`, 32 bits on the board — after 2^31 cycles,
+which the C4IX build reaches several times over. `user/ps.c:59`'s
+`total` sums those, so it goes wrong sooner.
+
+`C4CY` is a 32-bit read (`CYC_OUT` in the microcode), but the board also
+exposes the full count as `CYCLE_LO`/`CYCLE_HI` device registers at
+0x110/0x114 — so the width is available, just not through the opcode.
+
+**Three shapes, cheapest last:**
+
+1. Read `CYCLE_HI`/`CYCLE_LO` instead of `C4CY`. Board-only — native c4m
+   has no such registers — so C4IX would need a host check for
+   something it should not have to care about.
+2. Keep counting in units of 1024 cycles. One line, loses precision, and
+   every number printed anywhere would change.
+3. **A second word.** `cycles_hi` alongside `cycles`, bumped when the
+   low word wraps, and a printer that combines the pair. About twenty
+   lines across `sched.c`, `c4ix.h`, the task export in `task.c` and
+   `user/ps.c` — and it touches the kernel/userland task-info ABI, so
+   those two have to change together.
+
+C4KE has the same shape in `TASK_CYCLES` and will do the same thing at
+the same point; whatever is done should be done to both.

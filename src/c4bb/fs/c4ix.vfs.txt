@@ -1,0 +1,97 @@
+# C4IX VFS file listing - the manifest vfsload.c (src/c4ix/user/
+# vfsload.c) reads at boot to populate C4IX's real hierarchical VFS
+# (src/c4ix/vfs.c). Same format as C4KE's c4ke.vfs.txt (see that file
+# for the full grammar reference); this is SOURCE, copied onto the
+# disk by build-images.sh, not a build artifact.
+#
+# Unlike C4KE's flat ramfs, C4IX has real directories: umkdir() is
+# called for every directory line as the manifest is parsed, so
+# "ls /bin" and "cd" both work for real, not just as string prefixes.
+# So / holds directories only: programs are in /bin, where the shell's
+# PATH finds them by name (src/c4ix/user/sh.c), the games each in their
+# own under /usr/games, and their names in /usr/games/bin, which PATH
+# names too.
+
+# vfsload itself is deliberately excluded: it's the boot-time loader
+# (built and named plainly as vfsload.c4r, not the c4ix-NAME.c4r
+# convention every other user program follows), not a typical app.
+# c4m is c4m.c built for C4IX (build-images.sh), not a src/c4ix/user program
+BIN_ALL = hello uhello echo wc cat sh ps bench cycles ls mkdir top spin pin nice fmt gui desktop tar gunzip crc32 splash b4ke cc c4m persist dmesg free
+# The toolchain (docs/c4ix-desktop.md, part three): C4KE programs, which
+# run here through the compatibility layer, and write what they build
+# through its OP_VFS_PUT. In /bin only, under their own names.
+# c4sc is the compiled c4lc, what the BUILD.B4K files under /usr run.
+TOOLS = c4cc c4rlink c4rdump cpp c4sp c4th c4sc
+# Unpacked over / after everything above, by c4ix-persist (which then
+# lays the last session's saved changes over it): in the background
+# at the console's boot (vfsload prints the task; "wait ID" blocks on it),
+# and waited for, with splash on the display, at the desktop's (init
+# --desktop runs vfsload -w): the repo's sources
+# and docs under /usr, the C4IX libraries in /usr/lib, and more
+# headers in /usr/include. Built by build-images.sh.
+ARCHIVES = c4ix-root.tgz
+
+/: root
+	bin/:
+		# c4ix-hello.c4r -> /bin/hello, so "hello" works from the shell
+		# without the c4ix- prefix or .c4r suffix
+		each($BIN_ALL):
+			$1: c4ix-$1.c4r
+		# sync is persist save (src/c4ix/user/persist.c), and download is
+		# persist download: a file or folder handed to the web page
+		sync: ilink(/bin/persist)
+		download: ilink(/bin/persist)
+		each($TOOLS):
+			$1: $1.c4r
+		# exercises libc (src/c4ix/libc/tests)
+		libctest: c4ix-libctest.c4r
+		pictest: c4ix-pictest.c4r
+		unixtest: c4ix-unixtest.c4r
+	# the person's own files: the web page's Uploads, each on drive 0 as
+	# home/NAME too and listed in c4ix.sizes (libjs/uploads.js). Empty
+	# where there are none, and on a disk with no c4ix.sizes.
+	home/: hostdir(home/)
+	# what the desktop's Go menu lists besides its own tools: a line from
+	# each game on the disk that has one (src/c4bb/tests/vfs-games.py)
+	#@desktop-apps
+	# shared libraries: what a program linked with c4rlink -l loads
+	lib/:
+		libc4ix.c4s: c4ix-libc4ix.c4s
+		libc.c4s: c4ix-libc.c4s
+		libarc.c4s: c4ix-libarc.c4s
+		libgui.c4s: c4ix-libgui.c4s
+	# /usr is the repo itself, unpacked from the archive below: its src/
+	# at /usr/src (the programs' sources, src/c4ix/examples, c4th's
+	# Forth), its include/ at /usr/include. These two headers are here
+	# from the start, before the archive is.
+	usr/
+		# C4KE's kernel, for c4m to boot: c4m load-c4r.c -- /usr/lib/c4ke.c4r
+		lib/:
+			c4ke.c4r
+		# ... and at the top of the repo too, where `make` leaves it beside
+		# c4m.c and load-c4r.c, so cd /usr; c4m load-c4r.c -- c4ke.c4r
+		# works here as it does on the host
+		c4ke.c4r: ilink(/usr/lib/c4ke.c4r)
+		# headers a program compiled here is built against
+		include/:
+			window.h: c4ix-window.h
+			c4ix_user.h
+		# the boot logo splash shows while the archive unpacks, so it
+		# cannot be in the archive (src/c4ix/art): 4:3, and 16:9 for a wide
+		# screen; the C4PC hypervisor's control C4IX's own (hv)
+		share/
+			splash/:
+				c4ix.c4p.gz: c4ix-splash.c4p.gz
+				c4ix-wide.c4p.gz: c4ix-splash-wide.c4p.gz
+				hv.c4p.gz: c4ix-splash-hv.c4p.gz
+				hv-wide.c4p.gz: c4ix-splash-hv-wide.c4p.gz
+		# the games that are on the disk, each its own block, its own
+		# directory (games/NAME/c4ix.vfs.txt, src/c4bb/tests/vfs-games.py);
+		# and each one's sources, at their paths in the repository, so the
+		# IDE's Code tab finds what a game's source map names: lazy files
+		# that only c4ix.sizes lists (docs/c4ix-desktop.md, part twenty-one)
+		games/: hostdir(games/)
+			#@games
+			# and their programs by name, where the shell's PATH looks
+			bin/:
+				#@game-names

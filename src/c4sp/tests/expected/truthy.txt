@@ -1,0 +1,15 @@
+false falsy true
+0     falsy true
+nil   falsy true
+()    falsy true
+'nil  falsy true
+true  truthy false
+1     truthy false
+-1    truthy false
+0.0   truthy false
+str0  truthy false
+str   truthy false
+atom  truthy false
+list  truthy false
+lmbda truthy false
+nil

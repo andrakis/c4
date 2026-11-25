@@ -1,0 +1,97 @@
+# The B5 probe
+
+Three measurements of one loop -- sum 0..99999 -- taken before writing the
+native backend, to decide whether to write it at all and which of the two
+stack strategies to use. All three run under `c4m`, counting VM cycles with
+`__c4_cycles()`, which is exactly reproducible.
+
+| | file | cycles | per iteration | vs threaded |
+|---|---|---|---|---|
+| threaded, as c4th runs today | `threaded.f` | 34,318,112 | 343 | — |
+| strategy (a): software data stack, one `JSR` per Forth word | `strategy_a.c` | 12,600,041 | 126 | 2.7x |
+| strategy (b) ceiling: native C4 code, values in registers and a frame | `native.c` | 2,400,018 | 24 | **14.3x** |
+
+**Conclusion: build strategy (b).** It is 5.3x better than (a), and (a)'s
+figure is generous to it -- the C model lets native code run the loop
+control that a real strategy-(a) backend would also thread, so 126 is a
+lower bound on what (a) would really cost.
+
+The (b) row is a ceiling, not a promise: it is what c4cc emits for the
+equivalent C, with both live values in frame slots. A Forth backend keeps
+its values on a stack rather than in named locals, so it pays more for any
+operation that reorders them -- `SWAP`, `OVER`, `ROT`, `!` -- and less for
+the ones C4's own instruction set already performs natively, where `+` is
+one `ADD`.
+
+Reproduce:
+
+    ./c4cc -o /tmp/b.c4r src/c4th/bench/native.c && ./c4m load-c4r.c -- /tmp/b.c4r
+    ./c4cc -o /tmp/a.c4r src/c4th/bench/strategy_a.c && ./c4m load-c4r.c -- /tmp/a.c4r
+    ./c4m load-c4r.c -- c4th.c4r src/c4th/forth/core.f src/c4th/bench/threaded.f
+
+## b5c.f — counted loops, inlined calls, stack reordering (B5c)
+
+The B5 probe answered "which strategy"; this one answers "what did B5c
+buy". Five loops, each run threaded and then compiled and run natively,
+under c4m where `CYCLES` is a real counter:
+
+    ./c4m load-c4r.c -- c4th.c4r src/c4th/forth/core.f \
+        src/c4th/forth/asm.f src/c4th/forth/native.f src/c4th/bench/b5c.f
+
+| | threaded | native | |
+|---|---|---|---|
+| `DO`/`LOOP` with `I` | 34,300,951 | 1,700,354 | 20x |
+| `BEGIN`/`WHILE` with `>R`/`R>` | 107,201,208 | 3,100,351 | 34x |
+| loop calling another word | 20,080,951 | 440,354 | 45x |
+| loop reordering the stack | 21,681,110 | 1,540,357 | 14x |
+| loop through a `VARIABLE` | 71,501,323 | 2,200,356 | 32x |
+
+The call case is the fastest because inlining removes the call
+altogether; the shuffle case is the slowest because a permutation the
+compiler cannot do by moving code has to go through the frame, at about
+ten instructions an item.
+
+## The opcode probe (B5c)
+
+Two halves, both in the tree.
+
+The **emitting** half is `NOPC` in `src/c4th/forth/native.f` and the
+fused opcodes c4m runs, `LDL`, `STL` and `POPA`. The figures below were
+measured with five, `ADDI` and `MULI` besides, before bbb9ec3 cut the
+fused set to ten and left c4m three of them.
+`NOPC` is off by default, so the committed compiler emits nothing above
+`MOD` and its output still runs on plain `c4`. To measure with them on,
+put `1 NOPC !` in a file loaded before the benchmark:
+
+    echo '1 NOPC !' > .nopc.f
+    ./c4m load-c4r.c -- c4th.c4r src/c4th/forth/core.f \
+        src/c4th/forth/asm.f src/c4th/forth/native.f .nopc.f \
+        src/c4th/bench/b5c.f
+
+The same file loaded before `src/c4th/tests/b5.f` produces a transcript
+byte-identical to `expected/b5.txt`, which is how the opcodes were
+checked before any of the numbers were believed.
+
+|  | base | fused | |
+|---|---|---|---|
+| `DO`/`LOOP` with `I` | 1,700,354 | 1,000,343 | 1.70x |
+| `BEGIN`/`WHILE` with `>R`/`R>` | 3,100,351 | 1,700,347 | 1.82x |
+| loop calling another word | 440,354 | 300,343 | 1.47x |
+| loop reordering the stack | 1,540,357 | 1,280,346 | 1.20x |
+| loop through a `VARIABLE` | 2,200,356 | 1,500,346 | 1.47x |
+
+The **measuring** half is `make c4m-fuse` (`fuse-probe.sh`), which
+generates an instrumented c4m and runs a greedy peephole over the
+instructions two real workloads actually execute. It generates rather
+than living in `c4m.c` because plain c4 compiles *both* arms of an
+`#ifdef` — `c4.c:74` skips only the `#` line — and `./c4 ./c4m.c` is a
+test.
+
+| workload | instructions | set A | set B |
+|---|---|---|---|
+| `c4cc` compiling `c4.c` | 11,373,735 | 13.44% | 36.14% |
+| `c4sp -R`, c4lc's lexer over `c4.c` | 1,639,556,989 | 23.81% | 33.84% |
+
+Set A is the five opcodes above; set B adds a global load, push-local and
+push-global, and the whole immediate-ALU family. See
+`docs/c4th-design.md` for what follows from that.

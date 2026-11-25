@@ -1,0 +1,24 @@
+guarded 2
+taken_if 5
+taken_elif 8
+nested 30
+str hello world
+xstr 7
+str-noexpand VERSION
+cat 4
+paste 11
+defined-paren 1
+one-arm 1
+va-on 1
+va-sum 6
+gnu-none
+gnu 4 5
+gnu2-none
+gnu2 6
+strv x
+self 12
+self-va 708
+line 1 1 src/tests/c4lc_pp.c
+kw 70000 0 42
+str-kw int while
+and-right 1

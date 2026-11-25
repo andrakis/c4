@@ -1,0 +1,782 @@
+// term.c -- Terminal: a terminal running c4ix-sh over pipes.
+// docs/c4ix-desktop.md.
+//
+// The shell is a real task whose stdin and stdout are pipes this desktop
+// holds. Its output is drawn in the window kit's text grid (textgrid.c,
+// a VT100 subset); typing is edited there a line at a time, as a tty in
+// cooked mode does, and sent down the pipe on Enter. Ctrl-C interrupts
+// the job running under this window's shell and nothing else, and drops
+// whatever was typed that it had not read.
+//
+// A program may also make the window its canvas (include/window.h): it
+// writes drawing commands as escape sequences, ESC _ G ... ESC \, and
+// while it does the window shows the last frame it presented and sends
+// the mouse and keys down its stdin instead of editing a line. The
+// window becomes a terminal again when the program says so, when Ctrl-C
+// stops it, or when the shell's prompt comes back.
+//
+// Or a program may take the keys and leave the text, as from a tty in
+// raw mode: after ESC _ T r ESC \ each key goes down its stdin as it is
+// typed, unechoed -- the arrows, PgUp, PgDn, Home, End and the function
+// keys as a VT100 sends them, Enter as CR -- until ESC _ T c ESC \, Ctrl-C
+// (which stays an interrupt) or the prompt coming back. top does this;
+// on the console the kernel does the same (console.c).
+//
+// Or the window is a program's own (term_run): no shell and no menu, the
+// program itself on the pipes, and the window only its canvas. It closes
+// when the program ends -- unless it is showing text the program wrote,
+// an error most likely, which stays to be read. Ctrl-C ends the program,
+// as closing the window does. Go > Games and Files start a game so when
+// its /etc/desktop.apps line says `window` (tools.c, run_command). The
+// program may give its window a menu bar (window.h: the M and I ops): the
+// window grows by the bar's height, and a pick goes down the pipe as 'c'.
+//
+// A program run in the background from a Terminal (`quake --window &`)
+// gets such a window too (term_adopt). The Terminal's canvas is its
+// foreground job's, and its pipes are shared by every job it runs: two
+// games drawing there would each read the other's frame acks and keys,
+// and the shell at its prompt would read them too. So the shell gives a
+// background job an input that has ended, as POSIX's does, and a program
+// that asks for a canvas with no input asks for a window of its own
+// instead (window.c, win_open: the O op, with its task id). The desktop
+// makes the window and its pipes and gives them to that task as its stdin
+// and stdout (SYS_FDGIVE). Its stderr stays the Terminal's.
+//
+// A canvas is GW by GH, whatever the window's size, unless the program
+// asks for it to follow the window (the z op, window.h's win_resizable):
+// then it is the window's whole inside, a window of the program's own may
+// be dragged to any size, and the program hears each new size ('s') once
+// the window has held still at it (follow).
+//
+// A canvas may show a framebuffer, the 'f' op: 8-bit pixels and a
+// palette in the program's own memory, which GUI_BLIT8 has the host read
+// and scale to the canvas. Once a frame with one has been drawn the
+// program hears 'f' back, and may draw the next; and it hears keys let
+// go ('K') as well as pressed, which a game needs.
+//
+// Its Edit menu is the desktop's clipboard, as a console window's is: the
+// mouse selects (a run of lines, or with Alt held a block), Copy takes
+// the selection and Copy All the scrollback and the screen, and Paste
+// types the clipboard in, a key a character. Ctrl+Shift+C and V, Ctrl+Ins
+// and Shift+Ins do the same; Ctrl+C copies when there is a selection, and
+// is ^C when there is none.
+
+#include "desktop.h"
+#include "textgrid.h"
+#include "wkgui.h"
+
+enum { IOBUF = 8192 };
+// graphics mode: the canvas (the grid's own area), and the two display
+// lists -- the one being built, and the one shown
+enum { GW = 640, GH = 400, GLIST = 6000 };
+// a program's own window's menu bar: menus, items in each, and their text
+enum { MENUS = 4, MITEMS = 40, MTEXT = 2048 };
+
+struct term {
+    int win;                      // its window's number
+    int pid, in_w, out_r, ended;
+    int bare;                     // the program's own window: no shell (term_run)
+    int adopted;                  // ... and the program a Terminal's job (term_adopt): not ours to wait for
+    struct tgrid *g;              // the text
+    char pending[128];            // a command to type at the first prompt
+    int gfx, buttons;             // a canvas now; mouse buttons held on it
+    int raw;                      // keys go to the program as typed (ESC _ T r)
+    int fpend;                    // a frame with a framebuffer presented, not yet drawn
+    int fit, gw, gh;              // the canvas follows the window (z); its size
+    int lock, mx, my;             // the mouse is to be locked to the canvas (L 1); the pointer in it
+    int nw, nh, nat;              // the size the window last had, and since when
+    char title[48];               // the window's own title, while a program's shows
+    int ncur, nshow;
+    int gcur[GLIST];              // [len, op, numbers..., text]
+    int gshow[GLIST];
+    // the menu bar a program gave its own window (prog_menu)
+    int nmenus, mlen, mcount[MENUS];
+    struct wk_menu menus[MENUS];
+    char *mitem[MENUS * (MITEMS + 1)];
+    char mtext[MTEXT];
+};
+
+static char tmp[128];
+static char iobuf[IOBUF];
+static char *edit_items[7] = { "Copy   Ctrl+Shift+C", "Paste   Ctrl+Shift+V", "-", "Select All", "Copy All", 0 };
+static struct wk_menu menus[1];
+enum { T_COPY = 0, T_PASTE = 1, T_ALL = 3, T_COPYALL = 4 };
+
+static struct term *T(struct win *w) { return (struct term *)w->st; }
+
+// ---- graphics mode ------------------------------------------------------------------
+
+static void send(struct term *t, char *s) { write(t->in_w, s, ui_len(s)); }
+
+// An event down the program's stdin: ESC E kind a,b,c newline.
+static void event(struct term *t, int kind, int a, int b, int c) {
+    int k;
+    tmp[0] = 27; tmp[1] = 'E'; tmp[2] = kind; tmp[3] = 0;
+    ui_num(tmp + 3, a); k = ui_len(tmp); tmp[k] = ','; tmp[k + 1] = 0;
+    ui_num(tmp + k + 1, b); k = ui_len(tmp); tmp[k] = ','; tmp[k + 1] = 0;
+    ui_num(tmp + k + 1, c); k = ui_len(tmp); tmp[k] = 10; tmp[k + 1] = 0;
+    send(t, tmp);
+}
+
+static void lk_drop(struct term *t);
+
+static void gfx_mode(struct term *t, int on) {
+    lk_drop(t);
+    t->lock = 0;
+    if (on && !t->gfx) ui_ncpy(t->title, wk_get_title(t->win), 48);
+    if (!on && t->gfx && t->title[0]) wk_title(t->win, t->title);
+    if (on && t->g) tg_unselect(t->g);
+    if (on != t->gfx) { t->fit = 0; t->gw = GW; t->gh = GH; }
+    t->gfx = on;
+    t->ncur = 0; t->nshow = 0; t->buttons = 0; t->fpend = 0;
+    mark_dirty();
+}
+
+// A program's own window's menu bar (window.h): M starts menu m (m 0 the
+// whole bar again), I adds an item to menu m. They come in order; one
+// that does not fit is dropped. The first menu grows the window by the
+// bar's height, so the canvas keeps its size and its place in the client
+// area, where the mouse is measured from.
+static void prog_menu(struct term *t, int op, int m, char *s) {
+    struct win *w;
+    int k, had;
+    if (!s) s = "";
+    k = ui_len(s);
+    if (m < 0 || m >= MENUS) return;
+    had = t->nmenus;
+    if (op == 'M') {
+        if (m == 0) { t->nmenus = 0; t->mlen = 0; }
+        if (m != t->nmenus || t->mlen + k + 1 > MTEXT) return;
+        t->menus[m].title = t->mtext + t->mlen;
+        t->menus[m].items = t->mitem + m * (MITEMS + 1);
+        t->menus[m].items[0] = 0;
+        t->mcount[m] = 0;
+        t->nmenus = m + 1;
+    } else {
+        if (m >= t->nmenus || t->mcount[m] >= MITEMS || t->mlen + k + 1 > MTEXT) return;
+        t->menus[m].items[t->mcount[m]] = t->mtext + t->mlen;
+        t->mcount[m] = t->mcount[m] + 1;
+        t->menus[m].items[t->mcount[m]] = 0;
+    }
+    ui_cpy(t->mtext + t->mlen, s);
+    if (op == 'I' && s[0] == '*') t->mtext[t->mlen] = WK_CHECKED;
+    t->mlen = t->mlen + k + 1;
+    wk_menu(t->win, t->menus, t->nmenus);
+    if (!had && t->nmenus && (w = win_get(t->win))) wk_place(t->win, w->x, w->y, w->w, w->h + MENU_H);
+    mark_dirty();
+}
+
+// The canvas follows the window's size, or (on 0) is GW by GH again.
+static void fit(struct term *t, int on) {
+    struct win *w;
+    t->fit = on != 0;
+    t->nw = 0 - 1;
+    if (t->bare && (w = win_get(t->win))) w->resizable = t->fit;
+    if (!t->fit && (t->gw != GW || t->gh != GH)) {
+        t->gw = GW; t->gh = GH;
+        event(t, 's', GW, GH, 0);
+        mark_dirty();
+    }
+}
+
+// A canvas that follows its window takes the window's size once it has
+// held still at it for a moment: dragging an edge goes through many sizes,
+// and each is the program laying itself out again. The program hears it.
+static void follow(struct term *t, struct win *w) {
+    int nw, nh, now;
+    nw = wk_client_w(w) - 4 - (t->bare ? 0 : TG_SB_W);
+    nh = wk_client_h(w) - 4;
+    if (nw < 1) nw = 1;
+    if (nh < 1) nh = 1;
+    now = __time();
+    if (nw != t->nw || nh != t->nh) { t->nw = nw; t->nh = nh; t->nat = now; return; }
+    if ((nw != t->gw || nh != t->gh) && now - t->nat >= 100) {
+        t->gw = nw; t->gh = nh;
+        event(t, 's', nw, nh, 0);
+        mark_dirty();
+    }
+}
+
+static void term_adopt(int pid, char *title);
+
+// One command, ESC _ and ESC \ already stripped: G, the op, numbers
+// separated by commas, and for text a ';' and the string.
+static void apc(char *ctx, char *abuf, int alen) {
+    struct term *t;
+    int i, n, v, neg, op, len, *g, k, nums[8];
+    char *s;
+    t = (struct term *)ctx;
+    // T: raw keys (r) or lines (c)
+    if (alen == 2 && abuf[0] == 'T') { if (abuf[1] == 'r' || abuf[1] == 'c') t->raw = abuf[1] == 'r'; return; }
+    if (alen < 2 || abuf[0] != 'G') return;
+    op = abuf[1];
+    i = 2; n = 0;
+    while (i < alen && abuf[i] != ';' && n < 8) {
+        v = 0; neg = 0;
+        if (abuf[i] == '-') { neg = 1; ++i; }
+        while (i < alen && abuf[i] >= '0' && abuf[i] <= '9') { v = v * 10 + (abuf[i] - '0'); ++i; }
+        nums[n] = neg ? 0 - v : v; ++n;
+        if (i < alen && abuf[i] == ',') ++i;
+        else break;
+    }
+    s = 0;
+    if (i < alen && abuf[i] == ';') s = abuf + i + 1;
+    if (op == 'o') {
+        gfx_mode(t, 1);
+        if (s && *s) { if (ui_len(s) > 44) s[44] = 0; wk_title(t->win, s); }
+        event(t, 's', t->gw, t->gh, 0);
+        return;
+    }
+    if (op == 'q') { gfx_mode(t, 0); return; }
+    // a program in the background wants a window of its own (window.c)
+    if (op == 'O') { if (n && nums[0] > 0) term_adopt(nums[0], s); return; }
+    if (!t->gfx) return;
+    // a menu bar: a program's own window's only (a Terminal has its own)
+    if (op == 'M' || op == 'I') { if (t->bare) prog_menu(t, op, n ? nums[0] : 0, s); return; }
+    if (op == 'z') { fit(t, n ? nums[0] : 1); return; }
+    // the mouse locked to the canvas at a click, or not: the pointer says which
+    if (op == 'L') { t->lock = n ? nums[0] != 0 : 1; if (!t->lock) lk_drop(t); wk_repoint(); return; }
+    if (op == 'p') {
+        memcpy(t->gshow, t->gcur, t->ncur * sizeof(int));
+        t->nshow = t->ncur;
+        t->ncur = 0;
+        // a framebuffer in it: tell the program once it has been drawn
+        k = 0;
+        while (k < t->nshow && t->gshow[k] >= 2) {
+            if (t->gshow[k + 1] == 'f') t->fpend = 1;
+            k = k + t->gshow[k];
+        }
+        // A framebuffer fills the canvas, so only the canvas changed, and
+        // its frame covers all of it (gfx_draw): nothing under it or
+        // around it is drawn again. Lines and text may reach outside it,
+        // and the whole window is drawn for those.
+        if (t->fpend) { wk_invalidate_covered(t->win, 2, 2, t->gw, t->gh); mark_frame(); }
+        else wk_invalidate(t->win, 0, 0, 0, 0);
+        return;
+    }
+    // everything else is drawn later: into the list being built
+    len = 2 + n + (s ? 1 + (ui_len(s) + 4) / 4 : 0);
+    if (t->ncur + len > GLIST) return;           // a frame too big: the rest is dropped
+    g = t->gcur + t->ncur;
+    g[0] = len; g[1] = op;
+    k = 0;
+    while (k < n) { g[2 + k] = nums[k]; ++k; }
+    if (s) { g[2 + n] = ui_len(s); ui_cpy((char *)(g + 3 + n), s); }
+    t->ncur = t->ncur + len;
+}
+
+static void gfx_draw(struct term *t, int ox, int oy) {
+    int i, *g, n, op, fb, clip;
+    // The last framebuffer covers the whole canvas, and what came before
+    // it: drawn from there, with no black under it, and what follows it
+    // kept to the canvas (only the canvas is drawn again after a frame)
+    fb = 0 - 1;
+    i = 0;
+    while (i < t->nshow && t->gshow[i] >= 2) {
+        if (t->gshow[i + 1] == 'f' && t->gshow[i] >= 7) fb = i;
+        i = i + t->gshow[i];
+    }
+    clip = 0;
+    if (fb < 0) { d_rect(ox, oy, t->gw, t->gh, 0); i = 0; }
+    else {
+        i = fb;
+        if (i + t->gshow[i] < t->nshow) { d_clip(ox, oy, t->gw, t->gh); clip = 1; }
+    }
+    while (i < t->nshow) {
+        g = t->gshow + i;
+        op = g[1];
+        n = g[0] - 2;
+        if (op == 'c' && n >= 1) d_rect(ox, oy, t->gw, t->gh, g[2]);
+        else if (op == 'r' && n >= 5) d_rect(ox + g[2], oy + g[3], g[4], g[5], g[6]);
+        else if (op == 'R' && n >= 5) d_recto(ox + g[2], oy + g[3], g[4], g[5], g[6]);
+        else if (op == 'l' && n >= 5) d_line(ox + g[2], oy + g[3], ox + g[4], oy + g[5], g[6]);
+        else if (op == 'd' && n >= 4) d_disc(ox + g[2], oy + g[3], g[4], g[5]);
+        else if (op == 't' && n >= 6) d_textn(ox + g[2], oy + g[3], g[4], g[5], F_SANS, 0, (char *)(g + 7), g[6]);
+        else if (op == 'f' && n >= 5) {
+            // the program's memory, which the display reads at the
+            // desktop's word: lent to the desktop first (under the MMU
+            // each task's is its own); a frame it will not lend is not drawn
+            if (umapfrom(g[2], g[5] * g[4]) == 0 && umapfrom(g[6], 1024) == 0)
+                d_blit8(ox, oy, g[3], g[4], (char *)g[2], g[5], (int *)g[6], t->gw, t->gh);
+            else d_rect(ox, oy, t->gw, t->gh, 0);
+        }
+        if (g[0] < 2) break;
+        i = i + g[0];
+    }
+    if (clip) d_clip_end();
+}
+
+// ---- the shell --------------------------------------------------------------------
+
+// Our ends of the pipes are close-on-spawn, so no shell -- this one or a
+// later window's -- inherits them: that is what lets a shell see end of
+// file, and keeps each window's pipes its own.
+//
+// spawn gives the shell this task's 0, 1 and 2, so they point at the
+// pipes for the spawn and are put back after it. That takes seven
+// descriptors at once, and every step is checked: when the table is
+// full, a desktop that went on would keep a Terminal's pipe as its
+// stdout, and its own messages, and Power Off's, would go into that
+// window and never reach the console. Instead what was opened is closed,
+// 0, 1 and 2 are as they were, and term_open says no shell started.
+static char *sh_argv[3] = { "c4ix-sh.c4r", "-p", 0 };   // -p: the prompt on the input line
+static int start(struct term *t, char *path, int argc, char **argv) {
+    int pin[2], pout[2], s0, s1, s2;
+    t->pid = 0 - 1;
+    if (upipe(pin) < 0) return 0;
+    if (upipe(pout) < 0) { uclose(pin[0]); uclose(pin[1]); return 0; }
+    s0 = udup(STDIN); s1 = udup(STDOUT); s2 = udup(STDERR);
+    if (s0 >= 0 && s1 >= 0 && s2 >= 0) {
+        ucloexec(pin[1], 1); ucloexec(pout[0], 1);
+        ucloexec(s0, 1); ucloexec(s1, 1); ucloexec(s2, 1);
+        if (udup2(pin[0], STDIN) >= 0 && udup2(pout[1], STDOUT) >= 0 && udup2(pout[1], STDERR) >= 0)
+            t->pid = spawn(path, argc, argv);
+        // s0, s1 and s2 are open, so these cannot fail
+        udup2(s0, STDIN); udup2(s1, STDOUT); udup2(s2, STDERR);
+    }
+    uclose(s0); uclose(s1); uclose(s2);   // one that is -1 closes nothing
+    uclose(pin[0]); uclose(pout[1]);
+    if (t->pid < 0) { uclose(pin[1]); uclose(pout[0]); return 0; }
+    t->in_w = pin[1];
+    t->out_r = pout[0];
+    return 1;
+}
+
+// A new Terminal; with cmd, that command is typed at its first
+// prompt (Run, and Files running a program).
+int term_open(char *cmd) {
+    int i, k;
+    struct win *w;
+    struct term *t;
+    i = win_open(K_TERM, "Terminal", TG_W + 2 * BORDER + TG_SB_W, TG_H + 2 * BORDER + TITLE_H + 1 + MENU_H, sizeof(struct term));
+    if (i < 0) return 0 - 1;
+    w = win_get(i);
+    w->resizable = 0;
+    menus[0].title = "Edit"; menus[0].items = edit_items;
+    wk_menu(i, menus, 1);
+    t = T(w);
+    t->win = i;
+    if (!(t->g = tg_new(i))) { t->ended = 1; win_close(i); return 0 - 1; }   // no memory left for it
+    t->g->apc = apc; t->g->ctx = (char *)t;
+    if (cmd) ui_ncpy(t->pending, cmd, 128);
+    if (!start(t, "c4ix-sh.c4r", 2, sh_argv)) { tg_say(t->g, "desktop: could not start a shell\n"); t->ended = 1; t->pid = 0 - 1; return i; }
+    // "Terminal - task N": the id ps shows for this window's shell
+    ui_cpy(tmp, "Terminal - task ");
+    k = ui_len(tmp);
+    ui_num(tmp + k, t->pid);
+    win_title(w, tmp);
+    return i;
+}
+
+// A program in a window of its own, with no shell: the command's words are
+// its arguments, the first found as the shell finds it (desk_which). The
+// window is the canvas's size, with no menu and no scroll bar, and has the
+// program's name for a title until the program gives one.
+enum { RUN_ARGS = 16 };
+int term_run(char *cmd) {
+    int i, n;
+    struct win *w;
+    struct term *t;
+    char path[WK_PATH], line[128], *argv[RUN_ARGS + 1], *s;
+    if (!desk_which(cmd, path)) return 0 - 1;
+    ui_ncpy(line, cmd, 128);
+    n = 0; s = line;
+    while (*s && n < RUN_ARGS) {
+        while (*s == ' ') { *s = 0; ++s; }
+        if (!*s) break;
+        argv[n] = s; ++n;
+        while (*s && *s != ' ') ++s;
+    }
+    if (n == 0) return 0 - 1;
+    argv[n] = 0;
+    s = argv[0];
+    while (*s) ++s;
+    while (s > argv[0] && s[-1] != '/') --s;
+    i = win_open(K_TERM, s, TG_W + 2 * BORDER, TG_H + 2 * BORDER + TITLE_H + 1, sizeof(struct term));
+    if (i < 0) return 0 - 1;
+    w = win_get(i);
+    w->resizable = 0;
+    t = T(w);
+    t->win = i;
+    t->bare = 1;
+    if (!(t->g = tg_new(i))) { t->ended = 1; win_close(i); return 0 - 1; }   // no memory left for it
+    t->g->apc = apc; t->g->ctx = (char *)t;
+    if (!start(t, path, n, argv)) {
+        tg_say(t->g, "desktop: could not start "); tg_say(t->g, path); tg_say(t->g, "\n");
+        t->ended = 1; t->pid = 0 - 1;
+    }
+    return i;
+}
+
+// A program a Terminal ran in the background asks for a window of its
+// own (the O op: its task id, and its title): one as term_run's, whose
+// pipes are given to that task as its stdin and stdout (SYS_FDGIVE, which
+// gives only to a task the desktop's own tasks started). Its stdout goes
+// first: once its stdin is live (win_open waits for that) it is drawing
+// here. It is the shell's job, not the desktop's child, so the window
+// knows it has ended by the pipe, and closing the window ends it.
+static void term_adopt(int pid, char *title) {
+    int i, ok, pin[2], pout[2];
+    struct win *w;
+    struct term *t;
+    char name[48];
+    ui_ncpy(name, title && *title ? title : "Program", 45);
+    i = win_open(K_TERM, name, TG_W + 2 * BORDER, TG_H + 2 * BORDER + TITLE_H + 1, sizeof(struct term));
+    if (i < 0) return;
+    w = win_get(i);
+    w->resizable = 0;
+    t = T(w);
+    t->win = i;
+    t->bare = 1;
+    t->adopted = 1;
+    t->pid = pid;
+    t->ended = 1;                 // until it has its pipes
+    if (!(t->g = tg_new(i))) { win_close(i); return; }
+    t->g->apc = apc; t->g->ctx = (char *)t;
+    ok = 0;
+    if (upipe(pin) == 0) {
+        if (upipe(pout) == 0) {
+            ucloexec(pin[1], 1); ucloexec(pout[0], 1);
+            ok = ufdgive(pid, pout[1], STDOUT) >= 0 && ufdgive(pid, pin[0], STDIN) >= 0;
+            uclose(pout[1]);
+            if (ok) t->out_r = pout[0];
+            else uclose(pout[0]);
+        }
+        uclose(pin[0]);
+        if (ok) t->in_w = pin[1];
+        else uclose(pin[1]);
+    }
+    // no pipes, or not a task of ours: its win_open gives up waiting
+    if (!ok) { win_close(i); return; }
+    t->ended = 0;
+}
+
+// The window is going: stop the job running in it, then the shell.
+void term_close(struct win *w) {
+    struct term *t;
+    t = T(w);
+    lk_drop(t);
+    if (t->g) { tg_free(t->g); t->g = 0; }
+    if (t->ended) return;
+    uintr(t->pid);
+    ukill(t->pid, SIGTERM);
+    uclose(t->in_w);
+    uclose(t->out_r);
+    if (!t->adopted) uwait(t->pid);
+    t->ended = 1;
+}
+
+// Output waiting in the pipe; never blocks.
+void term_tick(struct win *w) {
+    struct term *t;
+    int n, k, got, prompt;
+    t = T(w);
+    if (t->ended) return;
+    if (t->gfx && t->fit) follow(t, w);
+    n = uavail(t->out_r);
+    got = 0;
+    // Take everything the program has written before drawing: a full-screen
+    // program writes a whole frame at once, and drawing half of one is flicker.
+    while (n > 0 && got < 65536) {
+        if (n > IOBUF) n = IOBUF;
+        n = uread(t->out_r, iobuf, n);
+        if (n <= 0) break;
+        got = got + n;
+        tg_feed(t->g, iobuf, n);
+        // the shell's prompt ends "$ " (c4ix-sh -p) and is the last thing it writes
+        prompt = !t->bare && n >= 2 && iobuf[n - 2] == '$' && iobuf[n - 1] == ' ';
+        // The shell's prompt is back: whatever made this a canvas, or took
+        // the keys, has ended. What was sent to it and not read -- a frame
+        // ack, a key let go -- goes with it, as on a Ctrl-C: the shell
+        // would read it next.
+        if (t->gfx && prompt) { gfx_mode(t, 0); udiscard(t->in_w); }
+        if (prompt) t->raw = 0;
+        // ... and time to type a waiting command
+        if (t->pending[0] && prompt) {
+            k = ui_len(t->pending);
+            tg_say(t->g, t->pending);
+            t->pending[k] = 10;
+            write(t->in_w, t->pending, k + 1);
+            tg_echo(t->g, 10);
+            t->pending[0] = 0;
+        }
+        n = uavail(t->out_r);
+    }
+    if (n < 0) {
+        // every writer is gone: the shell exited
+        uclose(t->in_w);
+        uclose(t->out_r);
+        if (!t->adopted) uwait(t->pid);
+        t->ended = 1;
+        // a program's own window goes with it, unless it shows what the program wrote
+        if (t->bare && (t->gfx || (!t->g->cx && !t->g->cy && !t->g->sbn))) { win_close(t->win); return; }
+        if (t->bare) tg_say(t->g, "\n[the program has ended; close this window]\n");
+        else tg_say(t->g, "\n[the shell has exited; close this window]\n");
+    }
+}
+
+// A key let go: only a canvas hears it.
+void term_keyup(struct win *w, int code, int ch, int mods) {
+    struct term *t;
+    t = T(w);
+    if (t->ended || !t->gfx) return;
+    event(t, 'K', code, ch, mods);
+}
+
+// The desktop has drawn: a framebuffer it showed has been read.
+void term_drawn(struct win *w) {
+    struct term *t;
+    t = T(w);
+    if (!t->fpend) return;
+    t->fpend = 0;
+    if (t->gfx && !t->ended) event(t, 'f', 0, 0, 0);
+}
+
+// The clipboard typed in, as keys: a line at a time down the pipe, as
+// typing it would send them; to a canvas, each as a key.
+static void paste(struct win *w, struct term *t) {
+    char *s;
+    int n, k, c;
+    s = wk_clip_get(&n);
+    k = 0;
+    while (k < n && !t->ended) {
+        c = s[k] & 255;
+        if (c == 9) c = ' ';
+        if (t->gfx) { if (c == 10) event(t, 'k', KEY_ENTER, 13, 0); else if (c >= 32 && c < 127) event(t, 'k', 0, c, 0); }
+        else if (t->raw) { tmp[0] = c == 10 ? 13 : c; if (c == 10 || (c >= 32 && c < 127)) write(t->in_w, tmp, 1); }
+        else if (c == 10) { if ((c = tg_key(t->g, KEY_ENTER, 0, 0)) > 0) write(t->in_w, t->g->line, c); }
+        else if (c >= 32 && c < 127) tg_key(t->g, 0, c, 0);
+        ++k;
+    }
+    wk_invalidate(w->id, 0, 0, 0, 0);
+}
+
+void term_command(struct win *w, int menu, int item) {
+    struct term *t;
+    t = T(w);
+    // a program's own window: its menus are the program's
+    if (t->bare) { if (!t->ended && t->gfx) event(t, 'c', menu, item, 0); return; }
+    if (!t->g) return;
+    if (item == T_COPY) { if (tg_copy(t->g, 0)) tg_unselect(t->g); }
+    else if (item == T_COPYALL) tg_copy(t->g, 1);
+    else if (item == T_ALL) tg_select_all(t->g);
+    else if (item == T_PASTE && !t->ended) { tg_unselect(t->g); paste(w, t); }
+}
+
+// Raw keys (t->raw): what a VT100 sends for a key that is not a character,
+// after its ESC, or 0
+static char *raw_tail(int code) {
+    if (code == KEY_UP) return "[A";
+    if (code == KEY_DOWN) return "[B";
+    if (code == KEY_RIGHT) return "[C";
+    if (code == KEY_LEFT) return "[D";
+    if (code == KEY_HOME) return "[H";
+    if (code == KEY_END) return "[F";
+    if (code == KEY_PGUP) return "[5~";
+    if (code == KEY_PGDN) return "[6~";
+    if (code == KEY_INS) return "[2~";
+    if (code == KEY_DEL) return "[3~";
+    if (code == KEY_F2 - 1) return "OP";
+    if (code == KEY_F2) return "OQ";
+    if (code == KEY_F2 + 1) return "OR";
+    if (code == KEY_F4) return "OS";
+    if (code == KEY_F5) return "[15~";
+    if (code == KEY_F5 + 1) return "[17~";
+    if (code == KEY_F5 + 2) return "[18~";
+    if (code == KEY_F5 + 3) return "[19~";
+    if (code == KEY_F5 + 4) return "[20~";
+    if (code == KEY_F5 + 5) return "[21~";
+    if (code == KEY_F5 + 6) return "[23~";
+    if (code == KEY_F5 + 7) return "[24~";
+    return 0;
+}
+
+// ... and the key itself down the program's stdin: a character as it is,
+// Enter as CR and Backspace as DEL, Ctrl with a letter as its control
+// code, Alt with ESC in front
+static void raw_key(struct term *t, int code, int ch, int mods) {
+    char b[8];
+    char *s;
+    int n, c;
+    n = 0;
+    if (!ch && (s = raw_tail(code))) {
+        b[0] = 27; n = 1;
+        while (*s && n < 7) { b[n] = *s; ++n; ++s; }
+        write(t->in_w, b, n);
+        return;
+    }
+    c = ch;
+    if (!ch && (code == KEY_ENTER || code == KEY_BACK || code == KEY_TAB || code == KEY_ESC)) c = code;
+    if (c == 10) c = 13;
+    if (c == 8) c = 127;
+    if ((mods & M_CTRL) && code >= 'A' && code <= 'Z') c = code - 64;
+    if (c <= 0 || c > 255) return;
+    if (mods & M_ALT) { b[n] = 27; ++n; }
+    b[n] = c; ++n;
+    write(t->in_w, b, n);
+}
+
+// the letter key, with Ctrl and Shift held
+static int ctrl_shift(int code, int ch, int mods, int c) {
+    return (mods & M_CTRL) && (mods & M_SHIFT) && (code == c || ch == c || ch == c + 32);
+}
+
+// A key typed here.
+void term_key(struct win *w, int code, int ch, int mods) {
+    struct term *t;
+    int n;
+    t = T(w);
+    if (t->g && (ctrl_shift(code, ch, mods, 'C') || ((mods & M_CTRL) && code == KEY_INS) ||
+                 (t->g->sel && (mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 'C')))) { term_command(w, 0, T_COPY); return; }
+    if (t->g && (ctrl_shift(code, ch, mods, 'V') || ((mods & M_SHIFT) && code == KEY_INS))) { term_command(w, 0, T_PASTE); return; }
+    if (t->ended) return;
+    // the modifiers alone are a canvas's business; anything else typed drops a selection
+    if (code == 16 || code == 17 || code == 18) { if (t->gfx) event(t, 'k', code, ch, mods); return; }
+    tg_unselect(t->g);
+    // a program's own window: Ctrl-C ends the program, and with it the window
+    if (t->bare && (mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 'C')) { ukill(t->pid, SIGINT); return; }
+    if ((mods & M_CTRL) && (ch == 'c' || ch == 'C' || code == 'C')) {
+        // What the program wrote before the interrupt shows first, as a
+        // tty's output queue would have it: drawn after the ^C, the last
+        // frame of a full-screen program (top) would clear it away.
+        term_tick(w);
+        if (t->ended) return;
+        if (t->gfx) gfx_mode(t, 0);
+        t->raw = 0;
+        tg_interrupt(t->g);
+        // Lines typed at the job and not read by it go with it, as a tty
+        // flushes its input on an interrupt: left in the pipe, the shell
+        // would read them next and run them as commands of its own.
+        udiscard(t->in_w);
+        // nothing running under the shell: an empty line brings a fresh prompt
+        if (uintr(t->pid) <= 0) write(t->in_w, "\n", 1);
+        return;
+    }
+    // raw keys: all of them the program's, Ctrl-L too; the screen, not the scrollback
+    if (t->raw && !t->gfx) { if (t->g->view) { t->g->view = 0; wk_redraw_all(); } raw_key(t, code, ch, mods); return; }
+    if ((mods & M_CTRL) && (ch == 'l' || ch == 'L' || code == 'L')) { tg_clear_screen(t->g); return; }
+    if (t->gfx) { event(t, 'k', code, ch, mods); return; }
+    if ((n = tg_key(t->g, code, ch, mods)) > 0) write(t->in_w, t->g->line, n);
+}
+
+void term_mouse(struct win *w, int ev, int x, int y, int cw, int ch) {
+    struct term *t;
+    int b;
+    t = T(w);
+    if (!t->g) return;
+    if (!t->gfx) {
+        // the grid selects, its scroll bar scrolls
+        if (ev == E_WHEEL || ui_scroll_active() || (ev != E_UP && x >= TG_W)) { tg_mouse(t->g, ev, x, y); return; }
+        tg_select(t->g, ev, x - 2, y - 2, (wk.mods & M_ALT) != 0);
+        return;
+    }
+    if (t->ended) return;
+    x = x - 2; y = y - 2;                          // inside the sunken edge
+    if (x < 0) x = 0; if (y < 0) y = 0;
+    if (x >= t->gw) x = t->gw - 1; if (y >= t->gh) y = t->gh - 1;
+    t->mx = x; t->my = y;
+    // each button as it is (0 the left, 1 the middle, 2 the right), and a
+    // move with those held, a bit each
+    b = wm_button & 7;
+    if (ev == E_DOWN) { t->buttons = t->buttons | (1 << b); event(t, 'd', x, y, b); }
+    else if (ev == E_UP) { if (t->buttons & (1 << b)) event(t, 'u', x, y, b); t->buttons = t->buttons & ~(1 << b); }
+    else if (ev == E_MOVE) event(t, 'm', x, y, t->buttons);
+}
+
+// Over a canvas that asked for the mouse locked (L 1), the pointer says
+// "click to capture" (GUI_PTR_LOCK): the page locks the mouse to the
+// display at the next click (libjs/display.js). Elsewhere a text beam.
+int term_pointer(struct win *w, int x, int y, int cw, int ch) {
+    struct term *t;
+    t = T(w);
+    if (t->gfx && t->lock && !t->ended && x >= 2 && y >= 2 && x < t->gw + 2 && y < t->gh + 2) return PTR_LOCK;
+    return PTR_TEXT;
+}
+
+// ---- the mouse locked to a canvas ---------------------------------------------------
+//
+// Locked, the page sends the mouse's motion as GUI_EV_REL (the desktop's
+// event mask asks for it, shell.c), and the canvas whose window had the
+// focus when it began has it, as `r dx,dy,buttons` (window.h); its buttons
+// go there too, as d and u at the pointer's place, kept here by adding up
+// the motion. A plain move again says the page let it go (Esc, which the
+// browser keeps for itself); the window losing the focus, the canvas
+// going, its program ending or L 0 let it go from this side, all buttons
+// let go first. Then a click locks it again. grin's game windows do the
+// same (src/grin/fwin.c).
+static int lk_win;                 // the window the mouse is locked to, or 0
+
+static struct term *lk_term() {
+    struct win *w;
+    if (!lk_win || !(w = win_get(lk_win)) || w->kind != K_TERM) return 0;
+    return T(w);
+}
+
+// let the lock go, if it is T's: its buttons up, the display told
+static void lk_drop(struct term *t) {
+    int b;
+    if (!lk_win || !t || t->win != lk_win) return;
+    b = 0;
+    while (b < 3) {
+        if ((t->buttons & (1 << b)) && !t->ended && t->gfx) event(t, 'u', t->mx, t->my, b);
+        ++b;
+    }
+    t->buttons = 0;
+    lk_win = 0;
+    desk_unlock();
+}
+
+int term_lock_event(int *ev) {
+    struct term *t;
+    struct win *w;
+    int f, b;
+    if (ev[0] == GUI_EV_REL) {
+        if (!lk_win) {
+            // the page has just locked it: the focused canvas's, if it asked
+            f = wk_focus();
+            if (f && (w = win_get(f)) && w->kind == K_TERM && T(w)->gfx && T(w)->lock && !T(w)->ended && !wk_modal() && !wk_menu_open())
+                lk_win = f;
+            else { desk_unlock(); return 1; }       // nobody's: let it go
+        }
+        if (!(t = lk_term())) { lk_win = 0; desk_unlock(); return 1; }
+        t->mx = t->mx + ev[1]; t->my = t->my + ev[2];
+        if (t->mx < 0) t->mx = 0; if (t->my < 0) t->my = 0;
+        if (t->mx >= t->gw) t->mx = t->gw - 1; if (t->my >= t->gh) t->my = t->gh - 1;
+        if (ev[1] || ev[2]) event(t, 'r', ev[1], ev[2], t->buttons);
+        return 1;
+    }
+    if (!lk_win) return 0;
+    if (!(t = lk_term())) { lk_win = 0; desk_unlock(); return 0; }
+    // a plain move: the page let it go (Esc); the kit has the mouse again
+    if (ev[0] == GUI_EV_MOVE) { t->buttons = 0; lk_win = 0; wk_repoint(); return 0; }
+    b = ev[3] & 7;
+    if (ev[0] == GUI_EV_DOWN) { t->buttons = t->buttons | (1 << b); event(t, 'd', t->mx, t->my, b); return 1; }
+    if (ev[0] == GUI_EV_UP) {
+        if (t->buttons & (1 << b)) event(t, 'u', t->mx, t->my, b);
+        t->buttons = t->buttons & ~(1 << b);
+        return 1;
+    }
+    if (ev[0] == GUI_EV_WHEEL) return 1;
+    // the page lost the keyboard, and with it the lock
+    if (ev[0] == GUI_EV_FOCUS && !ev[1]) lk_drop(t);
+    return 0;
+}
+
+// each pass: the lock let go once its canvas is no longer the one to have it
+void term_lock_tick() {
+    struct term *t;
+    if (!lk_win) return;
+    if (!(t = lk_term())) { lk_win = 0; desk_unlock(); return; }
+    if (t->ended || !t->gfx || !t->lock || wk_focus() != lk_win || wk_modal() || wk_menu_open()) lk_drop(t);
+}
+
+void term_draw(struct win *w, int ox, int oy, int cw, int ch, int focused) {
+    struct term *t;
+    t = T(w);
+    // only the canvas being drawn again (a frame): it covers all of that
+    if (t->gfx && d_damage_within(ox + 2, oy + 2, t->gw, t->gh)) { gfx_draw(t, ox + 2, oy + 2); return; }
+    d_rect(ox, oy, cw, ch, C_DARK);
+    if (t->gfx) { d_bevel(ox, oy, t->gw + 4, t->gh + 4, B_SUNKEN); gfx_draw(t, ox + 2, oy + 2); return; }
+    d_bevel(ox, oy, TG_W, TG_H, B_SUNKEN);
+    if (t->g) tg_draw(t->g, ox + 2, oy + 2, focused && !t->ended);
+}

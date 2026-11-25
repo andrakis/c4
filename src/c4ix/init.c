@@ -1,0 +1,435 @@
+//
+// C4IX init: the first task, and the kernel's command line.
+//
+// With no arguments it boots to a shell, because that is what anyone
+// running this actually wants; `--demo` asks for the guided tour and
+// `--help` lists the rest. init_usage() is the authority on all of
+// it -- keep the two in step.
+//
+// The tour has three acts:
+//   1. Cooperative ping/pong -- two tasks yielding explicitly. Runs
+//      under sched_lock so the interleaving is pure round-robin on
+//      both hosts and the output pins exactly.
+//   2. Preemption proof (c4m only) -- two busy tasks that never
+//      yield, each sampling the other's progress counter halfway
+//      through its own loop. Only preemption can interleave them, so
+//      "saw the other side mid-run" is the boolean that gets printed
+//      -- no interleaving-sensitive output, the pin survives codegen
+//      changes shifting cycle counts.
+//   3. Spawn -- load a .c4r from the host filesystem (kernel argv[1]
+//      if present), run it as a task, wait for its exit code.
+//
+
+#include "c4ix.h"
+
+static int pp_rounds;
+
+static int ping_task(int argc, int argv) {
+    int i;
+    // Masked, so the only switch is the yield: the mask is each task's
+    // own (sched.c), and init's does not reach this one -- unmasked, a
+    // preemption tick landing between the print and the yield reordered
+    // the lines, as code anywhere moved the cycle counts.
+    sched_lock();
+    i = 0;
+    while (i < argc) {
+        kprintf("ping %d\n", i);
+        sched_yield();
+        ++i;
+    }
+    sched_unlock();
+    return 100 + argc;
+}
+
+static int pong_task(int argc, int argv) {
+    int i;
+    // Masked, so the only switch is the yield: the mask is each task's
+    // own (sched.c), and init's does not reach this one -- unmasked, a
+    // preemption tick landing between the print and the yield reordered
+    // the lines, as code anywhere moved the cycle counts.
+    sched_lock();
+    i = 0;
+    while (i < argc) {
+        kprintf("pong %d\n", i);
+        sched_yield();
+        ++i;
+    }
+    sched_unlock();
+    return 200 + argc;
+}
+
+// busy tasks: no yields, just work and one mid-run sample of the
+// other side's progress
+static int busy_a_n;
+static int busy_b_n;
+static int busy_a_saw;
+static int busy_b_saw;
+
+enum { BUSY_SPIN = 60000 };
+
+static int busy_a(int argc, int argv) {
+    int i;
+    i = 0;
+    while (i < BUSY_SPIN) {
+        busy_a_n = busy_a_n + 1;
+        if (i == BUSY_SPIN / 2) busy_a_saw = busy_b_n;
+        ++i;
+    }
+    return 0;
+}
+
+static int busy_b(int argc, int argv) {
+    int i;
+    i = 0;
+    while (i < BUSY_SPIN) {
+        busy_b_n = busy_b_n + 1;
+        if (i == BUSY_SPIN / 2) busy_b_saw = busy_a_n;
+        ++i;
+    }
+    return 0;
+}
+
+// ---- X3: the IO layer, doing a shell's job by hand ----
+
+// A RAM file is ordinary storage behind the same fd calls: open it,
+// write it, close it, open it again and read it back.
+static void io_ramfile() {
+    char buf[64];
+    int fd, n;
+
+    if ((fd = sys_open("/tmp/note", C4IX_O_WRONLY + C4IX_O_CREAT)) < 0) {
+        kputs("init: cannot create /tmp/note\n");
+        return;
+    }
+    sys_write(fd, "written to a ram file\n", 22);
+    sys_close(fd);
+
+    if ((fd = sys_open("/tmp/note", C4IX_O_RDONLY)) < 0) {
+        kputs("init: cannot reopen /tmp/note\n");
+        return;
+    }
+    n = sys_read(fd, buf, 64);
+    sys_close(fd);
+    kprintf("init: read %d bytes back: ", n);
+    sys_write(FD_STDOUT, buf, n);
+}
+
+// Redirection, exactly as a shell does it and with no fork in sight:
+// point our own fd 1 at a file, spawn, then put fd 1 back. The child
+// inherits the table, so its output lands in the file -- and the
+// child here is c4ix-hello.c4r, which calls printf directly and has
+// never heard of C4IX. Under protected mode that printf traps and
+// the kernel writes it wherever fd 1 now points.
+static void io_redirect(char *prog) {
+    struct task *t;
+    int fd, saved;
+
+    if ((fd = sys_open("/tmp/out", C4IX_O_WRONLY + C4IX_O_CREAT + C4IX_O_TRUNC)) < 0) {
+        kputs("init: cannot create /tmp/out\n");
+        return;
+    }
+    // Announce this BEFORE the redirection, not after. From here until
+    // the child exits, everything it prints goes into the file -- so
+    // if the caller's program list is short enough that something
+    // interactive lands in this slot, the terminal falls silent with
+    // no explanation and looks hung. It is not hung; the child is
+    // waiting to be typed at, and its prompt went into /tmp/out.
+    kprintf("init: running '%s' with fd 1 redirected into /tmp/out\n", prog);
+    saved = sys_dup(FD_STDOUT);
+    sys_dup2(fd, FD_STDOUT);
+    t = task_spawn(prog, 1, 0);
+    sys_dup2(saved, FD_STDOUT);      // restore before anything prints
+    sys_close(saved);
+    sys_close(fd);
+    if (!t) { kprintf("init: spawn of '%s' failed\n", prog); return; }
+    task_wait(t);
+
+    kprintf("init: '%s' ran with fd 1 redirected; /tmp/out holds %d bytes:\n",
+        prog, vfs_size("/tmp/out"));
+    vfs_dump("/tmp/out");
+    // Without protected mode a raw printf never reaches the kernel,
+    // so there is nothing to redirect. Saying so beats an empty file
+    // that looks like a bug.
+    if (vfs_size("/tmp/out") == 0)
+        kputs("init: (empty: this host has no protected mode, so a raw printf bypasses fd 1)\n");
+}
+
+// A pipeline: writer's fd 1 and reader's fd 0 are the two ends of
+// one pipe. The reader blocks on the empty pipe until the writer
+// produces -- and its read syscall is restarted, not resumed.
+static void io_pipeline(char *wprog, char *rprog) {
+    struct task *w, *r;
+    int p[2], saved_out, saved_in;
+    char *wargv[4];
+
+    if (sys_pipe(p) < 0) { kputs("init: pipe failed\n"); return; }
+
+    wargv[0] = wprog;
+    wargv[1] = "piped";
+    wargv[2] = "through";
+    wargv[3] = 0;
+
+    saved_out = sys_dup(FD_STDOUT);
+    sys_dup2(p[1], FD_STDOUT);
+    w = task_spawn(wprog, 3, (int)wargv);
+    sys_dup2(saved_out, FD_STDOUT);
+    sys_close(saved_out);
+
+    // The write end must be gone from OUR table before the reader is
+    // spawned, or the reader inherits a copy of it and then waits
+    // forever for an end of file it is itself holding open. Every
+    // shell has this bug once.
+    sys_close(p[1]);
+
+    saved_in = sys_dup(FD_STDIN);
+    sys_dup2(p[0], FD_STDIN);
+    r = task_spawn(rprog, 1, 0);
+    sys_dup2(saved_in, FD_STDIN);
+    sys_close(saved_in);
+    sys_close(p[0]);
+
+    if (!w || !r) { kputs("init: pipeline spawn failed\n"); return; }
+    task_wait(w);
+    task_wait(r);
+}
+
+// X4: hand the whole job over to a shell. init stops being the thing
+// that wires up pipes and redirections by hand -- it just starts
+// c4ix-sh on a script, and the shell does all of it through
+// syscalls, from userland, behind protected mode.
+static void init_shell(char *shell, char *script) {
+    struct task *t;
+    char *sargv[3];
+
+    sargv[0] = shell;
+    sargv[1] = script;
+    sargv[2] = 0;
+
+    kprintf("init: --- X4: handing off to %s %s ---\n", shell, script);
+    if (!(t = task_spawn(shell, 2, (int)sargv))) {
+        kprintf("init: cannot start %s\n", shell);
+        return;
+    }
+    kprintf("init: shell exited %d after %d syscalls\n",
+        task_wait(t), task_last_syscalls);
+}
+
+static void init_io(char **av, int argc) {
+    kputs("init: --- X3: files, redirection, pipes ---\n");
+    io_ramfile();
+    if (argc > 1) io_redirect(av[1]);
+    if (argc > 4) io_pipeline(av[3], av[4]);
+    if (argc > 6) init_shell(av[5], av[6]);
+}
+
+// Exact match, because the options are words rather than clusters of
+// letters and a prefix match would quietly accept nonsense.
+static int init_is(char *s, char *opt) {
+    while (*s) {
+        if (*s != *opt) return 0;
+        ++s;
+        ++opt;
+    }
+    return *opt == 0;
+}
+
+// The demonstrations used to be what you got for asking for nothing,
+// which had the common case behind the uncommon one -- and worse, the
+// demonstrations take their programs POSITIONALLY, so a short list
+// put whatever you named into every role in turn. Booting to a shell
+// now needs no arguments at all, and the tour is behind --demo.
+static void init_usage() {
+    kputs("c4ix -- a small Unix-like kernel for the C4 virtual machine\n"
+          "\n"
+          "usage: c4ix.c4r [OPTION] [PROGRAM [ARGUMENT]...]\n"
+          "\n"
+          "  (no arguments)     boot to an interactive shell\n"
+          "  PROGRAM [ARG]...   boot, run PROGRAM with ARGs, shut down\n"
+          "  --demo IMAGE...    run the built-in demonstrations, below\n"
+          "  -h, --help         print this and shut down\n"
+          "  -q                 the boot's lines in the kernel log only;\n"
+          "                     on libjs they are on the console too\n"
+          "  -v                 the kernel log on the console as well,\n"
+          "                     as the kernel writes it (dmesg reads it\n"
+          "                     either way)\n"
+          "\n"
+          "PROGRAM is an image path as the host filesystem sees it. The\n"
+          "SHELL expands a bare name to c4ix-NAME.c4r or NAME.c4r; init\n"
+          "does not, so name the image in full here.\n"
+          "\n"
+          "--demo takes six images and uses each for a fixed role:\n"
+          "  1  calls printf directly -- proves redirection reaches a\n"
+          "     program that has never heard of C4IX\n"
+          "  2  uses libc4ix syscalls\n"
+          "  3  writer and 4 reader of a pipeline\n"
+          "  5  a shell, and 6 a script for it to run\n"
+          "Fewer than six still runs the stages it has arguments for,\n"
+          "so a short list puts one image into several roles.\n"
+          "\n"
+          "  c4ix.c4r --demo c4ix-hello.c4r c4ix-uhello.c4r c4ix-echo.c4r \\\n"
+          "           c4ix-wc.c4r c4ix-sh.c4r src/c4ix/user/test.sh\n"
+          "\n"
+          "  c4ix.c4r --desktop   the web page's boot: the root archive\n"
+          "                       unpacks first, with a loading screen,\n"
+          "                       then the shell runs \"desktop &\" and\n"
+          "                       \"top\", as if they were typed\n"
+          "  c4ix.c4r -e CMD      the shell runs CMD first, as if it were\n"
+          "                       typed (up to four, after --desktop's own\n"
+          "                       if both are given)\n");
+}
+
+// The guided tour. argc/av are shifted past --demo, so av[1] is the
+// first image and every stage below indexes exactly as documented.
+static int init_demo(int argc, char **av) {
+    struct task *a, *b;
+    int ra, rb, n;
+
+    kprintf("init: c4ix init v1 on %s\n", host_name());
+
+    // act 1: cooperative round-robin, preemption masked for an exact
+    // interleaving pin
+    sched_lock();
+    pp_rounds = 3;
+    a = task_create("ping", (int)&ping_task, pp_rounds, 0);
+    b = task_create("pong", (int)&pong_task, pp_rounds, 0);
+    kprintf("init: ping id %d, pong id %d, tasks %d\n", a->id, b->id, task_count());
+    ra = task_wait(a);
+    rb = task_wait(b);
+    kprintf("init: ping exited %d, pong exited %d\n", ra, rb);
+    sched_unlock();
+
+    // act 2: preemption, by the cycle interrupt
+    a = task_create("busy_a", (int)&busy_a, 0, 0);
+    b = task_create("busy_b", (int)&busy_b, 0, 0);
+    ra = task_wait(a);
+    rb = task_wait(b);
+    kprintf("init: busy done %d %d, preempted %d %d\n",
+        busy_a_n == BUSY_SPIN, busy_b_n == BUSY_SPIN,
+        busy_a_saw > 0, busy_b_saw > 0);
+
+    // act 3: spawn programs from the host filesystem. Each runs as
+    // userland -- behind protected mode where the host provides it --
+    // so every one of their syscalls passes through sys.c, whether
+    // the program asks through libc4ix or just calls printf.
+    // Kernel argv: [1] a raw-printf program, [2] a libc4ix program,
+    // [3] and [4] the two halves of the X3 pipeline. The first two
+    // run standalone here; the rest are driven by init_io below.
+    if (argc > 1) {
+        n = 1;
+        while (n < argc && n < 3) {
+            if ((a = task_spawn(av[n], argc - n, (int)(av + n)))) {
+                kprintf("init: spawned '%s' as task %d (%s)\n", a->name, a->id,
+                    a->privs == PRIV_USER ? "protected" : "unprotected");
+                ra = task_wait(a);
+                kprintf("init: '%s' exited %d after %d syscalls\n",
+                    av[n], ra, task_last_syscalls);
+            } else {
+                kprintf("init: spawn of '%s' failed\n", av[n]);
+            }
+            ++n;
+        }
+        init_io(av, argc);
+    }
+
+    return 0;
+}
+
+int init_main(int argc, int argv) {
+    struct task *a, *v;
+    char **av;
+    char *shargv[16];
+    char *vav[3];
+    char *cmds[4];
+    int i, desktop, shargc, ncmd, k, vrc;
+
+    av = (char **)argv;
+    i = 1;
+    desktop = 0;
+    ncmd = 0;
+
+    if (i < argc) {
+        if (init_is(av[i], "-h") || init_is(av[i], "--help")) {
+            init_usage();
+            return 0;
+        }
+        // Shift past the flag so the stages index from av[1] exactly
+        // as the help text describes.
+        if (init_is(av[i], "--demo")) return init_demo(argc - i, av + i);
+        // -q and -v are the kernel's (boot.c): its log on the console
+        // not even while booting, or always. (-q once meant "skip the
+        // demonstrations", which are opt-in now.)
+        while (i < argc && (init_is(av[i], "-q") || init_is(av[i], "-v"))) ++i;
+        // --desktop (the browser's boot): the shell starts top in the
+        // background on the console, then the desktop on the display,
+        // as typing "top &" and "desktop" at the first prompt would
+        if (i < argc && init_is(av[i], "--desktop")) { desktop = 1; ++i; }
+        // -e CMD: the shell runs CMD as if it were typed (the web page's
+        // "Wolfenstein 3D on C4IX" boots the console with -e "wolf3d --direct")
+        while (i + 1 < argc && ncmd < 4 && init_is(av[i], "-e")) { cmds[ncmd++] = av[i + 1]; i += 2; }
+    }
+
+    // Nothing left to run: the default, and the reason the default is
+    // worth having.
+    if (i >= argc) {
+        // Populate the VFS tree from c4ix.vfs.txt (if present on
+        // disk) before the shell starts, so ls/cat show real content
+        // from the first prompt. Not fatal if missing or it fails -
+        // vfsload says why and the tree is simply left at defaults.
+        // --desktop: vfsload waits for the root archive too, with the
+        // loading screen on the display, so the desktop and top start
+        // on a whole filesystem (and the console's boot lines can be read)
+        vav[0] = "c4ix-vfsload.c4r";
+        vav[1] = "-w";
+        vav[2] = 0;
+        vrc = (v = task_spawn(vav[0], desktop ? 2 : 1, (int)vav)) ? task_wait(v) : 0;
+        if (vrc == 3 && desktop) {
+            // the system did not fit: say so and stop, rather than start
+            // a desktop that falls over on what is missing
+            kprintf("c4ix: out of memory: the system does not fit in this machine's memory.\n");
+            kprintf("c4ix: the boot stops here. Give the machine more memory and boot again.\n");
+            return 3;
+        }
+        if (vrc == 4 && desktop) {
+            // the root archive could not be read (persist said why): no
+            // desktop on a tree that is not there
+            kprintf("c4ix: the root archive could not be read, so the system's files are not there.\n");
+            kprintf("c4ix: the boot stops here.\n");
+            return 4;
+        }
+        boot_done();
+        con_booted();
+
+        shargv[0] = "c4ix-sh.c4r";
+        shargv[1] = 0;
+        shargc = 1;
+        // The desktop in the background and top in front, not the other
+        // way round: the console's foreground job is the one its Ctrl-C
+        // stops, and a person at the console wants top gone and the prompt
+        // back -- not the desktop gone, with top still clearing the screen
+        // over every command they type.
+        // And persist keeps what changes, every minute, where the page
+        // gave it a drive to keep it on (persist.c says nothing if not).
+        if (desktop) {
+            shargv[1] = "-e"; shargv[2] = "persist -d 60 &";
+            shargv[3] = "-e"; shargv[4] = "desktop &"; shargv[5] = "-e"; shargv[6] = "top"; shargv[7] = 0;
+            shargc = 7;
+        }
+        for (k = 0; k < ncmd; ++k) { shargv[shargc++] = "-e"; shargv[shargc++] = cmds[k]; }
+        shargv[shargc] = 0;
+        if (!(a = task_spawn(shargv[0], shargc, (int)shargv))) {
+            kprintf("init: cannot start '%s'\n", shargv[0]);
+            return 1;
+        }
+        task_wait(a);
+        return 0;
+    }
+
+    boot_done();
+    con_booted();
+    if (!(a = task_spawn(av[i], argc - i, (int)(av + i)))) {
+        kprintf("init: spawn of '%s' failed\n", av[i]);
+        return 1;
+    }
+    task_wait(a);
+    return 0;
+}

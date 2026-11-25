@@ -1,0 +1,102 @@
+// test-c4ix-cpu.mjs - C4IX's CPU accounting, as top reports it.
+//
+// docs/c4ix-cpu.md, steps 3 and 4. Every share must be within 0..100,
+// and a screen's rows -- the tasks, the idle task, and System -- must
+// add up to exactly 100. An idle machine is at least 95% idle, which it
+// only is once the time the kernel naps is counted; and a busy one does
+// not overflow, as a task that ran 21M cycles in a second once did.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createMachine, boot } from '../boot.js';
+import { typeBytes } from '../keys.js';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = fileURLToPath(new URL('../../src/c4bb/images/', import.meta.url));
+const index = JSON.parse(readFileSync(join(ROOT, 'disk/index.json'), 'utf8'));
+class LazyDisk extends Map {
+  constructor(idx) { super(); this.sizes = new Map(idx); }
+  has(n) { return super.has(n) || this.sizes.has(n); }
+  get(n) {
+    if (super.has(n)) return super.get(n);
+    if (!this.sizes.has(n)) return undefined;
+    const b = new Uint8Array(readFileSync(join(ROOT, 'disk', n))); super.set(n, b); return b;
+  }
+}
+const out = [];
+const vm = createMachine({ arenaMb: 64, mhz: 100, drives: [{ files: new LazyDisk(index), writable: false, sink: null }], onByte: b => out.push(b) });
+boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
+const text = (from = 0) => Buffer.from(out.slice(from)).toString('latin1');
+const until = (cond, budget) => { for (let i = 0; i < budget && !cond(); i++) vm.run(2e6); return cond(); };
+let fail = 0;
+const check = (ok, what, extra = '') => { console.log(`test-c4ix-cpu: ${what} ${ok ? 'OK' : 'FAILED'}${!ok && extra ? '\n' + extra : ''}`); if (!ok) fail = 1; };
+const type = s => typeBytes(vm, new TextEncoder().encode(s));
+
+
+// top -b N's screens, from what it printed after output offset n0: each
+// task's row, and sy, the kernel's share for them all, from %Cpu(s).
+// PID PPID USER NI S [P, with several CPUs] RES %CPU %MEM TIME+ COMMAND
+const rowre = smp => new RegExp('^\\s*(\\d+)\\s+(\\d+)\\s+(user|kernel)\\s+(-|-?\\d+)\\s+[RSWDZ?]\\s+' +
+  (smp ? '(?:-|\\d+)\\s+' : '') + '(\\d+)\\s+(-?\\d+)\\s+(?:-|\\d+)\\s+\\S+\\s+(\\S.*?)\\s*$');
+const top = n => {
+  const n0 = out.length;
+  type(`top -b ${n}\n`);
+  until(() => (text(n0).match(/^top - up /gm) || []).length >= n && /c4ix:\/\$ *$/.test(text(n0)), 3000);
+  if (process.env.SHOW) console.log(text(n0));
+  return text(n0).split(/^top - (?=up )/m).slice(1).map(s => {
+    const lines = s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split('\n');
+    const row = rowre(!/, 1 CPU,/.test(lines[0]));
+    const rows = lines.map(l => row.exec(l)).filter(Boolean).map(m => ({ id: +m[1], pct: +m[6], name: m[7] }));
+    const cpu = /%Cpu\(s\):\s+(-?\d+) us,\s+(-?\d+) sy,\s+(-?\d+) id/.exec(s);
+    return { s, rows, sys: cpu ? +cpu[2] : null, usage: +(/usage (\d+)%/.exec(s) || [])[1] };
+  });
+};
+const sum = sc => sc.rows.reduce((a, r) => a + r.pct, 0) + sc.sys;
+const valid = sc => sc.rows.length >= 3 && sc.sys !== null && [...sc.rows.map(r => r.pct), sc.sys].every(p => p >= 0 && p <= 100);
+
+check(until(() => text().includes('c4ix:/$'), 3000), 'C4IX boots to its shell');
+// the root archive's unpack first, which would otherwise be busy too
+type('wait 4\n');
+until(() => text().includes('[4] done'), 3000);
+
+// An idle machine is idle: the kernel naps, and the naps count.
+let screens = top(2);
+check(screens.length === 2, 'top prints two screens', screens.map(s => s.s).join(''));
+screens.forEach((sc, k) => {
+  const idle = sc.rows.find(r => r.id === 0);
+  check(valid(sc), `idle, screen ${k + 1}: every share is within 0..100, with a System line`, sc.s);
+  check(sum(sc) === 100, `idle, screen ${k + 1}: the rows add up to 100 (${sum(sc)})`, sc.s);
+  check(idle && idle.pct >= 95 && sc.usage <= 5, `idle, screen ${k + 1}: the idle task has at least 95% (${idle && idle.pct}), usage ${sc.usage}%`, sc.s);
+});
+
+// A busy one: before step 3 a task that ran 21M cycles in a second
+// overflowed, and top showed negative and huge percentages.
+type('c4ix-spin.c4r 1000 > /tmp/spin.txt &\n');
+for (let i = 0; i < 50; i++) vm.run(2e6);
+
+// A user task's __c4_usleep sleeps that task, not the machine: USLP
+// once ran on the host, and raycast's frame cap stopped spin and the
+// desktop with it. 40 frames 50 ms apart take two machine-seconds, and
+// with spin busy beside them the machine never naps through them.
+{
+  const n0 = out.length, ms0 = vm.dev.simMs(), s0 = vm.dev.sleepMs;
+  const c0 = vm.cycle - vm.skipped;
+  type('raycast.c4r 32x12 -d -n 40 -f 50 > /tmp/rc.txt\n');
+  const done = until(() => /c4ix:\/\$/.test(text(n0)), 3000);
+  const ms = vm.dev.simMs() - ms0, slept = vm.dev.sleepMs - s0;
+  const busy = (vm.cycle - vm.skipped - c0) / (ms * 100000);
+  check(done && ms >= 2000, `usleep: raycast -f 50 runs its 40 frames over ${ms} ms`, text(n0));
+  check(slept < ms / 10 && busy > 0.9, `usleep: the machine slept ${slept} ms of them, busy ${(100 * busy).toFixed(0)}%`);
+}
+
+screens = top(3);
+check(screens.length === 3, 'top prints three screens with spin running', screens.map(s => s.s).join(''));
+screens.forEach((sc, k) => {
+  const spin = sc.rows.find(r => /spin/.test(r.name));
+  check(valid(sc), `busy, screen ${k + 1}: every share is within 0..100, with a System line`, sc.s);
+  check(sum(sc) === 100, `busy, screen ${k + 1}: the rows add up to 100 (${sum(sc)})`, sc.s);
+  check(spin && spin.pct > 0, `busy, screen ${k + 1}: spin is there, and busy`, sc.s);
+  // the idle task runs only when nothing else can (step 5): it used to
+  // take every other turn, and two thirds of the machine with it
+  check(sc.usage >= 95, `busy, screen ${k + 1}: the machine is busy, not idling (usage ${sc.usage}%)`, sc.s);
+});
+process.exit(fail);

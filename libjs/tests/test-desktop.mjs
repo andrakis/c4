@@ -1,0 +1,1978 @@
+// test-desktop.mjs - the C4IX desktop and its tools, headless
+// (docs/c4ix-desktop.md).
+//
+// Boots C4IX with a display fitted, starts `desktop` from the console,
+// and drives it as a person would, with clicks and keys on the display.
+// The screen is read back from the text commands of the last frame
+// presented, and things are clicked by the text drawn on them, so the
+// test follows the layout rather than pinning coordinates.
+
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+import { createMachine, boot } from '../boot.js';
+import { STOP } from '../c4m.js';
+import { GuiDevice, CMD } from '../gui-device.js';
+import { SoundDevice, SND, EVT, MUTE } from '../snd-device.js';
+import { typeBytes } from '../keys.js';
+import { layUploads } from '../uploads.js';
+import { untar } from '../kept.js';
+import { readC4r, analyse, insnText } from '../c4r.js';
+import { OPNAMES } from '../../src/c4bb/sim/devices.js';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = fileURLToPath(new URL('../../src/c4bb/images/', import.meta.url));
+// the screen's size: the desktop's own, until the test tells it another
+let SW = 800, SH = 600;
+const TASK_H = 30;
+let fail = 0;
+const check = (cond, what, extra = '') => {
+  console.log(`test-desktop: ${what} ${cond ? 'OK' : 'FAILED'}${!cond && extra ? '\n  ' + String(extra).slice(0, 1500) : ''}`);
+  if (!cond) fail = 1;
+  return cond;
+};
+
+// The disk the way the web page now serves it: lazily, a file read from
+// the host the first time the machine opens it (worker.js LazyFiles).
+const index = JSON.parse(readFileSync(join(ROOT, 'disk/index.json'), 'utf8'));
+class LazyDisk extends Map {
+  constructor(idx) { super(); this.sizes = new Map(idx); this.fetched = new Set(); }
+  has(n) { return super.has(n) || this.sizes.has(n); }
+  get(n) {
+    if (super.has(n)) return super.get(n);
+    if (!this.sizes.has(n)) return undefined;
+    const b = new Uint8Array(readFileSync(join(ROOT, 'disk', n)));
+    this.fetched.add(n); super.set(n, b);
+    return b;
+  }
+}
+const files = new LazyDisk(index);
+// The page's Uploads, laid over drive 0 as worker.js does (uploads.js):
+// C4IX lists them in /home. In the order given here they are made, the
+// VFS's dates, which with their names, sizes and extensions sorts each
+// of Files' orders differently.
+const UPLOADS = [['bravo.dat', 500], ['charlie.c', 9000], ['alpha.txt', 3000]];
+// (bravo.dat's last byte is a NUL, so the IDE takes it for a binary file)
+const upBytes = (n, z) => { const b = new TextEncoder().encode(`uploaded ${n}\n`.repeat(z)).slice(0, z); if (n === 'bravo.dat') b[z - 1] = 0; return b; };
+// ... and one in a folder, as the Uploads' folder list puts it (/home/wolf3d)
+const FOLDER_UP = ['wolf3d/delta.wl6', 700];
+layUploads(files, [...UPLOADS, FOLDER_UP].map(([n, z]) => [n, upBytes(n, z)]));
+const gui = new GuiDevice({ w: 640, h: 480 });
+// a sound card too, for the tray's volume: what it is told to play is
+// let go of, but each master volume the desktop sets is kept
+const snd = new SoundDevice();
+const masters = [];
+const out = [];
+// what C4IX hands the page (download, Files' File > Download: devices.js "download:NAME")
+const downloads = [];
+// Drive 1 as the page gives it (worker.js), one that keeps what is
+// written: persist keeps the root archive's tar there, and the desktop
+// reads the tree's files from it, not from RAM (persist.c).
+const vm = createMachine({ arenaMb: 64, gui, snd, onByte: b => out.push(b),
+                          drives: [{ files, writable: false, sink: null },
+                                   { files: new Map(), writable: true, sink: () => {}, remove: () => {} }],
+                          onDownload: (n, b) => downloads.push([n, b.slice()]) });
+boot(vm, new Uint8Array(readFileSync(join(ROOT, 'c4ix32.c4r'))), ['c4ix32.c4r']);
+const consoleText = () => Buffer.from(out).toString('latin1');
+
+// The screen: every string of the last presented frame, with its position.
+//
+// A frame that begins with CLEAR is the whole scene. One that does not --
+// the desktop's damage redraw (docs/c4ix-cpu.md, step 11) -- paints over
+// part of the frame before, as the display does: a rectangle it fills,
+// inside its clip, covers what earlier frames put there, and a string it
+// draws outside its clip is not seen. Within one frame nothing covers
+// anything, as before: the tests look for text by what was drawn.
+let frame = [], cur = [], presents = 0, rects = [], curRects = [], pointer = 0;
+let gen = 0, clip = null, partial = false;
+let imgdefs = 0, imgs = 0, curImgs = 0;
+const imgSize = new Map();
+const within = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
+const cut = (a, b) => {
+  const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+  return { x, y, w: Math.min(a.x + a.w, b.x + b.w) - x, h: Math.min(a.y + a.h, b.y + b.h) - y };
+};
+let rgbFrames = 0, rgbLast = null;
+const pump = () => {
+  for (const e of snd.drain() || []) if (e[0] === EVT.MASTER) masters.push(e[2]);
+  const words = gui.drain();
+  let sized = null;
+  for (let i = 0; words && i < words.length; i += words[i]) {
+    const t = words[i + 1];
+    if (t === CMD.CLEAR) { cur = []; curRects = []; partial = false; curImgs = 0; }
+    if (t === CMD.IMGDEF) { imgSize.set(words[i + 2], { w: words[i + 3], h: words[i + 4] }); imgdefs++; }
+    if (t === CMD.CLIP) clip = { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5] };
+    if (t === CMD.NOCLIP) clip = null;
+    // an image (the desktop's picture) covers what is under it, as a rectangle does
+    const z = t === CMD.IMG ? imgSize.get(words[i + 2]) : null;
+    if (t === CMD.RECT || z) {
+      const r = z ? { x: words[i + 3], y: words[i + 4], w: z.w, h: z.h, rgb: -1, gen }
+                  : { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], rgb: words[i + 6], gen };
+      if (z) curImgs++;
+      const v = clip ? cut(r, clip) : r;
+      if (partial && v.w > 0 && v.h > 0) {
+        cur = cur.filter(s => s.gen === gen || !within(v, s.x, s.y));
+        curRects = curRects.filter(q => q.gen === gen || !(within(v, q.x, q.y) && within(v, q.x + q.w - 1, q.y + q.h - 1)));
+      }
+      curRects.push(r);
+    }
+    if (t === CMD.TEXT2) {
+      const n = words[i + 8];
+      let s = '';
+      for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
+      if (!partial || !clip || within(clip, words[i + 2], words[i + 3]))
+        cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], size: words[i + 5], font: words[i + 6], adv: words[i + 7], gen });
+    }
+    if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); imgs = curImgs; presents++; gen++; partial = true; }
+    if (t === CMD.CURSOR) pointer = words[i + 2];
+    if (t === CMD.SIZE) sized = { w: words[i + 2], h: words[i + 3] };
+    // an 8-bit frame, made 32-bit by the device (GUI_BLIT8): count them,
+    // and keep the last one's place, size and a sum of all its pixels (a
+    // tile of the Puzzles' Net turned is a few thin lines)
+    if (t === CMD.RGB) {
+      rgbFrames++;
+      const w = words[i + 4], h = words[i + 5];
+      let sum = 0;
+      for (let k = 0; k < w * h; k++) sum = (sum * 31 + words[i + 8 + k]) | 0;
+      rgbLast = { x: words[i + 2], y: words[i + 3], w, h, dw: words[i + 6], dh: words[i + 7], sum };
+    }
+  }
+  // a size asked for in a frame: the page sizes its canvas and says so (display.js resize)
+  if (sized && (sized.w !== gui.w || sized.h !== gui.h)) gui.event({ kind: 'resize', ...sized });
+};
+// run() returns early whenever the guest sleeps, so waiting is until()'s job
+const run = (cycles = 2e6) => { const r = vm.run(cycles); pump(); return r; };
+const until = (cond, budget = 400) => { for (let i = 0; i < budget; i++) { if (cond()) return true; if (run() === STOP.HALT) return cond(); } return cond(); };
+const settle = () => { for (let i = 0; i < 20; i++) run(); return true; };
+const screen = () => frame.map(t => t.s).join('\n');
+const has = re => typeof re === 'string' ? frame.some(t => t.s.trimEnd() === re) : frame.some(t => re.test(t.s));
+const find = s => frame.filter(t => (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
+// Monospaced text as lines: the IDE colours a line in runs, one string
+// each, so a run that starts where the last ended joins it, and the cursor
+// drawn over a character is left out.
+const rows = () => {
+  const mono = frame.filter(t => t.adv > 0).sort((a, b) => a.y - b.y || a.x - b.x);
+  const out = [];
+  for (const t of mono) {
+    const p = out[out.length - 1];
+    if (p && p.y === t.y && p.adv === t.adv && t.x === p.x + p.s.length * p.adv) p.s += t.s;
+    else if (p && p.y === t.y && t.x >= p.x && t.x < p.x + p.s.length * p.adv) continue;
+    else out.push({ ...t });
+  }
+  return out;
+};
+// Drag a scroll bar's thumb, which sits at the top of its track: the
+// track is the 16-pixel-wide 0xe0e0e0 rectangle PICK chooses, the last
+// drawn of them (the topmost window's).
+const dragThumb = (pick, dy) => {
+  const bar = rects.filter(r => r.w === 16 && r.rgb === 0xe0e0e0).filter(pick).pop();
+  if (!bar) return false;
+  const x = bar.x + 8, y = bar.y + 20;
+  ev({ kind: 'move', x, y, buttons: 0 }); ev({ kind: 'down', x, y, button: 0 });
+  for (let k = 1; k <= 4; k++) ev({ kind: 'move', x, y: y + (dy * k) / 4, buttons: 1 });
+  ev({ kind: 'up', x, y: y + dy, button: 0 });
+  return true;
+};
+const ev = e => { gui.event(e); run(3e5); };
+const click = (x, y, button = 0) => { ev({ kind: 'move', x, y, buttons: 0 }); ev({ kind: 'down', x, y, button }); ev({ kind: 'up', x, y, button }); };
+// Click on a string on the screen. `pick` chooses among several (default:
+// the last drawn, which is the topmost).
+const clickText = (s, pick = 'last', dx = 5, dy = 5) => {
+  const all = find(s);
+  if (!all.length) return false;
+  const t = pick === 'last' ? all[all.length - 1] : pick === 'first' ? all[0] : pick(all);
+  if (!t) return false;
+  click(t.x + dx, t.y + dy);
+  return true;
+};
+const dbl = (s, pick = 'last') => {
+  const all = find(s);
+  const t = pick === 'last' ? all[all.length - 1] : pick(all);
+  if (!t) return false;
+  click(t.x + 5, t.y + 5); click(t.x + 5, t.y + 5);
+  return true;
+};
+const key = (ch, mods = 0, code) => {
+  const named = { '\n': 13, '\b': 8, ESC: 27, DEL: 46, F2: 113, F5: 116, TAB: 9, UP: 38, DOWN: 40, END: 35, HOME: 36, LEFT: 37, RIGHT: 39, INS: 45 };
+  const c = code ?? named[ch] ?? ch.toUpperCase().charCodeAt(0);
+  ev({ kind: 'keydown', code: c, char: ch === '\n' ? 10 : ch.length === 1 && c !== 8 ? ch.charCodeAt(0) : 0, mods });
+};
+const type = s => { for (const ch of s) key(ch); };
+// a press at (x0, y0), the pointer moved to (x1, y1) with the button held, and let go
+const drag = (x0, y0, x1, y1) => {
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 }); ev({ kind: 'down', x: x0, y: y0, button: 0 });
+  for (let k = 1; k <= 4; k++) ev({ kind: 'move', x: x0 + ((x1 - x0) * k) / 4, y: y0 + ((y1 - y0) * k) / 4, buttons: 1 });
+  ev({ kind: 'up', x: x1, y: y1, button: 0 });
+};
+// a menu of the topmost window, and an item of it
+const menu = (title, item) => { clickText(title); until(() => has(item)); return clickText(item); };
+const start = item => { click(20, SH - TASK_H + 12); until(() => has('Power Off...')); const ok = clickText(item); settle(); return ok; };
+// Files' file list: right of its folder tree, inside its window. The
+// window is found by its title (drawn 27 px in from the window's left, 7 down).
+const explorer = () => {
+  const t = frame.find(t => /^Files - /.test(t.s) && t.y < SH - TASK_H);
+  return t ? { x: t.x - 27, y: t.y - 7 } : null;
+};
+const inList = all => {
+  const e = explorer();
+  if (!e) return undefined;
+  return all.filter(t => t.x > e.x + 200 && t.x < e.x + 600 && t.y > e.y + 60 && t.y < e.y + 420).pop();
+};
+// anywhere in Files' window: its menu bar, the list's column headers
+const inFiles = all => {
+  const e = explorer();
+  if (!e) return undefined;
+  return all.filter(t => t.x > e.x && t.x < e.x + 600 && t.y > e.y && t.y < e.y + 420).pop();
+};
+const noDialog = () => !has('OK') && !has('Yes');
+
+// ---- boot C4IX, start the desktop ----------------------------------------------
+check(until(() => consoleText().includes('c4ix:/$'), 2000), 'C4IX boots to its shell');
+check(/entries left on the host until first use/.test(consoleText()) && files.fetched.size < 12,
+  `booting reads ${files.fetched.size} of ${index.length} disk files; the rest stay lazy`, [...files.fetched].join(' '));
+// The IDE's :make links with /usr/lib/libc4ix.c4l, which the root
+// archive brings: let its background unpack (task 4) finish first
+typeBytes(vm, new TextEncoder().encode('wait 4\n'));
+check(until(() => consoleText().includes('[4] done (0)'), 3000) &&
+  /persist: c4ix-root\.tgz: \d+ files, unpacked onto drive 1 and read from there/.test(consoleText()),
+  'the root archive unpacks in the background, onto drive 1, and is read from there',
+  consoleText().split('\n').filter(l => /persist|\[4\]/.test(l)).join(' | '));
+// No screen saver: headless, an idle machine covers its five minutes
+// within a long build (the savers are tried below, from Settings)
+{
+  const c0 = consoleText().length;
+  typeBytes(vm, new TextEncoder().encode('mkdir /etc\n'));
+  until(() => /c4ix:\/\$ ?$/.test(consoleText().slice(c0).trimEnd() + ' '));
+  const c1 = consoleText().length;
+  typeBytes(vm, new TextEncoder().encode('echo scheme 0 bg -1 wall 1 saver 0 wait 5 > /etc/desktop.cfg\n'));
+  until(() => /c4ix:\/\$ ?$/.test(consoleText().slice(c1).trimEnd() + ' '));
+}
+// The uploads are in /home, where ls lists them, and open there and by
+// their bare names, as they did before they were listed anywhere
+{
+  const sh = cmd => {
+    const c0 = consoleText().length;
+    typeBytes(vm, new TextEncoder().encode(cmd + '\n'));
+    until(() => /c4ix:\/\$ ?$/.test(consoleText().slice(c0).trimEnd() + ' '));
+    return consoleText().slice(c0);
+  };
+  const ls = sh('ls /home');
+  check(UPLOADS.every(([n]) => ls.includes(n)), 'ls lists the uploads in /home', ls);
+  check(sh('cat /home/alpha.txt').includes('uploaded alpha.txt'), 'cat reads one there', consoleText().slice(-300));
+  check(sh('cat bravo.dat').includes('uploaded bravo.dat'), 'and by its bare name, from the host', consoleText().slice(-300));
+  check(sh('ls /home/wolf3d').includes('delta.wl6') && sh('cat /home/wolf3d/delta.wl6').includes('uploaded wolf3d/delta.wl6'),
+    'an upload in a folder is in that folder, /home/wolf3d', consoleText().slice(-300));
+  // download: a file, and a folder as a tar, handed to the page
+  const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => v === b[i]);
+  const said = sh('download /home/alpha.txt');
+  check(downloads.length === 1 && downloads[0][0] === 'alpha.txt' && same(downloads[0][1], upBytes('alpha.txt', 3000)) &&
+        said.includes('download: alpha.txt, 3000 bytes'), 'download hands a file to the page, by its name, every byte', said);
+  sh('download /home/wolf3d/');
+  const t = downloads[1] && untar(downloads[1][1]);
+  check(downloads.length === 2 && downloads[1][0] === 'wolf3d.tar' && t.dirs.includes('wolf3d') &&
+        same((t.files.find(([n]) => n === 'wolf3d/delta.wl6') || [])[1], upBytes(...FOLDER_UP)),
+    'and a folder as NAME.tar, what is in it under NAME/', downloads.map(([n]) => n).join(' ') + ' ' + consoleText().slice(-200));
+  check(sh('download /nowhere').includes('no such file or folder') && downloads.length === 2, 'and says so of what is not there');
+  sh('mkdir /home/zeta');
+}
+typeBytes(vm, new TextEncoder().encode('desktop\n'));
+check(until(() => consoleText().includes('desktop: running on the display')), 'desktop starts from the console');
+check(until(() => gui.w === SW && gui.h === SH && presents > 0), `it asks for ${SW}x${SH} and draws`);
+check(until(() => masters.length > 0) && snd.read32(SND.MASTER) === 255, 'and sets the sound card\'s volume, full and not muted', `masters ${masters}`);
+check(until(() => has(/c4ix:\/\$/), 800), 'a Terminal opens with a shell prompt', screen());
+check(has('Go') && has(/[0-9]{1,2}:[0-9]{2} [AP]M/), 'the taskbar has Go and a clock');
+check(until(() => has(/^CPU \d{1,3}%$/)), 'and a CPU meter beside the clock', screen());
+check(['Filesystem', 'Terminal', 'Text Editor', 'IDE', 'Calculator', 'System Monitor'].every(has), 'the desktop icons are there, the IDE among them');
+
+// ---- Terminal ----------------------------------------------------------------
+type('ps\n');
+// the shell finds the desktop as /bin/desktop now (it tries /bin first)
+check(until(() => has(/ (c4ix-)?desktop/) && has(/tasks,/)), 'ps typed in the Terminal runs in its shell', screen());
+
+// ---- the Terminal's line editing, history and scrollback --------------------------
+// What is typed after the last prompt (the Terminal runs c4ix-sh -p: the prompt is on the input line).
+const inputLine = () => {
+  const ps = frame.filter(t => /^c4ix:\S*\$/.test(t.s));
+  if (!ps.length) return null;
+  const y = Math.max(...ps.map(t => t.y)), x = ps[0].x;
+  const row = frame.filter(t => t.y === y && t.x >= x && t.x < x + 640).sort((a, b) => a.x - b.x).map(t => t.s).join('');
+  return row.replace(/^c4ix:\S*\$ ?/, '').trimEnd();
+};
+check(until(() => inputLine() === ''), 'the prompt sits on the input line', screen());
+type('echo one\n');
+until(() => has('one'));
+type('echo two\n');
+until(() => has('two') && inputLine() === '');
+key('', 0, 38); key('', 0, 38);                                // Up, Up
+check(until(() => inputLine() === 'echo one'), 'Up brings back the line before last', inputLine());
+key('', 0, 40);                                                // Down
+check(until(() => inputLine() === 'echo two'), 'and Down the last', inputLine());
+key('', 0, 40);                                                // Down: the empty line again
+check(until(() => inputLine() === ''), 'and Down past the newest gives an empty line', inputLine());
+type('echo xz');
+key('', 0, 37);                                                // Left
+type('y');
+check(until(() => inputLine() === 'echo xyz'), 'Left moves into the line, and a key goes in there', inputLine());
+key('', 0, 36); key('', 0, 46);                                // Home, Delete: the "e"
+check(until(() => inputLine() === 'cho xyz'), 'Home and Delete edit at the start of the line', inputLine());
+type('e'); key('', 0, 35); type('!\n');                        // "e", End, "!", Enter
+check(until(() => has('xyz!')), 'End goes back to the end, and Enter sends the whole line', screen());
+// ---- the Terminal's clipboard: a run of text selected with the mouse, a
+// block with Alt held, and Paste typing it in --------------------------------------------------
+// the Terminal's text: 8 pixels a column, monospaced, its own colours
+const termText = s => frame.filter(t => t.adv === 8 && (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
+type('echo echo pasted\n');
+check(until(() => termText('echo pasted').length > 0 && inputLine() === ''), 'a line to copy', screen());
+{
+  const t = termText('echo pasted').pop();
+  drag(t.x + 2, t.y + 6, t.x + 11 * 8 - 3, t.y + 6);
+  check(until(() => frame.some(s => s.s === 'echo pasted' && s.rgb === 0)), 'dragging over it selects it, drawn black on grey', screen());
+  check(menu('Edit', 'Copy   Ctrl+Shift+C') && until(() => !frame.some(s => s.s === 'echo pasted' && s.rgb === 0)), 'Edit > Copy takes it', screen());
+  check(menu('Edit', 'Paste   Ctrl+Shift+V') && until(() => inputLine() === 'echo pasted'), 'Edit > Paste types it in', inputLine());
+  key('\n');
+  check(until(() => termText('pasted').length > 0), 'and Enter runs it', screen());
+}
+type('echo blk\n');
+until(() => termText('blk').length > 0 && inputLine() === '');
+{
+  // a block: the command's eight columns after the prompt, and the same
+  // columns of its output's row, which are blank (a run would take "blk")
+  const t = termText('blk').pop();
+  const n = termText('blk').length;
+  ev({ kind: 'keydown', code: 18, char: 0, mods: 4 });
+  drag(t.x + 8 * 8 + 2, t.y - 16 + 6, t.x + 15 * 8 + 3, t.y + 6);
+  ev({ kind: 'keyup', code: 18, char: 0, mods: 0 });
+  check(until(() => frame.some(s => s.s === 'echo blk' && s.rgb === 0) && !frame.some(s => s.s === 'blk' && s.rgb === 0)),
+    'with Alt held a drag selects a block', screen());
+  key('C', 3, 67);                                             // Ctrl+Shift+C
+  key('', 1, 45);                                              // Shift+Ins
+  check(until(() => termText('blk').length > n && inputLine() === ''), 'Ctrl+Shift+C copies it, and Shift+Ins pastes it: the one line, run',
+    inputLine() + ' / ' + screen().slice(-300));
+}
+type('cat /usr/src/c4ix/user/free.c\n');
+until(() => has(/^\s*return 0;/) && inputLine() === '', 600);
+check(!has(/^\/\/ C4IX userland: free /), 'a long file scrolls its first line off the Terminal', screen());
+// PgUp until it shows: how many pages that is depends on what came before
+for (let i = 0; i < 12 && !until(() => has(/^\/\/ C4IX userland: free /), 50); i++) key('', 0, 33);
+check(until(() => has(/^\/\/ C4IX userland: free /)), 'and PgUp scrolls back to it', screen());
+key('', 0, 34);                                                // PgDn
+type('echo back\n');
+check(until(() => has('back') && !has(/^\/\/ C4IX userland: free /)), 'typing comes back to the bottom', screen());
+// Copy All: the scrollback and the screen (pasted into Text Editor, below)
+check(menu('Edit', 'Copy All'), 'Edit > Copy All', screen());
+
+// ---- top: its keys as they are typed, and Ctrl-C -----------------------------------------------
+type('top\n');
+check(until(() => has(/^top - up /), 800), 'top starts in the Terminal', screen());
+const t0 = vm.dev.simMs();
+until(() => vm.dev.simMs() - t0 > 5000, 3000);
+check(has(/^top - up /) && !frame.some(t => /^c4ix:\/\$/.test(t.s) && t.y > 300), 'and is still running five machine-seconds later', screen());
+// it has asked for the keys as they are typed (ESC _ T r): no Enter, no echo
+key('h');
+check(until(() => has(/^Keys, as in Linux's top/), 400), 'h shows its help at once, with no Enter', screen());
+key('x');
+check(until(() => !has(/^Keys, as in Linux's top/) && has(/PID +PPID/), 400), 'and any key takes it away', screen());
+key('q');
+const headY = () => Math.max(-1, ...frame.filter(t => /PID +PPID/.test(t.s)).map(t => t.y));
+check(until(() => frame.some(t => /(^|\s)c4ix:\/\$/.test(t.s) && t.y > headY()), 400), 'q quits it, the prompt under its screen', screen());
+type('echo lines-again\n');
+check(until(() => has('lines-again')), 'and the Terminal edits lines again', screen());
+type('top\n');
+check(until(() => has(/^top - up /), 800), 'top again', screen());
+key('c', 2, 67);
+// top may be stopped partway through a line, and the shell doesn't start
+// its prompt on a fresh one, so the prompt can follow what top had written
+check(until(() => has(/\^C/) && frame.filter(t => /(^|\s)c4ix:\/\$/.test(t.s)).length >= 1), 'Ctrl-C stops it and the prompt comes back', screen());
+
+// ---- Ctrl-C drops what was typed at the job and not read --------------------------------------
+// as a tty flushes its input: before, the shell read the line next and ran it
+key('l', 2, 76);
+type('spin 1000\n');
+settle();
+type('ls /usr/lib\n');
+settle();
+key('c', 2, 67);
+until(() => has(/\^C/) && inputLine() === '', 800);
+const tc = vm.dev.simMs();
+until(() => vm.dev.simMs() - tc > 1000, 2000);                // time enough for the shell to have run it
+check(has(/\^C/) && inputLine() === '' && !has(/libarc\.c4l/), 'Ctrl-C drops a line typed at the job, and the shell does not run it', screen());
+
+// ---- c4m boots C4KE in the Terminal, and C4KE reads what is typed there ------------------
+// C4KE's shell polls /dev/stdin, which C4IX gave it as the machine's console;
+// in a Terminal that is nobody's keyboard, and every command waited for ever
+key('l', 2, 76);
+type('cd /usr\n');
+until(() => has(/^c4ix:\/usr\$/));
+type('c4m load-c4r.c -- c4ke.c4r\n');
+check(until(() => has(/^c4sh>/), 20000), 'c4m boots C4KE to its shell in the Terminal, from /usr/c4ke.c4r', screen());
+type('echo from-c4ke\n');
+check(until(() => has('from-c4ke') && find(/^c4sh>/).length >= 2, 4000), 'a command typed there runs in C4KE and its prompt comes back', screen());
+// Ctrl-C goes to the job C4KE is running, through c4m, as on a host
+// terminal; it used to end c4m itself
+key('l', 2, 76);
+type('spin\n');
+check(until(() => has(/^spin: running forever/), 4000), 'C4KE runs spin there', screen());
+key('c', 2, 67);
+check(until(() => has(/^spin: SIGINT/) && has(/^c4sh>/), 4000) && !has(/^c4ix:\/usr\$/),
+  'Ctrl-C reaches spin inside C4KE, and C4KE\'s shell carries on', screen());
+type('\\q\n');
+check(until(() => has(/^c4ix:\/usr\$/) && inputLine() === '', 4000), '\\q leaves C4KE for C4IX\'s shell', screen());
+type('cd /\n');
+until(() => has(/^c4ix:\/\$/));
+
+// ---- raycast in the Terminal: 256 colours ---------------------------------------------
+type('raycast.c4r 15x15 -s 3 -d -n 30 -g 80x25\n');
+check(until(() => new Set(rects.map(r => r.rgb)).size > 8, 1500), `raycast draws in colour in the Terminal (${new Set(rects.map(r => r.rgb)).size} colours)`);
+until(() => has(/^c4ix:\/\$/), 1500);
+key('l', 2, 76);                                               // Ctrl-L: a clean screen for what follows
+
+// ---- compile a windowed program inside the machine, and run it ------------------------------
+type('c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/include/window.c /usr/src/c4ix/examples/bounce.c\n');
+check(until(() => has(/c4cc: wrote \d+ bytes to ramfs:\/tmp\/bounce.c4r/), 3000), 'c4cc compiles bounce.c inside C4IX', screen());
+type('/tmp/bounce.c4r\n');
+check(until(() => has(/Bounce - compiled inside C4IX/) && has('Click me') && has('Button clicks:'), 1500),
+  'the program makes its Terminal its window, titled and drawn', screen());
+const sameRow = (label, value) => { const l = find(label)[0]; return !!l && frame.some(t => t.s === value && Math.abs(t.y - l.y) < 3 && t.x > l.x); };
+clickText('Click me');
+check(until(() => sameRow('Button clicks:', '1'), 400), 'clicking its button counts', screen());
+key('x');
+check(until(() => sameRow('Last key:', 'x'), 400), 'a key typed in the window reaches it');
+key('q');
+check(until(() => has(/bounce: \d+ frames, 1 clicks/) && !has('Click me'), 800), 'q ends it and the window is a terminal again', screen());
+check(has(/^Terminal - task \d+/), 'with its own title back');
+
+// ---- the mouse locked to a window (window.h's win_lock), as a game in one steers --------------
+type('c4cc -o /tmp/mouselock.c4r /usr/include/window.h /usr/include/window.c /usr/src/c4ix/examples/mouselock.c\n');
+check(until(() => has(/c4cc: wrote \d+ bytes to ramfs:\/tmp\/mouselock\.c4r/), 3000), 'c4cc compiles mouselock.c inside C4IX', screen());
+type('/tmp/mouselock.c4r\n');
+check(until(() => has('Mouse lock') && has('Locked moves:'), 1500), 'it makes its Terminal its window', screen());
+{
+  const l = find('Locked moves:')[0];
+  const cx = l.x + 300, cy = l.y + 150;                         // a place on its canvas
+  ev({ kind: 'move', x: cx, y: cy, buttons: 0 });
+  check(until(() => pointer === 8), 'over its canvas the pointer says "click to capture" (GUI_PTR_LOCK)', `pointer ${pointer}`);
+  // the click the page locks the mouse at: an ordinary one, the left button
+  ev({ kind: 'down', x: cx, y: cy, button: 0 }); ev({ kind: 'up', x: cx, y: cy, button: 0 });
+  check(until(() => sameRow('Presses:', '1') && sameRow('Last button:', '0'), 400), 'the click reaches it, the left button', screen());
+  // locked: the motion as the display's GUI_EV_REL, the buttons where the pointer has got to
+  for (let k = 0; k < 3; k++) ev({ kind: 'move', x: cx, y: cy, dx: 10, dy: -4, locked: 1, buttons: 0 });
+  check(until(() => sameRow('Locked moves:', '3') && sameRow('Moved across:', '30') && sameRow('Moved down:', '-12'), 400),
+    'locked, the motion reaches it as WIN_REL, however far it goes', screen());
+  ev({ kind: 'down', x: cx, y: cy, button: 2 }); ev({ kind: 'up', x: cx, y: cy, button: 2 });
+  check(until(() => sameRow('Presses:', '2') && sameRow('Releases:', '2') && sameRow('Last button:', '2'), 400), 'and the right button, as the right', screen());
+  // a plain move again: the page let it go (Esc); the kit has the mouse
+  ev({ kind: 'move', x: cx + 4, y: cy, buttons: 0 });
+  check(until(() => pointer === 8), 'let go, the pointer over the canvas still offers it', `pointer ${pointer}`);
+  key('q');
+  check(until(() => has(/mouselock: 3 locked moves, 30 across, -12 down, 2 presses, last button 2/) && !has('Locked moves:'), 800),
+    'q ends it, having had every move and press', screen());
+  ev({ kind: 'move', x: cx, y: cy + 2, buttons: 0 });
+  check(until(() => pointer === 1), 'and the Terminal has its text beam back', `pointer ${pointer}`);
+}
+
+// ---- Files ---------------------------------------------------------------------------
+start('Files');
+check(until(() => has('Files - /')), 'Go > Files opens at the root', screen());
+check(['bin', 'tmp', 'usr', 'build'].every(has) && has('Folder') && has('C4IX (/)'), 'it lists the root folders and shows the tree', screen());
+// The folder tree: the root archive's folders are more than its pane
+// shows. It scrolls (the wheel here), and a folder collapses and expands
+// (the keyboard, then its +/- box).
+const inTree = all => {
+  const e = explorer();
+  if (!e) return undefined;
+  return all.filter(t => t.x > e.x && t.x < e.x + 190 && t.y > e.y + 50 && t.y < e.y + 400).pop();
+};
+// It starts with only the root open: the root's folders, nothing deeper
+check(!!inTree(find('usr')) && !!inTree(find('bin')) && !inTree(find('src')) && !inTree(find('docs')),
+  'the tree starts with only the root open', screen());
+{
+  const ys = ['bin', 'build', 'home', 'tmp', 'usr'].map(n => inTree(find(n))?.y ?? -1);
+  check(ys.every((y, i) => y >= 0 && (i === 0 || y > ys[i - 1])), "and lists the root's folders by name", ys.join(' '));
+}
+// Into a deep folder through the list: the folders above it open, and
+// stay open after, which makes the tree taller and wider than its pane
+{
+  let path = '';
+  for (const d of ['usr', 'src', 'c4ix', 'libc', 'include']) {
+    path += '/' + d;
+    dbl(d, inList);
+    if (!until(() => has('Files - ' + path))) break;
+  }
+  check(has('Files - /usr/src/c4ix/libc/include') && !!inTree(find('libc')) && !!inTree(find('c4ix')),
+    'opening a folder deep down opens the folders above it in the tree', screen());
+  for (let i = 0; i < 5; i++) key('\b');
+  check(until(() => has('Files - /') && !!inTree(find('C4IX (/)'))) && !!inTree(find('src')),
+    'and they stay open back at the root', screen());
+}
+{
+  const e = explorer();
+  for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: 1 });
+  check(until(() => !inTree(find('C4IX (/)'))), 'the wheel scrolls the folder tree past its top', screen());
+  for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: -1 });
+  check(until(() => !!inTree(find('C4IX (/)'))), 'and back', screen());
+  check(dragThumb(r => r.x < e.x + 200, 120) && until(() => !inTree(find('C4IX (/)'))), "dragging the tree's scroll thumb scrolls it", screen());
+  for (let i = 0; i < 40; i++) ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: -1 });
+  until(() => !!inTree(find('C4IX (/)')));
+  // the deepest folders are wider than the tree: a bar across, whose right
+  // arrow moves every name left
+  const hbar = rects.filter(r => r.h === 16 && r.w > 60 && r.rgb === 0xe0e0e0 && r.x < e.x + 200 && r.y > e.y + 60).pop();
+  const rootX = inTree(find('C4IX (/)')).x;
+  if (hbar) for (let i = 0; i < 3; i++) click(hbar.x + hbar.w - 8, hbar.y + 8);
+  check(!!hbar && until(() => !!inTree(find('C4IX (/)')) && inTree(find('C4IX (/)')).x < rootX), 'the tree scrolls across too', screen());
+  if (hbar) for (let i = 0; i < 3; i++) click(hbar.x + 8, hbar.y + 8);
+}
+key('TAB'); key('', 0, 36); key('', 0, 37);               // the tree; Home; Left
+check(until(() => !!inTree(find('C4IX (/)')) && !inTree(find('usr')) && !!inList(find('usr'))),
+  'Left collapses the root in the tree, and the list still shows it', screen());
+key('F5');
+check(until(() => !inTree(find('usr')) && has('Files - /')), 'it stays collapsed through a refresh', screen());
+key('', 0, 39);                                           // Right
+check(until(() => !!inTree(find('usr')) && !!inTree(find('src'))), 'Right expands it again', screen());
+{
+  const u = inTree(find('usr'));
+  click(u.x - 29, u.y + 6);                               // its +/- box, left of the icon
+  check(until(() => !!inTree(find('usr')) && !inTree(find('src'))), "clicking /usr's box collapses it", screen());
+  click(u.x - 29, u.y + 6);
+  check(until(() => !!inTree(find('src'))), 'and again expands it', screen());
+}
+key('TAB');                                               // the list has the keyboard again
+dbl('usr', inList);
+check(until(() => has('Files - /usr') && has('src')), 'double-clicking a folder opens it', screen());
+key('\b');
+check(until(() => has('Files - /')), 'Backspace goes up a level');
+dbl('bin', inList);
+// b4ke, because it sorts first: /bin holds more programs than the list
+// shows at once, and one off the bottom cannot be double-clicked
+check(until(() => has('Files - /bin') && !!inList(find('b4ke')) && find('C4IX Program').length >= 10),
+  '/bin lists its programs as C4IX Programs, with no .c4r in their names', screen());
+dbl('b4ke', inList);
+check(until(() => has(/b4ke: cannot read BUILD\.B4K/), 800), 'double-clicking one runs it in a Terminal', screen());
+clickText(/^Files - /); key('\b');
+check(until(() => has('Files - /')), 'and back up to the root');
+// a library is C4R inside, but not a program: it says so rather than run
+dbl('lib', inList);
+check(until(() => has('Files - /lib') && !!inList(find('libc.c4s')) && has('Shared Library')),
+  '/lib lists its libraries as Shared Libraries', screen());
+dbl('libc.c4s', inList);
+check(until(() => has('libc.c4s - IDE') && has(/^\S+ \(\d+ words/) && has(/^\d+ functions$/), 2000),
+  "double-clicking one shows its code in the IDE's Code tab, rather than running it", screen());
+{
+  // c4rlink folds the copies c4lc spliced into each unit (docs/link-fold.md)
+  const copies = find('<udiv>');
+  check(copies.length === 1 && !frame.some(u => u.y === copies[0].y && u.x > copies[0].x && /\.c$/.test(u.s)),
+    "the compiler's helpers, one copy of each, named by no unit", screen());
+}
+menu('File', 'Close');
+check(until(() => !has('libc.c4s - IDE')) && !has(/missing|unresolved|cannot resolve/i), 'File > Close closes that, and nothing ran', screen());
+key('\b');
+check(until(() => has('Files - /')), 'and up to the root again');
+// The right click's menu: on a folder, what Files does with it; on a
+// program, Open in IDE too, which shows its code in the IDE's Code tab
+// (the IDE's own way in for a compiled file)
+{
+  const rclick = t => { ev({ kind: 'move', x: t.x + 5, y: t.y + 5, buttons: 0 }); ev({ kind: 'down', x: t.x + 5, y: t.y + 5, button: 2 }); ev({ kind: 'up', x: t.x + 5, y: t.y + 5, button: 2 }); };
+  rclick(inList(find('bin')));
+  check(until(() => has('Open') && has('Rename') && has('Delete') && has('New Folder') && has('Download') && !has('Open in IDE')),
+    'a right click on a folder opens its menu: Open, Rename, Delete, New Folder, Download', screen());
+  key('ESC');
+  check(until(() => !has('Rename')), 'and Esc closes it', screen());
+  dbl('bin', inList);
+  until(() => has('Files - /bin') && !!inList(find('cat')));
+  rclick(inList(find('cat')));
+  check(until(() => has('Open in IDE') && has('Rename')), 'on a program: Open in IDE among them', screen());
+  clickText('Open in IDE');
+  check(until(() => has('cat - IDE') && has(/^main \(\d+ words/), 2000), "Open in IDE shows the program's code in the IDE's Code tab", screen());
+  menu('File', 'Close');
+  check(until(() => !has('cat - IDE')), 'and File > Close closes it', screen());
+  // Files' title, not its taskbar button (which would minimise it, in front already)
+  clickText(/^Files - /, all => all.filter(t => t.y < SH - TASK_H).pop()); key('\b');
+  check(until(() => has('Files - /')), 'back up to the root');
+}
+// The splitter between the folder tree and the list: the pointer's shape
+// over it, and dragged, a wider tree, which a Files window opened after
+// keeps; dragged back after
+{
+  const e = explorer();
+  const x0 = e.x + 4 + 2 + 180 + 3, y0 = e.y + 200;
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 });
+  check(until(() => pointer === 9), 'over the bar between the tree and the list the pointer is a splitter\'s', `pointer ${pointer}`);
+  const ux = inList(find('usr')).x;
+  drag(x0, y0, x0 + 60, y0);
+  check(until(() => inList(find('usr')) && inList(find('usr')).x === ux + 60), 'dragging it makes the tree 60 pixels wider, the list narrower', screen());
+  start('Files');
+  // the new window, on top: its title, and its list's usr drawn after it
+  const tops = () => frame.filter(t => /^Files - \/$/.test(t.s) && t.y < SH - TASK_H);
+  until(() => tops().length >= 2);
+  {
+    const w2 = tops().pop(), i2 = frame.indexOf(w2), x2 = w2.x - 27;
+    const u2 = frame.filter((t, k) => k > i2 && t.s.trimEnd() === 'usr' && t.x > x2 + 200).pop();
+    check(!!u2 && u2.x - x2 === ux - e.x + 60, 'a Files window opened after has the tree that wide too', screen());
+  }
+  menu('File', 'Close');
+  until(() => frame.filter(t => /^Files - \/$/.test(t.s) && t.y < SH - TASK_H).length === 1);
+  drag(x0 + 60, y0, x0, y0);
+  check(until(() => inList(find('usr')) && inList(find('usr')).x === ux), 'and dragged back', screen());
+}
+dbl('tmp', inList);
+check(until(() => has('Files - /tmp')), 'into /tmp');
+clickText('File'); settle(); clickText('New Folder');
+check(until(() => has('Name of the new folder:')), 'File > New Folder asks for a name', screen());
+key('\n');
+check(until(() => noDialog() && !!inList(find('New Folder'))), 'and makes it', screen());
+clickText('New Folder', inList);
+key('F2');
+check(until(() => has('New name:')), 'F2 asks for a new name');
+for (let i = 0; i < 12; i++) key('\b');
+type('docs'); key('\n');
+check(until(() => noDialog() && !!inList(find('docs')) && !inList(find('New Folder'))), 'and renames it', screen());
+clickText('docs', inList);
+key('DEL');
+check(until(() => has(/Delete 'docs'/)), 'Delete asks first');
+key('y');
+check(until(() => noDialog() && !inList(find('docs'))), 'and Yes deletes it');
+// Several at once, and a folder with something in it: Ctrl-click takes a
+// second item (Ctrl is a key the page sends, wm_mods), and Delete takes
+// both, and what is inside
+const newdir = name => {
+  clickText('File'); settle(); clickText('New Folder');
+  until(() => has('Name of the new folder:'));
+  for (let i = 0; i < 12; i++) key('\b');
+  type(name); key('\n');
+  return until(() => noDialog() && !!inList(find(name)));
+};
+check(newdir('aa') && newdir('bb'), 'two new folders', screen());
+dbl('aa', inList);
+check(until(() => has('Files - /tmp/aa')) && newdir('inner'), 'and one inside the first', screen());
+key('\b');
+check(until(() => has('Files - /tmp')), 'back in /tmp');
+clickText('aa', inList);
+ev({ kind: 'keydown', code: 17, char: 0, mods: 2 });
+clickText('bb', inList);
+ev({ kind: 'keyup', code: 17, char: 0, mods: 0 });
+check(until(() => has(/2 selected/)), 'Ctrl-click selects a second item', screen());
+key('DEL');
+check(until(() => has(/Delete these 2 items/)), 'Delete asks about both', screen());
+key('y');
+check(until(() => noDialog() && !inList(find('aa')) && !inList(find('bb'))), 'and Yes deletes both, the folder inside too', screen());
+
+// ---- Files: the uploads in /home, and the list's order ------------------------------
+// /home has the three uploads and the folder made above. Their order in
+// the list, top to bottom:
+const homeNames = ['zeta', ...UPLOADS.map(([n]) => n)];
+const order = () => homeNames.every(n => inList(find(n)))
+  ? homeNames.slice().sort((a, b) => inList(find(a)).y - inList(find(b)).y).join(' ') : screen();
+const viewMenu = item => { clickText('View'); settle(); return clickText(item); };
+key('\b');
+until(() => has('Files - /'));
+dbl('home', inList);
+check(until(() => has('Files - /home') && order() === 'zeta alpha.txt bravo.dat charlie.c'),
+  '/home lists the uploads by name, after the folder', order());
+check(!!inList(find('1 KB')) && !!inList(find('3 KB')) && !!inList(find('9 KB')), 'with their sizes', screen());
+viewMenu('Sort by Size');
+check(until(() => order() === 'zeta bravo.dat alpha.txt charlie.c'), 'View > Sort by Size: the smallest file first, the folder still first', order());
+viewMenu('Descending');
+check(until(() => order() === 'zeta charlie.c alpha.txt bravo.dat'), 'View > Descending: the largest first, the folder still first', order());
+viewMenu('Sort by Type');
+check(until(() => order() === 'zeta alpha.txt bravo.dat charlie.c'), 'Sort by Type keeps descending: by extension, txt dat c', order());
+viewMenu('Ascending');
+check(until(() => order() === 'zeta charlie.c bravo.dat alpha.txt'), 'and Ascending turns it round', order());
+viewMenu('Sort by Date');
+check(until(() => order() === 'zeta bravo.dat charlie.c alpha.txt'), 'Sort by Date: in the order they were made', order());
+clickText('Name', inFiles);
+check(until(() => order() === 'zeta alpha.txt bravo.dat charlie.c'), "clicking the Name column's header sorts by name", order());
+clickText('Name', inFiles);
+check(until(() => order() === 'zeta charlie.c bravo.dat alpha.txt'), 'and clicking it again reverses it', order());
+clickText('Size', inFiles);
+check(until(() => order() === 'zeta bravo.dat alpha.txt charlie.c'), 'clicking Size sorts by size, smallest first', order());
+// the order is kept with Settings' choices: a new Files window has it
+clickText('File', all => all.filter(t => inFiles([t])).sort((p, q) => p.y - q.y)[0]); settle(); clickText('Close');
+check(until(() => !explorer()), 'File > Close closes Files', screen());
+start('Files');
+until(() => has('Files - /'));
+dbl('home', inList);
+check(until(() => has('Files - /home') && order() === 'zeta bravo.dat alpha.txt charlie.c'), 'and Files opened again keeps the order', order());
+clickText('Name', inFiles);
+check(until(() => order() === 'zeta alpha.txt bravo.dat charlie.c'), 'by name again', order());
+// File > Download: the selected file, to the page
+{
+  const before = downloads.length;
+  clickText('alpha.txt', inList); settle();
+  clickText('File', all => all.filter(t => inFiles([t])).sort((p, q) => p.y - q.y)[0]); settle(); clickText('Download');
+  check(until(() => downloads.length === before + 1) && downloads[before][0] === 'alpha.txt' && downloads[before][1].length === 3000 && noDialog(),
+    'File > Download hands the selected file to the page', downloads.map(([n]) => n).join(' ') + '\n' + screen());
+}
+key('\b');
+until(() => has('Files - /'));
+dbl('tmp', inList);
+check(until(() => has('Files - /tmp')), 'and back in /tmp');
+
+// ---- Text Editor --------------------------------------------------------------------------
+start('Text Editor');
+check(until(() => has('Untitled - Text Editor')), 'Go > Text Editor opens a new document');
+type('hello from c4ix\n'); type('second line');
+check(until(() => has('hello from c4ix') && has('second line') && has('Untitled * - Text Editor')), 'typing shows, and the title marks it modified', screen());
+key('s', 2, 83);
+check(until(() => has('Save As') && has('Save in:') && has('Save as type:') && has('tmp') && has('untitled.txt') && has('All Files (*)')),
+  'Ctrl+S on a new file asks where, in a Windows 95 Save As: /tmp, the name, the types', screen());
+key('\n');
+check(until(() => has('untitled.txt - Text Editor')), 'and saves it to /tmp/untitled.txt', screen());
+// Open: the folder, up, a folder's contents, and the types
+key('o', 2, 79);
+// the file box's client area, from its "Look in:" (drawn at 10, 14); what is
+// drawn after that is the box's, the topmost window
+const fbox = () => { const i = frame.findIndex(s => /^(Look|Save) in:$/.test(s.s.trimEnd())); return i >= 0 ? { x: frame[i].x - 10, y: frame[i].y - 14, i } : null; };
+check(until(() => has('Look in:') && has('Files of type:') && !!fbox()), 'Ctrl+O opens a Windows 95 Open box', screen());
+const inBox = all => { const b = fbox(); return b ? all.filter(t => frame.indexOf(t) > b.i && t.x > b.x && t.y > b.y + 40 && t.y < b.y + 227).pop() : undefined; };
+check(until(() => !!inBox(find('untitled.txt'))), 'in the file\'s folder, which lists it', screen());
+{
+  // Up: the button right of "Look in"; the folders above in its list
+  const b = fbox();
+  click(b.x + 462 - 34 + 12, b.y + 21);
+  check(until(() => has('C4IX (/)') && !!inBox(find('usr')) && !inBox(find('untitled.txt'))), 'the Up button goes to the folder above', screen());
+  dbl('tmp', inBox);
+  check(until(() => !!inBox(find('untitled.txt'))), 'and a double click into a folder', screen());
+  clickText('All Files (*)');
+  check(until(() => has('Text Documents (*.txt)') && has('C Source (*.c;*.h)')), 'Files of type lists the types', screen());
+  clickText('C Source (*.c;*.h)');
+  check(until(() => has('C Source (*.c;*.h)') && !inBox(find('untitled.txt'))), 'and C Source shows no .txt', screen());
+  key('ESC');
+  check(until(() => !has('Look in:')), 'Esc cancels it', screen());
+}
+clickText(/^Files - /); key('F5');
+check(until(() => !!inList(find('untitled.txt')) && has('Text')), 'Files lists the saved file after a refresh', screen());
+const notes = find('untitled.txt - Text Editor').length;
+dbl('untitled.txt', inList);
+check(until(() => find('untitled.txt - Text Editor').length > notes), 'double-clicking it opens it in Text Editor');
+check(until(() => find('hello from c4ix').length >= 2), 'with what was saved in it');
+// the Terminal's Copy All, pasted here: its scrollback too, free.c's first line long scrolled off
+key('v', 2, 86);
+// PgUp a page at a time, each drawn before the next
+const topLine = () => frame.some(t => t.adv === 7 && /^\/\/ C4IX userland: free /.test(t.s));
+for (let i = 0; i < 30 && !topLine(); i++) { key('', 0, 33); until(topLine, 8); }
+check(until(topLine),
+  "the Terminal's Copy All pastes into Text Editor, with what had scrolled off its screen", screen().slice(-600));
+
+// Word Wrap (Format), on from the start: a line longer than the window is
+// wide folds onto the rows below, after a space; off, it is one row, cut
+// at the window's edge, which scrolls across under a bar to the caret
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+const WORDS = Array.from({ length: 30 }, (_, i) => 'word' + i).join(' ');
+type(WORDS);
+const wordRows = () => frame.filter(t => /^word\d/.test(t.s)).sort((a, b) => a.y - b.y);
+check(until(() => wordRows().length >= 3 && wordRows().map(t => t.s).join(' ').replace(/ +/g, ' ').trim() === WORDS),
+  'Word Wrap: a long line folds onto the rows below, whole words to a row', wordRows().map(t => `${t.s}@${t.x},${t.y}`).join(' | '));
+check(wordRows().every(t => t.x === wordRows()[0].x && /(word\d+ ?)$/.test(t.s)) && wordRows().every(t => t.s.length <= 80),
+  'each row starts at the left and ends after a word', wordRows().map(t => t.s).join(' | '));
+const hbar = () => rects.some(r => r.h === 16 && r.w > 100 && r.rgb === 0xe0e0e0);
+check(!hbar(), 'with no bar across');
+menu('Format', 'Word Wrap');
+// (the row as it is shown, scrolled across: it may start inside a word)
+const lineRows = () => frame.filter(t => /word\d/.test(t.s));
+check(until(() => lineRows().length === 1 && hbar()), 'Format > Word Wrap off: one row, and a bar across', lineRows().map(t => t.s).join(' | '));
+check(/word29$/.test(lineRows()[0]?.s) && !/^word0 /.test(lineRows()[0]?.s), 'scrolled across to the caret at its end', lineRows()[0]?.s);
+key('HOME');
+check(until(() => wordRows().length === 1 && /^word0 word1 /.test(wordRows()[0].s) && !/word29/.test(wordRows()[0].s)),
+  'Home: back to its start, the rest past the edge', wordRows()[0]?.s);
+// the face and size: every Text Editor window's, at once
+menu('Format', 'Courier New');
+check(until(() => wordRows().length === 1 && wordRows()[0].font === 3 && wordRows()[0].adv === 7),
+  'Format > Courier New draws the text in it (font 3)', JSON.stringify(wordRows()[0]));
+menu('Format', 'Large');
+check(until(() => wordRows().length === 1 && wordRows()[0].font === 3 && wordRows()[0].adv === 8 && wordRows()[0].size === 14),
+  'Format > Large: a grid of 8 pixels a column, 14-pixel text', JSON.stringify(wordRows()[0]));
+check(find('hello from c4ix').every(t => t.adv === 8 && t.font === 3), 'in every Text Editor window', JSON.stringify(find('hello from c4ix')));
+// kept: notepad.cfg, which a new desktop reads (below, after Power Off)
+clickText(/^Terminal - task/);
+type('cat /etc/notepad.cfg\n');
+check(until(() => has(/^wrap 0 font 1 size 2/)), "Format's choices are kept in /etc/notepad.cfg", screen().slice(-300));
+
+// ---- Calculator ------------------------------------------------------------------------
+start('Calculator');
+check(until(() => has('Calculator') && has('Hex') && has('Dec')), 'Go > Calculator opens');
+type('12+30=');
+check(until(() => has('42')), '12 + 30 = 42', screen().slice(-300));
+clickText('Hex', 'last', -8, 5);
+check(until(() => has('2A')), 'switched to Hex it shows 2A');
+type('*2=');
+check(until(() => has('54')), '2A * 2 = 54 in hex');
+// Single and Double: IEEE arithmetic in that precision, the shortest
+// decimal that reads back, and the bits. Printable keys go in with
+// keyCode 0 here, or '.' would be Delete.
+const ftype = s => { for (const ch of s) key(ch, 0, ch === '=' ? 13 : 0); };
+clickText('Double', 'last', -8, 5);
+check(until(() => has('IEEE double, bits:')), 'Double mode shows the bits in place of the radix', screen().slice(-300));
+key('ESC'); ftype('0.1+0.2=');
+check(until(() => has('0.30000000000000004') && has('3FD33333 33333334')), '0.1 + 0.2 = 0.30000000000000004 in Double', screen().slice(-300));
+clickText('Single', 'last', -8, 5);
+check(until(() => has('IEEE single, bits:') && has('3E99999A')), 'switched to Single it is the float nearest, 0.3', screen().slice(-300));
+key('ESC'); ftype('16777216+1=');
+check(until(() => has('16777216') && has('4B800000')), '2^24 + 1 is 2^24 in Single', screen().slice(-300));
+clickText('Double', 'last', -8, 5);
+key('ESC'); ftype('16777216+1=');
+check(until(() => has('16777217')), 'and 16777217 in Double', screen().slice(-300));
+clickText('Single', 'last', -8, 5);
+key('ESC'); clickText('Max'); ftype('*2=');
+check(until(() => has('inf') && has('7F800000')), 'Max * 2 overflows to inf in Single', screen().slice(-300));
+clickText('Integer', 'last', -8, 5);
+check(until(() => has('Hex') && has('Dec') && !has('IEEE single, bits:')), 'and back to Integer', screen().slice(-300));
+clickText('Dec', 'last', -8, 5);
+key('ESC'); type('2+3==');
+check(until(() => has('8')), '= again repeats the last operation: 2 + 3 = = is 8', screen().slice(-300));
+type('=');
+check(until(() => has('11')), 'and again, 11', screen().slice(-300));
+type('10=');
+check(until(() => has('13')), 'a new number then = adds 3 to it', screen().slice(-300));
+clickText('Double', 'last', -8, 5);
+key('ESC'); ftype('10*0.5==');
+check(until(() => has('2.5')), 'in Double too: 10 * 0.5 = = is 2.5', screen().slice(-300));
+clickText('Integer', 'last', -8, 5);
+
+// ---- the IDE: Traditional typing, the clipboard, a binary file, its Settings ------------------
+// Printable keys go in with keyCode 0: this harness would otherwise make
+// '(' a Down arrow and '.' Delete (a browser sends their own keyCodes).
+const txt = s => { for (const ch of s) key(ch, 0, ch === '\n' ? 13 : 0); };
+const edLine = s => rows().some(t => t.s.trimEnd().endsWith(s));
+start('IDE');
+check(until(() => has('Untitled - IDE') && has(/^Type to edit; Esc for a command/)), 'Go > IDE opens a new file, titled IDE, typing as Text Editor does', screen());
+check(rects.some(r => r.rgb === 0x000087 && r.w > 300), "in the Blue scheme, after VIM's blue", [...new Set(rects.map(r => r.rgb.toString(16)))].join(' '));
+txt('hello world');
+check(until(() => edLine('hello world')), 'typing types at once', screen());
+for (let i = 0; i < 5; i++) key('', 1, 37);                   // Shift+Left
+key('c', 2, 67); key('END'); txt(' '); key('v', 2, 86);
+check(until(() => edLine('hello world world')), 'Shift+Left selects, Ctrl+C copies, Ctrl+V pastes', screen());
+key('a', 2, 65); txt('x');
+check(until(() => edLine('x') && !edLine('hello world world')), 'Ctrl+A selects it all, and typing replaces it', screen());
+key('z', 2, 90);
+check(until(() => edLine('hello world world')), 'Ctrl+Z undoes that', screen());
+menu('Edit', 'Select All   Ctrl+A'); menu('Edit', 'Cut   Ctrl+X');
+check(until(() => !edLine('hello world world')), 'Edit > Select All, then Cut, take it out', screen());
+menu('Edit', 'Paste   Ctrl+V');
+check(until(() => edLine('hello world world')), 'and Edit > Paste puts it back', screen());
+{
+  // a drag over "hello", and Ctrl+X
+  const t = rows().find(t => t.s.trimEnd().endsWith('hello world world'));
+  drag(t.x + 1, t.y + 5, t.x + 5 * 7 + 1, t.y + 5);
+  key('x', 2, 88);
+  check(until(() => rows().some(t => t.s.trimEnd() === ' world world')), 'a drag selects, and Ctrl+X cuts it', screen());
+}
+// what a window copied is still there once the window has gone
+start('Terminal');
+type('echo survivor\n');
+check(until(() => termText('survivor').length > 0), 'a new Terminal says a word', screen());
+{
+  const t = termText('survivor').pop();
+  drag(t.x + 2, t.y + 6, t.x + 8 * 8 - 3, t.y + 6);
+  key('C', 3, 67);
+  // its close box: the Flat look's, 627 pixels right of its title
+  const ti = frame.filter(s => /^Terminal - task/.test(s.s) && s.y < SH - TASK_H).pop();
+  click(ti.x + 627, ti.y + 6);
+  check(until(() => !frame.some(s => s.s === ti.s)), 'it is copied, and the Terminal closed', screen());
+  // the IDE is on top again, and has the keys
+  key('', 0, 35); key('v', 2, 86);
+  check(until(() => edLine('worldsurvivor')), "and it pastes into the IDE: the clipboard's text outlived its window", screen());
+}
+// a binary file: asked about first, by a NUL in it or by its name (a
+// compiled one opens in the Code tab instead: below)
+key('ESC'); txt('e! /home/bravo.dat\n');
+check(until(() => has(/does not look like text/)), 'opening a binary file asks first (a NUL in /home/bravo.dat)', screen());
+clickText('Cancel');
+check(until(() => noDialog() && has('Untitled * - IDE')), 'and Cancel leaves it unopened', screen());
+key('ESC'); txt('e! /usr/share/splash/c4ix.c4p.gz\n');
+check(until(() => has(/does not look like text/)), 'a .gz is binary by its name', screen());
+key('\n');
+check(until(() => noDialog() && has('c4ix.c4p.gz - IDE')), 'and OK opens it anyway', screen());
+key('n', 2, 78);
+check(until(() => has('Untitled - IDE')), 'Ctrl+N: a new file', screen());
+// Settings: the colours, and VIM mode
+menu('View', 'Settings...');
+check(until(() => has('IDE Settings') && has('Colour scheme') && has('Input mode')), "View > Settings opens the IDE's settings", screen());
+clickText('Classic (black on white)', 'last', -8, 5);
+check(until(() => !rects.some(r => r.rgb === 0x000087 && r.w > 300) && rects.some(r => r.rgb === 0xffffff && r.w > 300)), 'Classic draws it black on white', screen());
+clickText('VIM: Normal, Insert and Visual modes', 'last', -8, 5);
+// the font: the preview, and every IDE window, in its face and grid
+check(has('Font') && has('Consolas') && has('Courier New') && has('Lucida Console') && has('Large'), 'Settings offers fixed-width faces and sizes', screen());
+clickText('Courier New', 'last', -8, 5);
+clickText('Large', 'last', -8, 5);
+check(until(() => find('#include').some(t => t.font === 3 && t.adv === 8 && t.size === 14) && find('~').some(t => t.font === 3 && t.adv === 8)),
+  'Courier New, Large: the preview and the IDE behind it in a grid of 8 pixels', JSON.stringify(find('#include')));
+clickText('Normal', 'last', -8, 5);
+check(until(() => find('#include').some(t => t.font === 3 && t.adv === 7 && t.size === 12)), 'and Normal, 7 pixels again, still Courier New', JSON.stringify(find('#include')));
+clickText('OK');
+check(until(() => !has('IDE Settings') && !has(/^-- EDIT --/)), 'VIM mode takes it out of Traditional typing, and OK closes Settings', screen());
+txt('i');
+check(until(() => has('-- INSERT --')), 'i enters Insert mode');
+txt('int main() {\n    return 4;\n}');
+key('ESC');
+check(until(() => edLine('int main() {') && edLine('return 4;') && !has('-- INSERT --')), 'typing shows, keeping the indent, and Esc leaves Insert', screen());
+txt(':w /tmp/t.c\n');
+check(until(() => has(/"\/tmp\/t\.c" written, 3 lines/) && has('t.c - IDE')), ':w writes the file', screen());
+txt('2Gf4r7');
+check(until(() => edLine('    return 7;')), '2G f4 r7 changes the number in place', screen());
+txt('ggyyp');
+const mains = () => rows().filter(t => /int main\(\) \{\s*$/.test(t.s)).length;
+check(until(() => mains() === 2), 'yyp copies a line', screen());
+txt('dd');
+check(until(() => mains() === 1), 'dd deletes it');
+txt('u');
+check(until(() => mains() === 2), 'u undoes that', screen());
+txt('dd');
+key('UP'); key('DOWN');
+txt('A');
+key('LEFT', 0, 37); txt('0');
+key('ESC');
+check(until(() => edLine('    return 70;')), 'arrow keys move in Insert mode', screen());
+txt(':make\n');
+check(until(() => has(/^Build: finished/), 4000), ':make builds it with c4sc and c4rlink', screen());
+txt('ggOint x = ;');
+key('ESC');
+txt(':make\n');
+check(until(() => has(/^Build: failed - 1 error/), 4000), 'a compile error fails the build and is listed', screen());
+check(until(() => has(/\(1 of 1\)/)), 'and the editor goes to it', screen());
+txt('dd');
+txt('jwciwexit');
+key('ESC');
+check(until(() => edLine('    exit 70;')), 'ciw changes a word', screen());
+txt('w.');
+check(until(() => edLine('    exit exit;')), '. repeats the change', screen());
+txt('/main\n');
+txt('Vjd');
+check(until(() => !edLine('int main() {') && !edLine('exit exit;') && edLine('}')), '/ finds, and V j d deletes the lines', screen());
+txt(':set novim\n');
+check(until(() => has(/^VIM mode off|^-- EDIT --/)), ':set novim makes a plain editor', screen());
+txt('abc');
+check(until(() => edLine('abc}')), 'that types at once', screen());
+key('ESC'); txt('set vim\n');
+check(until(() => !has(/^-- EDIT --/)), 'and Esc then set vim brings VIM back', screen());
+txt(':q!\n');
+check(until(() => !has(/t\.c \* - IDE|t\.c - IDE/)), ':q! closes the window');
+
+// ---- the IDE's Code pane (explore.c): the code a C file compiles to ---------------------------
+{
+  // its opcode names are the machine's, and the numbers it treats apart theirs
+  const xsrc = readFileSync(new URL('../../src/c4ix/user/desktop/explore.c', import.meta.url), 'utf8');
+  const xnames = (/static char \*opnames =([^;]*);/.exec(xsrc) || [, ''])[1].match(/"([^"]*)"/g).map(q => q.slice(1, -1)).join('');
+  check(xnames === OPNAMES, "the Code pane's opcode names are the machine's (devices.js OPNAMES)", xnames);
+  const named = ['LEA', 'IMM', 'JMP', 'JSR', 'BZ', 'BNZ', 'ADJ', 'JSRI', 'JSRS', 'JMPA', 'LDL', 'PSHL', 'LEAP', 'IMMP', 'STL'];
+  const opnum = n => OPNAMES.match(/.{5}/g).findIndex(t => t.slice(0, 4).trim() === n);
+  check(named.every(n => new RegExp(`O_${n} = ${opnum(n)}\\b`).test(xsrc)) && new RegExp(`O_N = ${OPNAMES.length / 5}\\b`).test(xsrc),
+    'and the opcodes it names by number are where OPNAMES has them');
+}
+const LONG = '// ' + 'abcdefghij'.repeat(12);   // a line the Code tab folds
+const SQ = `int sq(int a) {\nreturn a * a;\n}\nint main() {\nprintf("%d\\n", sq(7));\n${LONG}\nreturn 0;\n}`;
+start('IDE');
+until(() => has('Untitled - IDE'));
+txt(':e /tmp/sq.c\n');
+txt('i'); txt(SQ); key('ESC');
+txt(':w\n');
+check(until(() => has(/"\/tmp\/sq\.c" written, 8 lines/)), 'a file with two functions, written', screen());
+txt(':code\n');
+check(until(() => has(/^main \(\d+ words, sq\.c:4\)$/), 4000), ':code opens the Code tab, compiles it with cc -g, and shows the function the cursor is in', screen());
+check(has('sq.c') && has('Code') && !has(/^-- (EDIT|INSERT) --/), "in the text's place, under a tab beside the text's", screen());
+// The tab: its code's header, the listing below it by rows, and the list
+// of functions left of it. A row of source has its line's number, then
+// its text where the labels go; an instruction its offset, perhaps a
+// label, the mnemonic further on, and its operand.
+const codeHdr = () => find(/^[\w.]+ \(\d+ words/).pop();
+const codeRows = () => {
+  const h = codeHdr();
+  if (!h) return [];
+  const by = new Map();
+  for (const t of frame) if (t.adv === 7 && t.x >= h.x - 6 && t.y > h.y + 8) { const l = by.get(t.y) || []; l.push(t); by.set(t.y, l); }
+  const ow = 4, c1 = ow + 3;
+  return [...by.keys()].sort((a, b) => a - b).map(y => {
+    const r = by.get(y).sort((a, b) => a.x - b.x);
+    const more = Math.round((r[0].x - h.x) / 7) >= c1;
+    // an instruction's label is L and a number; a source line can end in a
+    // colon too (case 1:)
+    const src = more || (r.length > 1 && !/^L\d+:$/.test(r[1].s.trimEnd()) && Math.round((r[1].x - h.x) / 7) < c1 + 4);
+    return { src, more, cells: more ? ['', ...r.map(t => t.s.trimEnd())] : r.map(t => t.s.trimEnd()) };
+  });
+};
+// the list's names start where its filter's text does (drawn even when
+// it is empty), on its header's row left of the code's
+const listed = () => {
+  const h = codeHdr(), f = h && frame.find(t => t.adv === 7 && t.y === h.y && t.x < h.x - 8);
+  return f ? frame.filter(t => t.adv === 7 && t.x === f.x && t.y > h.y + 8).map(t => t.s.trimEnd()) : [];
+};
+const insOf = r => { const c = r.cells, k = /^L\d+:$/.test(c[1] || '') ? 2 : 1; return c[k + 1] ? c[k].padEnd(5) + c[k + 1] : c[k]; };
+const srcText = () => codeRows().filter(r => r.src).map(r => r.cells.slice(1).join(' '));
+check(codeRows().some(r => !r.src && insOf(r) === 'JSR  sq') && codeRows().some(r => !r.src && insOf(r) === 'IMM  "%d\\n"'),
+  "main's call to sq, and its string, by name", codeRows().map(r => r.cells.join(' ')).join('\n'));
+check(srcText().includes('int main() {') && srcText().includes('printf("%d\\n", sq(7));') && srcText().includes('return 0;'),
+  'its source lines between the instructions they made', codeRows().map(r => r.cells.join(' ')).join('\n'));
+check(listed().includes('sq') && listed().includes('main'), 'and its functions listed beside it', listed().join(' '));
+{
+  // the long line, folded: a row with its number, then rows of the rest
+  const rs = codeRows(), k = rs.findIndex(r => r.src && !r.more && LONG.startsWith(r.cells[1]) && r.cells[1].length > 10);
+  let text = k >= 0 ? rs[k].cells[1] : '';
+  for (let j = k + 1; k >= 0 && j < rs.length && rs[j].more; j++) text += rs[j].cells[1];
+  check(k >= 0 && rs[k + 1].more && text === LONG, 'a long source line is folded onto the rows below it', rs.map(r => r.cells.join('|')).join('\n'));
+  const hbar = () => rects.some(r => r.h === 16 && r.rgb === 0xe0e0e0 && r.w > 100 && r.x >= codeHdr().x - 6);
+  check(!hbar(), 'with no bar across while it wraps');
+  clickText('Wrap');
+  check(until(() => hbar() && !codeRows().some(r => r.more)), 'Wrap off: it is one row, with a bar across to scroll it', screen());
+  clickText('Wrap');
+  check(until(() => !hbar() && codeRows().some(r => r.more)), 'and Wrap on again folds it', screen());
+  const h = codeHdr(), code = frame.filter(t => t.adv === 7 && h && t.x >= h.x - 6 && t.y > h.y + 8);
+  check(code.length > 5 && code.every(t => t.font === 3), "the Code tab drawn in the IDE's font, Courier New", JSON.stringify(code.filter(t => t.font !== 3).slice(0, 3)));
+}
+// the same as c4r.js says for the object host c4lc makes of the same source
+{
+  const top = fileURLToPath(new URL('../../', import.meta.url));
+  // the host's 32-bit c4lc (the word C4IX's c4sc has), picked as
+  // tools/c4lc.sh picks it: c4sc-host32, or c4sp32 with C4LC32=interp
+  const interp = (process.env.C4LC32 || process.env.C4LC || 'compiled') === 'interp';
+  const [lcBin, lcArgs] = interp ? ['c4sp32', ['-R', '-c', '16000000', 'src/c4sp/lisp/c4lc.lisp']]
+                                 : ['c4sc-host32', ['compile']];
+  if (existsSync(join(top, lcBin))) {
+    // a name of its own: another test-desktop may be running beside this one
+    const sq = `/tmp/.td-sq-${process.pid}`;
+    writeFileSync(sq + '.c', SQ + '\n');
+    execFileSync('./' + lcBin, [...lcArgs, '-O', '-g', '-c', '-P', '-I', '/tmp', '-I', 'src/c4ix/include',
+      '-D', 'C4CC=1', '-D', '__c4cc__=1', sq + '.c', sq + '.c4o'], { cwd: top, stdio: 'ignore' });
+    const a = analyse(readC4r(new Uint8Array(readFileSync(sq + '.c4o'))));
+    const f = a.funcs.find(g => g.name === 'main');
+    const want = [];
+    for (let k = f.first; k >= 0 && k < a.insns.length && a.insns[k].off < f.end; k++) want.push(insnText(a, a.insns[k], f));
+    const got = codeRows().filter(r => !r.src).map(insOf);
+    check(want.length > 3 && want.every((w, i) => got[i] === w), "each of main's instructions as libjs/c4r.js's insnText has it",
+      `want:\n${want.join('\n')}\ngot:\n${got.join('\n')}`);
+    unlinkSync(sq + '.c'); unlinkSync(sq + '.c4o');
+  } else console.log(`test-desktop: (no ./${lcBin}: the Code tab is not checked against c4r.js)`);
+}
+{
+  const h = codeHdr(), t = find('sq').filter(t => h && t.x < h.x - 8).pop();
+  if (t) click(t.x + 3, t.y + 5);
+  check(!!t && until(() => has(/^sq \(\d+ words, sq\.c:1\)$/)) && srcText().includes('return a * a;'), 'a click in the list shows that function', screen());
+}
+type('ma');
+check(until(() => has(/^main \(/) && !listed().includes('sq')), 'typing finds a function by name: the list keeps those it matches', listed().join(' '));
+key('ESC');
+check(until(() => listed().includes('sq') && has(/^main \(/)), 'and Esc forgets what was typed', listed().join(' '));
+key('', 0, 38);
+check(until(() => has(/^sq \(/)), 'Up goes to the function before it in the list', screen());
+{
+  const mul = find('MUL').filter(t => t.x >= codeHdr().x)[0];
+  if (mul) click(mul.x + 3, mul.y + 5);
+  check(!!mul && until(() => has(/^sq\.c:2  MUL/)), "a click on an instruction picks it: its line and what it is, below", screen());
+}
+{
+  const r = find('return a * a;').filter(t => t.x >= codeHdr().x)[0];
+  if (r) { click(r.x + 3, r.y + 5); click(r.x + 3, r.y + 5); }
+  check(!!r && until(() => has('2,1') && !codeHdr()), 'a double click on a line of source goes to it in the text', screen());
+}
+key('F7', 0, 118);
+check(until(() => has(/^sq \(/)), 'F7: the Code tab again, on the function the cursor is in', screen());
+clickText('main', all => all.filter(t => t.x < codeHdr().x - 8).pop());
+check(until(() => has(/^main \(/)), 'main, from the list');
+{
+  const call = find('sq').filter(t => t.x >= codeHdr().x)[0];
+  if (call) { click(call.x + 3, call.y + 5); click(call.x + 3, call.y + 5); }
+  check(!!call && until(() => has(/^sq \(/)), 'a double click on a call goes to the callee', screen());
+}
+key('\b');
+check(until(() => has(/^main \(/)), 'and Backspace comes back', screen());
+{
+  const o = find('-O').filter(t => t.x >= codeHdr().x)[0];
+  if (o) click(o.x + 3, o.y + 5);
+  check(!!o && until(() => has('Compiling with -g...')), 'its -O button compiles again without -O', screen());
+  check(until(() => has('Compiled with -g') && has(/^main \(/), 4000), '... and shows that, the same function', screen());
+}
+key('ESC');
+check(until(() => !codeHdr() && has('2,1') && has('Code')), 'Esc: back to the text, the Code tab still beside it', screen());
+clickText('Code');
+check(until(() => has(/^main \(/)), 'a click on the Code tab shows it again', screen());
+{
+  const xb = find('x').filter(t => t.x > codeHdr().x).pop();
+  if (xb) click(xb.x + 3, xb.y + 5);
+  check(!!xb && until(() => !codeHdr() && !has('Code') && has('2,1')), 'and its x closes it', screen());
+}
+txt(':q!\n');
+check(until(() => !has('sq.c - IDE')), 'and the window closes');
+// What the listing puts above each piece of code (explore.c's xp_lay, on
+// c4lc -g's rows): a K&R function from its name down; a statement that
+// goes on over two lines, whole, before its code; an initialised local's
+// line over its code; a switch's case labels over theirs, past comments,
+// and its line again over the dispatch at its end; and INT_MIN, a plain
+// number, as a number
+{
+  const XT = ['int kr', '(int a)', '{', 'return a + 1;', '}',
+    'int lim(int a, int d)', '{', 'if (d == 0 ||', 'a == -2147483647 - 1)', 'return 0;', 'return a;', '}',
+    'int ini(int a)', '{', 'int n = 3;', 'char w[] = "h";', 'return n + w[a];', '}',
+    'int sw(int a)', '{', 'switch (a) {', 'case 1:', 'a = 4;', 'break;', '// one', '// two', 'case 2:', 'case 3:',
+    'a = 5;', 'break;', 'default:', 'a = 6;', '}', 'return a;', '}',
+    'int main() {', 'return kr(1) + lim(1, 2) + ini(0) + sw(2);', '}'].join('\n');
+  start('IDE');
+  until(() => has('Untitled - IDE'));
+  txt(':e /tmp/xt.c\n');
+  txt('i'); txt(XT); key('ESC');
+  txt(':w\n');
+  check(until(() => has(/"\/tmp\/xt\.c" written/)), 'a file of what the listing has to place, written', screen());
+  txt(':code\n');
+  check(until(() => has(/^main \(\d+ words, xt\.c:\d+\)$/), 4000), ':code shows it', screen());
+  const pick = n => {
+    const h = codeHdr(), t = find(n).filter(t => h && t.x < h.x - 8).pop();
+    if (t) click(t.x + 3, t.y + 5);
+    return !!t && until(() => has(new RegExp(`^${n} \\(`)));
+  };
+  // the listing as S(ource) and I(nstruction) rows
+  const lst = () => codeRows().map(r => r.src ? 'S ' + r.cells.slice(1).join(' ') : 'I ' + insOf(r));
+  const after = (l, s) => { const k = l.indexOf('S ' + s); return k >= 0 && k + 1 < l.length ? l[k + 1] : ''; };
+  let l;
+  check(pick('kr') && has(/^kr \(\d+ words, xt\.c:1\)$/) && (l = lst())[0] === 'S int kr' &&
+    ['(int a)', '{', 'return a + 1;'].every(s => l.includes('S ' + s)),
+    'a K&R function is at its name, and its parameters are shown', (l || []).join('\n'));
+  check(pick('lim') && after(l = lst(), 'if (d == 0 ||') === 'S a == -2147483647 - 1)' && after(l, 'a == -2147483647 - 1)').startsWith('I '),
+    "a statement's lines all come before its code", l.join('\n'));
+  check(l.includes('I IMM  -2147483648'), 'INT_MIN is shown as a number', l.join('\n'));
+  check(pick('ini') && after(l = lst(), 'int n = 3;').startsWith('I ') && after(l, 'char w[] = "h";').startsWith('I '),
+    "an initialised local's line is over its code", l.join('\n'));
+  check(pick('sw') && after(l = lst(), '// one') === 'S // two' && after(l, '// two') === 'S case 2:' &&
+    after(l, 'case 2:') === 'S case 3:' && after(l, 'case 3:') === 'S a = 5;' && l.includes('S case 1:'),
+    "a switch's case labels are over their code", l.join('\n'));
+  {
+    // the dispatch, at the switch's end: the switch's line again (its
+    // first case is 1, so it starts PSH, IMM 1, SUB)
+    let ok = false, i = 0;
+    while (!ok && i < 4) { l = lst(); ok = l.some((s, k) => s === 'S switch (a) {' && l[k + 1] === 'I PSH'); if (!ok) { key('', 0, 34); settle(); } ++i; }
+    check(ok, "and the switch's line is over its dispatch", l.join('\n'));
+  }
+  key('ESC');
+  txt(':q!\n');
+  check(until(() => !has('xt.c - IDE') && !has('xt.c * - IDE')), 'and the window closes');
+}
+// a compiled file opens in the Code tab as it is, its source found by its map
+start('IDE');
+until(() => has('Untitled - IDE'));
+txt(':e /bin/ls\n');
+check(until(() => has('ls - IDE') && has(/^main \(\d+ words, ls\.c:\d+\)$/), 2000), 'a program (/bin/ls) opens in the Code tab alone, at main', screen());
+check(until(() => has(/^ls: \d+ functions?, [\d,]+ words of code, a map of \d+ files?; loads lib\w+\.c4s/)) && srcText().length > 3 && !has('Code'),
+  "with the source its map names, from /usr/src, and the libraries it loads", codeRows().map(r => r.cells.join(' ')).join('\n') + '\n' + screen());
+{
+  // the libraries' functions follow its own in the list, and a call into one goes there
+  const own = ['ls_dir', 'main'];
+  check(listed().length > 10 && own.every(n => listed().indexOf(n) >= 0 && listed().indexOf(n) < 2), "the libraries' functions are listed after its own", listed().slice(0, 12).join(' '));
+  // ls_dir calls into the libraries near its top: PgDn until one is in view
+  clickText('ls_dir', all => all.filter(t => t.x < codeHdr().x - 8).pop());
+  until(() => has(/^ls_dir \(/));
+  const extern = () => codeRows().find(r => !r.src && r.cells.includes('JSR') && !own.includes(r.cells[r.cells.indexOf('JSR') + 1]));
+  for (let i = 0; i < 6 && !extern(); i++) { key('', 0, 34); settle(); }
+  const call = extern();
+  const name = call ? call.cells[call.cells.indexOf('JSR') + 1] : '';
+  const t = name && find(name).filter(t => t.x >= codeHdr().x)[0];
+  if (t) { click(t.x + 3, t.y + 5); click(t.x + 3, t.y + 5); }
+  check(!!t && until(() => has(new RegExp(`^${name} \\(\\d+ words.*, in lib\\w+\\.c4s\\)$`))), `a double click on a call to ${name} goes to it, in its library`, screen());
+  key('\b');
+  check(until(() => has(/^ls_dir \(/)), 'and Backspace comes back');
+}
+{
+  // a scroll bar's thumb drags; its arrow, held, keeps scrolling
+  const at = () => codeRows().map(r => r.cells.join(' '));
+  const top0 = at();
+  check(dragThumb(r => r.x > codeHdr().x, 60) && until(() => at()[0] !== top0[0]), "a scroll bar's thumb drags", at().slice(0, 2).join(' / '));
+  const bar = rects.filter(r => r.w === 16 && r.rgb === 0xe0e0e0 && r.x > codeHdr().x).pop();
+  const before = at();
+  if (bar) { ev({ kind: 'move', x: bar.x + 8, y: bar.y + bar.h - 8, buttons: 0 }); ev({ kind: 'down', x: bar.x + 8, y: bar.y + bar.h - 8, button: 0 }); }
+  const t0 = vm.dev.simMs();
+  until(() => vm.dev.simMs() - t0 > 1500, 3000);
+  ev({ kind: 'up', x: bar ? bar.x + 8 : 0, y: bar ? bar.y + bar.h - 8 : 0, button: 0 });
+  const after = at(), k = before.indexOf(after[0]);
+  check(!!bar && after[0] !== before[0] && (k < 0 || k > 3), "and holding its arrow keeps scrolling", `${k}: ${before.slice(0, 4).join(' / ')} -> ${after.slice(0, 2).join(' / ')}`);
+}
+// a helper the compiler brought: its source is its parser's string (c4lc-parse.lisp's p:llsrc)
+type('__c4ll_add');
+check(until(() => has(/^__c4ll_add \(\d+ words, <c4lc long long>:\d+, in lib\w+\.c4s\)$/) && srcText().some(t => /^static int \*__c4ll_add\(/.test(t))),
+  "a helper of the compiler's shows its source, from the parser that holds it", codeRows().map(r => r.cells.join(' ')).join('\n') + '\n' + screen());
+key('ESC');
+menu('File', 'Close');
+check(until(() => !has('ls - IDE')), 'File > Close closes it');
+
+// ---- the IDE: its desktop icon, its file pane, colours, its scroll bar -----------------------
+dbl('IDE');
+check(until(() => has('Untitled - IDE') && has('Files')), 'the IDE icon opens the IDE, with a file pane, as it was left: VIM, Classic', screen());
+// The IDE window, by its title; what is drawn after the title in the
+// frame is that window's (it is on top), so other windows' text at the
+// same place does not count.
+const edTitle = () => frame.findIndex(t => / - IDE$/.test(t.s));
+const ed = () => { const i = edTitle(); return i >= 0 ? { x: frame[i].x - 27, y: frame[i].y - 7, i } : null; };
+const inPane = all => { const e = ed(); return e ? all.filter(t => frame.indexOf(t) > e.i && t.x > e.x && t.x < e.x + 184 && t.y > e.y + 60).pop() : undefined; };
+check(!!inPane(find('usr')) && !!inPane(find('bin')) && !inPane(find('src')), 'the pane lists the top of the disk, its folders closed', screen());
+clickText('usr', inPane);
+check(until(() => !!inPane(find('src'))), 'a click opens a folder', screen());
+clickText('src', inPane);
+check(until(() => !!inPane(find('c4ix'))), 'and one inside it');
+clickText('c4ix', inPane);
+until(() => !!inPane(find('examples')));
+clickText('examples', inPane);
+// The tree is taller than the pane by now (examples' files come last,
+// below the bottom row), so a turn of the wheel brings them up.
+{ const e = ed(); ev({ kind: 'wheel', x: e.x + 60, y: e.y + 200, dy: 1 }); }
+check(until(() => !!inPane(find('hello.c'))), 'which lists its files', screen());
+clickText('hello.c', inPane);
+check(until(() => has('hello.c - IDE') && edLine('int main(int argc, char **argv) {')), 'a click on a file opens it in the editor', screen());
+// File > Open: the Windows 95 box, in the file's folder, with the IDE's types
+menu('File', 'Open...');
+check(until(() => has('Look in:') && has('examples') && !!inBox(find('hello.c'))), "the IDE's File > Open is the Windows 95 box, in the file's folder", screen());
+clickText('All Files (*)');
+until(() => has('C Source (*.c;*.h)'));
+clickText('C Source (*.c;*.h)');
+check(until(() => has('C Source (*.c;*.h)') && !has('All Files (*)') && !!inBox(find('hello.c'))), 'with C Source among its types', screen());
+key('ESC');
+until(() => !has('Look in:'));
+check(frame.some(t => t.s === 'int' && t.rgb === 0x007878) && frame.some(t => t.s === 'return' && t.rgb === 0x0000b0) &&
+  frame.some(t => /^\/\/ hello\.c/.test(t.s) && t.rgb === 0x2a8a2a) && frame.some(t => /^"hello from/.test(t.s) && t.rgb === 0xa01818),
+  'a .c file is coloured: types, keywords, comments and strings', frame.filter(t => t.adv === 7).map(t => `${t.s}:${t.rgb.toString(16)}`).slice(0, 40).join(' '));
+txt(':syntax off\n');
+check(until(() => edLine('int main(int argc, char **argv) {') && !frame.some(t => t.s === 'int' && t.rgb === 0x007878)), ':syntax off draws it plain', screen());
+txt(':syntax on\n');
+key('b', 2, 66);
+check(until(() => !has('Files') && has('hello.c - IDE')), 'Ctrl+B hides the file pane', screen());
+key('b', 2, 66);
+check(until(() => has('Files') && !!inPane(find('hello.c'))), 'and shows it again, still open at the file', screen());
+txt(':e /usr/src/c4ix/user/desktop/edit.c\n');
+check(until(() => has('edit.c - IDE') && !!inPane(find('edit.c'))), ':e opens a file, and the pane opens the folders to it', screen());
+{
+  const e = ed();
+  const firstLine = () => Math.min(...frame.filter(t => t.adv === 7 && /^\d+$/.test(t.s.trim()) && t.x > e.x + 184 && t.x < e.x + 250).map(t => +t.s.trim()));
+  check(firstLine() === 1 && dragThumb(r => r.x > e.x + 400, 150) && until(() => firstLine() > 100),
+    "dragging the editor's scroll thumb scrolls the text", `first line ${firstLine()}`);
+}
+// a long line: folded by Word Wrap, which is on to start with; then off
+// to the right, and the bar across; then folded again
+txt(':e /tmp/long.txt\n');
+until(() => has('long.txt - IDE'));
+txt('i' + 'W'.repeat(110) + 'END');
+key('ESC'); txt('0');
+check(until(() => edLine('WEND') && rows().filter(t => /^W{20,}/.test(t.s.trim())).length >= 2), 'Word Wrap is on: a long line folds onto the next row', screen());
+txt(':set nowrap\n');
+check(until(() => rows().some(t => /^W{40,}$/.test(t.s.trim())) && !edLine('WEND')), 'and :set nowrap shows its start, the rest off to the right', screen());
+{
+  const e = ed();
+  const hb = rects.filter(r => r.h === 16 && r.rgb === 0xe0e0e0 && r.x > e.x + 150 && r.w > 200).pop();
+  if (hb) for (let i = 0; i < 4; i++) click(hb.x + hb.w - 30, hb.y + 8);   // the track, right of the thumb: a page each
+  check(!!hb && until(() => edLine('WEND')), "the editor's bar across scrolls to the end of it", screen());
+}
+txt(':set wrap\n');
+check(until(() => edLine('WEND') && rows().filter(t => /^W{20,}/.test(t.s.trim())).length >= 2), ':set wrap folds it onto the next row', screen());
+txt(':set nowrap\n');
+txt(':e! /usr/src/c4ix/user/desktop/edit.c\n');
+until(() => has('edit.c - IDE'));
+// a build that takes a while, cancelled from the pane's button. /build
+// arrives built, so it is an edit that makes one: edit.c's object, again
+txt('Go// a change, so there is something to build'); key('ESC');
+txt(':make\n');
+check(until(() => has('Build: running') && has('Cancel'), 400), ':make on a file under a BUILD.B4K runs b4ke there', screen());
+clickText('Cancel');
+check(until(() => has('Build: cancelled') && !has('Build: running'), 400), 'Cancel stops the build', screen());
+// src/tests has no BUILD.B4K, and /usr's builds the tree, not
+// mandel.c: so it is built alone, by cc, with the repo's headers
+txt(':e! /usr/src/tests/mandel.c\n');
+until(() => has('mandel.c - IDE'));
+txt(':make\n');
+check(until(() => has(/^Build: finished/) && has(/^c4rlink: wrote \d+ bytes to ramfs:\/tmp\/mandel\.c4r/), 4000),
+  ':make on a file no BUILD.B4K names builds it alone, with cc', frame.filter(t => /Build|mandel|cc|b4ke|c4lc|cannot|rror/.test(t.s)).map(t => t.s.trim()).join('\n'));
+{
+  // the pointer: a text beam over the text, an arrow on the taskbar
+  const e = ed();
+  ev({ kind: 'move', x: e.x + 400, y: e.y + 150, buttons: 0 });
+  check(until(() => pointer === 1), 'the pointer is a text beam over the text', `pointer ${pointer}`);
+  ev({ kind: 'move', x: 400, y: SH - 10, buttons: 0 });
+  check(until(() => pointer === 0), 'and an arrow over the taskbar', `pointer ${pointer}`);
+}
+txt(':q\n');
+check(until(() => !has('edit.c - IDE')), 'and :q closes it');
+
+// ---- the IDE: the wheel to both ends, Find, the file pane's splitter ------------------------
+// (VIM mode, as Settings left it above.) The IDE's own source: some
+// thousands of lines, many longer than the window is wide.
+start('IDE');
+until(() => has('Untitled - IDE'));
+txt(':e /usr/src/c4ix/user/desktop/edit.c\n');
+check(until(() => has('edit.c - IDE')), 'the IDE opens edit.c', screen());
+{
+  const src = readFileSync(join(ROOT, '../../../src/c4ix/user/desktop/edit.c'), 'latin1').split('\n');
+  const LINES = src.length - 1;
+  const e = ed();
+  // the line numbers in the gutter, right of a file pane FW wide
+  const nums = (fw = 180) => frame.filter(t => t.adv > 0 && /^ *\d+$/.test(t.s) && t.x > e.x + fw + 4 && t.x < e.x + fw + 36 && t.y > e.y + 40 && t.y < e.y + 470).map(t => +t.s.trim());
+  const wheel = dy => ev({ kind: 'wheel', x: e.x + 450, y: e.y + 200, dy });
+  for (const w of ['wrap', 'nowrap']) {
+    txt(`:set ${w}\n`);
+    for (let i = 0; i < 400 && !nums().includes(LINES); i++) wheel(10);
+    check(until(() => nums().includes(LINES)), `${w}: the wheel down reaches the last line, ${LINES}`, nums().join(' '));
+    for (let i = 0; i < 10; i++) wheel(10);
+    check(until(() => nums().includes(LINES)), `${w}: and turned on, stays there`, nums().join(' '));
+    for (let i = 0; i < 400 && !nums().includes(1); i++) wheel(-10);
+    check(until(() => nums().includes(1)), `${w}: the wheel up reaches the first line`, nums().join(' '));
+    // the scroll bar's thumb, dragged to the bottom of its track
+    check(dragThumb(r => r.x > e.x + 400, 600) && until(() => nums().includes(LINES)), `${w}: the thumb dragged to the bottom shows the last line`, nums().join(' '));
+    for (let i = 0; i < 400 && !nums().includes(1); i++) wheel(-10);
+  }
+  txt(':set wrap\n:1\n');
+  // Find: the matches of a name, where the file has them
+  const word = 'e_findbar';
+  const at = []; src.forEach((l, i) => { let k = l.indexOf(word); while (k >= 0) { at.push([i + 1, k]); k = l.indexOf(word, k + 1); } });
+  // the status line: the line and column of the cursor, at a match's last character (VIM's Visual)
+  const atMatch = j => has(`${at[j][0]},${at[j][1] + word.length}`);
+  key('f', 2, 70);
+  check(until(() => has('Find:') && has('Next') && has('Previous') && has('Match case')), 'Ctrl+F opens the find bar under the text', screen());
+  txt(word);
+  check(at.length >= 3 && until(() => atMatch(0)), `typing finds the first ${word}, line ${at[0][0]}`, screen());
+  key('', 0, 114);                                             // F3
+  check(until(() => atMatch(1)), `F3 the next, line ${at[1][0]}`, screen());
+  key('\n');
+  check(until(() => atMatch(2)), `Enter the next again, line ${at[2][0]}`, screen());
+  key('', 1, 114); key('', 1, 114);                            // Shift+F3, twice
+  check(until(() => atMatch(0)), 'Shift+F3 the ones before', screen());
+  key('', 1, 114);
+  check(until(() => atMatch(at.length - 1) && has('Wrapped to the bottom')), `and before the first, round to the last, line ${at[at.length - 1][0]}, saying so`, screen());
+  clickText('Next');
+  check(until(() => atMatch(0) && has('Wrapped to the top')), 'Next past the last: the first again, saying so', screen());
+  for (let i = 0; i < word.length; i++) key('\b');
+  txt('E_FINDBAR');
+  check(until(() => atMatch(0)), 'without Match case, E_FINDBAR finds it too', screen());
+  clickText('Match case');
+  key('', 0, 114);
+  check(until(() => has('Not found')), 'with Match case, nothing', screen());
+  key('ESC');
+  check(until(() => !has('Find:')), 'Esc closes the bar', screen());
+  menu('Edit', 'Find...   Ctrl+F');
+  check(until(() => has('Find:') && has('Match case')), 'and Edit > Find... opens it again', screen());
+  key('ESC');
+  until(() => !has('Find:'));
+  // the file pane's splitter: the pointer, a drag, a new window as wide
+  const x0 = e.x + 4 + 180 + 2, y0 = e.y + 250;
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 });
+  check(until(() => pointer === 9), "over the file pane's right edge the pointer is a splitter's", `pointer ${pointer}`);
+  drag(x0, y0, x0 + 60, y0);
+  check(until(() => nums(240).length > 5 && !nums(180).length), 'dragging it makes the pane 60 pixels wider, the text along with it', screen());
+  // (the last match is VIM's Visual selection: Esc to Normal, or : takes it as a range)
+  key('ESC'); txt(':q\n');
+  check(until(() => !has('edit.c - IDE')), 'Esc and :q close edit.c', screen());
+  start('IDE');
+  until(() => has('Untitled - IDE'));
+  const e2 = ed();
+  const nums2 = fw => frame.filter(t => t.adv > 0 && /^ *\d+$/.test(t.s) && t.x > e2.x + fw + 4 && t.x < e2.x + fw + 36 && t.y > e2.y + 40 && t.y < e2.y + 470).map(t => +t.s.trim());
+  check(until(() => nums2(240).includes(1)), 'an IDE window opened after has the pane that wide too', screen());
+  drag(e2.x + 4 + 242, e2.y + 250, e2.x + 4 + 182, e2.y + 250);
+  check(until(() => nums2(180).includes(1)), 'and dragged back', screen());
+  txt(':q\n');
+  check(until(() => !has('Untitled - IDE')), 'and :q closes it');
+}
+// ---- Text Editor's Find: the same bar, the kit's ---------------------------------------------
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+type('alpha beta\ngamma beta\n');
+{
+  // the selection is the match drawn again, in white, over its row's text
+  const sel = row => { const r = find(row)[0]; return !!r && frame.some(t => t.s === 'beta' && t.y === r.y && t.rgb === 0xffffff); };
+  key('f', 2, 70);
+  check(until(() => has('Find:') && has('Match case')), "Text Editor's Ctrl+F opens the find bar", screen());
+  type('beta');
+  check(until(() => sel('alpha beta')), 'typing finds the first beta, round from the end', screen());
+  key('', 0, 114);
+  check(until(() => sel('gamma beta') && !sel('alpha beta')), 'F3 the next', screen());
+  key('', 1, 114);
+  check(until(() => sel('alpha beta') && !sel('gamma beta')), 'Shift+F3 the one before', screen());
+  key('ESC');
+  check(until(() => !has('Find:')), 'Esc closes it', screen());
+  menu('Edit', 'Find Next   F3');
+  check(until(() => sel('gamma beta')), 'Edit > Find Next finds the next', screen());
+  menu('File', 'Exit');
+  until(() => !has('Untitled * - Text Editor'));
+}
+
+// ---- System Monitor ------------------------------------------------------------------------
+clickText(/^Terminal - task/);
+type('spin 5000\n');
+until(() => has(/spin: tick 1\//), 1500);
+key('ESC', 3, 27);                                             // Ctrl+Shift+Esc
+check(until(() => has('System Monitor') && has('Name')), 'Ctrl+Shift+Esc opens System Monitor on Processes', screen());
+check(until(() => has(/^(c4ix-)?desktop/) && has(/^(c4ix-spin\.c4r|spin) *$/) && has(/^CPU Usage: \d+%$/), 600), 'it lists the tasks, spin among them, with CPU usage', frame.filter(t => /c4ix|CPU|Image|boot|init|spin/.test(t.s)).map(t => t.s.trim()).join(' | '));
+check(until(() => has('Memory') && has(/^[\d,]+ K$/)), 'each task shows the memory it holds');
+check(has('idle') && has(/^System *$/), 'and, as NT does, idle and System', frame.filter(t => /System/.test(t.s)).map(t => t.s.trim()).join(' | '));
+check(until(() => has('Interval') && frame.some(t => /^[0-9,]+\.[0-9]M$/.test(t.s.trim())), 600), 'its Interval column shows what a task ran in the last second, spin in millions', frame.filter(t => /[0-9]M$|[0-9]k$|Interval/.test(t.s)).map(t => t.s.trim()).join(' | '));
+check(!has(/^(c4sc|b4ke)(\.c4r)? *$/), 'the cancelled build left nothing behind', frame.filter(t => /c4sc|b4ke/.test(t.s)).map(t => t.s).join(' | '));
+clickText(/^(c4ix-spin\.c4r|spin) *$/);
+clickText('Kill');
+check(until(() => has(/Kill task (c4ix-)?spin/)), 'Kill asks first');
+key('y');
+check(until(() => !has(/^(c4ix-spin\.c4r|spin) *$/), 600), 'and ends it', screen());
+clickText('Load');
+check(until(() => has('CPU Usage History') && has('Totals')), 'the Performance tab shows the gauge and the history');
+// and the memory: the heap's use, free and size, and its history; the
+// status bar says it on every page
+check(until(() => has('Memory Usage History') && has('In use (MB)') && has('Free (MB)') && has(/^Memory: [\d.]+ MB of [\d.]+ MB$/)),
+      'it shows the memory in use and free', frame.filter(t => /Memory|MB/.test(t.s)).map(t => t.s.trim()).join(' | '));
+// and swap: how much is on it, how fast pages go, and the tasks held
+check(until(() => has('Swap') && has('On swap (MB)') && has('Pages in /s') && has('Pages out /s') && has('Tasks held') && has('Largest free (MB)')),
+      'it shows swap, and the largest free run', frame.filter(t => t.y > 150).map(t => t.s.trim()).join(' | '));
+clickText('Programs');
+check(until(() => has('Status') && find('Running').length >= 3), 'the Applications tab lists the windows');
+
+// ---- Settings ---------------------------------------------------------------------------------
+start('Settings');
+check(until(() => has('Color scheme') && has('Classic Teal') && has('Granite') && has('Defaults')), 'Go > Settings lists the colour schemes', screen());
+clickText('Granite');
+check(until(() => rects.some(r => r.rgb === 0xb8c4cc) && !rects.some(r => r.rgb === 0xc0c0c0 && r.w > 300)), 'choosing Granite repaints the desktop in it', screen());
+key('ESC');
+check(until(() => !has('Color scheme')), 'Esc closes Settings');
+clickText(/^Terminal - task/);
+type('cat /etc/desktop.cfg\n');
+check(until(() => has(/^scheme 1 bg -1/)), 'the choice is kept in /etc/desktop.cfg', screen());
+type('cat /etc/ide.cfg\n');
+check(until(() => has(/^scheme 1 input 1 font 1 size 1/)), "and the IDE's in /etc/ide.cfg, its font too", screen());
+start('Settings');
+clickText('Defaults');
+check(until(() => rects.some(r => r.rgb === 0xeceff4 && r.w > 300) && !rects.some(r => r.rgb === 0xb8c4cc)), 'Defaults brings the Modern scheme back', screen());
+key('ESC');
+until(() => !has('Color scheme'));
+
+// ---- the look: Flat (the default) or Classic ----------------------------------------------------
+// Flat outlines the taskbar along its top in the shadow; Classic lights a line one down
+const taskLine = dy => rects.some(r => r.w === SW && r.h === 1 && r.y === SH - TASK_H + dy);
+check(taskLine(0) && !taskLine(1), 'the desktop starts in the Flat look', screen());
+start('Settings');
+until(() => has('Look'));
+clickText('Classic', 'last', -8, 5);
+check(until(() => taskLine(1)), 'Settings > Look > Classic bevels it', screen());
+clickText('Flat', 'last', -8, 5);
+check(until(() => taskLine(0) && !taskLine(1)), 'and Flat flattens it again', screen());
+key('ESC');
+until(() => !has('Look'));
+
+// ---- the picture, and the screen savers ------------------------------------------------------
+check(imgdefs === 64 && imgs >= 1, 'the desktop\'s picture went to the display once, as 64 tiles, and is drawn', `imgdefs ${imgdefs} imgs ${imgs}`);
+start('Settings');
+check(until(() => has('Picture: C4IX') && has('Screen saver') && has('Starfield') && has('Digital Rain') && has('5 min')),
+  'Settings has the picture and the screen savers', screen());
+clickText('The scheme\'s colour', 'last', -8, 5);
+check(until(() => imgs === 0), 'the scheme\'s colour turns the picture off', `imgs ${imgs}`);
+clickText('Picture: C4IX', 'last', -8, 5);
+check(until(() => imgs > 0), 'and Picture turns it back on', `imgs ${imgs}`);
+clickText('Polygons', 'last', -8, 5);
+clickText('-');
+check(until(() => has('4 min')), 'the wait goes down a minute', screen());
+clickText('Preview');
+{
+  const p = presents;
+  check(until(() => !has('Go') && presents > p + 15), 'Preview runs the screen saver over everything', screen());
+}
+key('a');
+check(until(() => has('Go') && has('Screen saver')), 'a key ends it and the desktop comes back as it was', screen());
+key('ESC');
+until(() => !has('Screen saver'));
+// a Terminal's title, not its taskbar button (drawn after the windows)
+clickText(/^Terminal - task/, 'first');
+type('cat /etc/desktop.cfg\n');
+check(until(() => has(/wall 1 saver 2 wait 4 style 0/), 800), 'the picture and the saver are kept in /etc/desktop.cfg',
+  frame.filter(t => /scheme|saver|cat /.test(t.s)).map(t => t.s.trimEnd()).join(' | '));
+// and no saver again, or the long waits below would start one over the clicks they make
+start('Settings');
+until(() => has('Screen saver'));
+clickText('(None)', 'last', -8, 5);
+check(until(() => frame.some(t => t.s.trimEnd() === '(None)')), 'and (None) turns the screen saver off');
+key('ESC');
+until(() => !has('Screen saver'));
+
+// ---- Wolfenstein 3D: a game in a Terminal, its frames 8-bit (GUI_BLIT8) -----------------------
+// (--window: by itself it takes the whole display, as gui does below)
+// Only where the game is on the disk: it is an optional submodule
+// (games/README.md), and C4IX's manifest lists it when it is there.
+if (/^\s*wolf3d: ilink/m.test(readFileSync(join(ROOT, 'disk/c4ix.vfs.txt'), 'utf8'))) {
+  clickText(/^Terminal - task/, 'first');
+  type('wolf3d --window\n');
+  check(until(() => has(/Unpacking the shareware episode/), 1500), 'wolf3d unpacks the shareware episode the first time', screen());
+  check(until(() => rgbFrames > 0 && has('Wolfenstein 3D'), 3000), 'and shows its frames in the window, which it titles',
+    `frames ${rgbFrames} ` + screen().slice(-300));
+  check(rgbLast && rgbLast.w === 320 && rgbLast.h === 200 && rgbLast.dw === 640 && rgbLast.dh === 400,
+    '320x200 in 8 bits, scaled to the canvas', JSON.stringify(rgbLast));
+  {
+    // the sign-on screen waits for a key; then the title, a new picture
+    const before = rgbLast.sum, n = rgbFrames;
+    key(' ', 0, 32);
+    check(until(() => rgbFrames > n + 2 && rgbLast.sum !== before, 1500), 'a key goes to the game, which moves on', `frames ${rgbFrames}`);
+  }
+  key('c', 2, 67);
+  check(until(() => has(/^Terminal - task/), 800), 'Ctrl-C stops it, and the window is a Terminal again', screen().slice(-300));
+} else console.log('test-desktop: Wolfenstein 3D is not on the disk (games/README.md): its checks skipped');
+
+// ---- the whole display: a program asks, the desktop gives way, and has it back ----------------
+// (include/display.h) gui, the display's demo, for 40 frames: the display is
+// its own, at its size, and once it ends the desktop draws everything again,
+// its Terminal showing what the demo printed meanwhile
+clickText(/^Terminal - task/, 'first');
+type('gui 40\n');
+{
+  // the demo's text is GUI_TEXT, which the screen here does not read: its frames are counted
+  const ok = until(() => gui.w === 640 && gui.h === 480, 1500), p = presents;
+  check(ok && until(() => presents >= p + 10 || gui.w !== 640, 1500) && presents >= p + 10,
+    'a program on the whole display: the desktop gives way', `${gui.w}x${gui.h}, ${presents - p} frames`);
+}
+check(until(() => gui.w === SW && has(/^Terminal - task/) && has(/gui: done after 40 frames/), 1500),
+  'and has it back when the program ends, and draws it all again', `${gui.w}x${gui.h} ` + screen().slice(-300));
+
+// ---- the games in the Go menu: under Games, each where it is on the disk -----------------------
+// (games/README.md: optional submodules; C4IX's manifest lists the ones there)
+{
+  const vfs = readFileSync(join(ROOT, 'disk/c4ix.vfs.txt'), 'utf8');
+  // Tyrian only where its data was there to put on the disk (the site has
+  // none: games/tyrian/c4ix.vfs.txt's #@app-if), Tyrian (your files),
+  // tyrian --home, wherever the game is
+  const tyrData = existsSync(join(ROOT, 'disk/tyrian/tyrian1.lvl'));
+  const games = [['wolf3d', 'Wolfenstein 3D'], ['doom', 'Doom'], ['tyrian', 'Tyrian', tyrData],
+                 ['tyrian', 'Tyrian (your files)'], ['rott', 'Rise of the Triad']];
+  const there = games.filter(([g, , data = true]) => data && new RegExp(`^\\s*${g}: ilink`, 'm').test(vfs));
+  const hover = (x, y) => ev({ kind: 'move', x, y, buttons: 0 });
+  click(20, SH - TASK_H + 12);
+  until(() => has('Power Off...'));
+  check(!games.some(([, label]) => has(label)), 'the games are not in the Go menu itself');
+  check(has('Games') === (there.length > 0), 'which has Games where a game is on the disk', `${there.length} on the disk`);
+  if (there.length) {
+    const g = find('Games')[0];
+    hover(g.x + 5, g.y + 5);
+    check(until(() => has(there[0][1]), 200), 'the pointer on Games opens them', screen().slice(-300));
+    const wrong = games.filter(([, label]) => there.some(t => t[1] === label) !== has(label));
+    check(wrong.length === 0, 'it lists the games that are on the disk, and only those',
+      wrong.map(([n]) => n).join(' ') || 'all as the manifest says');
+    const rows = there.map(([, label]) => find(label)[0]).sort((a, b) => a.y - b.y).map(t => t.s.trimEnd());
+    check(rows.join() === there.map(t => t[1]).sort().join(), 'by name', rows.join());
+    if (there.some(([g]) => g === 'tyrian'))
+      check(has('Tyrian (your files)') && has('Tyrian') === tyrData,
+        tyrData ? 'Tyrian, and Tyrian (your files) for the Uploads' : "Tyrian's data not on the disk: Tyrian (your files) only");
+    // the way across: right and down, over Run..., and the games stay
+    // (the menu's, drawn last: System Monitor has a Run... button too)
+    const r = find('Run...').pop(), one = there[0][1];
+    hover(r.x + 60, r.y + 5);
+    check(has(one), 'moving right, across Run..., they stay on the way to them', screen().slice(-300));
+    settle();
+    hover(r.x + 60, r.y + 6);
+    check(until(() => !has(one), 200), 'and they go once it moves on along Run...', screen().slice(-300));
+  }
+  key('ESC');
+  until(() => !has('Power Off...'));
+}
+
+// ---- a game in a window of its own: no shell, the window only its canvas ---------------------
+// (games/README.md: a desktop.apps line that says `window`.) The Puzzles' Net
+// from Go > Games > Puzzles and from Run..., and Ace's Thornq from Files, each
+// where it is on the disk.
+{
+  const vfs = readFileSync(join(ROOT, 'disk/c4ix.vfs.txt'), 'utf8');
+  const terms = () => find(/^Terminal - task/).length;
+  const hover = t => ev({ kind: 'move', x: t.x + 5, y: t.y + 5, buttons: 0 });
+  const t0 = terms();
+  // The game's window: its caption and its menu bar are what is drawn just
+  // above its frame. Not simply the last such string drawn: a window
+  // elsewhere may draw one later (the IDE, redrawing its line as its
+  // cursor blinks, once drew a "Net" under the game's window). And a menu
+  // item is one drawn after its title is clicked, not one still on the
+  // screen from before.
+  const above = all => all.filter(t => rgbLast && t.y < rgbLast.y && t.y >= rgbLast.y - 60
+    && t.x >= rgbLast.x - 40 && t.x < rgbLast.x + rgbLast.dw).pop();
+  const gameMenu = (title, item) => {
+    const g = gen;
+    clickText(title, above);
+    const fresh = all => all.filter(t => t.gen > g).pop();
+    until(() => !!fresh(find(item)));
+    return clickText(item, fresh);
+  };
+  // the game has stopped drawing: its picture the same for STILL ms (a
+  // Net tile turns over several frames)
+  const STILL = 300;
+  const still = () => {
+    let sum = rgbLast && rgbLast.sum, at = vm.dev.simMs();
+    return until(() => {
+      if (rgbLast && rgbLast.sum !== sum) { sum = rgbLast.sum; at = vm.dev.simMs(); }
+      return vm.dev.simMs() - at >= STILL;
+    }, 3000);
+  };
+  if (/^\s*net: ilink/m.test(vfs)) {
+    let f0 = rgbFrames;
+    click(20, SH - TASK_H + 12);
+    until(() => has('Power Off...'));
+    hover(find('Games')[0]);
+    until(() => has('Puzzles'));
+    hover(find('Puzzles')[0]);
+    until(() => has('Net'));
+    clickText('Net');
+    check(until(() => rgbFrames > f0 && has('Net') && !has('Power Off...'), 3000),
+      'Go > Games > Puzzles > Net plays in a window of its own, which the game titles', `frames ${rgbFrames - f0} ` + screen().slice(-300));
+    check(rgbLast && rgbLast.w === 640 && rgbLast.h === 400 && rgbLast.dw === 640 && rgbLast.dh === 400,
+      'its frames the canvas\'s size', JSON.stringify(rgbLast));
+    check(terms() === t0, 'with no Terminal', screen().slice(-300));
+    {
+      // n, a new game: a new picture
+      still();
+      const before = rgbLast.sum, n = rgbFrames;
+      type('n');
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'a key goes to the game', `frames ${rgbFrames - n}`);
+    }
+    // its menu bar (window.h's win_menu): the game's own controls
+    check(has('Game') && has('Type') && has('Help'), 'the window has the game\'s menus: Game, Type, Help', screen().slice(-300));
+    {
+      still();
+      let before = rgbLast.sum, n = rgbFrames;
+      gameMenu('Game', 'New   N');
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New starts a new game', `frames ${rgbFrames - n}`);
+      // a move: a click in the middle of the canvas, where the frame was
+      // drawn (under the menu bar), turns the tile there
+      still();
+      const cx = rgbLast.x + (rgbLast.dw >> 1), cy = rgbLast.y + (rgbLast.dh >> 1);
+      const fresh = rgbLast.sum;
+      n = rgbFrames;
+      click(cx, cy);
+      check(until(() => rgbFrames > n && rgbLast.sum !== fresh, 1500), 'a click under the menu bar reaches the board', `frames ${rgbFrames - n}`);
+      still();
+      const moved = rgbLast.sum;
+      gameMenu('Game', 'Undo   U');
+      check(moved !== fresh && until(() => rgbLast.sum === fresh, 1500), 'Game > Undo takes the move back: the picture before it',
+        `${rgbLast.sum === moved ? 'the move still shown' : 'another picture'}`);
+      check(rgbLast.dw === 640 && rgbLast.dh === 400, 'and the canvas is the size it was', JSON.stringify(rgbLast));
+    }
+    // maximised (a double click on its title), the canvas is the window's
+    // inside (window.h's win_resizable): the puzzle laid out again, in frames
+    // that size, drawn as they are, on the screen; a click in the middle
+    // still turns a tile; restored, 640x400 again
+    {
+      let n = rgbFrames;
+      dbl('Net', above);
+      check(until(() => rgbFrames > n && rgbLast.dw > 640 && rgbLast.dh > 400 && rgbLast.w === rgbLast.dw && rgbLast.h === rgbLast.dh, 3000)
+        && rgbLast.x >= 0 && rgbLast.x + rgbLast.dw <= SW && rgbLast.y + rgbLast.dh <= SH - TASK_H,
+        'maximised, Net is laid out again for the window, its frames the bigger canvas\'s size', JSON.stringify(rgbLast));
+      still();
+      const before = rgbLast.sum;
+      n = rgbFrames;
+      click(rgbLast.x + (rgbLast.dw >> 1), rgbLast.y + (rgbLast.dh >> 1));
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'and a click in its middle turns a tile', `frames ${rgbFrames - n}`);
+      still();
+      n = rgbFrames;
+      dbl('Net', above);
+      check(until(() => rgbFrames > n && rgbLast.w === 640 && rgbLast.h === 400 && rgbLast.dw === 640 && rgbLast.dh === 400, 3000),
+        'restored, its frames 640x400 again', JSON.stringify(rgbLast));
+    }
+    key('ESC');
+    check(until(() => !has('Net'), 1500) && terms() === t0, 'Esc ends the game, and its window goes with it', screen().slice(-300));
+    // its name typed in Run... is the same
+    start('Run...');
+    until(() => has(/Program to run/));
+    f0 = rgbFrames;
+    type('net'); key('\n');
+    check(until(() => rgbFrames > f0 && has('Net'), 3000) && terms() === t0, 'so is net typed in Run...', screen().slice(-300));
+    key('c', 2, 67);
+    check(until(() => !has('Net'), 1500) && terms() === t0, 'Ctrl-C ends it, and the window with it', screen().slice(-300));
+    // typed in a Terminal, it makes that Terminal its canvas, as --window did, and q
+    // gives the Terminal back
+    clickText(/^Terminal - task/, 'first');
+    f0 = rgbFrames;
+    type('net\n');
+    check(until(() => rgbFrames > f0 && has('Net'), 3000) && terms() < t0, 'net in a Terminal plays in that Terminal', screen().slice(-300));
+    type('q');
+    check(until(() => terms() === t0, 1500) && !has('Net'), 'and q gives it back', screen().slice(-300));
+    // What the Terminal sent Net that Net did not read (a key let go, a frame
+    // drawn) goes when the prompt is back, and the shell skips an event line
+    // anyway: once it ran one, "sh: cannot find" (term.c, sh.c)
+    until(() => false, 100);
+    check(!has(/cannot find/), 'and the shell reads nothing Net left unread', screen().slice(-300));
+    // In the background, net & gets a window of its own: a Terminal's canvas
+    // and its input are its foreground job's, and two games there read each
+    // other's frame acks and keys (term.c, term_adopt; window.c, win_open)
+    f0 = rgbFrames;
+    type('net &\n');
+    check(until(() => rgbFrames > f0 && has('Net'), 3000) && terms() === t0,
+      'net & in a Terminal plays in a window of its own, and the Terminal stays a Terminal', screen().slice(-300));
+    key('ESC');
+    check(until(() => !has('Net'), 1500) && terms() === t0 && !has(/cannot find/),
+      'Esc in that window ends it, and the window goes', screen().slice(-300));
+  } else console.log('test-desktop: the Puzzles are not on the disk (games/README.md): their window checks skipped');
+  if (/^\s*thornq: ilink/m.test(vfs)) {
+    // Files: a double-click on the program, by its path under /usr/games
+    start('Files');
+    until(() => has('Files - /'));
+    dbl('usr', inList);
+    until(() => has('Files - /usr') && !!inList(find('games')));
+    dbl('games', inList);
+    until(() => has('Files - /usr/games') && !!inList(find('ace')));
+    dbl('ace', inList);
+    until(() => has('Files - /usr/games/ace'));
+    key('END');
+    // (at the list's foot, below where inList looks; nothing else on the screen has the name)
+    check(until(() => has('thornq.c4r')), 'Files lists the Ace of Penguins in /usr/games/ace', screen().slice(-300));
+    const f0 = rgbFrames;
+    dbl('thornq.c4r');
+    check(until(() => rgbFrames > f0 && has('thornq'), 3000) && terms() === t0,
+      'a double-click on thornq.c4r plays it in a window of its own, with no Terminal', `frames ${rgbFrames - f0} ` + screen().slice(-300));
+    check(rgbLast && rgbLast.dw === 640 && rgbLast.dh === 400 && rgbLast.w * 400 === rgbLast.h * 640,
+      'its frames the canvas\'s shape', JSON.stringify(rgbLast));
+    {
+      still();
+      const before = rgbLast.sum, n = rgbFrames;
+      gameMenu('Game', 'New Game   F2');
+      check(until(() => rgbFrames > n && rgbLast.sum !== before, 1500), 'Game > New Game deals again', `frames ${rgbFrames - n}`);
+    }
+    {
+      // maximised: Thornq lays its table out for the bigger window
+      still();
+      const n = rgbFrames;
+      dbl('thornq', above);
+      check(until(() => rgbFrames > n && rgbLast.dw > 640 && rgbLast.dh > 400 && rgbLast.w === rgbLast.dw && rgbLast.h === rgbLast.dh, 3000),
+        'maximised, Thornq deals across the bigger window, its frames that size', JSON.stringify(rgbLast));
+    }
+    key('c', 2, 67);
+    check(until(() => !has('thornq'), 1500), 'Ctrl-C ends it, and the window with it', screen().slice(-300));
+    clickText('File', all => all.filter(t => inFiles([t])).sort((p, q) => p.y - q.y)[0]); settle(); clickText('Close');
+    until(() => !explorer());
+  } else console.log('test-desktop: the Ace of Penguins is not on the disk (games/README.md): its window check skipped');
+}
+
+// ---- Run --------------------------------------------------------------------------------------
+start('Run...');
+check(until(() => has(/Program to run/)), 'Go > Run asks for a program');
+type('echo from-run'); key('\n');
+check(until(() => has('from-run'), 800), 'and runs it in a new Terminal', screen());
+
+// ---- as many windows as memory allows (there were 8 slots) --------------------------------------
+// System Monitor's Performance tab (the CPU meter opens it) counts the windows open
+const opened = () => { const l = frame.find(t => t.s.trim() === 'Open windows'); const v = l && frame.find(t => t.y === l.y && /^\d+$/.test(t.s.trim())); return v ? +v.s.trim() : 0; };
+click(SW - 140, SH - TASK_H + 12);
+until(() => opened() > 0);
+const nopen = opened();
+for (let i = 0; i < 10; i++) { start('Calculator'); until(() => has('Hex')); }
+click(SW - 140, SH - TASK_H + 12);
+check(until(() => opened() === nopen + 10) && opened() > 8, 'ten more windows open, more than the old eight', `${nopen} then ${opened()}`);
+
+// ---- the screen's size, at run time: 640x480 and back (the window kit's relayout) ---------------
+// The page resizes the display, as it does when a size a program asked
+// for comes back (GUI_EV_RESIZE): a maximised window fills the new screen,
+// the rest are pulled back onto it, the taskbar runs along its new bottom
+// and the picture is stretched to it again.
+const filling = (w, h) => rects.some(r => r.x === 0 && r.y === 0 && r.w === w && r.h === h);
+start('Files');
+until(() => has('Files - /'));
+dbl('Files - /', all => all.filter(t => t.y < SH - TASK_H).pop());
+check(until(() => filling(SW, SH - TASK_H)), 'a double click on its title maximises Files', screen());
+{
+  const defs = imgdefs;
+  gui.event({ kind: 'resize', w: 640, h: 480 }); SW = 640; SH = 480;
+  run(3e5);
+  check(until(() => taskLine(0) && filling(640, 450)), 'told 640x480, the taskbar moves to its bottom and the maximised window fills what is above it', screen().slice(-400));
+  check(frame.every(t => t.x >= 0 && t.x < SW && t.y >= 0 && t.y < SH), 'every window is pulled back onto the screen',
+    frame.filter(t => t.x >= SW || t.y >= SH || t.x < 0 || t.y < 0).map(t => `${t.s}@${t.x},${t.y}`).join(' | '));
+  check(imgdefs === defs + 64, 'and the picture is stretched to it again', `imgdefs ${defs} then ${imgdefs}`);
+}
+start('Calculator');
+check(until(() => has('Hex')) && find('Power Off...').length === 0, 'the Go menu opens from the new taskbar, and Calculator from it');
+type('123*456=');
+check(until(() => has('56088')), 'which still works there: 123 * 456 = 56088', screen().slice(-300));
+gui.event({ kind: 'resize', w: 800, h: 600 }); SW = 800; SH = 600;
+run(3e5);
+check(until(() => taskLine(0) && filling(800, 570) && !filling(640, 450)), 'back at 800x600, the taskbar and the maximised window follow', screen().slice(-400));
+
+// ---- the volume: the tray's speaker, its slider and Mute (the sound card's MASTER) ------------
+// The popup sits over the tray: its slider runs from 100% at the top to
+// 0% 100 px down, starting 34 px under the popup's top, which is 10 px
+// above the "Volume" drawn in it; Mute is near its bottom. The card is
+// told at once, the slider's 0-100 squared into 0-255.
+{
+  const clock = frame.find(t => /^\d+:\d\d [AP]M$/.test(t.s));
+  click(clock.x - 20, clock.y + 4);
+  check(until(() => has('Volume') && has('Mute') && has('100%')), 'the speaker beside the clock opens the volume', screen().slice(-300));
+  const v = find('Volume').pop(), px = v.x - 16, py = v.y - 10, sx = px + 38;
+  click(sx, py + 34 + 50);
+  check(until(() => has('50%')) && snd.read32(SND.MASTER) === 63, 'a click halfway down the slider: 50%, the card at 63 of 255',
+    `master ${snd.read32(SND.MASTER)} ` + screen().slice(-200));
+  ev({ kind: 'move', x: sx, y: py + 84, buttons: 0 }); ev({ kind: 'down', x: sx, y: py + 84, button: 0 });
+  for (let k = 1; k <= 5; k++) ev({ kind: 'move', x: sx, y: py + 84 + k * 5, buttons: 1 });
+  ev({ kind: 'up', x: sx, y: py + 109, button: 0 });
+  check(until(() => has('25%')) && snd.read32(SND.MASTER) === 15, 'dragging the thumb down: 25%, the card at 15', `master ${snd.read32(SND.MASTER)}`);
+  clickText('Mute', 'last', -12, 5);
+  check(until(() => masters[masters.length - 1] === (15 | MUTE)) && snd.read32(SND.MASTER) === (15 | MUTE), 'Mute silences the card, keeping the volume',
+    `master ${snd.read32(SND.MASTER)}`);
+  key('ESC');
+  check(until(() => !has('Mute') && !has('25%')), 'Esc closes it');
+  // (desktop.cfg's "vol 25 mute 1" is read after Power Off, below)
+}
+
+// ---- Settings > Screen size: 640x480, 1024x768, kept in /etc/desktop.cfg ---------------------
+// The display takes the size at once (wk_screen): the taskbar along its
+// bottom, the picture stretched to it, the windows on it. Left at
+// 1024x768, which the desktop starts at again below.
+const onScreen = () => frame.every(t => t.x >= 0 && t.x < SW && t.y >= 0 && t.y < SH);
+const settingsWin = () => rects.filter(q => q.w === 590 && q.h === 450).pop();
+start('Settings');
+check(until(() => has('Screen size') && has('640x480') && has('800x600') && has('1024x768')), 'Settings offers three screen sizes', screen());
+for (const [w, h] of [[640, 480], [1024, 768]]) {
+  const defs = imgdefs;
+  clickText(`${w}x${h}`);
+  SW = w; SH = h;
+  check(until(() => gui.w === w && gui.h === h && taskLine(0) && find('Go').some(t => t.y > SH - TASK_H)),
+    `${w}x${h}: the display takes it at once, the taskbar along its bottom`, `${gui.w}x${gui.h} ` + screen().slice(-300));
+  const clock = frame.find(t => /^\d+:\d\d [AP]M$/.test(t.s));
+  check(!!clock && clock.x > SW - 100 && clock.x < SW - 40 && clock.y > SH - TASK_H, 'the clock in its corner', JSON.stringify(clock));
+  check(imgdefs === defs + 64 && imgs > 0, 'the picture stretched to it', `imgdefs ${defs} then ${imgdefs}`);
+  const r = settingsWin();
+  check(!!r && r.x >= 0 && r.y >= 0 && r.x + r.w <= SW && r.y + r.h <= SH - TASK_H && onScreen() &&
+    find('System Monitor').some(t => t.x < 100 && t.y < SH - TASK_H),
+    'Settings, the desktop\'s icons and everything else on the screen', JSON.stringify(r) + ' ' + frame.filter(t => t.x >= SW || t.y >= SH).map(t => `${t.s}@${t.x},${t.y}`).join(' | '));
+}
+key('ESC');
+until(() => !has('Screen size'));
+
+// ---- the Windows 3.1 look (look31.c), from Settings, kept across a restart ---------------------
+// The control-menu box is a white bar 11 by 3 on the title bar's left;
+// the title is centred between it and the minimise and maximise buttons.
+const sysbox = () => rects.some(r => r.w === 11 && r.h === 3 && r.rgb === 0xffffff);
+check(!sysbox(), 'the Flat look has no control-menu box');
+start('Settings');
+until(() => has('Look'));
+clickText('Windows 3.1', 'last', -8, 5);
+check(until(() => sysbox()), 'Settings > Look > Windows 3.1 draws the control-menu box', screen());
+{
+  const r = settingsWin();
+  const t = r && frame.filter(s => s.s.trimEnd() === 'Settings' && s.y > r.y && s.y < r.y + 22).pop();
+  const off = r && t ? Math.round(t.x + 'Settings'.length * 7 / 2 - (r.x + r.w / 2)) : 999;
+  check(Math.abs(off) <= 20, `and a title centred in its bar (${off} px from the middle; the Flat look's is ${27 + 28 - 295})`, JSON.stringify({ r, t }));
+}
+key('ESC');
+until(() => !has('Look'));
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+key('o', 2, 79);
+check(until(() => has('File name:') && has('Open') && !has('Look in:')), "and Text Editor's Open is Windows 3.1's file box", screen());
+key('ESC');
+until(() => !has('File name:'));
+
+// ---- Terminals until the desktop's descriptors run out ------------------------------------------
+// Each Terminal holds 2 of the desktop's descriptors, and starting one
+// takes 7 at once (term.c, start). At 16 a task (FD_MAX, c4ix.h) three
+// were open at most, and the next one still opened -- with the desktop's
+// stdout left on its pipe, so Power Off, below, said nothing on the
+// console. Now the table is 64; the Terminal that does not fit says so
+// in its window and leaves the desktop's 0, 1 and 2 as they were.
+{
+  const ids = () => frame.map(t => /^Terminal - task (\d+)/.exec(t.s)).filter(Boolean).map(m => +m[1]);
+  let top = Math.max(0, ...ids());
+  let more = 0, refused = false;
+  for (let i = 0; i < 40 && !refused; i++) {
+    start('Terminal');
+    let id = 0;
+    until(() => (id = ids().find(n => n > top) || 0) || has(/could not start a shell/), 800);
+    if (id) { top = id; more++; } else refused = true;
+  }
+  check(refused && has(/could not start a shell/), `Terminals open until the descriptors run out (${more} more), then one says it could not start a shell`, screen().slice(-400));
+  check(more > 4, `${more} more Terminals open at once, besides those already open (three in all at 16 fds)`);
+  // the IDE's :make starts b4ke the same way (edit.c, e_make), and is refused as cleanly
+  // (in VIM mode, as the IDE was left above)
+  start('IDE');
+  until(() => has('Untitled - IDE'));
+  txt(':e! /tmp/t.c\n');
+  until(() => has('t.c - IDE'));
+  txt(':make\n');
+  check(until(() => has(/No (descriptors|pipe) for the build/), 400), ':make then says there are no descriptors for the build', screen().slice(-300));
+  txt(':q!\n');
+  until(() => !has('t.c - IDE'));
+  // the one refused kept nothing open: one shell gone makes room for
+  // another (the topmost window title still showing is a Terminal with a shell)
+  clickText(/^Terminal - task \d+/, all => all.filter(t => t.y < SH - TASK_H).pop());
+  type('exit\n');
+  check(until(() => has(/the shell has exited/), 800), 'exit ends a shell there', screen().slice(-300));
+  start('Terminal');
+  check(until(() => ids().some(n => n > top), 800), 'and a Terminal opens again in the room it left', screen().slice(-300));
+}
+
+// ---- Settings > Font: the interface's face and size, kept in /etc/desktop.cfg ---------------------
+start('Settings');
+check(until(() => has('Font') && has('Font size') && has('Tahoma') && has('Verdana') && has('Georgia') && has('The quick brown fox')),
+  'Settings offers the interface\'s font, its face and size, with a sample', screen());
+check(find('The quick brown fox').every(t => t.font === 1 && t.size === 11), 'Tahoma, Normal: the sample in font 1 at 11', JSON.stringify(find('The quick brown fox')));
+clickText('Verdana', 'last', -8, 5);
+clickText('Large', 'last', -8, 5);
+check(until(() => find('The quick brown fox').some(t => t.font === 5 && t.size === 12) && find('Window Title').some(t => t.font === 6 && t.size === 12)),
+  'Verdana, Large: the sample in font 5 at 12, and its bold, 6', JSON.stringify(find('The quick brown fox')));
+check(find('Screen saver').every(t => t.font === 5) && find('Go').every(t => t.font === 5 || t.font === 6) && !frame.some(t => t.font === 1 || t.font === 2),
+  'and the whole interface: the groups, the taskbar, every window', JSON.stringify(frame.filter(t => t.font === 1 || t.font === 2).slice(0, 5)));
+{
+  const r = settingsWin();
+  check(!!r && r.x + r.w <= SW && onScreen(), 'and Settings still fits the screen', JSON.stringify(r));
+}
+key('ESC');
+until(() => !has('Font size'));
+
+// ---- Power Off --------------------------------------------------------------------------------
+start('Power Off...');
+check(until(() => consoleText().includes('desktop: shut down'), 2000), 'Power Off ends the desktop', consoleText().slice(-500) + ' / screen: ' + screen().slice(-400));
+typeBytes(vm, new TextEncoder().encode('ps\n'));
+check(until(() => /tasks,/.test(consoleText().split('desktop: shut down').pop())), 'and the console shell carries on');
+const psOut = consoleText().split('desktop: shut down').pop();
+check(!/c4ix-sh.c4r[\s\S]*c4ix-sh.c4r/.test(psOut.replace(/^[\s\S]*?ID/, '')), 'no Terminal shell outlived the desktop', psOut);
+
+// ---- the desktop again: in the look it was left in --------------------------------------------
+{
+  const c0 = consoleText().length;
+  typeBytes(vm, new TextEncoder().encode('cat /etc/desktop.cfg\n'));
+  check(until(() => / style 2 sort \d+ res 1024 768 vol 25 mute 1 font 1 fsize 2\b/.test(consoleText().slice(c0))), 'the look, the size, the volume and the font are kept in /etc/desktop.cfg', consoleText().slice(c0));
+}
+// what the ports will bring, for the Games menu to hold (docs/c4ix-desktop.md, part
+// twenty-three): a file on the disk, as cat finds it there, in place of the games' lines
+{
+  const lines = ['# a comment', 'Games|Not On The Disk|no-such-program', 'Tools|Not A Game|/bin/echo not-a-game'];
+  for (let k = 0; k < 40; k++) lines.push(`Games/Puzzles|Puzzle ${String(k).padStart(2, '0')}|/bin/echo picked-${k}`);
+  lines.push('Games/Cards|Solitaire|/bin/echo picked-solitaire', 'Games|Shooter|/bin/echo picked-shooter');
+  files.set('td-apps.txt', new TextEncoder().encode(lines.join('\n') + '\n'));
+  typeBytes(vm, new TextEncoder().encode('cat td-apps.txt > /etc/desktop.apps\n'));
+}
+// the card as it is when the page starts, so the desktop has to set it
+snd.write32(SND.MASTER, 255);
+const nmasters = masters.length + 1;
+typeBytes(vm, new TextEncoder().encode('desktop\n'));
+check(until(() => /desktop: running on the display/.test(consoleText().split('desktop: shut down').pop())), 'the desktop starts again');
+check(until(() => has(/^Terminal - task/) && sysbox(), 800), 'in the Windows 3.1 look, as it was left', screen());
+// (the 3.1 look lights the taskbar's top one pixel down)
+check(gui.w === 1024 && gui.h === 768 && taskLine(1), 'at 1024x768, as it was left', `${gui.w}x${gui.h}`);
+check(masters.length > nmasters && snd.read32(SND.MASTER) === (15 | MUTE), 'and the sound card at 25%, muted, as it was left', `masters ${masters.slice(-3)}`);
+check(find('Go').some(t => (t.font === 5 || t.font === 6) && t.size === 12) && !frame.some(t => t.font === 1 || t.font === 2), 'in Verdana, Large, as it was left', JSON.stringify(find('Go')));
+start('Text Editor');
+until(() => has('Untitled - Text Editor'));
+type('kept ' + WORDS);
+key('HOME');
+check(until(() => find(/word\d/).length === 1 && find(/^kept word0 /).some(t => t.font === 3 && t.adv === 8 && !/word29/.test(t.s)) && hbar()),
+  "and Text Editor in Courier New, Large, without Word Wrap, as notepad.cfg keeps them", JSON.stringify(find(/word\d/)));
+// ---- Games with 42 in it: groups, and a long one in columns on the screen -------------------------
+{
+  const hover = t => ev({ kind: 'move', x: t.x + 5, y: t.y + 5, buttons: 0 });
+  const puzzles = () => frame.filter(t => /^Puzzle \d\d/.test(t.s));
+  const openPuzzles = () => {
+    click(20, SH - TASK_H + 12);
+    until(() => has('Power Off...'));
+    hover(find('Games')[0]);
+    until(() => has('Puzzles'));
+    hover(find('Puzzles')[0]);
+    until(() => has('Puzzle 39'));
+  };
+  const onScreen = () => puzzles().length === 40 && puzzles().every(t => t.x >= 0 && t.x + 8 * t.s.trimEnd().length <= SW && t.y >= 0 && t.y + 14 <= SH - TASK_H);
+  const columns = () => new Set(puzzles().map(t => t.x)).size;
+  openPuzzles();
+  check(has('Cards') && has('Shooter') && find('Cards')[0].y < find('Puzzles')[0].y && find('Puzzles')[0].y < find('Shooter')[0].y,
+    "the groups come first in Games, each named once, then what isn't in one", screen().slice(-400));
+  check(!has('Not On The Disk') && !has('Not A Game') && !has('# a comment'), "a line whose program isn't there, another category's and a comment are not listed", screen().slice(-400));
+  check(onScreen() && columns() === 2, '40 in a group at 1024x768 are on the screen, in 2 columns', JSON.stringify(puzzles().slice(-2)));
+  // the Puzzles row is under the pointer's way back: on it, the group stays; on Cards, the group goes
+  hover(find('Cards')[0]);
+  check(until(() => !has('Puzzle 00') && has('Solitaire'), 200), 'another group in its place', screen().slice(-300));
+  hover(find('Puzzles')[0]);
+  until(() => has('Puzzle 39'));
+  check(clickText('Puzzle 39') && until(() => has(/picked-39/), 800) && !has('Power Off...'), "a row in a group runs its command in a Terminal, and the menu shuts", screen().slice(-300));
+  gui.event({ kind: 'resize', w: 640, h: 480 }); SW = 640; SH = 480;
+  run(3e5);
+  until(() => taskLine(1));
+  openPuzzles();
+  check(onScreen() && columns() === 3, 'and at 640x480, in 3 columns, over Go if it must', JSON.stringify(puzzles().slice(-2)));
+  key('ESC');
+  check(until(() => !has('Power Off...') && !has('Puzzle 00'), 200), 'Esc shuts them all');
+}
+start('Power Off...');
+check(until(() => consoleText().split('desktop: shut down').length > 2, 2000), 'and Power Off ends it again');
+typeBytes(vm, new TextEncoder().encode('cat /proc/meminfo\n'));
+check(until(() => /^rqlost 0$/m.test(consoleText().split('desktop: shut down').pop()), 2000), 'no task was found off its queue', consoleText().slice(-600));
+process.exit(fail);

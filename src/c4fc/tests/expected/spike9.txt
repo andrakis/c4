@@ -1,0 +1,8 @@
+guarded 2
+taken_if 32
+taken_elif 12
+str hello world
+xstr 9
+noexpand S9_VERSION
+paste 41
+width 8 height 4

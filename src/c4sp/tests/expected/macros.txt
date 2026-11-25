@@ -1,0 +1,18 @@
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+Testing condition (= a 3)
+Testing condition (= a 2)
+Testing condition (= a 11)
+or true
+Testing condition (= a 11)
+Testing condition (= b 2)
+and true
+nil

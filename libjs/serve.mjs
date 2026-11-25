@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+// serve.mjs - serve the repo root for the c4m.js page.
+//
+//   node libjs/serve.mjs [PORT] [--isolate]
+//
+// The page is libjs/web/index.html. It has to be served from the repo
+// ROOT, because the Worker imports ../src/c4bb/sim/... and the page
+// fetches images from src/c4bb/images. python3 -m http.server from the
+// root works just as well; this exists for --isolate, which adds the two
+// headers that make a page cross-origin isolated (and SharedArrayBuffer
+// available). With them the display takes the shared-memory path
+// (shared.js: a command ring and a framebuffer triple buffer); without
+// them it posts messages.
+//
+// A directory asked for with ?ls is its listing, as JSON: [{name, dir,
+// size}]. The Code Explorer (explore.html) finds images and sources so.
+
+import { createServer } from 'node:http';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { extname, join, normalize } from 'node:path';
+import { networkInterfaces } from 'node:os';
+import { proxyUrl } from '../src/c4bb/tools/proxy-domain.mjs';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const args = process.argv.slice(2);
+const PORT = Number(args.find(a => /^\d+$/.test(a)) || process.env.LIBJS_PORT || 8472);
+const ISOLATE = args.includes('--isolate');
+
+const TYPES = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.txt': 'text/plain; charset=utf-8',
+  '.c': 'text/plain; charset=utf-8', '.h': 'text/plain; charset=utf-8',
+  '.uc': 'text/plain', '.hwd': 'text/plain', '.svg': 'image/svg+xml', '.png': 'image/png',
+};
+
+export function makeServer(root = ROOT, isolate = ISOLATE) {
+  return createServer(async (req, res) => {
+    let p = join(root, normalize(decodeURIComponent(req.url.split('?')[0])));
+    if (!p.startsWith(root)) { res.writeHead(403); res.end(); return; }
+    try {
+      if ((await stat(p)).isDirectory()) {
+        if (new URLSearchParams(req.url.split("?")[1] || "").has("ls")) {
+          const ents = await readdir(p, { withFileTypes: true });
+          const list = await Promise.all(ents.filter(e => !e.name.startsWith('.')).map(async e => ({
+            name: e.name, dir: e.isDirectory(),
+            size: e.isDirectory() ? 0 : (await stat(join(p, e.name)).catch(() => ({ size: 0 }))).size,
+          })));
+          list.sort((x, y) => x.name.localeCompare(y.name));
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+          res.end(JSON.stringify(list));
+          return;
+        }
+        // without the slash, the page's relative URLs would name the directory above it
+        const [path, query] = req.url.split('?');
+        if (!path.endsWith('/')) {
+          res.writeHead(302, { location: path.replace(/^\/+/, '/') + '/' + (query === undefined ? '' : '?' + query) });
+          res.end();
+          return;
+        }
+        p = join(p, 'index.html');
+      }
+      const body = await readFile(p);
+      const h = { 'content-type': TYPES[extname(p)] || 'application/octet-stream', 'cache-control': 'no-store' };
+      if (isolate) {
+        h['cross-origin-opener-policy'] = 'same-origin';
+        h['cross-origin-embedder-policy'] = 'require-corp';
+      }
+      res.writeHead(200, h);
+      res.end(body);
+    } catch { res.writeHead(404); res.end(); }
+  });
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  makeServer().listen(PORT, '0.0.0.0', () => {
+    const lan = Object.values(networkInterfaces()).flat()
+      .find(n => n && n.family === 'IPv4' && !n.internal)?.address;
+    console.log(`c4m.js: http://localhost:${PORT}/libjs/web/`);
+    if (lan) console.log(`        http://${lan}:${PORT}/libjs/web/`);
+    const proxy = proxyUrl(PORT);
+    if (proxy) console.log(`        ${proxy}/libjs/web/`);
+    if (ISOLATE) console.log('        (cross-origin isolated)');
+  });
+}

@@ -1,0 +1,41 @@
+printf: [42] [   42] [42   |] [00042] [+42] [ 42]
+printf: [ff] [FF] [0xff] [10] [010] [4000000000]
+printf: [c4ix] [     right] [left      |] [tru] [ok]
+printf: [-2147483648] [0] [    -7] [pr] [%]
+printf: [0xabcd0000] [      0x1234] [0x1234  |] [0x0000001234] [0x001234] [(nil)]
+snprintf: "overflo" wanted 15
+float: [3.141593] [2.67] [    -1.500] [0.2     |] [+2] [-0003.14]
+float: [1.234568e+05] [1.235E-04] [100000] [1e+06] [0.0001] [1.00000]
+float: [inf] [-INF] [  nan] [0.000000e+00|] [1E-10]
+strtod: -1250 rest "xyz" 0.125 0.100000001
+strtod: inf erange 1 2.2250738585072009e-308
+math: 1.4142135623730951 0.8414709848078965 2.7182818284590451 2.3025850929940459
+math: -3 -2 3 1.5 1.4142135623730951 3.1415926535897931
+math: 0.52321478539513899 0.54630248984379048 -3 5
+string: hello, world len 12 cmp 1 1 0
+string: chr o, world rchr orld str world spn 2 cspn 3
+strtok: <one> <two> <three>
+strcasecmp: 0 ncmp 0 dup copied
+mem: xxxxx cmp 1 chr 1
+ctype: 11101 Qq
+strtol: -123 31 511 42 rest "xyz" ul 4294967295
+qsort: 1 3 5 7 9
+qsort: apple banana fig pear
+malloc: grown calloc 0
+env: HOME=/tmp NONE=unset
+file: line 1
+file: line 2
+file: line 3
+file: 3 lines, eof 1
+r+: read 4, then 10 at 7
+r+: line X
+r+: line 2
+r+: line 3
+r+: 3 lines
+errno: null fopen 1: No such file or directory
+getopt: verbose 1 n 3 rest one two
+dirent: libctest.txt found
+unix: lseek 6 world fstat 11 100644 nlink 1 ftruncate 5 link nlink 2 1 excl 1
+unix: vfork child 1 waitpid status 7 again -1
+loader: &optind + 1 is 1 on
+libctest: done

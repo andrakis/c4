@@ -1,0 +1,477 @@
+#!/usr/bin/env bash
+# test-c4dos.sh - C4DOS's gates (see docs/c4dos-design.md).
+#
+# Four legs, each a scripted session:
+#   1. NATIVE:   ./c4m load-c4r.c -- c4dos.c4r    (fast, the dev loop)
+#   2. CLOCK:    the -DC4DOS_CLOCK build answers TIME with an uptime
+#   3. THE TOWER: ./c4 c4l.c c4dos.c4r - the PURITY pin: original,
+#      unmodified c4 runs DOS, DOS runs hello.c4r. Proves the image
+#      contains nothing above EXIT (c4l refuses otherwise, by name).
+#   4. THE MACHINE: c4bb boots c4dos32, DIR/RUN/TIME work, and the
+#      layers stack: c4.c4r (the original interpreter, as a DOS
+#      transient) compiles and runs hello.c INSIDE the simulated
+#      computer, then hands the prompt back.
+#
+# Redirection (DEVICE=REDIR.SYS: > >> < |, batch files too) is checked
+# on the native leg and the tower, and with the console tap (REDIR.SYS
+# TAP: a c4cc program's PRTF and READ) on c4bb; without the line a > is
+# just a word, as it always was.
+#
+# API v4 (re-entrant RUN: exec, load/start/unload, catch, unlink, the
+# console slots and the sink) is checked on the native leg, the tower and
+# c4bb alike, by src/tests/dosexec.c: the same scenarios, the same
+# answers, wherever DOS runs. HEAP.SYS needs libjs's heap and is
+# test-c4dos-heap's (libjs/tests/test-c4dos-heap.mjs).
+#
+# Run from the repo root: bash src/c4dos/tests/test-c4dos.sh
+
+set -e
+cd "$(dirname "$0")/../../.."
+
+[ -x ./cpp ]  || { echo "test-c4dos: run 'make cpp' first"; exit 2; }
+[ -x ./c4cc ] || { echo "test-c4dos: run 'make c4cc' first"; exit 2; }
+[ -x ./c4m ]  || { echo "test-c4dos: run 'make c4m' first"; exit 2; }
+[ -x ./c4 ]   || { echo "test-c4dos: run 'make c4' first"; exit 2; }
+
+T=.c4dos_test_tmp
+rm -rf $T
+mkdir -p $T/fs
+trap 'rm -rf $T' EXIT
+
+# ---- builds (both clock variants, through our own cpp - raw c4cc
+# would skip the #if lines and compile both branches in) --------------
+./cpp src/c4dos/c4dos.c > $T/pp.c
+./c4cc -o $T/c4dos.c4r $T/pp.c > /dev/null
+./cpp -DC4DOS_CLOCK=1 src/c4dos/c4dos.c > $T/ppck.c
+./c4cc -o $T/c4dos-clock.c4r $T/ppck.c > /dev/null
+
+# raycast's C4DOS build: c4lc with -D RC_DOS=1, which swaps puts for
+# printf and stubs out the cycle counter and usleep, leaving an image
+# that uses nothing above EXIT except TIME -- exactly what a DOS with
+# DEVICE=CLOCK.SYS provides. Skipped if the host's 64-bit c4lc is not
+# built (tools/c4lc.sh: c4sc-host, or c4sp with C4LC64=interp); it is
+# not a prerequisite of the rest of this script.
+HAVE_RAYCAST=0
+. tools/c4lc.sh
+if [ -x $(lc_bin 64) ]; then
+    $(lc 64 16000000) -O -conforming -D RC_DOS=1 \
+        src/tests/raycast.c $T/raycast.c4r > /dev/null && HAVE_RAYCAST=1
+fi
+
+# ---- the test floppy ------------------------------------------------
+cp src/c4dos/fs/CONFIG.SYS $T/fs/config.sys
+cp src/c4dos/fs/AUTOEXEC.BAT $T/fs/autoexec.bat
+# Real spellings, not shouted: dir_resolve opens the name it finds in
+# this listing, so an entry of HELLO.C4R would name a file that is not
+# there and defeat the very lookup it exists to serve.
+printf 'config.sys\nautoexec.bat\nc4dos.dir\nhello.c4r\nraycast.c4r\ndosenum.c4r\ndosexec.c4r\ndosres.c4r\ndosfilt.c4r\n' > $T/fs/c4dos.dir
+cp src/tests/hello.c4r $T/fs/hello.c4r
+# dosenum is the v2 API's pin: the only thing here that ENUMERATES the
+# RAM disk rather than naming a file. The kernel extension that seeds
+# C4KE reads exactly these slots, so if this leg is green that path
+# has a working table under it.
+./c4cc -o $T/fs/dosenum.c4r include/c4dos.h src/tests/dosenum.c > /dev/null
+[ "$HAVE_RAYCAST" = 1 ] && cp $T/raycast.c4r $T/fs/raycast.c4r
+# dosexec and dosres are API v4's: a program that runs programs.
+./c4cc -o $T/fs/dosexec.c4r include/c4dos.h src/tests/dosexec.c > /dev/null
+./c4cc -o $T/fs/dosres.c4r include/c4dos.h src/tests/dosres.c > /dev/null
+# dosfilt is redirection's: a filter through DOS's console slots, or with
+# -r through READ and printf (the tap's)
+./c4cc -o $T/fs/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+# the same floppy in directories (API v7): SUB with a program, a note and
+# a batch file, SUB\DEEP under it, each with its own c4dos.dir and a
+# "NAME/" line in its parent's
+mkdir -p $T/fsd/SUB/DEEP
+cp $T/fs/config.sys $T/fs/autoexec.bat $T/fs/hello.c4r $T/fsd/
+cp $T/fs/hello.c4r $T/fsd/SUB/hello2.c4r
+echo 'a note in SUB' > $T/fsd/SUB/note.txt
+printf '@ECHO batch in SUB\n@RUN hello2.c4r\n' > $T/fsd/SUB/runsub.bat
+echo 'deep down' > $T/fsd/SUB/DEEP/deep.txt
+printf 'SUB/\nautoexec.bat\nc4dos.dir\nconfig.sys\nhello.c4r\n' > $T/fsd/c4dos.dir
+printf 'DEEP/\nc4dos.dir\nhello2.c4r\nnote.txt\nrunsub.bat\n' > $T/fsd/SUB/c4dos.dir
+printf 'c4dos.dir\ndeep.txt\n' > $T/fsd/SUB/DEEP/c4dos.dir
+DIRS_SCRIPT='DIR\nCD SUB\nDIR\nTYPE note.txt\nTYPE ..\\config.sys\nHELLO2\nRUNSUB\nCD deep\nCD\nTYPE deep.txt\nTYPE \\sub\\NOTE.TXT\nCD ..\\..\nCD\nsub\\hello2\nHELLO2\nPATH \\SUB\nPATH\nHELLO2\nRUNSUB\nTYPE note.txt\nAPPEND \\sub\nTYPE note.txt\nAPPEND ;\nPATH ;\nPATH\nCD NOSUCH\nCD ..\nCOPY config.sys RAM:\\TMP\\c.txt\nCD TMP\nDIR\nTYPE c.txt\nCD \\\nDIR\nCD SUB/DEEP\nCD\nCD /\nEXIT\n'
+check_dirs () {   # leg, output
+  echo "$2" | grep -q '^ Directory of A:\\SUB$' || { echo "FAIL $1 dirs: DIR in SUB"; echo "$2" | head -60; exit 1; }
+  echo "$2" | grep -q "^SUB  <DIR>$" && echo "$2" | grep -q "^DEEP  <DIR>$" || { echo "FAIL $1 dirs: a directory in DIR"; exit 1; }
+  [ "$(echo "$2" | grep -c '^a note in SUB$')" = 3 ] || { echo "FAIL $1 dirs: TYPE note.txt, by a path, along APPEND"; echo "$2"; exit 1; }
+  echo "$2" | grep -q "^DEVICE=RAMDISK.SYS" || { echo "FAIL $1 dirs: TYPE ..\\config.sys"; exit 1; }
+  [ "$(echo "$2" | grep -c '^yello$')" = 5 ] || { echo "FAIL $1 dirs: HELLO2 in SUB, by batch, by path, along PATH ($(echo "$2" | grep -c '^yello$'))"; echo "$2"; exit 1; }
+  [ "$(echo "$2" | grep -c '^batch in SUB$')" = 2 ] || { echo "FAIL $1 dirs: RUNSUB in SUB and along PATH"; exit 1; }
+  echo "$2" | grep -q '^A:\\SUB\\DEEP$' && echo "$2" | grep -q "^deep down$" || { echo "FAIL $1 dirs: CD deep"; exit 1; }
+  echo "$2" | grep -q '^A:\\$' || { echo "FAIL $1 dirs: CD ..\\.. to the root"; exit 1; }
+  echo "$2" | grep -q "SUB>" || { echo "FAIL $1 dirs: the prompt says the directory"; exit 1; }
+  [ "$(echo "$2" | grep -c 'bad command or file name: HELLO2')" = 1 ] || { echo "FAIL $1 dirs: HELLO2 at the root, with no PATH"; exit 1; }
+  echo "$2" | grep -q '^PATH=A:\\SUB$' && echo "$2" | grep -q "^No PATH$" || { echo "FAIL $1 dirs: PATH shown and cleared"; exit 1; }
+  [ "$(echo "$2" | grep -c 'file not found: note.txt')" = 1 ] || { echo "FAIL $1 dirs: note.txt at the root, with no APPEND"; exit 1; }
+  echo "$2" | grep -q "invalid directory: NOSUCH" && echo "$2" | grep -q "invalid directory: \.\.$" || { echo "FAIL $1 dirs: CD to nowhere"; exit 1; }
+  echo "$2" | grep -q "^c.txt  <ram> " && echo "$2" | grep -q "^TMP  <DIR> <ram>$" || { echo "FAIL $1 dirs: the RAM disk's directories"; echo "$2"; exit 1; }
+  [ "$(echo "$2" | grep -c '^A:\\SUB\\DEEP$')" = 2 ] || { echo "FAIL $1 dirs: CD SUB/DEEP, with a slash"; exit 1; }
+}
+
+# the same floppy with DEVICE=REDIR.SYS
+mkdir -p $T/fsr
+cp $T/fs/* $T/fsr/
+echo 'DEVICE=REDIR.SYS' >> $T/fsr/config.sys
+# ... and a driver C4DOS does not have, which DOS 6 met with "Bad or missing"
+echo 'DEVICE=EMM386.EXE NOEMS' >> $T/fsr/config.sys
+
+# The redirection session, and what it must say. The native leg and the
+# tower run it.
+REDIR_SCRIPT='DIR > LIST.TXT\nTYPE LIST.TXT\nECHO one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen\nECHO appended >> LIST.TXT\nTYPE LIST.TXT\ndosfilt < config.sys\nTYPE autoexec.bat | dosfilt\nECHO x y | dosfilt | dosfilt > PIPED.TXT\nTYPE PIPED.TXT\nECHO ECHO from the batch file > T.BAT\nT > T.OUT\nTYPE T.OUT\nTYPE nosuch.txt > E.TXT\nTYPE E.TXT\nDIR\nEXIT\n'
+check_redir () { # leg, output
+  echo "$2" | grep -q "installed: > >> < and |" || { echo "FAIL $1 redir: CONFIG.SYS line"; exit 1; }
+  echo "$2" | grep -q "^Bad or missing EMM386.EXE$" && echo "$2" | grep -q "^Error in CONFIG.SYS line [0-9]*$" || { echo "FAIL $1: a driver C4DOS does not have"; exit 1; }
+  # DIR went into the file, not onto the console: TYPE shows it, twice
+  # (before and after the >>), and the listing in it has LIST.TXT itself
+  [ "$(echo "$2" | grep -c '^hello.c4r$')" -ge 2 ] || { echo "FAIL $1 redir: TYPE LIST.TXT"; echo "$2" | head -40; exit 1; }
+  [ "$(echo "$2" | grep -c '^LIST.TXT  <ram>')" -ge 2 ] || { echo "FAIL $1 redir: DIR > LIST.TXT (the listing is not in the file)"; exit 1; }
+  echo "$2" | grep -q "seventeen$" || { echo "FAIL $1: ECHO stopped short of 17 words"; exit 1; }
+  [ "$(echo "$2" | grep -c '^appended$')" = 1 ] || { echo "FAIL $1 redir: >>"; exit 1; }
+  echo "$2" | grep -q "^> DEVICE=RAMDISK.SYS" || { echo "FAIL $1 redir: dosfilt < config.sys"; exit 1; }
+  echo "$2" | grep -q "^> .*WELCOME TO C4DOS" || { echo "FAIL $1 redir: TYPE | dosfilt"; exit 1; }
+  echo "$2" | grep -q "^> > X Y" || { echo "FAIL $1 redir: a pipe of three into a file"; exit 1; }
+  echo "$2" | grep -q "^> DOSFILT: 1 LINE" || { echo "FAIL $1 redir: the middle of the pipe"; exit 1; }
+  echo "$2" | grep -q "^from the batch file" || { echo "FAIL $1 redir: a batch file redirected"; exit 1; }
+  [ "$(echo "$2" | grep -c '^file not found: nosuch.txt')" = 1 ] || { echo "FAIL $1 redir: an error message redirected"; exit 1; }
+  # the pipe files are gone afterwards
+  if echo "$2" | grep -q 'PIPE[0-9]*[.][$][$][$]'; then echo "FAIL $1 redir: a pipe file was left behind"; exit 1; fi
+  return 0
+}
+
+# The v4 session, and what it must say. Every leg runs the same one.
+V4_SCRIPT='dosexec deep 3\nECHO prompt answers\ndosexec resident\ndosexec catch\ndosexec file\nTYPE kid.txt\ndosexec unlink\ndosexec read\na line for the program\nECHO after read\ndosexec sink\ndosexec gen\nEXIT\n'
+check_v4 () { # leg, output
+  for want in \
+      'dosexec: level 0 exits with 3 from three calls down' \
+      'dosexec: level 1: child returned 3' \
+      'dosexec: level 2: child returned 13' \
+      'dosexec: level 3: child returned 23' \
+      'prompt answers' \
+      'dosexec: load gave a handle' \
+      'dosres: main call 1, the constructor said 42' \
+      'dosexec: first start returned 1' \
+      'dosres: main call 2, the constructor said 42' \
+      'dosexec: second start (it exits) returned 52' \
+      'dosres: destructor, after 2 call(s)' \
+      'dosexec: unload returned 0' \
+      'dosexec: unload again returned -1' \
+      'dosexec: start after unload returned -1' \
+      'dosexec: catch of an exit gave 42, exited 1' \
+      'dosexec: catch of a return gave 6, exited 0' \
+      'dosexec: kid.txt after the child: 16 bytes: made by a child' \
+      'dosexec: unlink gone.txt: 0' \
+      'dosexec: open after unlink: -1' \
+      'dosexec: unlink again: -1' \
+      'dosexec: conread 23 bytes: a line for the program' \
+      'dosexec: conwrite works' \
+      'after read' \
+      "dosexec: the sink got 'into the sink', ctx 77" \
+      'dosexec: and the console is back' \
+      'dosexec: no generations (setgen -1)'; do
+    echo "$2" | grep -qF "$want" || { echo "FAIL $1 v4: no '$want'"; echo "$2" | tail -30; exit 1; }
+  done
+  # the file a child wrote is there for TYPE at the prompt too
+  [ "$(echo "$2" | grep -c 'made by a child$')" -ge 2 ] || { echo "FAIL $1 v4: TYPE kid.txt"; exit 1; }
+  # nothing ran after dos_exit, and the line typed ahead was the
+  # program's, not a command
+  if echo "$2" | grep -q 'dos_exit returned'; then echo "FAIL $1 v4: dos_exit returned"; exit 1; fi
+  if echo "$2" | grep -q 'bad command or file name: a'; then echo "FAIL $1 v4: conread missed its line"; exit 1; fi
+  return 0
+}
+
+R="$PWD"
+run_native () { # image, script on stdin
+  ( cd $T/fs && printf "$2" | "$R/c4m" "$R/load-c4r.c" -- "$R/$T/$1" 2>&1 )
+}
+
+# ---- leg 1: native session ------------------------------------------
+OUT=$(run_native c4dos.c4r 'DIR\nTYPE c4dos.dir\nRUN hello.c4r\nECHO back at the prompt\nBADCMD\nEXIT\n')
+echo "$OUT" | grep -q "C4DOS version"            || { echo "FAIL native: no banner"; exit 1; }
+echo "$OUT" | grep -q "Welcome to C4DOS"         || { echo "FAIL native: autoexec did not run"; exit 1; }
+echo "$OUT" | grep -q "hello.c4r"                || { echo "FAIL native: DIR"; exit 1; }
+echo "$OUT" | grep -q "yello"                    || { echo "FAIL native: RUN hello"; exit 1; }
+echo "$OUT" | grep -q "back at the prompt"       || { echo "FAIL native: no return to prompt"; exit 1; }
+echo "$OUT" | grep -q "bad command or file name" || { echo "FAIL native: bad-command"; exit 1; }
+echo "$OUT" | grep -q "this build of C4DOS has no clock" || { echo "FAIL native: clockless build has a clock?"; exit 1; }
+echo "test-c4dos: native session OK"
+
+# ---- leg 2: the clock build -----------------------------------------
+OUT=$(run_native c4dos-clock.c4r 'TIME\nEXIT\n')
+echo "$OUT" | grep -q "installed: TIME"   || { echo "FAIL clock: CONFIG.SYS DEVICE line"; exit 1; }
+echo "$OUT" | grep -q "uptime"                   || { echo "FAIL clock: TIME"; exit 1; }
+echo "test-c4dos: clock build OK"
+
+# ---- leg 2b: a transient that draws ---------------------------------
+# raycast is the one transient here that does real work: it renders two
+# frames of 256-colour ANSI, reads the clock for its frame counter, and
+# returns to the prompt. It also pins the RC_DOS build honestly -- if
+# anyone reaches for puts, __c4_cycles or __c4_usleep in that source,
+# the image gains an opcode DOS has no business executing.
+if [ "$HAVE_RAYCAST" = 1 ]; then
+    OUT=$(run_native c4dos-clock.c4r 'RUN raycast.c4r 15x15 -s 3 -d -n 2 -g 40x12\nECHO prompt is back\nEXIT\n')
+    echo "$OUT" | grep -q "48;5;"           || { echo "FAIL raycast: no colour output"; exit 1; }
+    echo "$OUT" | grep -q "prompt is back"  || { echo "FAIL raycast: no return to prompt"; exit 1; }
+    [ "$(echo "$OUT" | grep -c '48;5;')" = 24 ] || { echo "FAIL raycast: expected 24 rendered rows"; exit 1; }
+    echo "test-c4dos: raycast transient OK"
+else
+    echo "test-c4dos: raycast transient SKIPPED (no ./c4sp)"
+fi
+
+# ---- leg 2c: names ---------------------------------------------------
+# DOS was case-insensitive and let you type the program rather than the
+# file. Both are resolved through c4dos.dir, which is why that listing
+# has to carry the TRUE on-disk spellings: dir_resolve opens whatever
+# it finds there. A disk with no listing keeps the old exact-match
+# behaviour, so this also checks the fallback does not become required.
+OUT=$(run_native c4dos-clock.c4r 'HELLO\nRUN hello\nRUN HELLO.C4R\nRUN Hello.C4r\nTYPE CONFIG.SYS\nEXIT\n')
+[ "$(echo "$OUT" | grep -c yello)" = 4 ] || { echo "FAIL names: expected 4 runs, got $(echo "$OUT" | grep -c yello)"; exit 1; }
+echo "$OUT" | grep -q "DEVICE=CLOCK.SYS"  || { echo "FAIL names: TYPE CONFIG.SYS"; exit 1; }
+OUT=$(run_native c4dos-clock.c4r 'nosuchthing\nRUN nosuchthing\nEXIT\n')
+echo "$OUT" | grep -q "bad command or file name" || { echo "FAIL names: unknown word"; exit 1; }
+echo "$OUT" | grep -q "file not found"           || { echo "FAIL names: RUN of a missing program"; exit 1; }
+echo "test-c4dos: case-insensitive names and .c4r completion OK"
+
+# ---- leg 2d: the RAM disk -------------------------------------------
+# c4 and c4m have no write primitive and c4bb's disk is read-only, so
+# "writing a file" is a DOS service: DEVICE=RAMDISK.SYS installs a
+# name->buffer table, opens check it BEFORE the disk, and COPY is the
+# one builtin that puts something in it. RUN out of RAM is the point --
+# it is what lets one stage's output be the next stage's input.
+OUT=$(run_native c4dos-clock.c4r 'COPY hello.c4r work.c4r\nDIR\nRUN work.c4r\nEXIT\n')
+echo "$OUT" | grep -q "^RAMDISK.SYS  *RAM disk" || { echo "FAIL ramdisk: CONFIG.SYS DEVICE line"; exit 1; }
+echo "$OUT" | grep -q "work.c4r  <ram>"           || { echo "FAIL ramdisk: DIR does not list it"; exit 1; }
+echo "$OUT" | grep -q "yello"                     || { echo "FAIL ramdisk: RUN from RAM"; exit 1; }
+# RAM shadows the read-only disk: same name, RAM wins.
+OUT=$(run_native c4dos-clock.c4r 'COPY config.sys hello.c\nTYPE hello.c\nEXIT\n')
+echo "$OUT" | grep -q "DEVICE=RAMDISK.SYS"        || { echo "FAIL ramdisk: RAM does not shadow disk"; exit 1; }
+# and it is still reachable through the name rules
+OUT=$(run_native c4dos-clock.c4r 'COPY hello.c4r work.c4r\nWORK\nRUN Work.C4R\nEXIT\n')
+[ "$(echo "$OUT" | grep -c yello)" = 2 ] || { echo "FAIL ramdisk: name resolution into RAM"; exit 1; }
+echo "test-c4dos: ramdisk OK"
+
+# ---- leg 2e: the v2 API ----------------------------------------------
+# Enumeration, and handing memory back. A tool asks for a file by name;
+# a LOADER wants everything without being told what is there. The head=
+# field is the part that matters -- it proves ENTDATA points at content
+# and not at a plausible-looking address, which is exactly the bug the
+# v1 table had in slots 9-15 (allocated 16 words, filled 9).
+OUT=$(run_native c4dos-clock.c4r 'COPY hello.c4r work.c4r\nCOPY config.sys note.txt\nRUN dosenum.c4r\nEXIT\n')
+# A FLOOR, not an exact match: the version goes UP when the table gains
+# slots (v3 added the clock), and a pinned number turns every deliberate
+# bump into a test failure that says nothing. What this leg cares about
+# is that enumeration is THERE, which is v2 and later.
+APIV=$(echo "$OUT" | sed -n 's/.*dosenum: api version \([0-9]*\).*/\1/p' | head -1)
+[ -n "$APIV" ] && [ "$APIV" -ge 2 ] || {
+    echo "FAIL v2: version word (got '${APIV:-none}', want >= 2)"; exit 1; }
+# v3 and up must also hand a transient a RUNNING clock: c4m borrows it
+# rather than calling TIME itself, which would take it off the base rung
+# (docs/dos-rung-fixes.md F11). A stopped clock is the exact failure
+# that hung the nested C4KE boot forever.
+if [ "$APIV" -ge 3 ]; then
+    echo "$OUT" | grep -q "dosenum: clock reads -*[0-9]* ms, running" || {
+        echo "FAIL v3: clock slot absent or stopped"; exit 1; }
+fi
+echo "$OUT" | grep -q "dosenum: 2 entries"          || { echo "FAIL v2: entry count"; exit 1; }
+echo "$OUT" | grep -q "work.c4r 434 bytes head=C4R" || { echo "FAIL v2: ENTDATA does not point at the image"; exit 1; }
+echo "$OUT" | grep -q "note.txt 81 bytes head=REM"  || { echo "FAIL v2: ENTDATA for a text file"; exit 1; }
+
+# TRIM and RELEASE hand DOS's own memory back -- the thing dosload
+# exists to do. DOS must still WORK afterwards: the 4MB scratch is
+# re-allocated on demand, so COPY/RUN/TYPE all have to survive it.
+OUT=$(run_native c4dos-clock.c4r 'COPY hello.c4r work.c4r\nRUN dosenum.c4r -t -r\nDIR\nCOPY hello.c4r again.c4r\nRUN again.c4r\nTYPE config.sys\nEXIT\n')
+echo "$OUT" | grep -q "trim released 4194304 bytes"   || { echo "FAIL v2: trim"; exit 1; }
+echo "$OUT" | grep -q "0 entries left"                || { echo "FAIL v2: release"; exit 1; }
+echo "$OUT" | grep -q "ramdisk: 0 of .* 0 file(s)"    || { echo "FAIL v2: DIR after release"; exit 1; }
+echo "$OUT" | grep -q "yello"                         || { echo "FAIL v2: RUN after trim (scratch not re-allocated?)"; exit 1; }
+echo "$OUT" | grep -q "DEVICE=RAMDISK.SYS"            || { echo "FAIL v2: TYPE after trim"; exit 1; }
+echo "test-c4dos: API v2 enumeration and memory hand-back OK"
+
+# ---- leg 2g: API v4 ---------------------------------------------------
+# RUN is re-entrant: exec three deep with an exit() from three calls
+# down at the bottom, a resident image loaded once and started twice,
+# catch around an exit, a file a child wrote outliving it, and the
+# console through DOS. This is the c4cc build of DOS; test-c4dos-heap
+# runs the same against the c4lc -O one.
+OUT=$(run_native c4dos-clock.c4r "$V4_SCRIPT")
+check_v4 native "$OUT"
+echo "test-c4dos: API v4 (exec, load/start/unload, catch, unlink, console, sink) OK"
+
+# ---- leg 2h: redirection ----------------------------------------------
+# DEVICE=REDIR.SYS: > >> < and |, DOS's own builtins and error messages,
+# a filter through the console slots, a pipe of three, a batch file. And
+# without the line, the command line is parsed as it always was.
+OUT=$(cd $T/fsr && printf "$REDIR_SCRIPT" | "$R/c4m" "$R/load-c4r.c" -- "$R/$T/c4dos-clock.c4r" 2>&1)
+check_redir native "$OUT"
+OUT=$(run_native c4dos-clock.c4r 'ECHO a > b | c\nEXIT\n')
+echo "$OUT" | grep -q "^a > b | c$" || { echo "FAIL: without REDIR.SYS, > and | should be words"; exit 1; }
+echo "test-c4dos: redirection (> >> < |, batch files) OK, and without REDIR.SYS the line is as it was"
+
+# directories (API v7): CD, DIR of one, paths with \ and /, .. and \, a
+# program and a batch file in one, PATH and APPEND, the RAM disk's
+OUT=$(cd $T/fsd && printf "$DIRS_SCRIPT" | "$R/c4m" "$R/load-c4r.c" -- "$R/$T/c4dos-clock.c4r" 2>&1)
+check_dirs native "$OUT"
+echo "test-c4dos: directories (CD, DIR, paths, PATH, APPEND, the RAM disk's) OK"
+
+# ---- leg 2f: the ladder ---------------------------------------------
+# The claim this whole system exists to support: C4DOS builds C4KE.
+# dostar unpacks the sources onto the RAM disk, cpp preprocesses the
+# kernel, c4cc compiles it, and the image that comes out boots. The
+# kernel is left waiting at its shell, so the run is bounded by timeout
+# and judged on what it printed rather than on how it ended.
+#
+# AND THE HANDOVER. There is deliberately NO init.c4r on this floppy:
+# the only one in the machine is the one BUILD.BAT just compiled, and
+# it exists only in DOS's RAM disk. If the kernel comes up at a shell,
+# c4ke_dos.c seeded that image into the kernel's RAM filesystem and
+# task_loadc4r found it there -- which is the whole point of the rung.
+# Put init.c4r back on the disk and this leg stops proving anything.
+if [ -f c4ke-src.tar ] && [ -f dostar.c4r ] && [ -f cpp.c4r ]; then
+    mkdir -p $T/build
+    sed 's/SIZE=[0-9]*/SIZE=16777216/' src/c4dos/fs/CONFIG.SYS > $T/build/config.sys
+    cp src/c4dos/fs/AUTOEXEC.BAT $T/build/autoexec.bat
+    cp src/c4dos/fs/BUILD.BAT $T/build/build.bat
+    cp dostar.c4r cpp.c4r c4cc.c4r c4ke-src.tar c4sh.c4r $T/build/
+    (cd $T/build && ls -p | grep -v '/$' > c4dos.dir)
+    # The kernel comes up and waits at its shell, so timeout is the
+    # expected way for this to end -- || true keeps set -e from calling
+    # that a failure, and stdbuf keeps the output: a block-buffered
+    # stdout killed by SIGTERM never flushes, which looks exactly like
+    # a run that printed nothing at all.
+    OUT=$( cd $T/build && printf 'BUILD\nRUN c4ke.c4r\n' \
+        | timeout 120 stdbuf -o0 "$R/c4m" "$R/load-c4r.c" -- "$R/$T/c4dos-clock.c4r" 2>&1 || true )
+    # A FLOOR, not an exact count. c4ke-src.tar is C4KE_KIT, which ends
+    # in $(wildcard include/*.h) -- so the number goes up whenever a
+    # header is added, and a pinned figure rots silently. It already
+    # has, twice: 38 -> 39, and then 39 -> 42 when c4bb.h, c4bb_info.h
+    # and u0lite.h landed and nobody re-ran this leg. What the pin is
+    # actually for is "the unpack did not quietly stop working", and a
+    # floor says that without breaking every time the kernel grows a
+    # header.
+    UNP=$(echo "$OUT" | sed -n 's/.*dostar: extracted \([0-9]*\) files.*/\1/p' | head -1)
+    [ -n "$UNP" ] || {
+        echo "FAIL ladder: unpack"; echo "$OUT" | head -20; exit 1; }
+    [ "$UNP" -ge 39 ] || {
+        echo "FAIL ladder: unpack extracted only $UNP files"; exit 1; }
+    echo "$OUT" | grep -q "cpp: wrote .* to ram:c4ke.i" || { echo "FAIL ladder: preprocess"; exit 1; }
+    echo "$OUT" | grep -q "c4cc: wrote .* to ram:c4ke.c4r" || { echo "FAIL ladder: compile kernel"; exit 1; }
+    echo "$OUT" | grep -q "c4cc: wrote .* to ram:init.c4r" || { echo "FAIL ladder: compile init"; exit 1; }
+    echo "$OUT" | grep -q "c4ke v0.66 starting" || { echo "FAIL ladder: the built kernel did not start"; exit 1; }
+    # N/N, not "some": a shortfall here means RAMFS_MAX or memory ran
+    # out, and the symptom would otherwise be a much later mystery.
+    SEED=$(echo "$OUT" | sed -n 's/.*seeded \([0-9]*\)\/\([0-9]*\) file(s).*/\1 \2/p' | head -1)
+    [ -n "$SEED" ] || { echo "FAIL ladder: the kernel did not seed from the RAM disk"; exit 1; }
+    read SEED_N SEED_TOT <<< "$SEED"
+    [ "$SEED_N" -gt 0 ] && [ "$SEED_N" = "$SEED_TOT" ] || {
+        echo "FAIL ladder: partial seed ($SEED_N/$SEED_TOT)"; exit 1; }
+    echo "$OUT" | grep -q "Kernel ready" || { echo "FAIL ladder: kernel did not come up"; exit 1; }
+    echo "$OUT" | grep -q "C4SH" || { echo "FAIL ladder: no shell"; exit 1; }
+    echo "test-c4dos: the ladder holds (C4DOS built C4KE, seeded it, and booted its own init)"
+else
+    echo "test-c4dos: ladder SKIPPED (run 'make c4ke-src.tar dostar.c4r cpp.c4r')"
+fi
+
+# ---- leg 3: THE TOWER (plain, unmodified c4) ------------------------
+OUT=$( cd $T/fs && printf 'RUN hello.c4r\nEXIT\n' | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
+echo "$OUT" | grep -q "yello"                    || { echo "FAIL tower: plain c4 could not run DOS+hello"; exit 1; }
+echo "$OUT" | grep -q "system halted"            || { echo "FAIL tower: no clean halt"; exit 1; }
+echo "test-c4dos: the tower holds (plain c4 -> c4l -> C4DOS -> hello)"
+# and re-entrant RUN needs nothing above EXIT either
+OUT=$( cd $T/fs && printf "$V4_SCRIPT" | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
+check_v4 tower "$OUT"
+echo "test-c4dos: the tower runs API v4 too (programs running programs, on plain c4)"
+OUT=$( cd $T/fsr && printf "$REDIR_SCRIPT" | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
+check_redir tower "$OUT"
+echo "test-c4dos: the tower redirects too (REDIR.SYS on plain c4)"
+OUT=$( cd $T/fsd && printf "$DIRS_SCRIPT" | "$R/c4" "$R/c4l.c" "$R/$T/c4dos.c4r" 2>&1 )
+check_dirs tower "$OUT"
+echo "test-c4dos: the tower has directories too (plain c4)"
+
+# ---- leg 4: THE MACHINE (c4bb) --------------------------------------
+if [ -x ./c4cc32 ] && command -v node > /dev/null; then
+  ./cpp -DC4DOS_CLOCK=1 src/c4dos/c4dos.c | ./c4cc32 -o $T/c4dos32.c4r - > /dev/null
+  cp src/c4bb/images/hello32.c4r $T/fs/hello32.c4r
+  cp src/c4bb/images/disk/c4.c4r $T/fs/c4.c4r
+  cp src/c4bb/images/disk/hello.c $T/fs/hello.c
+  OUT=$(printf 'DIR\nRUN hello32.c4r\nTIME\nRUN c4.c4r hello.c\nECHO layers hold\nEXIT\n' \
+        | node src/c4bb/sim/cli.js -c 500000000 -d $T/fs $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "installed: TIME" || { echo "FAIL c4bb: CONFIG.SYS"; exit 1; }
+  echo "$OUT" | grep -q "yello"                  || { echo "FAIL c4bb: RUN hello32"; exit 1; }
+  echo "$OUT" | grep -q "uptime 0:00:0"          || { echo "FAIL c4bb: TIME should read boot uptime"; exit 1; }
+  echo "$OUT" | grep -q "layers hold"            || { echo "FAIL c4bb: c4-under-DOS did not return"; exit 1; }
+  # the nesting really ran: c4.c4r's own exit chatter appears mid-session
+  echo "$OUT" | grep -q "exit(0) cycle"          || { echo "FAIL c4bb: no evidence c4.c4r ran hello.c"; exit 1; }
+  echo "test-c4dos: the machine boots DOS, and c4-inside-DOS-inside-c4bb runs hello.c"
+  # API v4 on the board, 32-bit, and HEAP.SYS turned down: c4bb's heap
+  # is its firmware's and keeps no generations
+  mkdir -p $T/fs32
+  cp $T/fs/config.sys $T/fs/autoexec.bat $T/fs32/
+  echo 'DEVICE=HEAP.SYS' >> $T/fs32/config.sys
+  ./c4cc32 -o $T/fs32/dosexec.c4r include/c4dos.h src/tests/dosexec.c > /dev/null
+  ./c4cc32 -o $T/fs32/dosres.c4r include/c4dos.h src/tests/dosres.c > /dev/null
+  (cd $T/fs32 && ls > c4dos.dir)
+  OUT=$(printf "$V4_SCRIPT" | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32 $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "not installed: this machine's heap keeps no generations" || { echo "FAIL c4bb: HEAP.SYS should be refused"; exit 1; }
+  check_v4 c4bb "$OUT"
+  echo "test-c4dos: API v4 on c4bb, and HEAP.SYS declined there"
+  # DEVICE=DRIVES.SYS HOME=B: with a drive B: that can be written (the
+  # CLI's -w): the same session, so every file the v4 scenarios write
+  # goes to B: and the unlink scenario deletes from it; then COPY onto
+  # B:, DIR B:, a RAM copy over it, and DEL taking the RAM copy first
+  mkdir -p $T/fs32h $T/home
+  cp $T/fs32/* $T/fs32h/
+  echo 'DEVICE=DRIVES.SYS HOME=B:' >> $T/fs32h/config.sys
+  (cd $T/fs32h && ls > c4dos.dir)
+  OUT=$(printf "${V4_SCRIPT%EXIT\\n}COPY config.sys NOTE.TXT\nDIR B:\nTYPE b:note.txt\nCOPY NOTE.TXT RAM:\nDEL NOTE.TXT\nTYPE NOTE.TXT\nDEL NOTE.TXT\nTYPE NOTE.TXT\nDIR B:\nEXIT\n" \
+        | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32h -w $T/home $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "files are written to B:" || { echo "FAIL c4bb HOME=B:: CONFIG.SYS"; echo "$OUT" | head; exit 1; }
+  check_v4 c4bb-home "$OUT"
+  [ -f $T/home/kid.txt ] && grep -qx 'kid.txt' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: kid.txt not on B: and in its c4dos.dir"; exit 1; }
+  [ ! -e $T/home/gone.txt ] && ! grep -q 'gone.txt' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: unlink left gone.txt on B:"; exit 1; }
+  echo "$OUT" | grep -q "config.sys -> NOTE.TXT"  || { echo "FAIL c4bb HOME=B:: COPY"; exit 1; }
+  [ "$(echo "$OUT" | grep -c 'DEVICE=DRIVES.SYS HOME=B:')" -ge 2 ] || { echo "FAIL c4bb HOME=B:: TYPE b:note.txt and NOTE.TXT under its RAM copy"; echo "$OUT" | tail -20; exit 1; }
+  echo "$OUT" | grep -q "file not found: NOTE.TXT" || { echo "FAIL c4bb HOME=B:: two DELs should take both copies"; echo "$OUT" | tail -20; exit 1; }
+  [ ! -e $T/home/NOTE.TXT ] && ! grep -q 'NOTE.TXT' $T/home/c4dos.dir || { echo "FAIL c4bb HOME=B:: DEL left NOTE.TXT on B:"; exit 1; }
+  echo "test-c4dos: HOME=B: on c4bb: files on B:, its c4dos.dir kept, COPY, DIR B: and DEL"
+  # Directories on a drive that can be written: MD, a file into one, CD
+  # there, a c4cc program's own open() finding a name in it (the machine's
+  # DISK_DIRS), RD refusing until it is empty; MD on A:, which cannot be
+  # written, refused
+  mkdir -p $T/fs32d $T/homed
+  cp $T/fs32h/config.sys $T/fs32h/autoexec.bat $T/fs/c4.c4r $T/fs/hello.c $T/fs32d/
+  (cd $T/fs32d && ls > c4dos.dir)
+  OUT=$(printf 'MD B:\\W\nMD B:\\W\\X\nMD B:\\W\nCOPY hello.c B:\\w\nB:\nCD W\nRUN A:\\c4.c4r hello.c\nDIR\nCD \\\nRD W\\X\nRD W\nDEL W\\hello.c\nRD W\nDIR\nA:\nMD Q\nEXIT\n' \
+        | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32d -w $T/homed $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "hello.c -> B:.w.hello.c" || { echo "FAIL c4bb dirs: COPY into B:\\W"; echo "$OUT"; exit 1; }
+  echo "$OUT" | grep -q 'B:\\W>' || { echo "FAIL c4bb dirs: CD W on B:"; echo "$OUT"; exit 1; }
+  echo "$OUT" | grep -q "exit(0) cycle" || { echo "FAIL c4bb dirs: c4.c4r did not find hello.c in B:\\W (DISK_DIRS)"; echo "$OUT"; exit 1; }
+  echo "$OUT" | grep -q "is there already" || { echo "FAIL c4bb dirs: MD twice"; exit 1; }
+  echo "$OUT" | grep -q "W is not empty" || { echo "FAIL c4bb dirs: RD of a full directory"; echo "$OUT"; exit 1; }
+  echo "$OUT" | grep -q "cannot change Q - its drive cannot be written" || { echo "FAIL c4bb dirs: MD on A:"; exit 1; }
+  [ ! -e $T/homed/W/c4dos.dir ] && ! grep -q '^W/$' $T/homed/c4dos.dir || { echo "FAIL c4bb dirs: RD left W"; cat $T/homed/c4dos.dir; exit 1; }
+  echo "test-c4dos: directories on c4bb: MD, CD, RD on B:, and a c4cc program's open() in B:\\W"
+  # DEVICE=REDIR.SYS TAP: the machine's console tap catches a c4cc
+  # program's printf (hello32 into a file, and into a pipe) and feeds its
+  # READ of fd 0 (dosfilt -r at a pipe's end); redirect targets on B:
+  mkdir -p $T/fs32r $T/homer
+  cp $T/fs32/config.sys $T/fs32/autoexec.bat $T/fs/hello32.c4r $T/fs32r/
+  ./c4cc32 -o $T/fs32r/dosfilt.c4r include/c4dos.h src/tests/dosfilt.c > /dev/null
+  printf 'DEVICE=DRIVES.SYS HOME=B:\nDEVICE=REDIR.SYS TAP\n' >> $T/fs32r/config.sys
+  (cd $T/fs32r && ls > c4dos.dir)
+  OUT=$(printf 'hello32 > OUT.TXT\nTYPE OUT.TXT\nhello32 | dosfilt\nTYPE config.sys | dosfilt -r\nDIR | dosfilt -r > B:X.TXT\nTYPE B:X.TXT\nhello32\nEXIT\n' \
+        | node src/c4bb/sim/cli.js -c 900000000 -d $T/fs32r -w $T/homer $T/c4dos32.c4r 2>&1)
+  echo "$OUT" | grep -q "with the console tap" || { echo "FAIL c4bb tap: CONFIG.SYS"; echo "$OUT" | head; exit 1; }
+  # once from TYPE OUT.TXT and once from the last, plain hello32: the
+  # redirected run printed nothing on the console
+  [ "$(echo "$OUT" | grep -c '^yello$')" = 2 ] || { echo "FAIL c4bb tap: hello32 > OUT.TXT"; echo "$OUT"; exit 1; }
+  grep -qx 'yello' $T/homer/OUT.TXT || { echo "FAIL c4bb tap: OUT.TXT is not on B:"; exit 1; }
+  echo "$OUT" | grep -q '^> YELLO$' || { echo "FAIL c4bb tap: hello32 | dosfilt"; exit 1; }
+  echo "$OUT" | grep -q '^DEVICE=REDIR.SYS TAP$' || { echo "FAIL c4bb tap: READ fed from a pipe"; exit 1; }
+  echo "$OUT" | grep -q "^DOSFILT.C4R$" || { echo "FAIL c4bb tap: DIR | dosfilt -r > B:X.TXT"; echo "$OUT"; ls -la $T/homer; exit 1; }
+  grep -q 'dosfilt: .* lines (read)' $T/homer/X.TXT || { echo "FAIL c4bb tap: X.TXT on B:"; exit 1; }
+  echo "test-c4dos: the console tap on c4bb: a c4cc program's printf and READ redirected"
+else
+  echo "test-c4dos: SKIP c4bb leg (need c4cc32 + node; run 'make c4bb-32bit')"
+fi
+
+echo "test-c4dos: OK"

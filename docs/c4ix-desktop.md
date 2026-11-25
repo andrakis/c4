@@ -1,0 +1,1986 @@
+# The C4IX desktop: windows, and a terminal emulator in them
+
+Status tracker and design. Tick a box only on green evidence, and write
+the evidence next to it.
+
+## What it is
+
+`desktop` is a C4IX user program that takes over the libjs display
+(docs/libjs-design.md) and draws a desktop in the manner of Windows 95 on
+it. By default it has the boot logo as its picture, the Modern colours
+and the Flat look (parts nine and eleven; Classic and Windows 3.1 are in
+Settings). Its windows can be dragged, sized, focused, minimised,
+maximised and closed, and the taskbar has a Go menu, a button per
+window, and a tray with the CPU meter, the volume and a clock.
+
+The first application is a terminal. Each terminal window runs a real
+`c4ix-sh` as its own task, its stdin and stdout pipes that the desktop
+holds. This is what C4IX's fd layer was built for: the shell and every
+program it starts read and write fds 0 and 1, and the kernel decides
+where those go. C4KE cannot do this; its programs print with host
+opcodes that go straight to the console.
+
+The terminal draws what the shell writes through a VT100 subset
+(cursor movement, erase, SGR colours), and edits lines locally the way a
+tty in cooked mode does: typed characters are echoed, Backspace erases,
+and a line goes down the pipe when Enter is pressed. Ctrl-C interrupts
+that window's foreground job.
+
+One process owns the display and draws every window on it. A program
+gets a window by talking to the desktop over its pipes
+(`include/window.h`, part three): its Terminal's, or one of its own (a
+game whose `/etc/desktop.apps` line says `window`, part twenty-four; a
+`--window` program run with `&`, part twenty-seven). A game may take
+the whole display instead, which the desktop gives up to it
+(`SYS_DISPLAY`, part thirteen).
+
+## Design
+
+**Kernel additions** (src/c4ix):
+- `SYS_AVAIL` (221): bytes waiting on a descriptor, without blocking: 0
+  when a pipe is empty but still has a writer, -1 at end of file. The
+  desktop polls every terminal's output pipe from one loop, so it must
+  never park on one of them. libc4ix: `uavail(fd)`.
+- `SYS_CLOEXEC` (223): mark a descriptor close-on-spawn. Spawn clones the
+  whole fd table, so without this every terminal's shell would hold the
+  desktop's end of its own stdin (and never see end of file) and of every
+  other terminal's pipes, and the fd tables would fill. Per fd, not
+  per description: a dup of a marked fd is inherited. libc4ix:
+  `ucloexec(fd, on)`.
+- `SYS_INTR` (222): interrupt the foreground job below a given task,
+  found the way the console finds its own (descend the wait chain from
+  that task). A terminal window uses its shell's pid. libc4ix:
+  `uintr(pid)`.
+
+**Display additions**: a CLOCK register (0x440, host local seconds since
+midnight) for the taskbar clock, the window growing to 0x47F; and `TEXT2 [x, y, rgb, size, font, advance, n, chars]`.
+Font 0 is monospace, 1 a sans-serif UI face, 2 its bold; 3 to 8 are the
+faces part twenty offers (Courier New, Lucida Console, Verdana and its
+bold, Georgia and its bold). A non-zero
+advance places each character exactly `advance` pixels after the last,
+which is what a character grid needs; 0 is the font's own spacing.
+
+**The desktop** (src/c4ix/user/desktop/, eleven modules of its own over the window kit's eleven in src/winkit, and libc's `fp.c`, linked with libc4ix -> c4ix-desktop.c4r; it was one file, `desktop.c`, until D6, `edit.c` joined in part four, `calc.c` left `apps.c` with floating point, and the window kit, which grin shares, left `wm.c`, `term.c` and `apps.c` in part fourteen; `explore.c` joined in part eighteen, and `hl.c` left `edit.c` in part twenty):
+- Asks for an 800x600 display (1024x768 was too small to read once the
+  page scaled it into its pane), attaches the rings, and redraws what
+  changed: the whole scene, or only the damaged regions
+  (docs/c4ix-cpu.md, step 11). Idle, it waits on `SYS_EVWAIT` for a
+  deadline, an event or output on a terminal's pipe.
+- Windows are a z-ordered list (a linked list, as many as memory allows;
+  part seven). Title bar drag moves, a click raises and
+  focuses, the three caption buttons minimise, maximise/restore and close.
+- The taskbar has the Go button (its menu: Terminal, Files, Text Editor,
+  IDE, Calculator, System Monitor, Settings, About C4IX, Games, Run...,
+  Power Off...), a button per window, and the tray: the CPU meter, the
+  volume and the clock.
+- A terminal window is 80x25 cells of 8x16 pixels (80x24 until the
+  fixes of 2026-09-24), with 300 rows of scrollback. Closing it ends its
+  shell (SIGTERM) and the desktop reaps it.
+
+## Tracker
+
+### D0: kernel
+- [x] `SYS_AVAIL`, `SYS_INTR`, `SYS_CLOEXEC`; libc4ix `uavail`, `uintr`,
+      `ucloexec` (`SYS_TOP` is now 224)
+- [x] `make test-c4ix` and `test-c4ix-c4ke` green (2026-09-23). x5 re-pinned
+      for one line: the task struct's slab size, 432 -> 560, which is the
+      sixteen `fdcloexec` words
+
+### D1: display
+- [x] `TEXT2` in gui-device/display.js and `gui_text2` in gui.h; CLOCK
+
+### D2: the desktop shell
+- [x] Windows: draw, raise, focus, drag, minimise, maximise, close
+- [x] Taskbar: Go menu, window buttons, clock
+- [x] Headless test drives it with display events (`libjs/tests/test-desktop.mjs`,
+      in `make test-libjs`)
+
+### D3: the terminal
+- [x] A shell per window over pipes; output through the VT100 subset
+- [x] Local line editing, Enter sends the line, Ctrl-C interrupts
+- [x] Headless test (2026-09-23): `ps` typed in a window runs in that
+      window's shell and lands in that window; a second terminal from the
+      Go menu; `spin` there and Ctrl-C shows `^C` and stops it while the
+      first terminal still answers; dragging moves a window; closing one
+      removes it; Power Off returns to the console, and no terminal shell
+      outlives the desktop. C4IX's vfs pins widened to `[4-9]x/[4-9]x`
+      entries (now 50/50) in test-libjs and test-c4bb.
+
+### D4: in the browser
+- [x] CDP gate (`test-web.mjs --gui`, 3060 Ti, 2026-09-23): `desktop` from
+      the C4IX shell; the display becomes 800x600; a terminal shows the
+      prompt; `ps` typed on the display runs in that window; Start opens its
+      menu and New Terminal opens a second window; a window drags by its
+      title bar; its close button closes it; Power Off hands the console
+      back; no page errors. The strings drawn are read back through the
+      display's opt-in text log (`display.recordText`).
+- [x] Screenshot checked by eye. At the user's request the desktop is
+      800x600 (1024x768 was scaled down into the pane and hard to read), and
+      the page gives the display its natural width when it has room, so
+      it is shown pixel for pixel.
+
+Also fixed on the way: `build-images.sh` rebuilt C4IX only when one of
+four kernel files changed, so edits to `sys.c`, `vfs.c`, libc4ix or any
+user program were silently not built. It now rebuilds when anything under
+`src/c4ix` (or `libjs/guest/gui.h`) is newer than the kernel image.
+
+## Part two: NT-style tools (asked for 2026-09-23)
+
+Explorer, System Monitor, Text Editor, Calculator and Run, in the Windows NT 4
+style, all inside the desktop process. The desktop becomes several
+modules linked together (`src/c4ix/user/desktop/`): C4IX's compiler is
+given a fixed memory budget per file, and one file holding all of this
+would not fit it.
+
+**Kernel**: `SYS_STAT` (224: type and size of a path), `SYS_UNLINK` (225:
+remove a file, or an empty directory) and `SYS_RENAME` (226: give an
+entry a new name in the same directory). libc4ix: `ustat`, `uunlink`,
+`urename`.
+
+**Shared pieces**: a drawing layer every window draws through, clipped to
+its client area; widgets (buttons, list views with columns and
+selection, scroll bars, a menu bar with drop-down menus, text fields,
+tabs); a message box; resizable windows (drag the bottom-right corner).
+
+- **Explorer**: a folder tree next to a file list (Name, Size, Type), a
+  menu bar, an address box with Up, a status bar. Double-click opens a
+  folder, runs a program in a new Terminal, or opens anything else
+  in Text Editor. New Folder, Delete (confirmed), Rename. Several items
+  can be selected: Ctrl-click adds or removes one, Shift-click or
+  Shift with the arrows takes a range, Ctrl+A takes them all. Delete
+  takes everything selected, a folder with all that is in it. (A click
+  carries no modifiers from the page, but Ctrl and Shift are keys the
+  page sends: the desktop keeps them, `wm_mods`.)
+- **System Monitor** (Ctrl+Shift+Esc too): Programs (the desktop's
+  windows, Close, Show), Tasks (every task with PID, CPU %,
+  CPU time in cycles, the memory it holds, syscalls and state, Kill),
+  Load (a CPU gauge and a scrolling history graph; Totals, Memory
+  and Swap side by side, Memory with the largest free block and Swap with
+  what is on it, pages in and out per second and the tasks load control
+  holds, all from `/proc/meminfo`; and the memory's own history). The status
+  bar says the memory in use on every page.
+  - A task's memory is its image (code, data, the constructor and
+    destructor lists), its stack, its copies of the shared libraries'
+    data, and what it allocated (`ualloc`, or `malloc` behind protected
+    mode). The System row holds the rest of what is in use: the files,
+    which are RAM, the shared libraries' code, and the kernel's own.
+  - The heap's size and use come from the host. libjs counts its heap
+    (`HEAP_USED`, docs/c4bb-design.md); on native c4m the totals say
+    "not known on this host".
+- **Text Editor**: open, edit and save text files in C4IX's filesystem;
+  keyboard editing, mouse placement, scroll bar and wheel.
+- **Calculator** (`calc.c`), in three modes:
+  - Integer: 32-bit words in Hex, Dec, Oct or Bin, with + - * /, Mod, And, Or, Xor, Not, Lsh, Rsh.
+  - Single and Double: IEEE floating point (docs/c4-float.md), each operation done in that precision with c4lc's `float` or `double`. The display shows the shortest decimal that reads back as the value, and a line under it the value's bits: 0.1 + 0.2 is 0.30000000000000004 in Double and 0.3 in Single. Keys: Sqrt, x^2, 1/x, Int, Abs, Pi, e, Exp (an exponent, as in `1e-7`), and the constants Max, Min (the smallest normal), Eps and Inf. On the keyboard `.` is the point, `e` Exp, `p` Pi and `r` Sqrt.
+  - The conversions both ways are libc's `fp.c`, linked into the desktop, so they are exact.
+- **Run**: Go > Run... starts a program in a new Terminal.
+
+### D5: kernel
+- [x] `SYS_STAT`, `SYS_UNLINK`, `SYS_RENAME`; libc4ix `ustat`, `uunlink`,
+      `urename` (`SYS_TOP` is now 227). A removed directory is unlinked but
+      its vnode kept, since a task may still have it as its working
+      directory; an open file cannot be removed.
+- [x] native suites green: `make test-c4ix`, `test-c4ix-c4ke` (2026-09-23)
+
+### D6: the desktop as modules, and the shared pieces
+- [x] `src/c4ix/user/desktop/`: `wm.c` (window manager, drawing layer,
+      menu bars, dialogs), `ui.c` (widgets), `term.c`, `files.c`,
+      `taskmgr.c`, `apps.c`, sharing `desktop.h`; linked by a Makefile rule
+      and by `build-images.sh`. The disk carries the modules concatenated
+      as `c4ix-desktop.c`.
+- [x] each window's client area is clipped; buttons, list views with
+      headers, scroll bars, menu bars with drop-downs, text fields, tabs,
+      group boxes, radio buttons; message and input boxes (modal);
+      windows resize from their corner; title-bar double click maximises;
+      the NT 4 Go menu with its banner; five desktop icons
+- [x] test-desktop.mjs green
+
+### D7: the tools
+- [x] Explorer: tree + list (Name, Size, Type), menus, address, Up,
+      status bar; double-click opens folders, runs programs, opens text in
+      Text Editor; New Folder, Delete (confirmed), Rename; F2, F5, Del,
+      Backspace, Enter, arrows
+- [x] System Monitor: Programs (Close, Show, New Task),
+      Tasks (name, PID, CPU %, CPU time, syscalls, state; Kill,
+      confirmed; kernel tasks refused), Load (gauge, 60 s history,
+      totals, memory and swap); also Ctrl+Shift+Esc -- which in a browser on Windows is
+      taken by Windows itself, so the Go menu and the icon are the way
+      in there
+- [x] Text Editor: open, edit, save (Ctrl+S, Save As), scroll bar, wheel,
+      modified mark in the title
+- [x] Calculator: 32-bit, Hex/Dec/Oct/Bin, + - * / Mod And Or Xor Not Lsh
+      Rsh, keyboard; Run (Go > Run..., and System Monitor's New Task)
+- [x] Headless (2026-09-23), 40 checks in `test-desktop.mjs`, twice green:
+      Explorer browses, makes, renames and deletes a folder in /ram;
+      Text Editor saves /ram/untitled.txt, Explorer lists it and reopens it in
+      Text Editor with its text; Calculator 12+30=42, 2A in Hex, 2A*2=54;
+      System Monitor lists spin, ends it on confirmation, shows the
+      Performance and Applications tabs; Run starts a command in a new
+      Terminal; Power Off leaves no shell behind.
+      Found on the way: typing between two clicks no longer makes them a
+      double click, and F5 and Backspace work in either Explorer pane.
+
+### D8: in the browser
+- [x] CDP gate (3060 Ti, 2026-09-23): the desktop, `ps` in a Terminal,
+      Explorer opening /usr, Text Editor typing, Calculator 6*7=42, System Monitor
+      processes with CPU usage and its Performance tab, Power Off; no page
+      errors. Screenshots of Explorer, Text Editor with Calculator, and Task
+      Manager checked by eye.
+
+Known: C4IX's boot loader race (docs/c4bb-design.md, "Known issue") now
+shows on every boot of this build as one extra, empty entry: "vfsload:
+cannot open" and 50/51. All 50 real entries load. It moves with timing --
+an instrumented vfsload loads 50/50 -- and is not caused by this work.
+
+## Fixes after the user's first look (2026-09-24)
+
+- [x] **`top` ran three times and quit.** It was written before the console
+      could be interrupted. It now runs until Ctrl-C, redrawing in place
+      (ESC[2J ESC[H) once a machine-second and sleeping in between; `top N`
+      still stops after N screens.
+- [x] **raycast in a Terminal had no colour and the desktop
+      flickered.** Four causes, all fixed:
+  - the terminal kept 16 colours and dropped raycast's 256-colour codes;
+    cells now hold xterm-256 indices (24-bit colours map to the nearest);
+  - it was 80x24, so raycast's 25-row frames scrolled every frame; it is
+    80x25 now;
+  - on the shared display path the page presented at the end of every
+    ring batch, so a batch that ended part-way through the desktop's
+    redraw showed the half-drawn scene. The page now presents only where
+    the guest presents, and draws a trailing partial frame off screen
+    (`display.js` drawCoalesced);
+  - the terminal read 1 KB per pass; it now drains its pipe before drawing,
+    so whole frames arrive together, and output-driven redraws are capped
+    at one per 25 ms of machine time (machine time, not host time: the two
+    run at different rates when the machine is unpaced, and on host time the
+    headless test saw no redraw at all).
+  The page's default pace also went from 20 to 100 MHz, the difference
+  between raycast managing a few frames a second in the desktop and 80.
+  Headless: 30 distinct colours drawn in the Terminal; browser:
+  raycast's status line and colour counted, screenshot checked.
+  raycast still reads keys through `/dev/tty`, which is the page's
+  terminal, not the window it draws in: `-d` (demo) runs it hands-free.
+- [x] **A movable split between the terminal and the display.** Drag the
+      bar between the panes (remembered; double-click resets). The canvas
+      scales to fill its pane, snapping to a whole-number scale with sharp
+      pixels when one is within 15% of the best fit. Browser gate: dragging
+      400 px grew the display from 800 to 1064 px.
+
+## Part three: a lazy disk, programs from Explorer, compilers inside (asked for 2026-09-24)
+
+The web page fetched all 181 disk files, one by one, before the machine
+started, although a C4IX boot opens almost none of them. Explorer did not
+show the C4IX programs as programs, and could not run them. innerbench
+failed. The machine had no compilers to build a program with, and the
+user wants to compile a test GUI application inside it and run it.
+
+### L: the lazy disk
+- [x] **Lazy RAM files in the kernel.** A vnode can name a host file and
+      its size without holding its bytes (`vfs_lazyfile`, SYS_LAZYFILE 227).
+      The first read, write or program load fills it (`vfs_fill`), and a
+      truncating open drops the host copy. `ls` and stat need only the
+      size, so they never fill a file.
+- [x] **vfsload makes entries lazy.** The image build writes `c4ix.sizes`,
+      a "SIZE NAME" line per disk file. vfsload makes each entry named in
+      it a lazy file, and an alias of a lazy file another lazy file on the
+      same host bytes. Anything the table does not list is copied as
+      before, and with no table at all everything is.
+- [x] **The page fetches on demand.** The build also writes `index.json`,
+      names and sizes. The page sends only that to the worker. The
+      worker's disk fetches a file with a synchronous request the first
+      time the machine opens it, which is allowed in a worker, and the
+      machine's open is synchronous anyway. A disk with no index falls
+      back to the eager fetch, as does `lazy: false`.
+- [x] Evidence. Headless desktop test: booting reads 4 of 182 files.
+      Browser gate on the 3060 Ti: 4 of 182 fetched, shell prompt 1.2 s
+      after the page loaded. `x5-c4m.txt` re-pinned for the larger vnode
+      (112 to 128 bytes).
+
+### E: Explorer runs programs
+- [x] C4IX's programs live in `/bin` without a `.c4r` suffix, so Explorer
+      showed them as plain files and opened them in Text Editor. stat now
+      says whether a file is a program: by its C4R signature, or for a
+      lazy file by its host name, so a listing never fetches anything.
+      Explorer shows these as "C4IX Program" with the program icon, and
+      double-click or File > Open runs one in a new Terminal.
+      Headless: `/bin` lists them as programs and double-clicking `hello`
+      runs it.
+
+### I: innerbench
+- [x] innerbench compiles C4KE from source in nested c4m instances, and
+      c4m has no preprocessor. The mailbox commit (ad57ad0, 2026-09-09)
+      gave c4ke.c global arrays, which c4's compiler cannot parse, and a
+      scheduler call into `c4bb_mbox.h`, which c4m never reads. Both inner
+      kernels died with "bad global declaration" while the outer one
+      still said "innerbench complete" and exited 0. The table is now
+      allocated, and the two mailbox reads the scheduler needs are
+      written out against the registers. `make test` now fails when an
+      inner kernel does not compile or no inner benchmark finishes; it
+      passes with the fix and fails on the old source.
+
+### C: compilers inside C4IX
+The survey (2026-09-24): the VM has no write opcode, so a compiler writes
+its output through C4KE's `OP_VFS_PUT`, the C4DOS RAM-disk API, or
+stdout. C4IX offers none of the first two, so c4cc, c4rlink and c4sp/c4lc
+all fail at the write. c4th writes images to stdout, and the C4IX shell
+can redirect that into a RAM file, so the Forth route works already.
+- [x] **C1: C4KE's RAM-filesystem opcodes in C4IX.** OP_VFS_PUT, GET,
+      UNLINK, COUNT and NAME in `src/c4ix/c4ke.c`, over the C4IX VFS (a
+      bare name lands in the working directory; GET hands back the
+      kernel's bytes in place). CK_TOP went from 160 to 161. Tasks are now
+      told C4I_TRAPH: C4IX read the info bits at boot, before it installed
+      its trap handler, and c4cc will not probe for OP_VFS_PUT without it.
+- [x] **C2: the tools in `/bin`.** c4cc, c4rlink, c4rdump, cpp, c4sp (with
+      c4lc beside it on the disk) and c4th, with its Forth sources in
+      `/usr/src/forth`. `/usr/include` has `window.h` and `c4ix_user.h`;
+      `/usr/src/examples` has a README, hello.c and bounce.c. A 32-bit
+      `libc4ix.c4l` is not on the disk yet, so c4lc builds plain programs,
+      not C4IX-library ones.
+- [x] **C3: room to run them.** Measured rather than raised: c4cc
+      compiles bounce.c, c4lc compiles hello.c and c4th compiles and runs
+      its self-test image, all on the stock 32 KB task stack. Larger
+      c4lc builds are not measured.
+- [x] **The loader preferred the host.** A program compiled to
+      `/ram/hello.c4r` ran the disk's own `hello.c4r`, because the board's
+      disk answers a missing path by its bare file name. A RAM file by
+      the path now wins.
+- [x] **C4: compile a GUI program inside the machine and run it.** The
+      desktop owns the display, so a program gets a window through its
+      Terminal: `include/window.h` writes drawing commands to
+      stdout as ESC _ G ... ESC \ sequences, and the window sends mouse
+      and key events back on stdin. The window is the program's until it
+      closes it, Ctrl-C stops it, or the shell prompts again. The header
+      builds with c4cc (no preprocessor, structs or arrays) and with c4lc.
+      Headless desktop test and browser gate on the 3060 Ti: c4cc
+      compiles bounce.c in a Terminal; it takes the window, titled,
+      animates, counts a click on its button, sees a typed key, and q
+      gives the terminal back with its title.
+
+## Part four: an IDE (asked for 2026-10-19)
+
+The machine could compile inside itself (part three), and now rebuild
+everything it ships (`b4ke -C /usr/src/c4`, docs/c4ix-design.md). What
+it lacked was somewhere to edit and build in one place.
+
+- [x] **The Editor** (`src/c4ix/user/desktop/edit.c`, window kind
+      `K_EDIT`, Go > Editor, and Explorer for `.c .h .b4k .lisp .f
+      .js` files). Lines are separate allocations, so there is no
+      Text Editor-style 65,000-byte limit; undo and redo are snapshots of the
+      text, 32 deep.
+- [x] **VIM mode**, on by default. Normal, Insert, Visual and Visual-line,
+      and the `:` / `?` command line. Motions with counts (`hjkl w b e W B
+      E 0 ^ $ gg G { } % f t F T ; ,`), operators `d c y > <` with any
+      motion or doubled, text objects `iw aw i( a( i{ a{ i" a"`, `x X D C
+      s S r J ~ p P u Ctrl-R . n N *`, and `:w :q :q! :wq :x :e :N :$
+      :s/a/b/ :%s/a/b/g :set nu|nonu|vim|novim`. `:set novim` is a plain
+      editor in which Esc opens the command line.
+- [x] **Arrow keys in every mode**, Insert included, with Home/End,
+      PgUp/PgDn, Ctrl+Home/End and Ctrl+Left/Right; Shift+arrows start a
+      Visual selection. Ctrl+S saves from any mode.
+- [x] **Build what is open.** `:make` (F5) saves, then runs b4ke over pipes
+      into a pane under the text, the way the Terminal runs its
+      shell. It uses the nearest `BUILD.B4K` at or above the file;
+      without one, a `.c` file gets a build file of its own
+      (`/ram/edit.b4k`: c4sc, then c4rlink with `/usr/lib/libc4ix.c4l`).
+      b4ke now echoes each command it runs (`+ c4sc ...`), so c4lc's
+      `line N:` errors, which name no file, are matched to the source the
+      command compiled. `FILE:N:` and c4cc's `N:` count too. The build
+      goes to the first error; F8 / Shift+F8 or `:cn` / `:cp` move
+      through them, and a double click in the pane jumps. `:run` (F6) runs
+      the result in a new Terminal: the lone file's image, or a
+      `BUILD.B4K`'s `SET RUN command`.
+- [x] Pinned by `test-desktop.mjs`: Insert and Esc, auto-indent, `:w`, `2G
+      f4 r7`, `yyp`, `dd`, `u`, arrows in Insert, `:make` building, a
+      compile error listed and gone to, `ciw` and `.`, `/` and `V j d`,
+      `:set novim` and back, and `:q!`.
+
+## Part five: the IDE grows a file pane, and the desktop's scroll bars drag (asked for 2026-10-20)
+
+- [x] **Scroll bars drag.** Every bar on the desktop -- Text Editor, the Editor,
+      both of Explorer's panes, System Monitor -- moves with its thumb.
+      `ui_scroll_click` starts a drag when the thumb is pressed;
+      `ui_scroll_drag(x, y, py)` answers each move with the top line for
+      the bar at x, y (a window may have two); `mouse_up` ends it. While a
+      drag is on, moves reach the window even outside it, and each one
+      redraws. A click on a bar now also brings the cursor or selection
+      along, as the wheel does, where it used to be scrolled straight back
+      to it by the next redraw (the Editor, System Monitor).
+- [x] **Explorer's tree** scrolls (a bar and the wheel) and its folders
+      collapse: a +/- box, a double click, Left/Right or -/+.
+- [x] **An IDE icon** on the desktop, beside Text Editor: the Editor.
+- [x] **Explorer opens source in the IDE**: `.c` and `.h` already did; so
+      do shell scripts, Makefiles, assembly, Markdown, JSON, HTML, CSS,
+      Python and Forth's `.fs` now. Plain `.txt` stays Text Editor's.
+- [x] **The Editor's file pane**: a tree of the disk down the left, its
+      folders closed to start with. A click opens or closes a folder, and
+      opens a file (not over unsaved changes). Opening a file, from the
+      pane, `:e`, a build error or Explorer, opens the folders on the way
+      to it and marks it; a file written with `:w` joins its folder's
+      list. Ctrl+B, View > Files or `:Ex` shows and hides it, and it gives
+      way when the window is too narrow for it and the text.
+- [x] **Syntax colours, by the file's name**: C and headers, JavaScript,
+      Lisp, Forth, shell scripts and Makefiles, and B4KE build files --
+      keywords, types, strings, comments, numbers and the preprocessor. A
+      line is coloured on its own; only being inside a C comment carries
+      over, and where that stands at the top of the view is kept with a
+      count of changes, so scrolling does not read the file from the top.
+      `:syntax off` / `on`, or View > Syntax Colouring.
+- [x] **Bars across** (`ui_hscrollbar`, `ui_hscroll_click`, dragged
+      through the same `ui_scroll_drag`): under the Editor's text, under
+      its file pane and Explorer's tree when a name is wider than them, and
+      under the build log. Across, the text follows the cursor only when
+      the cursor has moved, so the bar can be scrolled away from it.
+- [x] **Word wrap**: `:set wrap` / `:set nowrap`, View > Word Wrap. Long
+      lines fold onto the rows below; `j` and `k` still move by line, and
+      a click lands on the right column of a folded row.
+- [x] **The build pane** scrolls both ways and keeps its place when
+      scrolled up to read. While a build runs its header has **Cancel**
+      (also Build > Cancel Build, `:cancel`): what b4ke is running is
+      interrupted and ended first, then b4ke, and every one is waited
+      for, so a cancelled compiler neither runs on nor stays a zombie.
+      Closing the window mid-build does the same.
+- [x] **A CPU meter** beside the clock: System Monitor's number, from its
+      own sample every two seconds, redrawn only when it changes; a click
+      opens System Monitor on Performance. It inherits that number's model,
+      which counts the boot task as idle (see the CPU review plan).
+- [x] Pinned by `test-desktop.mjs`: the icon; the pane listing the root,
+      opening folders and a file; the colours of `hello.c`; `:syntax off`;
+      Ctrl+B both ways; `:e` opening the folders to a file; dragging the
+      Editor's thumb and Explorer's tree thumb; the meter; a long line off
+      to the right, the bar across reaching its end, and `:set wrap`
+      folding it; `:make` under a `BUILD.B4K` cancelled from the pane,
+      with no c4sc or b4ke left in System Monitor; Explorer's tree scrolled
+      across. Not yet looked at in a browser.
+
+## Part six: the browser's boot, a first frame, Settings, a pointer (asked for 2026-10-20)
+
+- [x] **The web page boots with `--desktop`** (`libjs/web/app.js`). init
+      then starts the shell with `-e "desktop &" -e top`: the shell runs
+      each `-e` line first, as if typed at the prompt, so the desktop runs
+      on the display and top on the console. top is the console's
+      foreground job, so Ctrl-C there stops it and gives the prompt back
+      while the desktop carries on. (It was `-e "top &" -e desktop` at
+      first, which left the console's Ctrl-C aimed at the desktop and top
+      clearing the screen over every command.) `c4ix-sh -e CMD ...` is
+      general.
+- [x] **The first frame stays.** The page learns the desktop's size by
+      message and resizes (clearing) the canvas, while frames come through
+      the ring: a first frame could land before the resize and be wiped,
+      leaving a black display until a click. `Display.resize` now tells
+      the guest (a resize event), the desktop asks for resize and focus
+      events and redraws on them, and it draws once more half a second
+      in.
+- [x] **Settings** (Go > Settings, `K_SETTINGS`, in `apps.c`): eight
+      colour schemes (Classic Teal, Slate, Rainy Day, Desert, Rose,
+      Spruce, Lilac, Storm) and a desktop colour (the scheme's, or one of
+      eight), applied at once beside a preview, kept in
+      `/etc/desktop.cfg` and read when the desktop starts -- so a choice
+      outlives Power Off, not a reload of the page. The scheme's nine
+      colours (`C_DESK`, `C_FACE`, `C_LIGHT`, `C_SHADOW`, the two title
+      gradients and `C_SEL`) are variables now; text, white and the
+      green of the graphs stay constants.
+- [x] **A pointer.** The display was `cursor: crosshair`; it is the
+      host's arrow now, and the guest picks a shape with a new ring
+      command, `GUI_CURSOR` (`gui_cursor`, `GUI_PTR_*`: arrow, text beam,
+      resize, hand, move, wait, cross, none). It takes effect at once,
+      with no frame. The desktop shows a text beam over the Command
+      Prompt, Text Editor's text and the Editor's text (`edit_pointer`), the
+      resize arrow on a size grip, and the arrow elsewhere.
+- [x] Pinned by `test-boot-desktop.mjs` (new, in `test-libjs`): `--desktop`
+      starts both, and a resize from the page draws the scene again; and
+      by `test-desktop.mjs`: Settings repaints in Slate, keeps it in
+      `/etc/desktop.cfg`, and Defaults restores it; the pointer over the
+      text and the taskbar.
+
+## Part seven: the Terminal edits and scrolls, windows without a limit, builds that start built (asked for 2026-10-20)
+
+- [x] **Line editing** (`term.c`). The line being typed is edited where
+      it stands: Left/Right, Home/End (Ctrl-A/Ctrl-E), Backspace and
+      Delete anywhere in it, Ctrl-U to clear it, Ctrl-L to draw it again.
+      Up/Down walk the last 16 lines sent; Down past the newest gives back
+      what was being typed. The terminal still sends the shell whole
+      lines, so every program sees what it saw before.
+- [x] **The prompt is on the input line**: `c4ix-sh -p`, which the
+      Terminal passes. The console shell keeps its newline -- on the
+      console, output is buffered until one -- but a pipe delivers every
+      write at once, so the window does not need it.
+- [x] **Scrollback**: 300 rows in a ring beside the 80x25 screen, with a
+      scroll bar, PgUp/PgDn and the wheel. Typing comes back to the
+      bottom.
+- [x] **System Monitor's Interval column**, as top has: what each task ran
+      in the last sample, in kilocycles (850k, 12.3M); the window is 490
+      wide for it.
+- [x] **Windows are a linked list** (`desktop.h`, `wm.c`): MAXW's eight
+      slots are gone, and there are as many windows as memory allows.
+      Each is its own allocation, on two lists through the same nodes:
+      the order they opened in (the taskbar's, `win_first()`/`next` for
+      the tools) and the z-order. Window numbers are never reused, so a
+      number kept for a closed window finds nothing; a closed window is
+      freed at the top of the next pass of the main loop, since whoever
+      closed it may still hold it.
+- [x] **Terminals until the descriptors run out** (2026-10-29). Each
+      Terminal holds 2 of the desktop's fds, and `start` (`term.c`) takes
+      7 at once: two pipes, and 0, 1 and 2 saved while they point at the
+      pipes for the spawn. At 16 fds a task three Terminals fitted; the
+      fourth found the table full, opened anyway, and left the desktop's
+      stdout on its pipe, so the desktop's messages, and Power Off's, went
+      into that window and never reached the console. `FD_MAX` is 64 now
+      (`c4ix.h`; `fdcloexec` a byte per fd, the task struct 1040 bytes
+      from 720), and `start` checks every step: a Terminal that does not
+      fit closes what it opened, leaves 0, 1 and 2 as they were, and says
+      "desktop: could not start a shell". 27 open at once in
+      `test-desktop.mjs`, which opens them until one is refused, then
+      checks that the room one shell leaves takes another and that Power
+      Off still reaches the console.
+- [x] **`cc`** (`user/cc.c`): c4sc with c4lc's preprocessor, `/usr/include`
+      on a task's default stack, linking with c4rlink when given `-l` or several
+      sources. src/c4tui/demo.c takes 18 machine-seconds this way and 344
+      with `c4sp c4lc.lisp`, for the same image.
+- [x] **Builds start built**: the root archive carries `/build`
+      (docs/c4ix-design.md, "Already built"), so the IDE's `:make` on a
+      file under `/usr` compiles that file and links its program, not
+      the libraries first.
+- [x] **The repo is /usr, builds go to /build, no /ram**
+      (docs/c4ix-design.md): one copy of each source, `<u0.h>` found in
+      `/usr/include`, and `/tmp` for scratch. The IDE builds a `.c` file
+      that no BUILD.B4K names on its own, with cc, into `/tmp/NAME.c4r`
+      (its build file is `/tmp/edit.b4k`).
+- [x] Pinned by `test-desktop.mjs` (history, in-line edits, scrollback,
+      ten more windows than before) and `test-libjs.sh` (cc builds echo
+      the disk's, byte for byte; a fresh boot's b4ke has nothing to do; an
+      edited source remakes two steps).
+
+### Found on the way, not fixed
+- `make test-c4th-os`: the C4DOS leg prints an empty prompt line ahead of
+  c4th's output, so it differs from the reference at byte 1. Nothing it
+  runs changed in this work, and a fresh `c4dos-clock.c4r` does the same.
+  *Fixed 2026-09-30:* that line is DOS's own `A>` prompt on a line of its
+  own (the console is unbuffered, so the prompt ends its line); the test's
+  filter now drops a bare `A>` line before stripping the prefix.
+- `test-c4ke-mbox` (in `test-c4bb`) fails about one run in four with
+  "Custom opcode not found: 1073741824" in the mbpair message. It fails
+  as often with the C4KE source from before this work.
+  *Fixed 2026-10-24:* a PIT tick delivered between C4KE's re-arm of the
+  PIT and its handler's TLEV, after it had switched tasks; it hit hosts
+  slower than `CYCLES_PER_MS`. c4bb (6295e18) and libjs hold the PIT and
+  the mailbox inside a handler now (docs/c4bb-storage.md, "What the
+  kernel taught the hardware").
+
+## Part eight: the boot waits for its filesystem, with a loading screen (asked for 2026-10-21)
+
+- [x] **The archive first.** The browser's boot (`--desktop`) started the
+      desktop and top while c4ix-tar was still unpacking the root archive
+      in the background, so Filesystem was missing files for several
+      seconds. Now init runs `vfsload -w`, which waits for the archive
+      before it returns: the desktop and top start on the whole
+      filesystem, and the console's boot lines stay up long enough to
+      read. The console's own boot (no arguments) still unpacks in the
+      background, with `wait 4` to block on it.
+- [x] **A loading screen** (`user/splash.c`, `/bin/splash`). While it
+      waits, vfsload runs `splash -p PID`: the boot logo full screen, and
+      along the bottom a band of colour that flows to the right, as the
+      late-nineties loading screens cycled their palettes. When the tar
+      task is gone it lets go of the display (`gui_detach`) and exits, and
+      the desktop takes the display. `splash` alone, from a shell, shows
+      it until a key or a click. With no display it says "not fitted".
+- [x] **The logo** (`src/c4ix/art/`): drawn by Kiln (project "C4IX",
+      Content/Boot Logo) from a description: "C4IX" in chrome with
+      frosting dripping off it, "Built upon Robert Swierczek's C4" under
+      it, and a cake made of circuit boards whose candle flame is a chip
+      (C4IX, C4KE: cakes). `boot-logo.png` is Kiln's 1200x900 original;
+      `mkc4p.py` scales it to 800x600 and dithers it to 256 colours, as a
+      gzipped "C4P8" image (155 KB) that splash inflates with libarc. Both
+      are committed, so building the disk needs no Pillow. It is a disk
+      file (`/usr/share/splash/c4ix.c4p.gz`, lazy like the rest), not in
+      the archive it is shown during.
+- [x] **`/var/log/kernel`** (`/log/kernel` until 2026-10-29). Everything
+      the console says while booting is kept there: the kernel's lines, and the tasks' (vfsload, tar) until
+      init starts the shell. After that only the kernel's own lines are
+      added, or top's redraws would fill it. Lines from before the VFS
+      exists are held back and written when it does. It stops at 256 KB,
+      and the kernel holds it open, so it cannot be deleted.
+- [x] Pinned by `test-boot-desktop.mjs`: vfsload waits; splash puts the
+      logo up and animates; the desktop and top start only after the
+      archive is unpacked; `cat /var/log/kernel` has the kernel's and vfsload's
+      lines and not top's. Seen in a browser too (2026-10-21).
+
+## Part nine: the boot logo as the desktop's picture, and screen savers (asked for 2026-10-21)
+
+- [x] **The picture** (`wall.c`): the boot logo, stretched over the
+      desktop (it is made at the desktop's 800x600, so 1:1 today). The
+      desktop inflates it once at start, from the same file splash shows
+      (`/usr/share/splash/c4ix.c4p.gz`, so it links libarc now), and gives
+      the display 64 tiles of 100x75 (`gui_imgdef`: a tile has to fit the
+      command ring), which the display keeps. Every redraw of the
+      background then draws only the tiles it needs (`gui_image`), clipped
+      to the damage like everything else. Icon labels get a dark shadow
+      over it. Settings: "Picture: C4IX" (the default), or the scheme's
+      colour, or one of the eight; `/etc/desktop.cfg` gains `wall 0|1`.
+- [x] **Screen savers** (`savers.c`), after the user's RetroSavers (D3D
+      ports of the classics), redone in integer arithmetic with the
+      display's line, rectangle and text commands: Starfield, Polygons
+      (two shapes bouncing, trailing their last outlines), Beziers (a loop
+      of cubic curves with a fading trail), Marquee (a line of text
+      crawling across) and Digital Rain (columns of falling characters).
+      The names are generic ones. After the chosen number of minutes with
+      no input -- machine minutes, the clock the desktop sleeps on -- the
+      saver takes the whole display, a frame every 33 ms, with the pointer
+      hidden; the first key or movement ends it and the desktop is drawn
+      again as it was. Settings has a Screen saver group: which (or
+      None), the wait (1-60 minutes, default 5, Starfield), and Preview;
+      `/etc/desktop.cfg` gains `saver S wait M`. Defaults is the look
+      only: it leaves the saver as it is.
+- [x] Pinned by `test-desktop.mjs`: the picture goes to the display once
+      as 64 tiles and is drawn; the scheme's colour turns it off and
+      Picture back on; Preview runs a saver over everything and a key ends
+      it; the choices are kept in `/etc/desktop.cfg`. The test starts the
+      desktop with no saver chosen: headless, an idle machine covers five
+      minutes within one of its long builds.
+
+### Found on the way, not fixed
+
+- One more Terminal open (a Run of `cat`, say) before Power Off,
+  late in test-desktop's long run, and the desktop exits without its
+  "desktop: shut down": the shell's prompt comes back, the line never
+  does. Power Off straight after boot, or after the picture and saver
+  checks alone, is fine; so is the whole run without that window.
+
+## Part ten: names of its own (asked for 2026-10-21)
+
+The desktop began as a homage to Windows 95 and NT 4, names and all.
+It keeps the era's feel, but nothing it shows is Microsoft's any more:
+
+| was | is |
+|---|---|
+| Start, Start menu | Go, Go menu |
+| Shut Down..., "It's now safe to turn off your computer." | Power Off..., "C4IX has stopped. You can close this page." |
+| Command Prompt | Terminal |
+| My Computer | Filesystem |
+| Explorer, "Exploring - /path" | Files, "Files - /path" |
+| Notepad | Text Editor |
+| Task Manager: Applications, Processes, Performance | System Monitor: Programs, Tasks, Load |
+| End Task, Switch To, New Task..., End Process | Close, Show, Run..., Kill |
+| Image Name, System Idle Process | Name, idle |
+| Windows Standard, Slate, Rainy Day, Desert, Rose, Spruce, Lilac, Storm | Classic Teal, Granite, Drizzle, Sandstone, Blush, Pine, Lavender, Thunder |
+| File Folder, Text Document, "N object(s)", Up One Level | Folder, Text, "N items", Up |
+| Confirm File Delete, "Are you sure you want to delete 'x'?" | Delete File, "Delete 'x'?" |
+
+Earlier parts above keep the names they were written with where they
+describe what was done then. The code's own names (`K_NOTE`,
+`taskmgr.c`, the Editor's `:Explore`) are unchanged.
+
+## Part eleven: two looks, flat by default (asked for 2026-10-21)
+
+- [x] **Flat** (the default), after the open-source desktops rather than
+      Windows: 1-pixel outlines where there were two-pixel bevels; solid
+      title bars to the window's edges, their caption buttons bare glyphs
+      in the bar's text colour (white on a dark bar, the scheme's dark on
+      a light one); light buttons with an accent outline for the default;
+      tabs underlined in the accent; radio buttons filled with it; slim
+      scroll-bar thumbs on the track; a flat taskbar whose focused button
+      is underlined; the Go menu's banner in the accent. The accent is the
+      scheme's title colour.
+- [x] **Modern**, a ninth scheme, made for it: cool greys, slate title
+      bars, no gradient. It is the default, applied as the desktop starts
+      (the scheme's colours were only ever applied from /etc/desktop.cfg:
+      the default had been the compiled-in Classic Teal).
+- [x] **Classic**: the bevelled look the desktop had, with any scheme.
+- [x] Every window keeps its geometry in both, so nothing moves when the
+      look changes and no hit test differs. The routines that draw chrome
+      ask `ui_style` (`d_bevel`, the caption buttons, `draw_window`,
+      `draw_taskbar`, `draw_start`, and ui.c's buttons, scroll bars, tabs,
+      radios and headers); the applications draw through them.
+- [x] **Go's mark** is C4IX's own now in both looks: a little cake with
+      its candle lit, where the four coloured squares were.
+- [x] Settings has a Look group (Flat, Classic); `/etc/desktop.cfg` gains
+      `style 0|1`; Defaults is Modern, Flat and the picture. Preview's
+      grace for its own click is 150 ms (it was 400, long enough to swallow
+      the key test-desktop pressed to end the saver).
+- [x] Pinned by test-desktop.mjs: the desktop starts Flat; Look > Classic
+      and back, seen in the taskbar's top line; Defaults brings Modern
+      back. Seen in a browser (2026-10-22).
+
+## Part twelve: a game in a window (asked for 2026-10-21)
+
+Wolfenstein 3D ([c4ix-wolf3d.md](c4ix-wolf3d.md)) needed two things from
+the desktop that drawing commands and key presses could not give it.
+
+- [x] **8-bit framebuffers.** `window.h`'s `win_fb(pixels, w, h, pitch,
+      pal)` sends `f` with the pixels' address and a palette of 256
+      0x00RRGGBB words. The Terminal keeps it in the canvas's display list
+      like any other op and draws it with `GUI_BLIT8` (16), scaled to the
+      canvas.
+  - The host reads the bytes and the colours when the desktop rings the
+    bell, and puts 32-bit pixels in the command stream in their place (RGB,
+    102). The page draws them unsmoothed, inside any clip.
+  - Converting the pixels in the guest would cost it as much as drawing
+    the frame.
+- [x] **Flow control.** Once the desktop has drawn a frame that has one,
+      the program hears `f` (WIN_FRAME). Until then it draws its next frame
+      into other memory. `term_drawn`, after every redraw, sends it, so the
+      program never waits on the window and the window never shows a frame
+      half drawn.
+- [x] **Keys let go.** The page always sent key-up events, and the desktop
+      dropped them. A canvas now hears them as `K` (WIN_KEYUP), because a
+      game moves while a key is held.
+- [x] **Go > Wolfenstein 3D** runs `wolf3d` in a new Terminal. The first
+      time, the game unpacks the shareware episode there, and then the
+      window is its canvas.
+- [x] Pinned by test-desktop.mjs:
+  - `wolf3d` unpacks the episode and shows 320x200 8-bit frames scaled to
+    640x400;
+  - a key goes to the game, and its picture changes;
+  - Ctrl-C makes the window a Terminal again.
+
+## Part thirteen: a game on the whole display (asked for 2026-10-23)
+
+A game in a Terminal window draws through the desktop. Every frame goes
+over the window's pipe, and the desktop puts it on the display. Even at
+400 MHz, Wolfenstein 3D was not satisfying to play that way, and
+`wolf3d --direct`, drawing on the display itself, ran much better. But
+the display serves one ring at a time. A program that attached its own
+under the desktop fought it for the screen, and when the program ended
+the display was left pointing at its freed ring. The desktop never had it
+back.
+
+Windows 3 to 98 had the answer: a DOS game took the whole screen, and the
+desktop waited until it was done. C4IX does the same.
+
+- [x] **The kernel keeps who has the display** (`SYS_DISPLAY`, 240;
+      src/c4ix/sys.c, "The display"; `include/display.h`).
+  - A program asks with `udisplay_take()` before it attaches, and gives
+    the display back with `udisplay_give()` after it detaches.
+  - The desktop takes the display at its start, with `DISP_YIELDS`: it
+    agrees to give way.
+  - When a program asks, the kernel wakes the desktop and tells it
+    (`DISP_STATE` is 1). The program keeps asking every 10 ms.
+  - The desktop yields between frames, and the display passes to the
+    program.
+  - A desktop that has not yielded after a second is passed over, so a
+    stuck one cannot keep a game off the screen.
+  - Only one level: a second program asking while a game has the display
+    is told no.
+- [x] **The desktop stands aside.** While a game has the display, the
+      desktop draws nothing and reads no events, since the keys go to the
+      game. It still reads its terminals' pipes, so the programs in its
+      windows run on unseen. A program that draws into its window waits
+      for the frame to be shown, as it always has.
+- [x] **And comes back.** The game gives the display up, or dies and
+      `task_zombify` gives it up for the game. The desktop then attaches
+      its ring again, puts the pointer back and draws the whole scene. A
+      Terminal shows whatever its program printed in the meantime.
+- [x] **Wolfenstein 3D takes the display by default.** That covers
+      `wolf3d` and Go > Wolfenstein 3D. `wolf3d --window` plays in the
+      Terminal window, as before. A game that finds the display held by a
+      program that does not give way plays in the window instead.
+- [x] **`gui`, the display's demo, asks too.** Its source,
+      libjs/guest/gui-demo.c, is shared with c4cc, which has no
+      preprocessor, so src/c4ix/user/gui.c wraps its attach and detach
+      in the take and the give.
+- [x] Pinned by test-desktop.mjs: `gui 40` in a Terminal has the display
+      at 640x480 and presents its own frames. When it ends, the desktop
+      has the display back at 800x600, with the Terminal showing
+      `gui: done after 40 frames`. Checked in the browser too: `wolf3d`
+      from a Terminal plays on the whole display, and quitting from its
+      menu brings the desktop back.
+
+### Not done
+
+- **No way back but the game's own.** While a game has the display,
+  every key is the game's, so Ctrl-C cannot reach its Terminal. A game
+  ends from its menu. A stuck one has to be killed from the page's
+  console: Ctrl-C there stops top, and `kill` takes the game's id from
+  `ps`. Its death gives the desktop the display back. Windows' Alt-Tab,
+  which put the game in the background and brought it back later, would
+  need the game to give way as the desktop does.
+- **`raycast -G` does not ask.** It is one image for the bare machine and
+  C4IX, so it cannot make a C4IX system call. Run under the desktop, it
+  still fights it.
+
+## Part fourteen: the window kit, shared with grin, and a Windows 3.1 look (asked for 2026-10-24)
+
+grin, the Windows 3.1-style shell planned for C4DOS (docs/grin-plan.md),
+shares its GUI code with this desktop instead of copying it. Milestone G1
+of that plan moved everything here that is not C4IX's own into a window
+kit, `src/winkit/` (winkit.h has the API), and rebuilt the desktop on it.
+
+- [x] **The kit**: `draw.c` (the d_* layer: an origin, its clip, damage,
+      the colour schemes, bevels, icons), `ui.c`, `wmcore.c` (windows,
+      z-order, focus, modality, drag and size, menu bars, timers, the
+      clipboard, events, the redraw), `dialog.c` (message, input and file
+      boxes), `look95.c` (Flat, Classic), `look31.c` (Windows 3.1),
+      `textgrid.c` (term.c's VT100 grid, scrollback, line editor and row
+      cache, without the pipes), `savers.c`, and the accessories as
+      classes: `calc.c`, `notepad.c` (the Text Editor), `clock.c` (new;
+      linked in, not on the Go menu).
+- [x] **A class per window kind**: a `struct wk_class` of hooks that may be
+      0 (the review's M1), with per-class state sizes (B9) and int handles
+      that are never reused. The desktop's own tools keep the hooks they
+      were written with; `tools.c` is one table of them and the adapters
+      that make each kind a class. `shell.c` is what `wm.c` kept: the
+      display, the loop, the icons and picture, the taskbar, the Go menu,
+      desktop.cfg. `host.c` gives the kit memory and files.
+- [x] **The screen's size at run time**: a resize from the page lays the
+      windows out again (a maximised one fills the new area, the rest are
+      pulled back onto it), the taskbar follows the bottom, and the
+      picture is stretched to the new size.
+- [x] **Settings > Look > Windows 3.1**: the thick sizing border with its
+      notches, a solid title bar with the title centred, the control-menu
+      box (a click opens Restore, Minimize, Maximize, Close; a double
+      click closes) and raised minimise and maximise arrows. The taskbar
+      stays; the choice is `style 2` in desktop.cfg; Flat stays the
+      default.
+- [x] The review's B3 (bounded paths), B5, B6, B7, B8 and B10 are not
+      carried over (see the commit). The picture's gzipped file, which
+      the desktop used to keep beside the inflated picture, is freed.
+- [x] test-desktop.mjs: the old checks unchanged and green, and new ones
+      for 640x480 and back and for the 3.1 look across a restart.
+
+### Not done
+
+- B1 and B2 (the Editor's leak, End Process) and B3 in `edit.c` and
+  `files.c`: those modules did not move.
+- Minimised windows as icons, which the 3.1 look will have in grin (G2);
+  here they go to the taskbar in every look.
+
+## Part fifteen: the clipboard between apps, the IDE's settings, a Windows 95 file box (asked for 2026-10-28)
+
+The desktop is one task, so the kit's clipboard (`wk_clip_set`,
+`wk_clip_get` in `wmcore.c`) is every window's: what is copied is the
+kit's own copy, in the kit's memory, so it outlives the window that
+copied it (grin's G7 found the same for its applications, 86c4c89).
+
+- [x] **Terminal's Edit menu**: Copy, Paste, Select All and Copy All.
+      The mouse selects on the grid (`tg_select`, textgrid.c): a drag is
+      a run of lines, and with Alt held a block. The selection keeps to
+      its text as more arrives and while the scrollback is scrolled (its
+      lines are numbered from the grid's first). Copy All takes the
+      scrollback and the screen. Paste types the clipboard in, a key a
+      character, a line at a time down the pipe. Keys: Ctrl+Shift+C and
+      V, Ctrl+Ins and Shift+Ins; Ctrl+C copies when there is a selection
+      and is ^C when there is none. The window is a menu bar taller.
+- [x] **The IDE's Edit menu**: Cut, Copy, Paste, Select All, on the same
+      clipboard; in VIM mode they take a Visual selection (a drag of the
+      mouse makes one).
+- [x] **The IDE types as Text Editor does by default** (Traditional):
+      Shift with the moving keys, a drag or Shift+click select, a double
+      click takes a word, typing replaces the selection, Ctrl+X, C, V, A,
+      Z and Y; Esc still opens the command line (`:w`, `:make`, `:e`).
+      VIM mode is the other choice.
+- [x] **The IDE's Settings** (View > Settings): the colour scheme, Blue
+      (the default, after VIM's `blue`: gold on dark blue) or Classic (the
+      IDE's first colours), and the input mode, Traditional or VIM, with
+      a preview. Used at once in every IDE window, and kept in
+      `/etc/ide.cfg` as `scheme N input M`.
+- [x] **Word wrap on to start with** (`:set nowrap`, View > Word Wrap).
+- [x] **A binary file is opened only once asked**: by its name (`.c4r
+      .c4o .c4l .c4s .tgz .tar .zip .wad .wl1` and the like) or a NUL in
+      its first 512 bytes. OK opens it anyway, Cancel leaves the file
+      shown as it was. Open, `:e`, the file pane and Files all ask.
+- [x] **The IDE's title says IDE** ("hello.c - IDE"), and so does its
+      item on the Go menu.
+- [x] **Open and Save As are Windows 95's** in Text Editor and the IDE
+      (look95.c draws the kit's file box, dialog.c's, in the Flat and
+      Classic looks): Look in with the folder and a list of the folders
+      above it, an Up button, the folder's contents with icons, the name,
+      and Files of type. The types are a Windows filter string, "C Source
+      (*.c;*.h)|*.c;*.h|All Files (*)|*"; a name with a * in it lists what
+      it matches. In the Windows 3.1 look the box is 3.1's, as grin's is.
+- [x] test-desktop.mjs: checks for each, and for the clipboard's text
+      outliving the Terminal that copied it. web-ix-edit.mjs, the browser
+      check over CDP: a Terminal's selection pasted into the IDE, its
+      Settings, the binary warning, the Open box, Text Editor's Save As.
+
+## Part sixteen: Files sorts, and the uploads have a place (asked for 2026-10-29)
+
+- [x] **Sorting** (`files.c`): View > Sort by Name, Type (the extension),
+      Size or Date, and Ascending or Descending, with a check mark on the
+      ones in use (the kit's `WK_CHECKED`: an item whose first byte it is).
+      A click on a column's header sorts by that column, again reverses
+      it, and an arrow on the header shows which. Folders come first
+      either way, names sort without regard to case, and what the order
+      leaves equal goes by name. Date is the VFS's modification order
+      (`vfs_touch`), as C4IX keeps no clock every host has. One order for
+      every Files window, kept as `sort N` in desktop.cfg (N is the key
+      times two, plus one for descending).
+- [x] **The uploads in /home**: the page's Uploads were laid over drive 0
+      by name, so a program could open them, but no listing named them.
+      `libjs/uploads.js` (worker.js, and test-desktop.mjs the same way)
+      now also puts each on the drive as `home/NAME` with a line in
+      `c4ix.sizes`, and the manifest's `home/: hostdir(home/)` makes them
+      lazy files in `/home` (vfsload.c, `load_hostdirs`). Files, `ls` and
+      the shell see them there; the bare names still open. /home is empty
+      where there are none.
+- [x] test-desktop.mjs: three uploads and a folder in /home, `ls` and `cat`
+      on them, and each order, by the menu and by the headers, kept across
+      closing Files.
+- [x] web-ix-files.mjs, the browser check over CDP: the uploads put in the
+      page's store, /home listing them in Files, the headers and View >
+      Sort; the uploads are taken out of the store again after.
+- [x] **The folder tree** starts with only the root open (its own folders,
+      nothing deeper), keeps open what was opened through a reload, brings
+      in a folder new to it collapsed, and lists each folder's folders by
+      name (`tree_walk`, `tree_load`).
+
+## Part seventeen: the screen's size, and a volume control (asked for 2026-10-29)
+
+- [x] **Settings > Screen size**: 640x480, 800x600 (the default) and
+      1024x768. The display takes the choice at once (`display_set`, the
+      kit's `wk_screen`: the page sizes its canvas and scales it to the
+      pane, the kit lays the windows out again, the picture is stretched
+      to it), and the desktop asks for it when it starts, before its first
+      frame. 640x480 still fits Settings (now 440x450), the Go menu with
+      every game in it, and the desktop's six icons. desktop.cfg gains
+      `res W H`.
+- [x] **The volume**: a speaker in the taskbar's tray, in the clock's
+      panel; the CPU meter moves left to make room. A click opens a popup
+      over the tray with a slider (100% at the top) and Mute. Each change
+      goes to the sound card at once, as its master volume (MASTER, 0x4BC,
+      docs/libjs-design.md "The sound card"): the slider's 0-100 squared
+      into 0-255, so its middle sounds about half as loud, and bit 8 for
+      Mute. The mixer scales everything by it, so every program follows
+      it, games included, and a game's RESET does not undo it. desktop.cfg
+      gains `vol V mute M`; the desktop sets the card when it starts.
+- [x] test-desktop.mjs fits a sound card: the volume at start, the
+      slider by click and by drag, Mute, Esc; Settings at
+      640x480 and 1024x768, with the taskbar, clock, picture, icons and
+      Settings on the screen at each; and a restart that comes back at
+      1024x768 with the card muted at 25%, its desktop.cfg ending
+      `res 1024 768 vol 25 mute 1`. test-libjs checks MASTER
+      through RESET and the mix at full, at 128 and muted.
+- [x] The display's ring is 256 KB (it was 64 KB). The picture's tiles
+      are the longest frames the desktop sends, 48 KB each at 1024x768,
+      and `gui_frame` places a frame longer than half the command ring
+      only when the ring's head happens to allow, dropping it otherwise:
+      at 1024x768 the picture came and went. At 800x600 a tile (30 KB)
+      was already more than half of the old ring's 32 KB.
+- [x] `web-desktop-display.mjs`: the same over CDP in a browser, with a
+      screenshot at each size.
+
+### Found on the way, not fixed
+
+- **A Terminal could take the desktop's stdout**, with three or four
+  open: fixed on ix-fds, "Terminals until the descriptors run out" above
+  (64 fds a task, and `start()` checks each step).
+- `gui_frame` (libjs/guest/gui.c) could place a long frame in an empty
+  ring at any head, by skipping to the start and ringing the bell to
+  drain the skip, rather than dropping it.
+
+## Part eighteen: the IDE shows the code it compiles to (asked for 2026-10-29)
+
+A cut-down Code Explorer (docs/c4-explorer.md, track E) inside the IDE,
+sized for 800x600 and 1024x768, and still usable at 640x480. The web
+page's three panes (libjs/web/explore.html) become one: the IDE's text is
+the source pane, and the cursor picks the function.
+
+- [x] **c4sc `-g`** (track S's S3): body.h takes `-g` and `-g0`, as
+      c4lc.lisp does, and sets the lexer's locations, the parser's lines
+      and the writer's files. The SMAP trailer is the one c4lc writes,
+      byte for byte, and the code is the same with or without it.
+      test-c4sc-back compiles its corpus under `-g` and `-O -g` too. cc
+      passes `-g` through, and says so in its usage.
+- [x] **View > Code** (F7, `:code`): a pane of its own module,
+      `explore.c`, beside the text when the window is wide enough (at
+      least 250 pixels for it and 300 for the text), below the text
+      otherwise. It compiles the saved file with `cc -g -c -O` into
+      `/tmp/.ide-PID-N.c4o`, on a pipe of its own, apart from the build,
+      and again at each save and each file opened. It reads the object
+      itself: the code, the patches, the symbols and the source map.
+- [x] **What it shows**: the function the cursor is in (the one with code
+      from the cursor's line, else the last one this file starts above
+      it), with each instruction's offset, a label where a branch lands,
+      the mnemonic and its operand named as libjs/c4r.js's `insnText`
+      names it: a function, `&global+n`, a string literal quoted, `L3`,
+      `[bp+2]`, an extern. The instructions from the cursor's line are
+      lit, each row has a band of its line's colour, and the gutter has
+      the same bands beside the lines that made code. The header names
+      the function and its size; the footer says where a picked
+      instruction came from, that the text has changed since it was
+      compiled, or why there is nothing to show (the compiler's last two
+      lines, when it failed).
+- [x] **Clicks**: an instruction goes to its line; a double click on a
+      call (or a function's address) goes to the callee, when it is in
+      the same file, and says which file it is in otherwise. The `-O`
+      button compiles again with or without `-O`.
+- [x] test-desktop.mjs: the pane's opcode table is the machine's
+      (devices.js OPNAMES), and so are the numbers it names; a two-function
+      file, `:code`, `JSR sq` and the string by name; every instruction of
+      `main` as `insnText` gives it for host c4lc's object of the same
+      source; the cursor on the other function; a click to a line, a
+      double click to the callee; `-O` off and on; F7 to hide it.
+- [x] `web-ix-code.mjs`: the same in a browser over CDP, a file
+      written in the IDE and `:code`, with a screenshot at 800x600
+      (beside the text), 640x480 (below it) and 1024x768.
+
+### Found on the way
+
+- **The last string literal of an object had no name** in the web
+  explorer too. c4lc leaves its NUL to the zeroed memory after the
+  data (an object's data can be exactly `%d\n`, three bytes), and
+  libjs/c4r.js's `cString` wanted a NUL inside the data, so the
+  operand read `data+0`. The data's end now ends a string, in
+  c4r.js and in the pane.
+- c4sc's driver is compiled apart from the generated units, so the
+  globals `-g` sets are declared in src/c4sc/host.h, beside the other
+  flags'.
+- The IDE's status line drew its message under the cursor's
+  line and column when the text was narrow; it is clipped short of
+  them now.
+
+Left out, from the page: the function list and its filter, the globals
+and strings, callers and callees, opening an image rather than a source,
+and the tooltips that explain each instruction (opdoc.js).
+
+## Part nineteen: the Code tab, closer to the Code Explorer (asked for 2026-10-30)
+
+What part eighteen made did not work well enough. Beside the text, at
+800x600 and below, it took too much of the window; it showed the code
+with no source in it, so reading it meant finding the line in the text
+by hand, include files and all; there was no way to go to a function but
+by moving the cursor to it; and a compiled file -- every program C4IX
+ships carries a source map now -- could not be opened at all. So it is
+nearer libjs's explorer (libjs/web/explore.html) now:
+
+- [x] **A tab, in the text's place.** View > Code (F7, `:code`) opens a
+      Code tab beside the file's, over the text; F7 or Esc goes from one
+      to the other, a click on a tab does too, and the tabs' `x` closes
+      the Code tab. The file pane stays where it was (Ctrl+B).
+- [x] **The functions down the left**, in the file's order (`A-Z` sorts
+      them by name), the one shown lit, the file's own brighter than
+      those from its headers. Typing finds one: the list keeps the names
+      with what was typed in them, and the first is shown; Esc forgets
+      it, and Up and Down go through the list.
+- [x] **The source between the instructions.** Each line of source the
+      map names is shown above the instructions it made, its number where
+      the offsets are and its text where the labels are, on the gutter's
+      colour. A statement over several lines is shown whole before its
+      code. Some lines with no code of their own are shown too, as the
+      file has them, but not blank ones: all of a function's head (its
+      name, its parameters, its locals), the few between two lines that
+      made code, and past those the labels, braces and comments just
+      above a statement, so a `case` is over its code. A number is a
+      number, and only an address the object's patches say is one is
+      shown as a name or a string (a switch's table as `jump table`).
+      A click on a row lights every row of its line, and
+      the footer says where it came from; a double click on a call (or
+      Enter) goes to the callee, and Back (`<`, Backspace, Alt+Left)
+      comes back; a double click on any other row goes to its line in the
+      text -- this file's in this window, another's (a header) in a
+      window of its own.
+- [x] **A compiled file opens as it is.** The IDE takes anything with
+      C4R's header -- a program, an object, a library, whatever it is
+      called -- as compiled, rather than as a binary file to ask about:
+      it opens in the Code tab alone, at `main` (or the first function
+      by name), with no text and nothing to save. Its sources are read
+      where its map says: as the path is (C4IX's own compiles name their
+      files fully), under /usr (the images are compiled in the
+      repository, whose src/ is /usr/src), or beside the file. F6 runs a
+      program. Files opens objects and libraries in it on a double click,
+      and File > Show Code opens a program there. Without a map, the
+      functions are the symbols', with no source.
+- [x] test-desktop.mjs: `:code` is a tab with the source between the
+      instructions and both functions listed; `main` against
+      `insnText` as before; the list by a click, by typing, by Up; a
+      click on an instruction; a double click on a source line to the
+      text; F7 back; a double click on a call and Backspace; `-O` keeps
+      the function; Esc, the tab, its `x`; `/bin/ls` opened as it is,
+      its source from /usr/src; Files' double click on `libc.c4s`. The
+      binary-file checks use files that are not C4R now (a NUL in an
+      upload, and a `.gz`).
+- [x] `web-ix-code.mjs`: the tab at the three sizes, a function found by
+      typing, then `/bin/ls` and `/bin/desktop` (the biggest program
+      C4IX has, 818 functions over 24 files) opened as they are, timed,
+      with a screenshot of each.
+
+Left out still: the globals and strings, callers and callees, and
+opdoc.js's tooltips.
+
+## Part twenty: the Code tab, used (asked for 2026-10-30)
+
+What the user found using part nineteen's Code tab:
+
+- [x] **Scroll bars.** The Code tab's bar could not be dragged: its drag
+      named the bar at the tab's right edge, where its click had named it
+      at the code's (the kit tells two bars apart by where they are).
+      And a held arrow scrolled one line, where every other desktop's
+      bar keeps going. Now the kit does that for every bar (winkit
+      `ui.c`, `wmcore.c`): a press on an arrow, or on the track either
+      side of the thumb, says it repeats (`ui_scroll_repeat`), and while
+      the button is held the desktop presses it again, after 400 ms and
+      then every 50 ms, until the thumb comes under the pointer. Every
+      window gets it, and so does grin, which shares the kit.
+- [x] **Shared libraries.** A program linked with `c4rlink -l` names each
+      library it loads in a static global `__c4_needed` (loader.c); the
+      Code tab reads those too, and the libraries those load, as the
+      loader would. Their functions follow the program's in the list, in
+      a colour of their own, a double click on a call into one (a symbol
+      patch, `JSR ureaddir`) goes there, the header names the library
+      ("in libc4ix.c4s"), and the footer lists what is loaded. Each module
+      keeps its own code, patches, symbols and map (`struct xmod`).
+- [x] **The functions that came twice, or eighteen times.** Not the tab's
+      doing: c4lc splices the helpers it calls -- `<udiv>`, `<ld16s>`,
+      the soft float `__c4d_*` and long long `__c4ll_*` -- into every unit
+      that uses them, as static functions, so wolf3d6 carries eighteen
+      copies of `<ld16s>` and libc.c4s three of `<udiv>`. The list now
+      names the unit each copy came with beside it, and the header says
+      "with id_ca.c". Making one copy do for all was c4rlink's to do, and
+      it does now (docs/link-fold.md): what still comes more than once is
+      what cannot fold, `__c4fp_hw` and its FPU wrappers, whose statics
+      are each unit's.
+- [x] **Libraries' sources.** libc.c4s has a map, of ten files, and its
+      own functions showed their source; what showed none were the
+      compiler's helpers, whose map file is c4lc's own (`<c4lc softfp>`,
+      `<c4lc long long>`): C that c4lc keeps in strings of its parser,
+      p:fpsrc and p:llsrc, spliced in as they are. The tab reads them
+      from there, /usr/src/c4sp/lisp/c4lc-parse.lisp, line 1 being the
+      define's own (so a double click opens the parser at the line). A
+      game's sources are not on the disk at all (the root archive has no
+      `games/`): that is the lazily loaded tree, a separate piece of
+      work.
+- [x] **Long source lines** fold onto the rows below, their number on the
+      first; Wrap (in the code's header) turns that off, and a bar
+      across then scrolls the listing.
+- [x] test-desktop.mjs: a long line folded and the bar across with Wrap
+      off; `/bin/ls`'s libraries listed after its functions, and a call
+      into one followed and back; the code's thumb dragged, and its arrow
+      held for a second and a half of machine time; a long long helper's
+      source from the parser; libc.c4s's `<udiv>` once, folded.
+      web-ix-code.mjs opens `/lib/libc.c4s` too.
+
+## Part twenty-one: the games' sources, read when they are opened (asked for 2026-10-30)
+
+The Code tab finds a compiled file's sources where its map says, under
+/usr for the repository's own (part nineteen). The root archive puts
+the repository's text files there, but not games/: the games are
+submodules (games/README.md), and their sources are megabytes that every
+visitor would download to boot. So for Doom, Wolfenstein 3D, Rise of the
+Triad and OpenTyrian the tab found nothing, and showed `wl_def.h:1499`
+where the source should have been. Now each game's sources are on the
+disk as lazy files, listed at boot and read the first time something
+opens one; the page keeps what it has read, so it is read once.
+
+### What was there to build on
+
+- **The lazy disk** (part three). `c4ix.sizes`, a "SIZE NAME" line per
+  disk file, makes vfsload's entries lazy RAM files (`vfs_lazyfile`): a
+  name and a size, filled from the host on first use (`vfs_fill`), so
+  `ls` and stat cost nothing. In the page, `index.json` is the same table,
+  and the worker fetches a file with one synchronous request when the
+  machine first opens it. A file made from a package is the exception
+  (2026-11-21, `libjs/unpack.js`): Quake's `pak0.pak`, on a disk built
+  with `QUAKE_AS_ZIP=1`, is unpacked from the `quake106.zip` beside it
+  the first time it is opened, checked against its SHA-256, and kept in
+  the same cache as a fetched file.
+- **`hostdir(PREFIX)`**, vfsload's directory of every file the table lists
+  under a prefix: Tyrian's data (which the manifest cannot name, as it is
+  on the disk only where it was there to copy) and the uploads in /home.
+  It took one level only.
+- **The persist store** (page.js, src/c4bb/web/store.js): a medium per
+  system in IndexedDB, written as the machine closes files on drive 1.
+- **jor1k's 9p filesystem** (`js/worker/filesystem`) lists the whole tree
+  up front from a JSON file of names, sizes and modes, marks each file
+  "on the server", and fetches it on its first open, optionally as a
+  `.bz2`, or as a `LazyUint8Array` that fetches ranges. It keeps nothing
+  between visits but what the HTTP cache does. Taken from it: the tree
+  known at boot, the contents on open. Not taken: per-file compression
+  (the host gzips text on the way, and a source is tens of KB) and
+  ranges (a source is read whole anyway).
+
+### What was done
+
+- [x] **Which games.** Each game that is on the disk (its C4IX image is
+      there), so whichever are checked out. All four are GPL v2: Doom
+      (doomgeneric, `LICENSE`), Rise of the Triad (icculus.org's,
+      `COPYING`), OpenTyrian (`COPYING`), and Wolf4SDL, used under the GPL
+      (`license-gpl.txt`; id's original licence is `license-id.txt`). No
+      game's data is in its repository, so no data comes this way.
+      Tyrian's code may be passed on; its data may not. Since
+      2026-11-21 (page-games) the site has OpenTyrian, its sources
+      included, and libjs/site.sh refuses any of Tyrian 2.1's files by
+      their SHA-256s (libjs/tyrian21.sha256) rather than games/tyrian as
+      a whole.
+- [x] **Which files.** The game repository's tracked text files
+      (`git -C games/NAME ls-files`, as the root archive takes c4's), but
+      not `data/` (data, and /usr/games/tyrian/data is Tyrian's hostdir)
+      or dot-files: every source its maps name, and its README, licence,
+      c4.mk and tools. Doom 192 files, 1.63 MB; Wolfenstein 3D 64,
+      1.52 MB; Rise of the Triad 201, 3.13 MB; OpenTyrian 125, 1.29 MB.
+- [x] **Where.** At their paths in the repository, on the disk and in
+      C4IX alike: `games/doom/am_map.c` is the disk's
+      `games/doom/am_map.c` and C4IX's `/usr/games/doom/am_map.c`, which is
+      where the Code tab looks for what Doom's map names (explore.c
+      `xp_where`: the path, then under /usr). It is the game's own
+      directory, beside `doom.c4r` and `doom1.wad`, as the repository
+      has them. Wolfenstein 3D's two programs share one tree. (The plan
+      for taking Wolfenstein 3D out of the repository, docs/c4-explorer.md,
+      had its sources copied to /usr/games/wolf3d as lazy files; this is
+      that, for every game.)
+- [x] **How they are listed.** build-images.sh copies them to the disk
+      and lists them in `c4ix.sizes`, as every disk file is. C4IX's
+      manifest says `games/: hostdir(games/)`, and hostdir now makes the
+      directories a name has in it (vfsload.c `make_dirs`), so the whole
+      tree is there at boot, ~580 lazy files, without a byte of them read.
+      They are in no `manifest.json`, so the eager loaders (the c4bb
+      page, `lazy: false`) do not fetch them, and the C4KE root disk
+      leaves them out.
+- [x] **How the page keeps them.** index.json gives a game source a
+      third element, the first 16 hex digits of its SHA-256
+      (src/c4bb/tests/lazy-index.py). The worker's disk (now libjs/lazy.js,
+      `LazyFiles`, the worker's class moved out so node can test it) hands
+      a file with a hash to the page once it has fetched it, and the page
+      keeps it in IndexedDB, in the medium `lazy DISK`, as "HASH NAME". At
+      the next boot the page reads that medium while the machine boots
+      (it does not wait for it) and gives the worker what still has the
+      index's hash; the rest it deletes. A rebuilt game whose file changed
+      has another hash, so the file is fetched again and kept under the
+      new one. The worker also keeps them for its own life, so a Reset
+      reads none of them again. `status.disk.cached` counts the files
+      that came from the cache.
+- [x] **Under node** a disk is a directory, read as it is: cli.js reads
+      it whole, the tests' lazy disks file by file, as before.
+- [x] **test-lazy-src.mjs** (in test-libjs): C4IX booted on the lazy
+      disk, its root archive unpacked, fetches none of the sources; `ls`
+      of the game's directory lists them and fetches nothing; `crc32` of
+      one fetches it, once, gives the host's CRC and size, and it is kept
+      under its hash; a second boot with
+      what was kept reads it from the cache and fetches nothing of the
+      games'; and an index with another hash for it drops the kept copy
+      and fetches it again.
+- [x] **web-ix-src.mjs**: in a browser, with the cache emptied, the boot
+      keeps nothing; `:e /usr/games/bin/doom` opens Doom in the Code tab
+      at `main` (dg-gui.c:164) with its C source between the
+      instructions, and File > Open of `/usr/games/wolf3d/wolf3d.c4r`
+      does the same for Wolfenstein 3D (wl_main.c:1848); the page keeps
+      both files; after a reload, Doom's source comes from the cache.
+      OK on Chrome 151, served on 8499.
+
+### What it costs
+
+Measured on helios's tree, which has all four games (Pages', without
+Tyrian, lists 457 of the 582):
+
+| | before | after |
+|---|---|---|
+| index.json, fetched at boot | 7,704 B (2,634 gzipped) | 36,834 B (13,639) |
+| c4ix.sizes, fetched at boot | 6,386 B (2,575 gzipped) | 22,129 B (6,885) |
+| requests at boot (test-lazy-src's console boot, archive unpacked) | 8 files | 8 files |
+| console prompt, machine time | 1.05 s (20.8M cycles) | 1.55 s (30.2M cycles) |
+| root archive unpacked, machine time | 69.7 s | 70.2 s |
+
+- **The boot** fetches no more files: the tables are larger, ~45 KB, or
+  ~15 KB as gzip sends them. Making 582 lazy files costs ~9.4M cycles
+  of vfsload, about 0.1 s at the page's 100 MHz. The first version cost
+  twice that: profiled (a boot profiler after prof-c4ix.mjs), it was the
+  kernel's linear directory lookup (`vfs_child`, 4.8M cycles, which
+  stays: each new file is looked up among those its directory already
+  has), two allocations per file in vfsload (now two buffers), a
+  `umkdir` per file (now one per directory), and every lookup of a
+  manifest entry reading past the sources' lines (now last in
+  c4ix.sizes).
+- **Opening one.** `:e /usr/games/bin/doom` showed Doom at `main` with
+  its source in 1.6 s, and File > Open of `/usr/games/wolf3d/wolf3d.c4r`
+  in 3.1 s (web-ix-src.mjs, Chrome 151): the program, then the one
+  source file shown, each one request. After a reload the source is
+  not requested at all.
+- **The site** (libjs/site.sh): the disk's `games/` is 457 files,
+  6.29 MB, for Doom, Wolfenstein 3D and Rise of the Triad -- about 3.5%
+  on a site of ~176 MB. They are copies of the site's own `games/`
+  (site.sh ships every tracked file of the checked-out games already),
+  which the Pages repository's git stores once. A visitor downloads only
+  the files they open, a few KB each with gzip.
+- **Instead, in the root archive**, the three games' sources would add
+  ~1.29 MB gzipped (413 + 248 + 624 KB) to the 3.96 MB that every
+  desktop boot fetches and inflates.
+- **Under node**, cli.js reads a disk directory whole, so it reads the
+  7.6 MB of sources at each start too; the tests' lazy disks do not.
+
+### Found on the way
+
+- **The games' programs are in /usr/games/bin**, not /bin: `/bin/doom`
+  does not exist, and the IDE opens it as a new file. `:e
+  /usr/games/bin/doom` (the shell finds `doom` on its PATH) is the way.
+- C4IX's `wc` counts its standard input only; `wc FILE` waits on it.
+- In this tree `c4ix-rott.c4r`'s map gives libjs/guest/snd.c as 1,077
+  bytes, and the file is 1,188: the Rise of the Triad image is older
+  than the file, so the Code tab marks that source as changed.
+- A new worktree needs its submodules checked out before its build
+  products are copied in and touched; otherwise every game object is
+  older than its source and is compiled again.
+
+Left for later: a kernel directory lookup better than linear, which
+would take the rest of the boot cost away. (Tyrian's sources on the
+site came with page-games, 2026-11-21: site.sh now tells Tyrian's data
+from its code by the data's SHA-256s.)
+
+## Part twenty-two: Word Wrap in Text Editor, and a choice of fonts (asked for 2026-10-30)
+
+Text Editor's long lines ran off its right edge, out of reach; and the
+whole desktop was drawn in the same three fonts at the same sizes, at
+every screen size. Now:
+
+- [x] **Word Wrap** (Text Editor's new Format menu, on at first, a check
+      beside it). A line wider than the window folds onto the rows below,
+      after the last space that fits, or where the row is full if it has
+      none; a space just past the edge is the fold, and is not drawn.
+      Up, Down, Home and End move by these rows, as the IDE's do; a
+      click lands on the row it is on. Off, a line is one row, and the
+      text scrolls across under a bar, following the caret when it
+      moves, as the IDE's `:set nowrap` does. notepad.c keeps the text
+      in one buffer as before: a row is found from where it starts
+      (`row_end` says where it ends and the next begins), so nothing
+      else in it changed.
+- [x] **The fonts the display has.** `TEXT2` was always sized and faced
+      by the guest; the faces were 0 to 2. Six more: 3 Courier New and
+      4 Lucida Console (fixed-width), 5 Verdana and 6 its bold, 7
+      Georgia and 8 its bold (gui.h's `GUI_*`, the kit's `F_*`).
+      display.js, the one place the protocol is drawn (the tests only
+      read it; the native c4m has no display), names each as a chain of
+      families that ends somewhere different on Windows and on Linux:
+      "Lucida Console" is Noto Sans Mono on a Chromebook, for one.
+      Verdana is drawn at 0.95 of its size, which brings its width near
+      Tahoma's: the kit never measures text, it guesses (6 pixels a
+      character at 11, 7 bold), and the guesses hold in any of the three.
+- [x] **Three levels, a handful at each.** The kit offers them
+      (draw.c): the interface's faces, Tahoma, Verdana and Georgia; the
+      fixed-width ones, Consolas, Courier New and Lucida Console; and
+      Small, Normal and Large. For the interface a size is a pixel off
+      11 (10, 11, 12); for an editor it is a grid, a font size and a
+      cell (10 in 6x13, 12 in 7x15, 14 in 8x17), no narrower than the
+      face's characters.
+  - *The desktop*: Settings has a third column (the window is 590 wide
+    now, still inside 640x480), Font and Font size, with a sample.
+    `wk_font_use` sets `wk.fsans`, `wk.fbold` and `wk.fsize`, and
+    `d_text`/`d_textn` draw F_SANS and F_BOLD in them: every title,
+    menu, dialog, button and the taskbar, at once. Kept in
+    /etc/desktop.cfg as `font F fsize Z`, after `mute`. grin never sets
+    them, so it draws as it did.
+  - *The IDE*: IDE Settings has a Font group, faces and sizes. ECW,
+    ECH and EFONT were constants; they are `ide_cw`, `ide_ch` and
+    `ide_fs` now (with `ide_face`), set from the choice, and the Code
+    tab's XCW, XCH and XFONT are the same variables (explore.c), so the
+    text, the gutter, the status line, the build log and the Code tab all
+    move to the new grid. Kept in /etc/ide.cfg: `scheme N input M font F
+    size S`.
+  - *Text Editor*: Format lists the fixed-width faces and the sizes,
+    checked. The choices are every Text Editor window's, and kept in
+    /etc/notepad.cfg (`wrap W font F size S`), which the desktop names
+    through the kit's `notepad_cfg`; grin names none, so its Notepad
+    starts as it always did. grin's applications reach the kit through
+    its table, which grew the six font functions (GRIN_KIT_VERSION 4).
+- [x] **The rebuild's memory.** test-c4ix-rebuild failed on this branch:
+      inside C4IX, c4sc ran out of memory compiling edit.c (`cannot
+      allocate gc mark state for 1350000 cells`). C4IX held the root
+      archive in RAM, in the same 64 MB as the compile, and the archive was
+      about 40 KB bigger here than on the Code tab's branch; edit.c was
+      already at the edge, and neither hl.c (part twenty) nor moving IDE
+      Settings into a module of its own was enough. What fixed it was the
+      collector: c4sp kept five bytes of mark state a cell, 6.7 MB for
+      edit.c, and keeps a bit a cell and a worklist of a fixed size now,
+      0.23 MB (docs/c4sp-design.md, 4.8). The rebuild passes at 64 MB
+      with every branch of the time merged.
+- [x] test-desktop.mjs reads each string's font and size now. Text
+      Editor: a line of thirty words folds into rows that each end after
+      a word and join back into the line, with no bar across; Word Wrap
+      off makes it one row, scrolled to the caret, with the bar; Home
+      scrolls back; Courier New and Large draw it in font 3 on an
+      8-pixel grid, in every Text Editor window; /etc/notepad.cfg says so.
+      The IDE: Courier New, Large in the preview and the editor behind it,
+      then Normal; the Code tab in Courier New; /etc/ide.cfg says so.
+      Settings: Verdana, Large draws the sample in fonts 5 and 6 at 12,
+      and no string anywhere in fonts 1 or 2; Settings still fits; after
+      Power Off and a new desktop, desktop.cfg has `font 1 fsize 2`, the
+      desktop comes back in Verdana, and a new Text Editor in Courier
+      New, Large, without Word Wrap.
+- [x] web-ix-fonts.mjs: the page at 640x480, 800x600 and 1024x768, with
+      Text Editor wrapped and not, Settings in each face, the IDE at each
+      size; a screenshot of each.
+
+## Part twenty-three: a Games category in the Go menu (asked for 2026-11-06)
+
+The games sat among the tools, a line each in `start_items` in shell.c
+and another in `game_path()`. The ports to come (docs/ports-survey.md)
+would have brought about 56, 40 of them Simon Tatham's Puzzles, at 26
+pixels a row, on a screen at most 768 high. So:
+
+- [x] **Go > Games** opens a menu of its own, to the right: Doom, Rise of
+      the Triad, Tyrian, Wolfenstein 3D, by name. It opens when the
+      pointer is on the row, or on a press where there was no move, as a
+      touch has none. Games is not in Go at all on a disk with no game.
+- [x] **A menu can open a menu, up to Go, Games and a group.** A
+      category of `Games/Puzzles` is a row in Games that opens its own
+      list, and groups come first. A menu that is too tall wraps into
+      columns, as many rows to a column as fit above the taskbar; 40 rows
+      are 2 columns at 1024x768 and 3 at 640x480. It goes right of the
+      row that opened it, and over its parent if the screen has no room
+      there, and up if it has none below. A row's arrow is five thin
+      rectangles.
+- [x] **The way across.** A menu opened by hovering can't shut as soon
+      as the pointer leaves the row, or the pointer could never reach
+      anything below it: from Games, a move down and right crosses Run...
+      So rows in a parent do not light while the pointer is moving right.
+      Moving left or straight up or down, the row under it takes over.
+      A press always counts. Esc shuts everything, as it did.
+- [x] **A game brings its own line.** It has no line in shell.c any more:
+      a `#@app` line in its `c4ix.vfs.txt` (games/README.md) goes into
+      `/etc/desktop.apps`, by way of vfs-games.py and the disk's
+      `c4ix-desktop.apps`, for each game on the disk. The desktop reads
+      the file once, when it starts:
+
+      ```
+      CATEGORY|NAME|COMMAND
+      Games|Doom|doom
+      Games/Puzzles|Net|puzzles net
+      ```
+
+      A line whose program isn't on the disk is left out: by the path the
+      command names, or else by name in `/usr/games/bin`. So is another
+      category's, a comment, and anything without three fields; fields
+      after the third are for W2 of docs/c4-explorer.md, which this is
+      the first part of, and are ignored. (Since part twenty-four the
+      fourth field is FLAGS, and the desktop reads `window` there.) The
+      list holds 128 rows and 8 KB of text; beyond that the rest are not listed. A game that
+      doesn't use a Terminal starts the same way: `run_command` opens one
+      for its program, and a window from `window.h` or the whole display
+      is drawn over that.
+- [x] The tools stay in the source. Go's own rows want icons and are the
+      desktop's; they are for W2 to move, if it comes to that.
+
+Not done, for now: a launcher window (the menus hold what is coming),
+keys in the menu, and an icon on a game's row.
+
+- [x] test-desktop.mjs: the games are not in Go itself; Games is there
+      where the manifest has a game; the pointer on it lists the games on
+      the disk and only those, by name; moving right across Run... keeps
+      them and moving down it closes them. For the second desktop it
+      replaces `/etc/desktop.apps` with 42 rows, a comment, a line whose
+      program isn't there and another category's: groups come first, the
+      three are not listed, 40 puzzles are on the screen in 2 columns at
+      1024x768 and 3 at 640x480, Verdana Large included, Cards takes
+      Puzzles' place, and picking Puzzle 39 runs its command in a
+      Terminal and shuts the menu.
+
+## Part twenty-four: click-driven games in a window of their own (asked for 2026-11-10)
+
+The user: the Ace games should run in a window by default, instead of
+fullscreen, and so should anything like them, games that animate little
+and mostly answer clicks, without a Terminal. That is The Ace of
+Penguins' eleven games and Simon Tatham's forty Puzzles.
+
+- [x] **A window that is only the program's canvas** (`term_run` in
+      term.c). It is a Terminal's window with no shell in it: the
+      desktop spawns the program itself on the two pipes, with the
+      command's words for its arguments and its first found as the shell
+      finds it (`desk_which`: a path as written, or a name in `/bin`,
+      `/usr/bin` or `/usr/games/bin`, with `.c4r` or not). It has no
+      menu and no scroll bar, so it is the canvas's 640x400 and a
+      border; the program's own title replaces its name once it opens
+      the canvas. The window closes when the program ends. One showing
+      text the program wrote, as an error is, stays open to be read,
+      with a line saying the program has ended. Ctrl-C ends the program,
+      and so does closing the window, as for a Terminal. The shell's
+      prompt means nothing here: a program writing `$ ` is not taken for
+      one.
+- [x] **How the desktop knows** (decided). A game's `/etc/desktop.apps`
+      line says so, in a fourth field: `CATEGORY|NAME|COMMAND|FLAGS`,
+      where FLAGS are words and `window` is the one there is.
+  - Why there: the line is already where a game says how it starts,
+    and W2 of docs/c4-explorer.md planned this file to grow the
+    starting options (`single`) after COMMAND. `single` becomes another
+    word of FLAGS, and W2's suffixes and icon follow it. A desktop that
+    doesn't know the field cuts the line at COMMAND as before, so a
+    line with it is still listed.
+  - Not in the program: nothing in a `.c4r` describes it, and adding a
+    field to the format for this would make every linker and loader
+    know it. Not by guessing from the program's name or size either.
+  - Files and Run... have a path or a typed command, not a line. The
+    desktop keeps the names of the programs whose lines say `window`
+    (tools.c, `desk_window_app`), and `run_command` gives such a
+    program its own window: named alone, or by a path under
+    `/usr/games`, which is how Files names one. The names are unique
+    there, since vfs-games.py refuses two games' programs with one
+    name. The same program anywhere else gets a Terminal, where it
+    still plays in a window, the Terminal itself.
+  - `files.c` is unchanged: `open_sel` calls `run_command`, which
+    decides.
+- [x] **The games choose a window themselves.** `window.h`'s
+      `win_here()` is 1 when stdin and stdout are both pipes (SYS_FSTAT's
+      mode, S_IFIFO), as in either kind of desktop window, and 0 on the
+      console. Ace and the Puzzles open a window where it is 1, and take
+      the whole display where it is 0, as before; `-fullscreen` (Ace)
+      and `--fullscreen` (Puzzles) take the display anyway, and
+      `-window` / `--window` still ask for the window. Typed in a
+      Terminal, a game makes that Terminal its canvas until it ends, as
+      `--window` did. Ace's `-demo`, which test-ace runs, is left as it
+      was: no window it wasn't asked for.
+- [x] **A table bigger than the canvas.** Ace sends its table in the
+      middle of a frame of the window's shape, which the desktop scales
+      to the canvas. That frame was always 640x400, and `oy` would have
+      gone negative for a taller table; a game in a window is laid out
+      at 640x400 (`init_table` clamps to the display's size, which a
+      window sets to that), so none was. Now the frame is as big as the
+      table needs, in the window's shape, and the desktop scales it
+      down; the mouse is mapped back through it, and the last frame is
+      kept until the next, which the desktop may still draw. A program
+      started by its path also has its name without `.c4r` for a title.
+- [x] **Go > Games** has the games that were not in it yet: Cards (Ace's
+      six card games), Puzzles (the forty, and Ace's Mastermind,
+      Merlin, Minesweeper, Pegged and Taipei), both in windows of their
+      own; Quake and Super Blit Kart, which take the display from a
+      Terminal as Doom does; Text Adventures (Zork I, II and III, Open
+      Adventure) and BSD Games (22 of them), in a Terminal, which the
+      curses ones make their canvas, as they did. Phantasia and hack are not
+      listed: they need a current directory they can write
+      (games/README.md), and a Terminal starts in `/`.
+- [x] **A menu bar, which the game gives** (asked for the same day: the
+      usual title bar, and menus to control the game). `window.h` has two
+      more ops, `M n;title` (menu n, 0 starting the bar again) and `I
+      n;label` (an item of it: `-` a rule, a leading `*` a check mark),
+      and a pick comes back as `c menu,item` (WIN_MENU). `win_menu` and
+      `win_item` send them.
+  - The game declares them, not desktop.apps, because only the game
+    knows what it has: the Puzzles' presets are the game's own list, and
+    Ace's keys differ from game to game. So the menus are there however
+    the game was started, from Go, Run... or Files.
+  - A program's own window takes them (term.c `prog_menu`: 4 menus, 40
+    items each, 2 KB of text); a Terminal ignores them, keeping its Edit
+    menu, and there the keys are the controls. The first menu grows the
+    window by the bar's height, so the canvas stays 640x400 and the mouse
+    is measured from it as before.
+  - The Puzzles: Game (New, Restart, Undo, Redo, Solve where the game
+    can, Exit), the buttons' own actions; Type, the presets, the one in
+    play checked and sent again when it changes; Help, About, a line in
+    the status bar. The button row stays.
+  - Ace: Game (New Game, F2, in every game; Undo, Backspace, in the eight
+    that undo; Thornq's hint and auto-hints, Minesweeper's autoplay,
+    Spider's arrows; Exit), Spider's Suits, Minesweeper's Level, Pegged's
+    and Taipei's Layout, and Help (F1) where a game has help. Each item
+    is a key the game's own `key()` takes, so a pick is that key. Ace has
+    no redo and no "deal this hand again": F2 deals anew.
+- [x] **The window any size, the game laid out for it** (asked for
+      2026-11-11: a maximised Mines drew its board at a fixed size in the
+      top-left, and on a short screen cut its bottom rows off). The canvas
+      was 640x400 whatever the window, and a program's own window could
+      not be resized, only maximised.
+  - `window.h` has `win_resizable()`, the op `z 1`: the canvas is then
+    the window's whole inside, a window of the program's own takes a drag
+    on its edges, and a maximised one fills the screen. A Terminal keeps
+    its size but may still be maximised. Each new size goes down the
+    pipe as `s w,h` (WIN_SIZE) once the window has held still at it for
+    100 ms (term.c `follow`), so a drag through many sizes is one
+    re-layout. A program that does not ask has 640x400, as before.
+  - The Puzzles: a new size is FE_EV_SIZE; fe.c makes a frame that size
+    and lays the puzzle out again, `midend_size` with the room between
+    the buttons and the status line, the puzzle as big as it fits there
+    (in a window; on the whole display, up to twice its own size, as
+    before) and centred. A window smaller than 240x140 shows a frame that
+    size, scaled down.
+  - Ace: a new size is ACE_EV_SIZE. The games that lay themselves out
+    (Solitaire, FreeCell, Spider, Thornq: a resize callback) get a table
+    the window's size, at least 640x400; the rest keep theirs. Either way
+    the frame has the window's shape, the table in its middle: scaled up
+    in whole pixels where the window holds it twice or more, drawn as it
+    is where it fits, scaled down where it does not.
+- [x] test-desktop.mjs, where the games are on the disk: Go > Games >
+      Puzzles > Net opens a window titled Net, its frames 640x400, with
+      no Terminal; a key reaches the game; it has Game, Type and Help;
+      Game > New is a new game, a click on the board under the menu bar
+      turns a tile, and Game > Undo takes it back; Esc ends it and the
+      window goes. `net` from Run... does the same, and Ctrl-C ends it with its
+      window. `net` typed in a Terminal makes the Terminal its canvas,
+      and `q` gives it back. In Files, a double-click on
+      `/usr/games/ace/thornq.c4r` plays Thornq in a window of its own,
+      in frames of the canvas's shape, Game > New Game deals again, and
+      Ctrl-C closes it. Maximised, Net's frames are the bigger canvas's
+      size, drawn as they are, and a click in the middle turns a tile;
+      restored, 640x400 again. Thornq maximised deals across the bigger
+      table, in frames of its shape.
+
+## Part twenty-five: the games' directories, listed when first looked in (asked for 2026-11-10)
+
+With every game merged (the BSD games, Ace, Super Blit Kart, the
+puzzles, Quake, Frotz and Adventure beside Doom, Wolfenstein 3D, Rise of
+the Triad and Tyrian), part twenty-one's way of listing the games'
+files at boot made the boot slow. `c4ix.sizes` had 3,261 lines, and
+vfsload made a lazy file for each one under a `hostdir()`. That is a
+name and a size each, but thousands of them, and the boot took 103M
+cycles: 5.2 s at the page's 100 MHz before the console prompt. Asked
+for: a few seconds at most, and the rest loaded when it is wanted.
+
+### What was done
+
+- [x] **A host directory.** A directory vnode (vfs.c) with a
+      `hostname` is one whose entries are still on the host: the
+      prefix, ending '/', under which its files are. The first time
+      anything looks in it (`vfs_child`, `vfs_nth_file`, `vfs_nfiles`,
+      `vfs_direntry`, and `vfs_unlink` before its "is it empty"), the
+      kernel reads the host file `PREFIX.c4ix-dir` (`vfs_dirlist`) and
+      makes its entries: a lazy file for each "SIZE NAME" line and a
+      host directory for each "d NAME" line. A directory the manifest
+      has made already gets the host's entries added to it. Made
+      entries have the date 0. `SYS_LAZYFILE` with size -1 makes one
+      (`vfs_lazydir`), and stat gives such a directory device 3 until it
+      is listed.
+- [x] **The listings.** build-images.sh takes each `hostdir(PREFIX)` of
+      the disk's manifest and writes a `.c4ix-dir` in every directory
+      under it (src/c4bb/tests/host-dirs.py). `c4ix.sizes` leaves out
+      every file under a host directory except each one's own
+      `PREFIX.c4ix-dir`: vfsload looks that name up to know whether a
+      listing exists. Opening it would fetch it, on the page, at every
+      boot. With no listing, vfsload makes a lazy file for each line, as
+      before. index.json still lists every file. A listing gets no
+      hash, so the page doesn't keep it: it is small and read once per
+      boot.
+- [x] **vfsload's look-ups** hash the sizes table and the manifest's
+      entries (`index_sizes`, `host_of`), instead of a walk of each for
+      every entry.
+- [x] **persist** doesn't walk into a directory still on the host
+      (device 3). Its base list notes it as `PATH/`, and a path under one
+      counts as changed only if it is dated after the boot, so listing
+      a directory doesn't make its entries look new.
+- [x] **Files' tree** (files.c) reads only the folders that are open,
+      and those above the one shown. Every other folder is a row, with
+      a box if it has folders in it; a host directory is taken to have
+      some. Clicking a folder walked the whole disk to draw the tree
+      again: a second or so, and millions of instructions, once the
+      games' directories were there. Opening a folder reads it then.
+
+### What it costs
+
+| | before | after |
+|---|---|---|
+| c4ix.sizes | 3,261 lines | 341 lines |
+| boot to the console prompt | 103M cycles, 5.16 s | 13.7M cycles, 0.68 s |
+| `ls /usr/games/rott` | nothing fetched | `games/.c4ix-dir`, `games/rott/.c4ix-dir` |
+
+- test-lazy-src.mjs now checks that the boot reads no listing, and that
+  `ls` of a game's directory reads only listings. test-desktop's boot
+  check, that a boot reads fewer than 12 disk files, holds again.
+
+### Found on the way
+
+- **The display kept the scale of the size before.** A size the desktop
+  asks for from Settings (`wk_screen`) is a SIZE command in the shared
+  ring. display.js sized the canvas, but the page was never told, so it
+  stayed at the last size's scale: 800x600's ×1.42 put 1024x768 at
+  about ×1.11. A program that gives the display back, or a reload,
+  attaches through the size registers, which do tell the page. Then
+  1024x768 snapped to ×1, since whole numbers within 15% of the fit
+  were taken. Now app.js watches the canvas's width and height, and
+  snaps only within 5%.
+
+## Part twenty-six: top as Linux's is, with its keys as they are typed (asked for 2026-11-17)
+
+Linux's top and htop fit much more on a screen than C4IX's top did, and
+they take keys while they run. Asked for: a top more like Linux's, and
+htop too if it can be had, by a Busybox port if that was the way.
+
+### The way chosen
+
+- **Busybox's top** reads Linux's `/proc`: `/proc/stat`,
+  `/proc/meminfo`, and `stat`, `statm` and `status` for each process.
+  C4IX has no `/proc`, and making one in Linux's text formats only for
+  top to parse would be the long way round. procps-ng's top is 8,571
+  lines over libproc2's 11,706, and it reads the same files.
+- **So top.c is C4IX's own**, rewritten in Linux top's layout and with
+  its keys, over `SYS_CPUSTAT` as before.
+- **htop** is 19,372 lines of core, with a platform layer for each OS:
+  Linux's is 7,696 lines, and the "unsupported" one, 448, is where a
+  C4IX one would start. It draws with curses (about 30 calls, which
+  PDCurses with a VT backend could give), and it needs c4lc to take 185
+  `for (int ...)` declarations, 9 compound literals and 8
+  `static_assert`s. That is a port of its own (andrakis/c4-htop), after
+  this.
+
+### What was done
+
+- [x] **Raw keys.** A program writes `ESC _ T r ESC \` to have its keys
+      as they are typed, and `ESC _ T c ESC \` for lines again.
+      - On the console, console.c takes the sequence out of the output
+        and opens the host's `/dev/tty`, which puts keys.js (and cli.js)
+        in RAW. It closes it for `c`, or when the task that asked dies
+        (`task_zombify` calls `con_task_gone`).
+      - In the desktop's Terminal, term.c's `apc()` sets `raw`, and keys
+        go to the program as typed: Enter as CR, Backspace as DEL,
+        Ctrl+letter as its control code, Alt as an ESC first, arrows as
+        `ESC [ A` to `D`, Home and End as `ESC [ H` and `F`, PgUp and
+        PgDn as `ESC [ 5 ~` and `6 ~`, Ins and Del, and F1 to F12 as
+        xterm sends them. Ctrl-C is still the signal. The Terminal goes
+        back to lines at Ctrl-C and when the shell's prompt comes back,
+        so a program that dies raw doesn't leave it so.
+- [x] **SYS_CPUSTAT** says the cycles in a millisecond (`cpms`), for
+      TIME+, and how many tasks there are in all (`total`), even past
+      the ones it has room for. `CPU_MAXT`, a user-side size only, is
+      now 128.
+- [x] **top.c**, in Linux top's shape:
+      - a heading with the uptime, the CPUs and the usage; `Tasks:` by
+        state; `%Cpu(s):` us, sy and id, and each CPU's load on SMP;
+        `KiB Mem:`; then a line for prompts and messages, which says
+        which tasks are shown when there are more than rows ("tasks
+        1-17 of 31, scroll with Up, Down, PgUp and PgDn").
+      - the columns PID PPID USER NI S, P on SMP, RES %CPU %MEM TIME+
+        COMMAND, the heading in reverse video and running tasks bold.
+      - the keys: P, M, T and N sort by CPU, memory, time and PID, R
+        reverses, V shows the tree, i hides tasks that did nothing, 1
+        gives each CPU a line and a bar, k kills (asking which task and
+        which signal), r renices, d or s changes the delay, Space
+        refreshes, the arrows, PgUp, PgDn, Home and End scroll, h or ?
+        is the help, and q quits.
+      - `top -b` prints screens one after another with no escapes, for
+        tests and pipes; `-d SECS` and `-n N`, or a bare N, as before.
+- [x] **The tests** read the new screens: test-c4ix-cpu runs `top -b`,
+      test-desktop types `h`, a key and `q` at top in the Terminal, and
+      then checks that the Terminal edits lines again. test-desktop's
+      long file is now free.c, as top.c is longer than the scrollback
+      it checks.
+
+### Found on the way
+
+- **The console's keys stayed a line at a time.** Opening the host's
+  `/dev/tty` puts the host in RAW, but the host still holds back what
+  `/dev/stdin` reads until Enter, however many raw fds are open
+  (devices.js `kbdRead`). The kernel read `/dev/stdin`, so on the page
+  top saw no key until Enter. While raw, `con_poll` now reads from the
+  `/dev/tty` fd it holds. The desktop's Terminal was never affected:
+  its keys come down a pipe.
+- **An arrow was three keys.** The console's `uavail` says only whether
+  anything is there (1), not how much, and top read that many bytes: the
+  ESC of `ESC [ B` came alone, as Esc, then `[` and `B`. top now reads as
+  much as its buffer has room for; a read with something there doesn't
+  wait.
+- **%Cpu(s) could add up to more than 100.** Each task's share is
+  rounded on its own, so 26 spins at 3.8% each showed `104 us`. top
+  now takes what is over 100 off `us`.
+
+### Left
+
+- **The size.** top takes `LINES` and `COLUMNS`, which nothing sets
+  yet, so it draws 24 rows of 80 even in a bigger Terminal. A size
+  query (`ESC [ 18 t`, answered by the Terminal and the page) would
+  let it fill the window.
+- **The console's own top**, which init starts beside the desktop, has
+  the console's keys while it runs. Ctrl-C stops it.
+- **htop**, as above, and termios in libc for it (M7d of the Busybox
+  port).
+
+## Part twenty-seven: a game run in the background gets a window of its own (2026-11-17)
+
+Found while fixing three windowed Quakes at once (the sound card's
+PCM_START): `pin 1 quake --window &`, `pin 2 ...`, `pin 3 ...` typed in
+one Terminal all drew on that Terminal's canvas, through its two pipes.
+Every job a Terminal runs shares them, so:
+
+- each game read the others' events. A frame ack (`f`, WIN_FRAME) read
+  by the wrong Quake left the right one waiting for it, and a Quake
+  waiting sends no more frames (qg-c4ix.c): its picture froze;
+- the shell at its prompt read them too: `sh: cannot find f0,0,0`, an
+  ack run as a command (with two Duke3Ds);
+- what was left in the pipe when a game ended went to the shell.
+
+What was done:
+
+- [x] **A background job has no input** (sh.c). As POSIX's shell does
+      for an asynchronous list (`/dev/null`), `cmd &` gets a pipe with no
+      writer for its stdin, at its end at once, unless it has a `<` of
+      its own. The Terminal's input is the shell's and its foreground
+      job's.
+- [x] **A program wanting a canvas with no input asks for a window**
+      (window.c, `win_open`). With stdin ended it writes `O pid;title`
+      instead (window.h's wire format), and waits up to 10 s for its
+      stdin to be live; then it opens the canvas as always, on its new
+      stdout. Without an answer, win_open says 0.
+- [x] **The Terminal makes the window** (term.c, `term_adopt`): one as
+      `term_run`'s, only its canvas, with two new pipes, given to that
+      task as its fds 1 and 0, in that order. The program is the shell's
+      job, not the desktop's child: the window knows it has ended when
+      its pipe has no writer, and is not the one to wait for it; closing
+      the window, or Ctrl-C in it, ends the program, as for term_run's.
+      Its stderr stays the Terminal's, so an error shows where it was
+      typed.
+- [x] **SYS_FDGIVE** (247; libc4ix `ufdgive(pid, fd, to)`): the
+      caller's descriptor `fd` becomes task `pid`'s descriptor `to`, as
+      dup2 would there, for a task the caller started or one its tasks
+      did (the rule SYS_MAPFROM has). Every syscall holds the kernel
+      lock, so the other task's table is not in use; a task parked
+      reading what `to` was is woken, and its read, which starts again,
+      takes the new one. SYS_TOP is 248.
+- [x] **Events left over are not commands.** When the prompt comes
+      back and the Terminal stops being a canvas, it drops what it sent
+      the program and was not read (`udiscard`, as on a Ctrl-C). The
+      shell skips a line that starts ESC E anyway: it can read the
+      pipe before the Terminal sees the prompt.
+- [x] test-desktop.mjs: after `net` and `q` in a Terminal the screen
+      says no `cannot find`; `net &` there plays in a window of its own,
+      the Terminal keeps its title, and Esc in the game's window ends it
+      and the window. `libjs/tests/try-quake3.mjs` counts each window's
+      frames by where its canvas is, says FROZEN for one that drew and
+      then stopped while its Quake lives, reports a Terminal line saying
+      `cannot find`, and exits 1 for either or for a Quake lost.
+
+Three `pin N quake --window &` from one Terminal, for 300 s of simulated
+time: three windows drew, none froze, and no line said `cannot find`.
+The gate (c4bb-images, test-c4ix, test-c4ix-rebuild, test-libjs, test,
+test-c4fc, test-quake) passed.
+
+## Part twenty-eight: the IDE scrolls both ways alike, Find, splitters, and Files' right click (asked for 2026-11-19)
+
+The user's report: scrolling up in the IDE was much slower than down; the
+wheel often stopped just short of the file's first or last lines; the IDE
+and Text Editor need Find; the IDE's file pane and Files' folder tree
+should be sizable; Files wants a right-click menu, with Open in IDE for a
+program.
+
+The IDE (`edit.c`) and Text Editor (the kit's `notepad.c`, grin's Notepad
+too) are two editors, a line array and one buffer, so Find is the kit's
+find bar, which both keep, each looking in its own text.
+
+### What it was
+
+Measured with `libjs/tests/try-scroll.mjs`: the IDE on its own source
+(edit.c, 2,894 lines then), from its middle, 30 turns of the wheel down
+and 30 up, counting the instructions each turn runs until the desktop is
+idle with the frame drawn (cycles less those skipped asleep, less an idle
+stretch's):
+
+| | down | up |
+|---|---|---|
+| before, Word Wrap off | 2.24 M | 49.9 M (22 times) |
+| before, Word Wrap on | 1.92 M | 1.82 M, but 30 turns moved the view back 31 lines, not 90 |
+| after, Word Wrap off | 2.27 M | 2.28 M |
+| after, Word Wrap on | 2.14 M | 1.98 M, 90 lines each way |
+
+- **Up re-read the file.** The colouring's state was kept for the top of
+  the view only (part five), good for going down. Going up asked for an
+  earlier line, and the state was worked out again from line 1: 50 M
+  instructions halfway down this file, a second or so in the browser.
+- **Wrapped, the view came back.** The wheel moved the cursor to the
+  view's last line, counted in file lines; with folded lines above it
+  that line was below the bottom, and the redraw, which keeps the cursor
+  in view, moved the view down again. At the top this left lines 1..6
+  out of reach; the wheel scrolled less than it should all the way up.
+- **Wrapped, the end was out of reach.** The last top line was the
+  file's lines less the view's rows, and the folded lines near the end
+  need more rows than that: the last 8 lines of edit.c never showed.
+
+### What was done
+
+- [x] **The colouring's state at every line's start** (`e_hlstate`): an
+      array, worked out as far down as it has been asked for. A change
+      (`e_touched`, which the four primitives and `r` and `~` call) cuts
+      it back to the line changed. Up and down cost the same.
+- [x] **Scrolling in display rows** (`e_maxtop`, `e_lastfull`,
+      `e_scrolled`): the last top line is the one that puts the last line
+      at the bottom however its lines fold, and the cursor comes onto a
+      line wholly in view, so the redraw leaves the view where the wheel
+      put it. The scroll bar's thumb reaches the same last top line (it
+      is given the text's lines less that line as "visible").
+- [x] **Find** (the kit's `struct ui_find`, `ui_find_*` in ui.c): a bar
+      under the text with what to find, Next, Previous, Match case, a
+      note and a close box. Ctrl+F or Edit > Find... opens it, with the
+      selection to look for if that is on one line; typing looks from the
+      match as it grows; Enter, F3 or Next finds the next, Shift+Enter,
+      Shift+F3 or Previous the one before; past the end or the top it goes
+      round and says so ("Wrapped to the top"), or says
+      "Not found". The match is selected, Traditional's selection or VIM's
+      Visual, and the view follows the cursor to it. Esc closes the bar; a
+      click in the text gives the keys back to it. Ctrl+F is Find in VIM
+      mode too, as Ctrl+B is the file pane. Edit > Find Next and Find
+      Previous in both editors.
+- [x] **Splitters** (the kit's `ui_splitter`, `ui_split_click`,
+      `ui_split_drag`, ended with a thumb's drag by `ui_scroll_end`): the
+      bar right of the IDE's file pane and the one between Files' tree and
+      list. The pointer over one is a new shape, GUI_PTR_COLS (9,
+      `col-resize`). The IDE's pane keeps 100 pixels and leaves the text
+      220; Files' tree keeps 100 and the list 280. Let go, the width is
+      every window's opened after: the IDE's in /etc/ide.cfg (`pane P`),
+      Files' in /etc/desktop.cfg (`tree T`).
+- [x] **Pop-up menus** (`wk_popup`, wmcore.c): a menu at a point in a
+      window, drawn and chosen from as a drop-down is, its item reaching
+      the window's command hook as `WK_CMD(WK_POPUP, item)`. A press of
+      another button than the left one is never half of a double click.
+      The desktop's tools see which button pressed in `wm_button`.
+- [x] **Files' right click**: on an item, Open, Open in IDE (a program,
+      an object file or a library into the IDE's Code tab alone, as the
+      IDE's File > Open does one; a source into the IDE's text), Rename,
+      Delete (which asks, as before), New Folder and Download, all that
+      Files does already; on a folder in the tree, which it then shows,
+      Expand or Collapse, New Folder in it and Refresh. A right click on
+      an item not selected selects it alone; on one among a selection,
+      Delete takes them all.
+- [x] grin's table of the kit's functions (`kitfns.h`) gains the find
+      bar, the check box, the splitter and `wk_popup`: version 5.
+- [x] test-desktop.mjs: Files' right-click menus and Open in IDE on
+      /bin/cat; its splitter (the pointer, a drag, a second window as
+      wide); the IDE on edit.c reaching its last and first lines with the
+      wheel and the thumb, wrapped and not; Find, F3, Enter, Shift+F3,
+      round both ways, Match case, Not found, Esc and Edit > Find...; the
+      pane's splitter and a second IDE window as wide; Text Editor's Find.
+- [x] web-ix-edit.mjs and web-ix-files.mjs, in the browser: the same, with
+      screenshots; both now boot with `?persist=0` rather than reset.
+
+Text Editor's own scrolling was already in rows (`row_count`), and costs
+the same both ways: each redraw walks the buffer to its top row.
+
+## Part twenty-nine: the mouse locked to a game in a window (asked for 2026-11-19)
+
+Tyrian steers its ship with the mouse. Full screen, the page locks the
+mouse to the display at a click (GUI_PTR_LOCK, the browser's Pointer
+Lock), and its motion comes as GUI_EV_REL. In a desktop window
+(`tyrian --window`) the ship followed the pointer only while it was over
+the window: the pointer left at the edge, and only the left button came
+through. grin's game windows already lock the mouse (src/grin/fwin.c);
+the desktop's windows now do the same.
+
+- [x] **window.h**: an op `L 1` (`win_lock(1)`), "lock the mouse to this
+      canvas at a click", and `L 0`; an event `r dx,dy,buttons`, which
+      win_poll gives as WIN_REL (9), the motion in the canvas's pixels.
+      `d` and `u` carry the button pressed, 0 the left, 1 the middle, 2
+      the right, as the header always said; `m` the buttons held, a bit
+      each.
+- [x] **term.c**: a canvas that asked has a pointer hook that says
+      GUI_PTR_LOCK over it ("click to capture"), so the page locks the
+      mouse at the next click. Locked, the display's GUI_EV_REL goes to
+      the program of the window that has the focus, as `r`, and the
+      buttons as `d` and `u` at the pointer's place, which the desktop
+      keeps by adding up the motion (`term_lock_event`). A plain move says
+      the page let the mouse go (Esc, which the browser keeps); the window
+      losing the focus, a dialog or menu, the program ending, giving up
+      its canvas or sending `L 0` let it go from this side, its buttons up
+      first (`term_lock_tick`, `lk_drop`). A click takes it again.
+- [x] **shell.c**: GUI_M_REL in the desktop's event mask (only a locked
+      mouse sends it), the locked mouse's events taken before the kit's,
+      and `desk_unlock()`, the display told to let go.
+- [x] **Tyrian** (games/tyrian, tyr-c4ix.c): `win_lock(1)` after
+      `win_open`; WIN_REL as GUI_EV_REL, scaled as the pointer is
+      (640x400 to the display's 640x480); the buttons as they are.
+- [x] `src/c4ix/examples/mouselock.c`, beside bounce.c: a dot steered by
+      the locked mouse, its moves and presses counted, to compile inside
+      C4IX with c4cc. test-desktop.mjs runs it: the pointer over its
+      canvas, a click, three locked moves (30 across, 12 up), the right
+      button as the right, a plain move letting go, and the totals it
+      prints when q ends it.
+- [x] In the browser (CDP 9222): `tyrian --window` from a Terminal, the
+      pointer over the canvas `none` (the lock's), locked at a click, into
+      a level by the keys, the ship steered left and right and firing
+      with the left button, the lock held throughout. (A CDP-sent Esc does
+      not end the browser's lock; a real one does.)
+
+Duke Nukem 3D's and Quake's windows could use the same op.
+
+## Also landed (to 2026-11-21)
+
+- **The idle desktop sleeps again** (56a46bd, 2026-11-18). Run as
+  `desktop &`, it has an ended pipe for its stdin since part
+  twenty-seven, and `SYS_EVWAIT` found that pipe always ready, so an
+  idle desktop ran the machine flat out. Now the desktop makes its
+  stdin its stdout when its stdin has ended. Idle for 10 s at 400 MHz:
+  4,000 M instructions before, 7.6 M after (try-osprof.mjs).
+- **A game's frame at once** (0f0c3cb, ec0583c, 2026-11-13). A
+  framebuffer present is drawn on the same pass, not held to the 25 ms
+  limit, and redraws only the game's canvas.
+- **Text by `memcpy`** (d475032, 2026-11-17): `gui_text`, `gui_text2`
+  and `gui_imgdef` copy their bytes in one instruction.
+- **Settings > Accelerators** (e4e680c, 2026-11-16): C4IX's own
+  accelerators on or off (docs/accel.md 7).
+- **Uploads in folders, and downloads** (463c096, 2026-11-11): an
+  upload goes in `/home` or a game's `/home/NAME`; Files' File >
+  Download, or `download FILE`, saves a file or a folder as a tar.

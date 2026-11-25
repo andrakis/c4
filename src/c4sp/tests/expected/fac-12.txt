@@ -1,0 +1,3 @@
+Using 12 for factorial
+Factorial of 12 = 479001600
+nil

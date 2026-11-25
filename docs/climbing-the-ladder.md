@@ -1,0 +1,189 @@
+# Climbing the ladder by hand: C4DOS to C4KE to C4IX, on the breadboard
+
+Every rung of this is a system building the next one, inside a simulated
+machine, with nothing brought in from the host except the floppy it
+booted from. This is the walkthrough: what to type, what happens, and
+what it costs.
+
+    make c4dos-c4ix32
+    node src/c4bb/sim/cli.js -i -m 64 -d c4dos-c4ix32
+
+No image on the command line: the firmware boots like a BIOS, finds the
+floppy in drive 0 and boots what its `boot.cfg` names
+(docs/c4bb-storage.md M10). Naming `c4dos32.c4r` at the end still works
+and is the machine with something in ROM instead.
+
+## The session
+
+| where | type | what happens |
+|---|---|---|
+| `A>` | `LADDER` | the seed compiler rebuilds itself and the preprocessor, reaches a fixed point, and the tools it just built compile C4KE from its own source |
+| `A>` | `RUN dosload.c4r c4ke.c4r` | boots the kernel the machine compiled. C4DOS hands over its RAM disk on the way out, so everything just built is still there |
+| `c4sh>` | `tar x c4ix-src.tar` | C4KE unpacks C4IX's source into its own RAM filesystem — about fifty files |
+| `c4sh>` | `b4ke -t -f c4ix.b4k` | thirteen modules through the compiled compiler, then the link. This is the long one — `-t` runs `top` alongside so there is something to watch |
+| `c4sh>` | `c4ix.c4r c4ix-sh.c4r` | boots C4IX — protected mode, preemption — with a shell |
+| `c4ix:/$` | `ls`, `ps` | C4IX, running, showing its own tasks |
+
+Three systems, each one compiled by the one before it, in a single
+power-on of a machine whose CPU is 80 microcoded opcodes.
+
+## What it actually does, verified end to end
+
+Driven by a script with sleeps in it (`-i` streams a pipe now), on a
+64 MB machine:
+
+    A>LADDER
+    ...
+    c4cc: wrote 187771 bytes to ram:c4ke.c4r
+    A>RUN dosload.c4r c4ke.c4r
+    dosload: 4194304 bytes released, loading c4ke.c4r
+    ...
+    c4sh>tar x c4ix-src.tar
+    tar: extracted 43 files, 257816 bytes
+    c4sh>b4ke -f c4ix.b4k
+    b4ke: C4IX, thirteen modules and a link
+    ...
+    c4rlink: wrote 130665 bytes to ramfs:c4ix.c4r
+    b4ke: 14 ran, 0 skipped, 0 failed
+    c4sh>c4ix.c4r c4ix-sh.c4r
+    C4IX booting, 203277198 cycles spent loading the kernel image
+    c4ix: protected mode on for user tasks, preemption on
+    c4ix-sh -- 'help' for builtins, 'exit' or end-of-file to leave
+    c4ix:/$ ls
+    ram/
+    c4ix:/$ ps
+      ID  PPID STATE   PRIV    SYSCALLS     TRAPS      CYCLES  NAME
+       0     0 ready   kernel         0   2122118 ...           boot
+       1     0 wait    kernel         0         7     69.883k  init
+       2     1 wait    user          28        28    107.859k  c4ix-sh.c4r
+       4     2 run     user          37        41     53.708k  c4ix-ps.c4r
+    4 tasks
+
+(When this was first run, C4IX's own cycle column went negative past
+2^31 — it accounted in a single 32-bit int and the whole climb is
+billions of cycles. Fixed the same day, f5c82a1: both kernels now keep
+cycles in two words, billions and the rest.)
+
+(The transcript is from August 2026. C4IX today has no `/ram`: the
+kernel makes `/tmp` at boot, so `ls` shows `tmp/`. And `ps` shows the
+idle task as 0 and the boot task as 1, `kernel` (docs/c4ix-cpu.md,
+step 5).)
+
+## What each rung needs
+
+The reason this is a *ladder* and not a menu is that each rung needs
+strictly more machine than the last, which is the whole shape of the
+climb:
+
+| rung | needs |
+|---|---|
+| C4DOS | a disk to read, a RAM disk to write, the base opcode set |
+| the tools | `dostar`, c4cc, cpp — and enough RAM disk for their output |
+| C4KE | traps, a cycle interrupt, `ITH` — the kernel is a trap handler |
+| C4IX | the ten fused opcodes (the compiled compiler uses them), and protected mode if you want it to mean anything |
+
+## The pieces that had to exist for this to work at all
+
+- **`tar`** (`src/c4ke/bin/tar.c`) — C4KE could not unpack anything.
+  `dostar` does this one rung down onto the C4DOS RAM disk; this does it
+  onto C4KE's ramfs, and the format and parser are deliberately the
+  same. Without it, C4KE could only build what C4DOS had already
+  staged for it, which is not a system building the next one.
+- **`b4ke` and `c4ix.b4k` on the C4DOS floppy** — they were on the C4KE
+  root disk, which is not the disk you get here.
+- **`cli.js -i` streaming its input.** C4KE hands the console to the
+  *focused* task, so a command queued behind a five-minute compile is
+  simply lost. Prefeeding a whole pipe is right for a batch session and
+  wrong for a scripted interactive one; `-i` now feeds stdin as it
+  arrives whether it is a terminal or a pipe, which is what lets this
+  walkthrough be driven by a shell script with sleeps in it.
+
+## Keeping it
+
+The session above lives entirely in RAM: C4DOS's RAM disk becomes
+C4KE's ramfs, and when the machine stops, all of it goes. The machine
+now has **drives** (docs/c4bb-storage.md), so it does not have to:
+
+    node src/c4bb/sim/cli.js -i -m 64 -d c4dos-c4ix32 -w mydisk c4dos32.c4r
+
+`-w` attaches a writable medium as drive 1 — the directory is created
+if it is not there, because a blank disk is a real thing. Then:
+
+| where | type | what happens |
+|---|---|---|
+| `A>` | `LADDER` | as before |
+| `A>` | `RUN install.c4r B:` | a **bootable** medium on drive 1: the kernel it just compiled, the userland, and the sources for the two rungs above |
+| `A>` | `RUN reboot.c4r 0` | takes the C4DOS floppy out, and restarts |
+| | | the BIOS finds drive 1 and boots the kernel this machine made |
+
+That is the whole loop, and it does not stop the machine once. The
+eject matters as much as the install: leave the floppy in and the BIOS
+finds drive 0 still bootable, and you come up in exactly the system you
+were trying to leave. `RUN reboot.c4r` with no drive just restarts.
+
+`install` reads `install.lst` and fetches each name from wherever it
+is — the RAM disk for what `LADDER` just built, the floppy for
+everything else — and writes `boot.cfg`, which is what the BIOS reads.
+Nothing is written until every required name has been found, so an
+install run before `LADDER` says what is missing and leaves the medium
+untouched.
+
+`RUN bbsave.c4r B:` is the blunter tool beside it: every RAM-disk file
+onto a drive, no manifest and no boot record. Useful for keeping
+intermediate work; not a boot medium.
+
+### And again, one rung up
+
+The medium you just booted carries everything the next system is built
+from, so the same loop runs again from inside C4KE — with a third drive
+for what it makes:
+
+    node src/c4bb/sim/cli.js -i -m 256 -d c4dos-c4ix32 -w disk1 -w disk2
+
+| where | type | what happens |
+|---|---|---|
+| `c4sh>` | `tar x c4ix-src.tar` | C4IX's source, out of the archive the medium carried |
+| `c4sh>` | `b4ke -f c4ix.b4k` | thirteen modules and a link |
+| `c4sh>` | `kinstall C:` | a bootable C4IX medium on drive 2, from `c4ix.lst` |
+| `c4sh>` | `reboot 1` | and the machine comes up in C4IX |
+
+`kinstall` is `install` at the kernel rung — the ramfs first, then the
+drive this system booted from, so the kernel `b4ke` just built shadows
+anything of that name that shipped. It has its own name because the
+C4DOS `install.c4r` is on the same floppy and cannot run here; it talks
+to a DOS that is gone.
+
+`make test-c4bb-climb` runs the whole thing: three systems, each booted
+off a medium the one below wrote. It shares C4IX's thirteen compiles
+over four machines booted from C4DOS's medium and links on a fifth
+(docs/c4bb-storage.md, "Four machines build C4IX").
+
+`save B:` is the blunt tool at this rung, as `bbsave` is one below:
+the whole ramfs onto a drive, no manifest and no boot record (`save`
+takes `1:` as well as `B:`).
+
+## The machine's clock
+
+`-hz` sets how fast the machine claims to be, default 20 MHz, and an
+interactive run is **paced to it** — a simulated second is a real one,
+`top` refreshes once a second and `sleep()` sleeps. `--fast` lets it
+run flat out instead, which is what the batch tests want. It changes
+nothing about what executes: the cycle counts are the same either way.
+
+## In the browser
+
+The same disk works: open `src/c4bb/web/index.html`, choose **(BIOS)**,
+which boots the climb disk (`c4dos32` boots the smaller recovery floppy,
+`src/c4bb/web/app.js`), and type the same things. The page's arena is 128 MB.
+
+libjs's page has the ladder too, with no BIOS and no reset:
+`?system=c4dos-ladder` boots C4DOS with the games, `BUILD` and `RUN
+dosload.c4r c4ke.c4r` as here, and in C4KE `kboot c4ix.c4r` boots the
+C4IX that `b4ke` just linked. [c4dos-ladder.md](c4dos-ladder.md).
+
+## Non-interactively
+
+`make test-c4dos-c4ix32` runs the C4DOS-only route (`IX` under DOS) and
+checks it reaches a C4IX shell. `make test-c4bb-storage` pins the drives:
+two of them, one writable, and a medium that outlives the machine that
+wrote it.

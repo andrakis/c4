@@ -1,0 +1,466 @@
+// fwin.c -- a DOS program's frames in a grin window (docs/grin-plan.md 3.6,
+// G6): how the games play beside grin's applications.
+//
+// A game's bare platform layer finds grin's table in C4DOS's slot 25
+// (gkit.h) and, instead of taking the whole display, calls three entries
+// of it:
+//   fwin_open(title, w, h, flags)   a window for w x h frames: 1, or 0
+//   fwin_frame(pixels, w, h, pitch, pal)   a frame: 8-bit, through 256
+//                                   colours 0x00RRGGBB
+//   fwin_poll(ev)                   grin's loop once (grin_pump), then the
+//                                   window's next event in gui.h's form:
+//                                   1, 0 for none, -1 once it has closed
+// The frame is copied into grin's buffer and the window damaged; the blit
+// goes out with grin's next redraw, which the poll makes at once, and the
+// host copies the pixels at the bell. Keys reach the game only while its
+// window has the focus; a game that steers with the mouse (FW_MOUSE) has
+// it locked to the display by a click on the window, and Esc lets it go.
+// Mouse positions are in the frame's pixels.
+//
+// Since version 6 of the table a game may ask for more, as C4IX's window.h
+// gives it (the card and puzzle games, the same code under both):
+//   fwin_open's flag FW_RESIZE      a window of any size: it opens as big as
+//                                   the screen lets it, may be sized and
+//                                   maximised, and each new size of its
+//                                   inside comes from fwin_poll as
+//                                   FW_EV_SIZE w, h once it has held still
+//                                   for SIZE_MS; the game's frames are that
+//                                   size from then on (a frame of another
+//                                   size is stretched to fill the window)
+//   fwin_ctl(FWC_MENU, n, title)    menu n of the window's menu bar (0
+//                                   starts the bar again), and
+//   fwin_ctl(FWC_ITEM, n, label)    an item of it ("-" a rule, "*x" x
+//                                   checked); a pick comes from fwin_poll
+//                                   as FW_EV_MENU menu, item, rules counted
+// A window with no menus of the game's has a Size menu (1x, 2x) unless it
+// is of any size.
+//
+// The game is a DOS program: one at a time (dos_busy), run from the top of
+// grin's loop (fwin_run, from grin.c) without the display being given up,
+// or typed in a DOS Prompt. While it runs, grin's loop runs only inside
+// its polls, which are DOS's code calling grin's: so each poll runs in
+// grin's heap generation (3.3) and as grin's image (C4DOS v8, image()),
+// so that what grin allocates, and an application started meanwhile, are
+// grin's and not the game's. Its window is closed at the top of the loop
+// once the program has ended, whichever way it ended.
+
+#include <stdlib.h>
+#include <string.h>
+#include "shell.h"
+#include "wkgui.h"
+
+// fwin_open's flags: the game steers with the mouse; or only clicks with it,
+// the pointer free (The Ace of Penguins)
+enum { FW_MOUSE = 1, FW_CLICK = 2, FW_RESIZE = 4 };
+enum { FWC_MENU = 1, FWC_ITEM = 2 };
+enum { FW_EV_MENU = 100, FW_EV_SIZE = 101 };
+enum { QN = 128, OUT_N = 200, SAY_N = 320, SIZE_MS = 100 };
+enum { GM_MENUS = 6, GM_ITEMS = 48, GM_TEXT = 3072 };
+
+static int win;                       // the game's window, or 0
+static int fw, fh, flags, scale;      // its frames' size, its flags, 1x or 2x
+static int closed;                    // the window has gone: polls say -1
+static int ever;                      // a window was opened in this run (fwin_run)
+static char *pix;                     // the last frame, grin's copy
+static int *pal;
+static int fresh;                     // a frame waits to be drawn
+static int q[QN * 4];                 // events for the game
+static int qh, qt;
+static int pumped;                    // the loop ran since the poll said "none"
+static int locked;                    // the mouse is locked to the display, for the game
+static int rx, ry, mx, my;            // motion short of a frame pixel; the pointer, in the frame
+static int held[8];                   // the keys the game was told are down, a bit each
+static int had_focus;
+static int me;                        // grin's image (C4DOS v8), 0 without
+static char named[40];                // the Program Manager item's title that started it, or ""
+static int sizable;                   // FW_RESIZE: the window any size, the frames following it
+static int cw0, ch0;                  // its inside, as last drawn
+static int want_w, want_h;            // the size the game last had (opened at, or told of)
+static int size_at;                   // when the inside last changed, waiting to be told; 0 none
+// the game's menu bar: its menus, each item array 0-ended, the text in a pool
+static struct wk_menu gm[GM_MENUS];
+static char *gitems[GM_MENUS * (GM_ITEMS + 1)];
+static int gcount[GM_MENUS], gmn;
+static char gtext[GM_TEXT];
+static int gtn;
+
+static void push(int t, int a, int b, int c) {
+    int n;
+    n = (qt + 1) % QN;
+    if (n == qh) return;              // full: dropped
+    q[qt * 4] = t; q[qt * 4 + 1] = a; q[qt * 4 + 2] = b; q[qt * 4 + 3] = c;
+    qt = n;
+}
+
+// every key the game holds let go, as its window lost them
+static void let_go() {
+    int c;
+    c = 0;
+    while (c < 256) {
+        if (held[c >> 5] & (1 << (c & 31))) push(GUI_EV_KEYUP, c, 0, 0);
+        ++c;
+    }
+    c = 0;
+    while (c < 8) { held[c] = 0; ++c; }
+}
+
+static void unlock() {
+    if (!locked) return;
+    locked = 0;
+    gui_cursor(GUI_PTR_ARROW);        // the display lets the mouse go
+    wk_repoint();
+}
+
+// ---- the window ----------------------------------------------------------------------
+
+static int clampx(int x) { return x < 0 ? 0 : x >= fw ? fw - 1 : x; }
+static int clampy(int y) { return y < 0 ? 0 : y >= fh ? fh - 1 : y; }
+
+static void fw_draw(int w, int cw, int ch, int focused) {
+    if (sizable && (cw != cw0 || ch != ch0)) { cw0 = cw; ch0 = ch; size_at = __time(); if (!size_at) size_at = 1; }
+    if (!pix) { d_rect(0, 0, cw, ch, 0x000000); return; }
+    if (sizable) d_blit8(0, 0, fw, fh, pix, fw, pal, cw, ch);
+    else d_blit8(0, 0, fw, fh, pix, fw, pal, fw * scale, fh * scale);
+    fresh = 0;
+}
+
+// the mouse over the window, not locked: in the frame's pixels, for a
+// game that wants it (a double click is its first click and a second)
+static void fw_mouse(int w, int ev, int x, int y, int b) {
+    if (!(flags & (FW_MOUSE | FW_CLICK))) return;
+    if (sizable) { mx = clampx(cw0 ? x * fw / cw0 : x); my = clampy(ch0 ? y * fh / ch0 : y); }
+    else { mx = clampx(x / scale); my = clampy(y / scale); }
+    if (ev == E_MOVE) push(GUI_EV_MOVE, mx, my, b);
+    else if (ev == E_DOWN) push(GUI_EV_DOWN, mx, my, b);
+    else if (ev == E_UP) push(GUI_EV_UP, mx, my, b);
+}
+
+// a game steered by the mouse: over its frame the pointer says "click to
+// capture" (GUI_PTR_LOCK), and the click locks it (libjs/display.js)
+static int fw_pointer(int w, int x, int y) { return flags & FW_MOUSE ? GUI_PTR_LOCK : PTR_ARROW; }
+
+static void fw_destroy(int w) {
+    if (w != win) return;
+    closed = 1;
+    unlock();
+}
+
+// the window's size for frames at scale s
+static int win_w(int s) { return fw * s + 2 * BORDER; }
+static int win_h(int s) { return fh * s + 2 * BORDER + TITLE_H + 1 + MENU_H; }
+static int fits(int s) { return win_w(s) <= wk.aw && win_h(s) <= wk.ah; }
+
+static void resize(int s) {
+    struct win *p;
+    int x, y;
+    if (!(p = win_get(win)) || s == scale) return;
+    if (fw * s > WK_MAX_W || fh * s > WK_MAX_H) return;
+    scale = s;
+    x = p->x; y = p->y;
+    if (x + win_w(s) > wk.ax + wk.aw) x = wk.ax + wk.aw - win_w(s);
+    if (y + win_h(s) > wk.ay + wk.ah) y = wk.ay + wk.ah - win_h(s);
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    wk_place(win, x, y, win_w(s), win_h(s));
+    wk_redraw_all();
+}
+
+static char *size_items[3] = { "1x  320 x 200", "2x  640 x 400", 0 };
+static struct wk_menu fw_menus[1] = { { "Size", size_items } };
+
+static void fw_command(int w, int id) {
+    if (gmn) { push(FW_EV_MENU, id / WK_CMD_STEP, id % WK_CMD_STEP, 0); return; }
+    if (id == WK_CMD(0, 0)) resize(1);
+    else if (id == WK_CMD(0, 1)) resize(2);
+}
+
+// the window's menu bar: the game's, or the Size menu, or none for a
+// window of any size that has none of the game's
+static void menus_set() {
+    if (!win || closed) return;
+    if (gmn) wk_menu(win, gm, gmn);
+    else if (sizable) wk_menu(win, 0, 0);
+    else wk_menu(win, fw_menus, 1);
+    wk_invalidate(win, 0, 0, 0, 0);
+}
+
+// text into the pool: its copy, or 0 when the pool is full
+static char *keep(char *s) {
+    int n;
+    char *d;
+    n = ui_len(s) + 1;
+    if (gtn + n > GM_TEXT) return 0;
+    d = gtext + gtn;
+    memcpy(d, s, n);
+    gtn = gtn + n;
+    return d;
+}
+
+static struct wk_class fw_class = {
+    .kind = ICON_TERM, .draw = fw_draw, .mouse = fw_mouse, .command = fw_command,
+    .destroy = fw_destroy, .pointer = fw_pointer
+};
+
+// ---- before the kit: what is the game's of the display's events ----------------------
+//
+// Called by grin's loop for every event before the kit sees it; 1 when it
+// was the game's. Keys go to the game while its window has the focus and
+// no dialog or menu holds them, all but Ctrl+Esc (the Task List). They go
+// straight to it, not through the kit, which draws the whole scene again
+// after every key. A locked mouse is the game's alone: its motion (it
+// comes as GUI_EV_REL, as grin's event mask asks) and its buttons. The
+// first plain move after it says Esc let it go.
+int fwin_event(int *ev) {
+    int t, c, dx, dy;
+    if (!win || closed) return 0;
+    t = ev[0];
+    if (t == GUI_EV_REL) {
+        locked = 1;
+        rx = rx + ev[1]; ry = ry + ev[2];
+        dx = rx / scale; dy = ry / scale;
+        rx = rx - dx * scale; ry = ry - dy * scale;
+        mx = clampx(mx + dx); my = clampy(my + dy);
+        if (dx || dy) push(GUI_EV_REL, dx, dy, ev[3]);
+        return 1;
+    }
+    if (locked) {
+        if (t == GUI_EV_MOVE) { locked = 0; wk_repoint(); return 0; }
+        if (t == GUI_EV_DOWN || t == GUI_EV_UP) { push(t, mx, my, ev[3]); return 1; }
+        if (t == GUI_EV_WHEEL) return 1;
+    }
+    if (t == GUI_EV_FOCUS && !ev[1]) { let_go(); return 0; }   // the page lost the keyboard
+    if ((t == GUI_EV_KEYDOWN || t == GUI_EV_KEYUP) && wk_focus() == win && !wk_modal() && !wk_menu_open()) {
+        if (ev[1] == KEY_ESC && (ev[3] & M_CTRL)) return 0;
+        wk.mods = ev[3];
+        c = ev[1] & 255;
+        if (t == GUI_EV_KEYDOWN) held[c >> 5] = held[c >> 5] | (1 << (c & 31));
+        else held[c >> 5] = held[c >> 5] & ~(1 << (c & 31));
+        push(t, ev[1], ev[2], ev[3]);
+        return 1;
+    }
+    return 0;
+}
+
+// a frame waits to be drawn: grin's loop draws at once, not 25 ms later
+int fwin_fresh() { return win && fresh; }
+
+// After a pass: the game told when its window gains or loses the focus,
+// and what it held let go when it loses it (and the mouse with it)
+static void focus_check() {
+    int f;
+    f = !closed && wk_focus() == win;
+    if (f == had_focus) return;
+    had_focus = f;
+    if (!f) { let_go(); unlock(); }
+    push(GUI_EV_FOCUS, f, 0, 0);
+}
+
+// ---- the table's entries (gkit.h), called by the game ---------------------------------
+
+static int open_win(char *title, int w, int h, int fl) {
+    int i;
+    int ww, hh;
+    if (win || w <= 0 || h <= 0 || w > WK_MAX_W || h > WK_MAX_H) return 0;
+    if (!(pix = (char *)malloc(w * h))) return 0;
+    if (!(pal = (int *)malloc(256 * sizeof(int)))) { free(pix); pix = 0; return 0; }
+    memset(pix, 0, w * h);
+    memset((char *)pal, 0, 256 * sizeof(int));
+    fw = w; fh = h; flags = fl;
+    closed = 0; fresh = 0; qh = 0; qt = 0; pumped = 0;
+    locked = 0; rx = 0; ry = 0; mx = w / 2; my = h / 2;
+    i = 0;
+    while (i < 8) { held[i] = 0; ++i; }
+    sizable = (fl & FW_RESIZE) != 0;
+    scale = !sizable && fits(2) ? 2 : 1;
+    cw0 = 0; ch0 = 0; size_at = 0; want_w = w; want_h = h;
+    fw_class.size = 16;
+    // the item's title, when an item started it: Tetris, not PDCurses' curses
+    if (named[0]) title = named;
+    // any size: as big as its frames, or as the screen lets it be (the
+    // game is told the size it got, and lays out to it)
+    ww = win_w(1); hh = win_h(1);
+    if (ww > wk.aw) ww = wk.aw;
+    if (hh > wk.ah) hh = wk.ah;
+    if ((win = sizable ? wk_open(&fw_class, title, ww, hh, 0, 0)
+                       : wk_open(&fw_class, title, win_w(scale), win_h(scale), WK_FIXED, 0)) <= 0) {
+        win = 0;
+        free(pix); free((char *)pal); pix = 0; pal = 0;
+        return 0;
+    }
+    menus_set();
+    had_focus = wk_focus() == win;
+    ever = 1;
+    return 1;
+}
+
+int grin_fwin_open(char *title, int w, int h, int fl) {
+    int old, ok;
+    old = gd_setgen(grin_heapgen());
+    ok = open_win(title, w, h, fl);
+    if (old >= 0) gd_setgen(old);
+    return ok;
+}
+
+// copied, so that a redraw for another window's sake has a whole frame to show.
+// A frame of another size than the window was opened for (Duke Nukem 3D
+// opens 640x400 and draws its menus at 320x200, its levels at the size
+// chosen) is scaled to it, nearest pixel, rather than dropped.
+void grin_fwin_frame(char *p, int w, int h, int pitch, int *colours) {
+    int x, y, sy, old;
+    char *d, *s, *np;
+    if (!win || closed || w <= 0 || h <= 0 || !p || !colours) return;
+    // a window of any size: the frames are the game's size, whatever it is
+    if (sizable && (w != fw || h != fh) && w <= WK_MAX_W && h <= WK_MAX_H) {
+        old = gd_setgen(grin_heapgen());
+        np = (char *)malloc(w * h);
+        if (old >= 0) gd_setgen(old);
+        if (np) { free(pix); pix = np; fw = w; fh = h; }
+    }
+    if (w != fw || h != fh) {
+        y = 0;
+        while (y < fh) {
+            sy = y * h / fh;
+            s = p + sy * pitch; d = pix + y * fw;
+            x = 0;
+            while (x < fw) { d[x] = s[x * w / fw]; ++x; }
+            ++y;
+        }
+    } else if (pitch == w) memcpy(pix, p, w * h);
+    else { y = 0; while (y < h) { memcpy(pix + y * w, p + y * pitch, w); ++y; } }
+    memcpy((char *)pal, (char *)colours, 256 * sizeof(int));
+    fresh = 1;
+    wk_invalidate(win, 0, 0, fw * scale, fh * scale);
+}
+
+int grin_fwin_poll(int *ev) {
+    int og, oi, k;
+    if (!win || closed) return 0 - 1;
+    if (qh == qt && !pumped) {
+        og = gd_setgen(grin_heapgen());
+        oi = me ? gd_image(me) : 0;
+        grin_pump_game();
+        focus_check();
+        if (oi) gd_image(oi);
+        if (og >= 0) gd_setgen(og);
+        pumped = 1;
+        if (!win || closed) return 0 - 1;
+    }
+    // the window's new size, once it has held still: the game's to lay out to
+    if (size_at && __time() - size_at >= SIZE_MS) {
+        size_at = 0;
+        if (cw0 > 0 && ch0 > 0 && (cw0 != want_w || ch0 != want_h)) {
+            want_w = cw0; want_h = ch0;
+            push(FW_EV_SIZE, cw0, ch0, 0);
+        }
+    }
+    if (qh == qt) { pumped = 0; return 0; }
+    k = qh * 4;
+    ev[0] = q[k]; ev[1] = q[k + 1]; ev[2] = q[k + 2]; ev[3] = q[k + 3];
+    qh = (qh + 1) % QN;
+    return 1;
+}
+
+// The game's menu bar (version 6), as window.h's win_menu and win_item:
+// kept here, and the window's bar set again from it. 1, or 0 when it is
+// not one this takes (too many menus or items, no room for the text).
+int grin_fwin_ctl(int op, int n, char *t) {
+    int k;
+    char *c;
+    if (n < 0 || n >= GM_MENUS || !t) return 0;
+    if (op == FWC_MENU) {
+        if (!n) { gmn = 0; gtn = 0; }
+        if (n > gmn) return 0;
+        if (!(c = keep(t))) return 0;
+        gm[n].title = c;
+        gm[n].items = gitems + n * (GM_ITEMS + 1);
+        gm[n].items[0] = 0;
+        gcount[n] = 0;
+        if (n == gmn) ++gmn;
+        menus_set();
+        return 1;
+    }
+    if (op == FWC_ITEM) {
+        if (n >= gmn || gcount[n] >= GM_ITEMS) return 0;
+        if (!(c = keep(t))) return 0;
+        if (c[0] == '*') c[0] = WK_CHECKED;
+        k = gcount[n];
+        gm[n].items[k] = c;
+        gm[n].items[k + 1] = 0;
+        gcount[n] = k + 1;
+        menus_set();
+        return 1;
+    }
+    return 0;
+}
+
+// ---- grin's side: starting one, and after it ----------------------------------------
+
+void fwin_init() { me = gd_image(0); }
+
+// the next game's window is titled so (Program Manager's item), or as the
+// game says with 0
+void fwin_name(char *title) { named[0] = 0; if (title) ui_ncpy(named, title, 40); }
+
+// The window gone with the program, from the top of the loop: closed if
+// the program left it open, its frame freed, the mouse let go
+void fwin_end() {
+    if (!win && !pix) return;
+    unlock();
+    if (win && wk_alive(win)) wk_close(win);
+    win = 0; closed = 0; fresh = 0;
+    if (pix) free(pix);
+    if (pal) free((char *)pal);
+    pix = 0; pal = 0;
+}
+
+// What the program says on the console meanwhile is kept, the last of it,
+// for when it ends without having opened a window: then a message box
+// says so, and shows it (a game that could not start, or a program that
+// is not a game)
+static char out[OUT_N], say[SAY_N];
+static int outn;
+
+static int cap_write(int ctx, char *buf, int n) {
+    int k;
+    k = 0;
+    while (k < n) { out[outn % OUT_N] = buf[k]; ++outn; ++k; }
+    return n;
+}
+static int cap_read(int ctx, char *buf, int n) { return 0; }
+
+// the last line it said, after the words already in say
+static void last_line() {
+    int n, e, b, k;
+    char text[OUT_N + 1];
+    // the ring's last OUT_N bytes, in order
+    n = outn < OUT_N ? outn : OUT_N;
+    k = 0;
+    while (k < n) { text[k] = out[(outn - n + k) % OUT_N]; ++k; }
+    e = n;
+    while (e > 0 && (text[e - 1] == '\n' || text[e - 1] == '\r' || text[e - 1] == ' ')) --e;
+    b = e;
+    while (b > 0 && text[b - 1] != '\n') --b;
+    if (b == e) return;
+    text[e] = 0;
+    ui_ncat(say, " It said: ", SAY_N);
+    ui_ncat(say, text + b, SAY_N);
+}
+
+// The command line, as a windowed DOS program (Program Manager's window
+// items, and a DOS program Program Manager runs in one started from File
+// Manager or File > Run): from the top of grin's loop, with dos_busy set
+void fwin_run(char *cmdline) {
+    ever = 0; outn = 0;
+    gd_sink((int)cap_write, (int)cap_read, 0);
+    gd_exec(cmdline);
+    gd_sink(0, 0, 0);
+    named[0] = 0;
+    gmn = 0; gtn = 0; sizable = 0;
+    if (!ever) {
+        ui_ncpy(say, dos_busy_name, SAY_N);
+        ui_ncat(say, " ended without opening a window.", SAY_N);
+        last_line();
+        wk_msgbox(0, 0, "grin", say, WK_OK);
+    }
+    fwin_end();
+}

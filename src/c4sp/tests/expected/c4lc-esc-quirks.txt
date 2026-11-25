@@ -1,0 +1,6 @@
+tab=8 cr=10 nl=10
+a=97 b=98 f=102 v=118
+hexA=49 oct101=49 esc=51
+bs=92 qt=34 ap=39 qm=63
+oct3cap=0 then=48
+

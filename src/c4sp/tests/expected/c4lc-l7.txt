@@ -1,0 +1,9 @@
+area 200 tag 7
+via ptr 13 16
+corner2 20 102 third 103
+dowhile 12
+block 13
+compound 8
+task 42 T regs 4 9
+union 7 bigger 1
+chain 3

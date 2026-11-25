@@ -1,0 +1,847 @@
+// C4IX userland: boot-time filesystem loader.
+//
+// Same manifest format and job as C4KE's vfsload.c (src/c4ke/bin/
+// vfsload.c has the full grammar reference), but targets C4IX's real
+// hierarchical VFS instead of C4KE's flat ramfs: directories are
+// created with umkdir() as the manifest tree is walked (parents
+// always exist by the time a child directory line is reached, since
+// the parser is a top-down recursive descent over the same
+// structure), and each file is a real RAM file - uopen(path,
+// O_CREATE) then a copy loop from the real host file, opened the
+// same way C4KE's loader does (uopen falls back to a host open()
+// when the path isn't already in the VFS tree - see sys_open's
+// comment in sys.c). ilink(path) entries are resolved the same way:
+// after every real file has loaded, read the target back through the
+// VFS (now populated) and write a second copy under the alias name.
+// C4IX only: a directory line can say hostdir(PREFIX), and holds every
+// host file the sizes table lists under that prefix (load_hostdirs).
+//
+// Run once at boot by init.c before the shell starts.
+
+#include "c4ix_user.h"
+
+enum {
+    MAX_LINES   = 4000,
+    MAX_VARS    = 32,
+    MAX_WORDS   = 64,
+    MAX_ENTRIES = 300,
+    MAX_SUBST   = 8,
+    READ_CAP    = 262144,
+    SUBST_SLOP  = 512,
+};
+
+// c4lc/c4cc share a lexer quirk where '\t' and '\r' char literals
+// come out as 8 and 10, not 9 and 13 - use numeric constants.
+enum { TAB = 9, CR = 13 };
+
+// KNOWN ISSUE, as of 2026-08 on the breadboard: roughly 1 run in a few,
+// exactly one entry's value came back empty or garbled by the time
+// load_entries() read it back, though it was stored correctly
+// (confirmed by tracing), and it healed when unrelated debug prints
+// shifted the timing -- a preemption race, not a logic bug in this
+// file. docs/c4bb-design.md has what was tried, and the C4IX `top`
+// crash it was thought to share a cause with. Not seen since: the
+// boots the tests make load every entry (test-c4bb, test-desktop).
+//
+// What looked like it coming back (2026-10-27) was something else.
+// Linked without its unreached functions (66,722 -> 53,878 bytes), this
+// image made C4KE, booted by c4m in a desktop Terminal, hang every time
+// -- spin never ran (test-desktop) -- and padded back to its old size it
+// worked. The size only moved WHEN things happened. The bug was C4KE's:
+// its trap handlers unmasked the timer before they had returned, so a
+// tick, or a Ctrl-C, landing in between saved one task's registers as
+// another's (c4ke.c: ih_cycle, signal_forwarder).
+
+char **g_line_text;
+int   *g_line_indent;
+int    g_nlines;
+int    g_cursor;
+
+char **g_var_name;
+char **g_var_words;
+int   *g_var_wordcount;
+int    g_nvars;
+
+char **g_subst;
+int    g_subst_depth;
+
+char **g_entry_path;
+char **g_entry_value;
+int   *g_entry_is_ilink;
+int    g_nentries;
+
+///
+/// string helpers
+///
+
+char *str_dup_n(char *s, int n) {
+    char *r;
+    r = (char *)ualloc(n + 1);
+    if (!r) return 0;
+    memcpy(r, s, n);
+    r[n] = 0;
+    return r;
+}
+char *str_dup(char *s) { return str_dup_n(s, ustrlen(s)); }
+
+char *str_cat(char *a, char *b) {
+    int la, lb;
+    char *r;
+    la = ustrlen(a); lb = ustrlen(b);
+    r = (char *)ualloc(la + lb + 1);
+    if (!r) return 0;
+    memcpy(r, a, la);
+    memcpy(r + la, b, lb);
+    r[la + lb] = 0;
+    return r;
+}
+
+char *trim(char *s) {
+    char *end;
+    while (*s == ' ' || *s == TAB) ++s;
+    if (!*s) return s;
+    end = s + ustrlen(s) - 1;
+    while (end > s && (*end == ' ' || *end == TAB || *end == CR)) { *end = 0; --end; }
+    return s;
+}
+
+int starts_with(char *s, char *pfx) {
+    while (*pfx) { if (*s != *pfx) return 0; ++s; ++pfx; }
+    return 1;
+}
+int ends_with(char *s, char *sfx) {
+    int ls, lf;
+    ls = ustrlen(s); lf = ustrlen(sfx);
+    if (lf > ls) return 0;
+    return !memcmp(s + ls - lf, sfx, lf);
+}
+
+int find_top_colon(char *s) {
+    int i, depth;
+    i = 0; depth = 0;
+    while (s[i]) {
+        if (s[i] == '(') ++depth;
+        else if (s[i] == ')') --depth;
+        else if (s[i] == ':' && depth == 0) return i;
+        ++i;
+    }
+    return -1;
+}
+
+char *paren_inner(char *s, char *name) {
+    int nlen, slen;
+    nlen = ustrlen(name); slen = ustrlen(s);
+    if (!starts_with(s, name) || s[nlen] != '(' || s[slen - 1] != ')') return 0;
+    return trim(str_dup_n(s + nlen + 1, slen - nlen - 2));
+}
+
+char *substitute(char *s) {
+    char *out;
+    int cap, len, i, n, wl;
+    cap = ustrlen(s) + SUBST_SLOP;
+    out = (char *)ualloc(cap);
+    if (!out) return str_dup(s);
+    len = 0; i = 0;
+    while (s[i] && len < cap - 1) {
+        if (s[i] == '$' && s[i + 1] >= '1' && s[i + 1] <= '9') {
+            n = s[i + 1] - '0';
+            if (n <= g_subst_depth && g_subst[n - 1]) {
+                wl = ustrlen(g_subst[n - 1]);
+                if (wl > cap - 1 - len) wl = cap - 1 - len;
+                memcpy(out + len, g_subst[n - 1], wl);
+                len = len + wl;
+                i = i + 2;
+                continue;
+            }
+        }
+        out[len++] = s[i++];
+    }
+    out[len] = 0;
+    return out;
+}
+
+///
+/// I/O: uopen/uread walk the SAME open() sys_open falls back to a
+/// real host file for, so a bare host filename here reads the actual
+/// disk (never the VFS tree we are about to populate)
+///
+
+char *read_whole_file(char *name, int *plen) {
+    int fd, n;
+    char *buf;
+    fd = uopen(name, O_RD);
+    if (fd < 0) { uprintf("vfsload: cannot open %s\n", name); return 0; }
+    buf = (char *)ualloc(READ_CAP);
+    if (!buf) { uclose(fd); return 0; }
+    n = uread(fd, buf, READ_CAP);
+    uclose(fd);
+    if (n < 0) { uprintf("vfsload: read failed on %s\n", name); return 0; }
+    *plen = n;
+    return buf;
+}
+
+int write_vfs_file(char *path, char *buf, int len) {
+    int fd, n;
+    fd = uopen(path, O_WR + O_CREATE + O_TRUNCATE);
+    if (fd < 0) return -1;
+    n = write(fd, buf, len);
+    uclose(fd);
+    return (n == len) ? 0 : -1;
+}
+
+///
+/// manifest splitting (identical to C4KE's vfsload.c)
+///
+
+void split_lines(char *raw) {
+    char *p, *lineStart;
+    int indent;
+
+    g_line_text = (char **)ualloc(MAX_LINES * sizeof(int));
+    g_line_indent = (int *)ualloc(MAX_LINES * sizeof(int));
+    g_nlines = 0;
+
+    p = raw;
+    while (*p) {
+        char *h, *text, *q;
+        lineStart = p;
+        while (*p && *p != '\n') ++p;
+        if (*p == '\n') { *p = 0; ++p; }
+
+        h = lineStart;
+        while (*h) { if (*h == '#') { *h = 0; break; } ++h; }
+
+        indent = 0;
+        q = lineStart;
+        while (*q == ' ' || *q == TAB) { ++indent; ++q; }
+
+        text = trim(lineStart);
+        if (!*text) continue;
+        if (g_nlines >= MAX_LINES) { uprintf("vfsload: manifest too long, truncating\n"); return; }
+        g_line_text[g_nlines] = text;
+        g_line_indent[g_nlines] = indent;
+        ++g_nlines;
+    }
+}
+
+int line_is_var_def(char *l, int *outEq) {
+    int i;
+    i = 0;
+    while (l[i] && l[i] != '=' && l[i] != ':') ++i;
+    if (l[i] != '=') return 0;
+    *outEq = i;
+    return 1;
+}
+
+void split_words_into(char *s, char *name);   // forward: mutually used below
+int var_lookup(char *name);
+
+void add_word(int v, char *word) {
+    if (g_var_wordcount[v] < MAX_WORDS) {
+        g_var_words[v * MAX_WORDS + g_var_wordcount[v]] = word;
+        ++g_var_wordcount[v];
+    }
+}
+
+void split_words_into(char *s, char *name) {
+    int v, j, found, ov;
+    char *p, *w, *tok;
+
+    if (g_nvars >= MAX_VARS) { uprintf("vfsload: too many variables\n"); return; }
+    v = g_nvars++;
+    g_var_name[v] = str_dup(name);
+    g_var_wordcount[v] = 0;
+
+    p = s;
+    while (*p) {
+        while (*p == ' ' || *p == TAB) ++p;
+        if (!*p) break;
+        w = p;
+        while (*p && *p != ' ' && *p != TAB) ++p;
+        tok = str_dup_n(w, p - w);
+        if (starts_with(tok, "$(") && ends_with(tok, ")")) {
+            found = var_lookup(str_dup_n(tok + 2, ustrlen(tok) - 3));
+            if (found) {
+                ov = found - 1;
+                j = 0;
+                while (j < g_var_wordcount[ov]) { add_word(v, g_var_words[ov * MAX_WORDS + j]); ++j; }
+            } else {
+                uprintf("vfsload: %s references undefined variable %s\n", name, tok);
+            }
+        } else {
+            add_word(v, tok);
+        }
+        if (*p) ++p;
+    }
+}
+
+void extract_vars() {
+    int src, dst, eq;
+
+    g_var_name = (char **)ualloc(MAX_VARS * sizeof(int));
+    g_var_words = (char **)ualloc(MAX_VARS * MAX_WORDS * sizeof(int));
+    g_var_wordcount = (int *)ualloc(MAX_VARS * sizeof(int));
+    g_nvars = 0;
+
+    src = 0; dst = 0;
+    while (src < g_nlines) {
+        if (g_line_indent[src] == 0 && line_is_var_def(g_line_text[src], &eq)) {
+            char *name, *value, *valBuf;
+            int valCap, valLen, wl, hasCont;
+
+            name = trim(str_dup_n(g_line_text[src], eq));
+            value = trim(str_dup(g_line_text[src] + eq + 1));
+
+            valCap = ustrlen(value) + 256;
+            valBuf = (char *)ualloc(valCap);
+            valLen = 0;
+            for (;;) {
+                hasCont = ends_with(value, "\\");
+                wl = ustrlen(value) - (hasCont ? 1 : 0);
+                if (wl > 0) {
+                    if (valLen + wl + 1 > valCap) wl = valCap - valLen - 1;
+                    if (wl > 0) { memcpy(valBuf + valLen, value, wl); valLen = valLen + wl; valBuf[valLen++] = ' '; }
+                }
+                ++src;
+                if (!hasCont || src >= g_nlines) break;
+                value = trim(str_dup(g_line_text[src]));
+            }
+            valBuf[valLen] = 0;
+            split_words_into(trim(valBuf), name);
+        } else {
+            g_line_text[dst] = g_line_text[src];
+            g_line_indent[dst] = g_line_indent[src];
+            ++dst; ++src;
+        }
+    }
+    g_nlines = dst;
+}
+
+int var_lookup(char *name) {
+    int i;
+    i = 0;
+    while (i < g_nvars) { if (!ustrcmp(g_var_name[i], name)) return i + 1; ++i; }
+    return 0;
+}
+
+///
+/// the tree parser: directories are created HERE, as encountered, so
+/// a child directory's umkdir() always runs after its parent's
+///
+
+void add_entry(char *path, char *value, int isIlink) {
+    if (g_nentries >= MAX_ENTRIES) { uprintf("vfsload: too many entries, dropping %s\n", path); return; }
+    g_entry_path[g_nentries] = path;
+    g_entry_value[g_nentries] = value;
+    g_entry_is_ilink[g_nentries] = isIlink;
+    ++g_nentries;
+}
+
+void emit_value(char *path, char *value) {
+    char *inner;
+    inner = paren_inner(value, "ilink");
+    if (inner) { add_entry(path, inner, 1); return; }
+    inner = paren_inner(value, "file");
+    if (inner) {
+        int comma, i;
+        comma = -1;
+        i = 0;
+        while (inner[i]) { if (inner[i] == ',') { comma = i; break; } ++i; }
+        if (comma >= 0) add_entry(path, trim(str_dup(trim(str_dup_n(inner + comma + 1, ustrlen(inner) - comma - 1)))), 0);
+        else add_entry(path, inner, 0);
+        return;
+    }
+    add_entry(path, value, 0);
+}
+
+void parse_block(int parentIndent, char *pathPrefix);
+
+void handle_each(char *keyExpr, char *valuePattern, int indent, char *pathPrefix) {
+    char *argText, *v;
+    int nwords, i, blockStart, found, vi;
+
+    argText = paren_inner(keyExpr, "each");
+    if (!argText) { uprintf("vfsload: malformed each() near '%s'\n", keyExpr); ++g_cursor; return; }
+
+    if (*argText == '$') {
+        found = var_lookup(argText + 1);
+        if (!found) { uprintf("vfsload: unknown variable %s\n", argText); ++g_cursor; return; }
+        vi = found - 1;
+        nwords = g_var_wordcount[vi];
+    } else {
+        split_words_into(argText, "$each$");
+        vi = g_nvars - 1;
+        nwords = g_var_wordcount[vi];
+    }
+
+    if (*valuePattern) {
+        ++g_cursor;
+        i = 0;
+        while (i < nwords) {
+            char *word, *pattern, *key, *val;
+            int c;
+            word = g_var_words[vi * MAX_WORDS + i];
+            if (g_subst_depth < MAX_SUBST) g_subst[g_subst_depth++] = word;
+            pattern = substitute(valuePattern);
+            c = find_top_colon(pattern);
+            if (c >= 0) { key = trim(str_dup_n(pattern, c)); val = trim(str_dup(pattern + c + 1)); }
+            else { key = pattern; val = pattern; }
+            emit_value(str_cat(pathPrefix, key), val);
+            --g_subst_depth;
+            ++i;
+        }
+    } else {
+        ++g_cursor;
+        blockStart = g_cursor;
+        i = 0;
+        while (i < nwords) {
+            char *word;
+            word = g_var_words[vi * MAX_WORDS + i];
+            if (g_subst_depth < MAX_SUBST) g_subst[g_subst_depth++] = word;
+            g_cursor = blockStart;
+            parse_block(indent, pathPrefix);
+            --g_subst_depth;
+            ++i;
+        }
+        if (nwords == 0) {
+            g_cursor = blockStart;
+            while (g_cursor < g_nlines && g_line_indent[g_cursor] > indent) ++g_cursor;
+        }
+    }
+}
+
+// hostdir(PREFIX) as a directory line's value: every host file the
+// sizes table lists as PREFIX + NAME is the lazy file NAME in that
+// directory, and a NAME with a '/' in it is in a directory made for it
+// (load_hostdirs). A game's data that cannot be shipped goes on the disk
+// only where it is there to copy, so the manifest cannot name its files
+// -- and OpenTyrian's newsh#.shp and shapes).dat could not be written in
+// it anyway. The games' sources are hundreds of files in directories of
+// their own, which only the image build lists (/usr/games: games/: hostdir(games/)).
+enum { MAX_HOSTDIRS = 8 };
+char *g_hostdir_path[MAX_HOSTDIRS];
+char *g_hostdir_prefix[MAX_HOSTDIRS];
+int g_nhostdirs;
+
+void process_line(char *pathPrefix) {
+    char *line, *rawKey, *rawVal, *key, *value;
+    int indent, c;
+
+    indent = g_line_indent[g_cursor];
+    line = g_line_text[g_cursor];
+    c = find_top_colon(line);
+    if (c >= 0) { rawKey = trim(str_dup_n(line, c)); rawVal = trim(str_dup(line + c + 1)); }
+    else { rawKey = trim(str_dup(line)); rawVal = ""; }
+
+    if (starts_with(rawKey, "each(") && ends_with(rawKey, ")")) {
+        handle_each(rawKey, rawVal, indent, pathPrefix);
+        return;
+    }
+
+    key = substitute(rawKey);
+    if (ends_with(key, "/")) {
+        char *path;
+        ++g_cursor;
+        path = str_cat(pathPrefix, key);
+        // root always exists; every other directory is created right
+        // as it's encountered, so its parent is always already there
+        if (ustrcmp(path, "/")) umkdir(path);
+        if (starts_with(rawVal, "hostdir(") && ends_with(rawVal, ")") && g_nhostdirs < MAX_HOSTDIRS) {
+            g_hostdir_path[g_nhostdirs] = path;
+            g_hostdir_prefix[g_nhostdirs] = str_dup_n(rawVal + 8, ustrlen(rawVal) - 9);
+            ++g_nhostdirs;
+        }
+        parse_block(indent, path);
+        return;
+    }
+
+    ++g_cursor;
+    value = *rawVal ? substitute(rawVal) : key;
+    emit_value(str_cat(pathPrefix, key), value);
+}
+
+void parse_block(int parentIndent, char *pathPrefix) {
+    while (g_cursor < g_nlines && g_line_indent[g_cursor] > parentIndent) {
+        process_line(pathPrefix);
+    }
+}
+
+///
+/// resolution: real files first (their vfs paths must exist before
+/// any ilink can read them back), then ilinks
+///
+
+// ---- lazy entries ----
+//
+// With c4ix.sizes on the disk (a line "SIZE NAME" per host file, written
+// by the image build), an entry is not copied at all: it becomes a lazy
+// RAM file (ulazyfile) that the kernel reads in from the host the first
+// time something uses it. A boot then reads nothing it does not run. An
+// entry the table does not list is copied as before, and with no table
+// at all everything is.
+
+char *g_sizes;
+int g_sizes_len;
+
+// Looking names up. The table is hundreds of lines and the manifest
+// hundreds of entries, and each entry looked up by a walk of the table
+// (and each alias by a walk of the entries) was most of the boot once
+// every game was on the disk: both go in hash tables, once.
+enum { HBUCKETS = 1024 };
+int hname(char *s, int n) {
+    int h, i;
+    h = 5381; i = 0;
+    while (i < n) { h = h * 33 + (s[i] & 255); ++i; }
+    return h & (HBUCKETS - 1);
+}
+
+// the table's lines: where each name is in g_sizes, its length and size
+int *g_sz_off, *g_sz_len, *g_sz_val, *g_sz_next, *g_sz_head;
+void index_sizes() {
+    int i, j, v, k, n;
+    n = 1; i = 0;
+    while (i < g_sizes_len) { if (g_sizes[i] == 10) ++n; ++i; }
+    g_sz_off = (int *)ualloc(n * sizeof(int)); g_sz_len = (int *)ualloc(n * sizeof(int));
+    g_sz_val = (int *)ualloc(n * sizeof(int)); g_sz_next = (int *)ualloc(n * sizeof(int));
+    g_sz_head = (int *)ualloc(HBUCKETS * sizeof(int));
+    memset((char *)g_sz_head, 0, HBUCKETS * sizeof(int));
+    k = 0; i = 0;
+    while (i < g_sizes_len && k < n) {
+        v = 0;
+        while (i < g_sizes_len && g_sizes[i] >= '0' && g_sizes[i] <= '9') { v = v * 10 + (g_sizes[i] - '0'); ++i; }
+        if (i < g_sizes_len && g_sizes[i] == ' ') ++i;
+        j = i;
+        while (j < g_sizes_len && g_sizes[j] != 10) ++j;
+        if (j > i) {
+            g_sz_off[k] = i; g_sz_len[k] = j - i; g_sz_val[k] = v;
+            // at the chain's end, so the first line with a name is found first
+            g_sz_next[k] = 0;
+            v = hname(g_sizes + i, j - i);
+            if (!g_sz_head[v]) g_sz_head[v] = k + 1;
+            else { v = g_sz_head[v] - 1; while (g_sz_next[v]) v = g_sz_next[v] - 1; g_sz_next[v] = k + 1; }
+            ++k;
+        }
+        i = j + 1;
+    }
+}
+
+// the size the table gives for host file NAME, or -1
+int size_of(char *name) {
+    int n, k;
+    if (!g_sizes) return 0 - 1;
+    n = ustrlen(name);
+    k = g_sz_head[hname(name, n)];
+    while (k) {
+        --k;
+        if (g_sz_len[k] == n && !memcmp(g_sizes + g_sz_off[k], name, n)) return g_sz_val[k];
+        k = g_sz_next[k];
+    }
+    return 0 - 1;
+}
+
+void load_sizes() {
+    int fd, n;
+    g_sizes = 0;
+    if ((fd = uopen("c4ix.sizes", O_RD)) < 0) return;
+    // ~30 KB with the games' sources in it
+    g_sizes = (char *)ualloc(READ_CAP);
+    n = uread(fd, g_sizes, READ_CAP - 1);
+    uclose(fd);
+    if (n <= 0) { g_sizes = 0; return; }
+    g_sizes_len = n;
+    index_sizes();
+}
+
+// the host name behind a vfs path an earlier entry made, or 0. The
+// entries' paths are hashed the first time: by then they are all made.
+int *g_ent_head, *g_ent_next;
+char *host_of(char *path) {
+    int i, h;
+    if (!g_ent_head) {
+        g_ent_head = (int *)ualloc(HBUCKETS * sizeof(int));
+        g_ent_next = (int *)ualloc((g_nentries + 1) * sizeof(int));
+        memset((char *)g_ent_head, 0, HBUCKETS * sizeof(int));
+        // from the last, onto the front: each chain in the entries' order
+        i = g_nentries;
+        while (i > 0) {
+            --i;
+            h = hname(g_entry_path[i], ustrlen(g_entry_path[i]));
+            g_ent_next[i] = g_ent_head[h];
+            g_ent_head[h] = i + 1;
+        }
+    }
+    i = g_ent_head[hname(path, ustrlen(path))];
+    while (i) {
+        --i;
+        if (g_entry_is_ilink[i] != 1 && !ustrcmp(g_entry_path[i], path)) return g_entry_value[i];
+        i = g_ent_next[i];
+    }
+    return 0;
+}
+
+// each directory in PATH after its first FROM characters, made (umkdir
+// leaves one that is there) -- unless it is the last one made: the table
+// is sorted, so a directory's files come together, and the hundreds of
+// sources make a few dozen directories
+enum { PATHMAX = 256 };
+char *g_lastdir;
+int g_lastlen;
+void make_dirs(char *path, int from) {
+    int k, last;
+    k = from; last = 0;
+    while (path[k]) { if (path[k] == '/') last = k; ++k; }
+    if (!last || (last == g_lastlen && !memcmp(path, g_lastdir, last))) return;
+    k = from;
+    while (k <= last) {
+        if (path[k] == '/') { path[k] = 0; umkdir(path); path[k] = '/'; }
+        ++k;
+    }
+    if (!g_lastdir) g_lastdir = (char *)ualloc(PATHMAX);
+    memcpy(g_lastdir, path, last); g_lastlen = last;
+}
+
+// The hostdir(PREFIX) directories, each made a host directory: the kernel
+// lists it from the host's PREFIX.c4ix-dir when something first looks in
+// it (vfs.c, vfs_lazydir), so the boot makes one entry for each and none
+// for the thousands of files in them. How many were made. Whether the
+// listing is there is c4ix.sizes's to say, which names it: to open it
+// would fetch it, on a page's lazy disk, at every boot. The deepest
+// first: one inside another (/usr/games/bsdgames/data in /usr/games) is
+// walked to through the outer one, which, left on the host already,
+// would be listed to find it.
+int load_hostdir_files(int h);
+int load_hostdirs() {
+    int h, ok, fd, n, listed, left, best, *done;
+    char host[PATHMAX];
+    ok = 0;
+    if (!(done = (int *)ualloc((g_nhostdirs + 1) * sizeof(int)))) return 0;
+    memset((char *)done, 0, (g_nhostdirs + 1) * sizeof(int));
+    left = g_nhostdirs;
+    while (left > 0) {
+        best = 0 - 1;
+        h = 0;
+        while (h < g_nhostdirs) {
+            if (!done[h] && (best < 0 || ustrlen(g_hostdir_path[h]) > ustrlen(g_hostdir_path[best]))) best = h;
+            ++h;
+        }
+        h = best;
+        done[h] = 1;
+        --left;
+        n = ustrlen(g_hostdir_prefix[h]);
+        if (n + 10 < PATHMAX) {
+            memcpy(host, g_hostdir_prefix[h], n);
+            memcpy(host + n, ".c4ix-dir", 10);
+        } else host[0] = 0;
+        listed = 0;
+        if (host[0] && g_sizes) listed = size_of(host) >= 0;
+        else if (host[0] && (fd = uopen(host, O_RD)) >= 0) { uclose(fd); listed = 1; }
+        if (listed) {
+            if (ulazyfile(g_hostdir_path[h], g_hostdir_prefix[h], 0 - 1) == 0) ++ok;
+        }
+        // a disk from before the listings: a lazy file each, from c4ix.sizes
+        else load_hostdir_files(h);
+        ++h;
+    }
+    return ok;
+}
+
+// hostdir(PREFIX) H's files from c4ix.sizes, a lazy file each; how many.
+// The names are put together in two buffers, as the kernel copies what
+// it keeps: an allocation each was a sixth of the time hundreds took.
+int load_hostdir_files(int h) {
+    int i, j, n, v, ok, dl;
+    char *pfx;
+    char path[PATHMAX];
+    char host[PATHMAX];
+
+    ok = 0;
+    if (!g_sizes) return 0;
+    {
+        pfx = g_hostdir_prefix[h];
+        n = ustrlen(pfx);
+        dl = ustrlen(g_hostdir_path[h]);
+        i = 0;
+        while (i < g_sizes_len) {
+            v = 0;
+            while (i < g_sizes_len && g_sizes[i] >= '0' && g_sizes[i] <= '9') { v = v * 10 + (g_sizes[i] - '0'); ++i; }
+            if (i < g_sizes_len && g_sizes[i] == ' ') ++i;
+            j = i;
+            while (j < g_sizes_len && g_sizes[j] != 10) ++j;
+            if (j - i > n && j - i < PATHMAX && dl + j - i - n < PATHMAX && !memcmp(g_sizes + i, pfx, n)) {
+                memcpy(host, g_sizes + i, j - i); host[j - i] = 0;
+                memcpy(path, g_hostdir_path[h], dl); memcpy(path + dl, host + n, j - i - n + 1);
+                make_dirs(path, dl);
+                if (ulazyfile(path, host, v) == 0) ++ok;
+            }
+            i = j + 1;
+        }
+    }
+    return ok;
+}
+
+int load_entries() {
+    int i, ok, rlen, ilFd, ilLen, sz, lazy;
+    char *rbuf, *ilBuf, *host;
+
+    ok = 0; lazy = 0;
+    i = 0;
+    while (i < g_nentries) {
+        if (!g_entry_is_ilink[i] && (sz = size_of(g_entry_value[i])) >= 0 &&
+            ulazyfile(g_entry_path[i], g_entry_value[i], sz) == 0) { ++ok; ++lazy; g_entry_is_ilink[i] = 2; }
+        ++i;
+    }
+    i = 0;
+    while (i < g_nentries) {
+        if (!g_entry_is_ilink[i]) {
+            rbuf = read_whole_file(g_entry_value[i], &rlen);
+            if (rbuf) {
+                if (!write_vfs_file(g_entry_path[i], rbuf, rlen)) ++ok;
+                else uprintf("vfsload: write failed for %s\n", g_entry_path[i]);
+            }
+        }
+        ++i;
+    }
+    i = 0;
+    while (i < g_nentries) {
+        // an alias of a lazy file is another lazy file on the same host bytes
+        if (g_entry_is_ilink[i] == 1 && (host = host_of(g_entry_value[i])) && (sz = size_of(host)) >= 0 &&
+            ulazyfile(g_entry_path[i], host, sz) == 0) { ++ok; ++lazy; }
+        else if (g_entry_is_ilink[i] == 1) {
+            ilFd = uopen(g_entry_value[i], O_RD);
+            if (ilFd < 0) {
+                uprintf("vfsload: ilink %s -> %s: target not found\n", g_entry_path[i], g_entry_value[i]);
+            } else {
+                ilBuf = (char *)ualloc(READ_CAP);
+                ilLen = uread(ilFd, ilBuf, READ_CAP);
+                uclose(ilFd);
+                if (ilLen >= 0 && !write_vfs_file(g_entry_path[i], ilBuf, ilLen)) ++ok;
+            }
+        }
+        ++i;
+    }
+    if (lazy) uprintf("vfsload: %d entries left on the host until first use\n", lazy);
+    return ok;
+}
+
+// ---- archives ----
+//
+// ARCHIVES = NAME... in the manifest names tar archives (gzipped or
+// not) to unpack over / once the entries above exist. The root archive
+// is megabytes of sources and docs, and inflating it is seconds of
+// interpreted work -- too long to hold the console's first prompt for --
+// so they are handed to c4ix-persist in the background and boot carries
+// on. It unpacks each in turn, then lays over them what the last
+// session saved, where there is a drive that keeps it (persist.c).
+// The task id is printed: "wait ID" in the shell blocks until it is done.
+// One request fetches the whole archive, where the same files as
+// manifest entries would be a request each.
+//
+// With -w (the desktop's boot: init --desktop) vfsload waits for each
+// instead, while c4ix-splash shows the loading screen on the display
+// (it says "not fitted" and leaves where there is none), so the desktop
+// and top start on the whole filesystem. If memory ran out for it
+// (c4ix-persist's exit status 3), vfsload says so and exits 3, and init
+// starts no desktop on what there is; if the root archive could not be
+// read (4: damaged), it exits 4, and init stops there too.
+int g_wait;
+int g_nomem;
+int g_damaged;
+
+static char *itoa10(int v) {
+    char *b;
+    int i, n;
+    b = (char *)ualloc(16);
+    n = v; i = 1;
+    while (n >= 10) { n = n / 10; ++i; }
+    b[i] = 0;
+    while (i > 0) { --i; b[i] = '0' + v % 10; v = v / 10; }
+    return b;
+}
+
+void unpack_archives() {
+    int v, j, n, st[4], pid, sp, rc;
+    char *name;
+    char **targv;
+    char **sargv;
+    v = var_lookup("ARCHIVES");
+    if (!v) return;
+    --v;
+    // one task for them all, as the last session's changes go over the
+    // last of them
+    targv = (char **)ualloc((g_var_wordcount[v] + 3) * sizeof(int));
+    targv[0] = "c4ix-persist.c4r"; targv[1] = "boot";
+    n = 2;
+    j = 0;
+    while (j < g_var_wordcount[v]) {
+        name = g_var_words[v * MAX_WORDS + j];
+        ++j;
+        if (size_of(name) < 0 && ustat(name, st) < 0) {
+            uprintf("vfsload: archive %s is not on this disk\n", name);
+            continue;
+        }
+        targv[n] = name;
+        ++n;
+    }
+    if (n == 2) return;
+    targv[n] = 0;
+    name = targv[2];
+    pid = spawn(targv[0], n, targv);
+    if (pid < 0) {
+        uprintf("vfsload: cannot start c4ix-persist for %s\n", name);
+        // no room even to begin unpacking it: as much "does not fit" as running out part way
+        if (pid == SPAWN_NOMEM) g_nomem = 1;
+        return;
+    }
+    if (!g_wait) { uprintf("vfsload: unpacking %s in the background as task %d\n", name, pid); return; }
+    uprintf("vfsload: unpacking %s as task %d, and waiting for it\n", name, pid);
+    sargv = (char **)ualloc(4 * sizeof(int));
+    sargv[0] = "c4ix-splash.c4r"; sargv[1] = "-p"; sargv[2] = itoa10(pid); sargv[3] = 0;
+    sp = spawn(sargv[0], 3, sargv);
+    rc = uwait(pid);
+    if (sp > 0) uwait(sp);
+    if (rc == 3) {
+        uprintf("vfsload: %s could not be unpacked: out of memory\n", name);
+        g_nomem = 1;
+        return;
+    }
+    if (rc == 4) {
+        uprintf("vfsload: %s could not be unpacked: it is damaged\n", name);
+        g_damaged = 1;
+        return;
+    }
+    uprintf("vfsload: %s unpacked\n", name);
+}
+
+int main(int argc, char **argv) {
+    char *manifest, *manifestName;
+    int len, ok;
+
+    g_wait = (argc > 1 && !ustrcmp(argv[1], "-w"));
+    if (g_wait) { --argc; ++argv; }
+    manifestName = (argc > 1) ? argv[1] : "c4ix.vfs.txt";
+    manifest = read_whole_file(manifestName, &len);
+    if (!manifest) {
+        uprintf("vfsload: no manifest (%s); vfs left at defaults\n", manifestName);
+        return 1;
+    }
+
+    g_entry_path = (char **)ualloc(MAX_ENTRIES * sizeof(int));
+    g_entry_value = (char **)ualloc(MAX_ENTRIES * sizeof(int));
+    g_entry_is_ilink = (int *)ualloc(MAX_ENTRIES * sizeof(int));
+    g_nentries = 0;
+    g_subst = (char **)ualloc(MAX_SUBST * sizeof(int));
+    g_subst_depth = 0;
+
+    load_sizes();
+    split_lines(manifest);
+    extract_vars();
+
+    g_cursor = 0;
+    parse_block(-1, "");
+
+    ok = load_entries();
+    uprintf("vfsload: %d/%d entries loaded from %s\n", ok, g_nentries, manifestName);
+    if (g_nhostdirs) uprintf("vfsload: %d hostdir() directories left on the host until first looked in\n", load_hostdirs());
+    unpack_archives();
+    return g_nomem ? 3 : g_damaged ? 4 : 0;
+}

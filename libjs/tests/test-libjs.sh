@@ -1,0 +1,664 @@
+#!/bin/bash
+# test-libjs.sh - the libjs c4m against native c4m, and both kernels.
+# Run from the repo root (make test-libjs). Modelled on
+# src/c4bb/tests/test-c4bb.sh, whose images and oracles it shares.
+#
+# The oracle for each image is native 32-bit c4m (./c4m32 load-c4r.c),
+# except where c4m32 cannot be trusted:
+#   - %lld reads two words on a 32-bit libc where the program pushed one,
+#     so those images compare against 64-bit c4m;
+#   - test_args and test_printf segfault c4m32 in its missed-trap path.
+# Trap chatter from kernel-less images and %p lines are filtered.
+#
+# Out of contract, as on c4bb: test_customop test_signal test_timekeeping
+# test_fread (need a kernel or a host fd), test_crash (STRC needs symbols).
+#
+# The checks are in parts, a function each (part_NAME, below), which do
+# not depend on one another:
+#   PARTS="desktop c4ix"   runs only those (make test-quick picks them by
+#                          the paths a change touched: test-quick.sh)
+#   JOBS=N                 runs N parts at a time (2 by default: a part
+#                          peaks at a third of a GB), each part's output
+#                          kept until it is done and shown in the parts'
+#                          order. JOBS=1 runs them one after another and
+#                          prints as it goes. libjs/README.md has the times.
+
+LIBJS="node libjs/cli.js --mmu"   # the MMU, off by default, catches what it can here
+C4M32="./c4m32 load-c4r.c --"
+C4M64="./c4m load-c4r.c --"
+IMAGES=src/c4bb/images
+FILTER='/^Trap type/d; /missed a trap/d'
+NORM='s/rendered in [0-9]*ms/rendered in Xms/; s|f/s [ 0-9]\{5\}|f/s XXXXX|g; s/kc [ 0-9]\{5\}/kc XXXXX/g'
+fail=0
+
+ok ()   { echo "test-libjs: $1 OK"; }
+bad ()  { echo "test-libjs: $1 FAILED"; fail=1; }
+
+# The lines of /proc/uptime's format, each with its second number ten
+# times its first (to the hundredth both are cut to): Linux's two
+# numbers, with the same clock in tenths where Linux has its idle time
+# (src/c4ix/vfs.c, vfs_proc).
+uptimes () { grep -E '^[0-9]+\.[0-9]{2} [0-9]+\.[0-9]{2}$' |
+             awk '{ d = $2 - 10 * $1; if (d < 0) d = -d; if (d < 0.105) print }'; }
+
+check () {
+    name="$1"; shift
+    a=$(timeout 300 $LIBJS "$@" 2>/dev/null | sed "$FILTER" | sed "$NORM")
+    b=$(timeout 300 $C4M32 "$@" 2>&1 | sed "$FILTER" | sed "$NORM")
+    if [ "$a" = "$b" ]; then ok "$name"; else
+        bad "$name"; diff <(echo "$a") <(echo "$b") | head -10; fi
+}
+
+check64 () {
+    name="$1"; img32="$2"; img64="$3"
+    a=$(timeout 300 $LIBJS "$img32" 2>/dev/null | sed "$FILTER")
+    b=$(timeout 300 $C4M64 "$img64" 2>&1 | sed "$FILTER")
+    if [ "$a" = "$b" ]; then ok "$name (vs 64-bit baseline)"; else
+        bad "$name"; diff <(echo "$a") <(echo "$b") | head -10; fi
+}
+
+# part NAME: run part_NAME, in a subshell of its own, whose exit status
+# is its fail, and add "NAME SECONDS" to $W/times. With JOBS > 1 in the
+# background, its output in $W/K.out and its status in $W/K.st; flush
+# shows the finished ones in order.
+JOBS=${JOBS:-2}
+W=$(mktemp -d)
+trap 'rm -rf $W' EXIT
+nparts=0 shown=0
+part () {
+    [ -n "${PARTS:-}" ] && [[ " $PARTS " != *" $1 "* ]] && return
+    if [ "$JOBS" -le 1 ]; then
+        ( fail=0; s=$SECONDS; part_$1; echo "$1 $((SECONDS - s))" >> $W/times; exit $fail ) || fail=1
+        return
+    fi
+    while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n; flush; done
+    ( fail=0; s=$SECONDS; part_$1 > $W/$nparts.out 2>&1; echo "$1 $((SECONDS - s))" >> $W/times; echo $fail > $W/$nparts.st ) &
+    nparts=$((nparts + 1))
+}
+flush () {
+    while [ $shown -lt $nparts ] && [ -f $W/$shown.st ]; do
+        cat $W/$shown.out
+        [ "$(cat $W/$shown.st)" = 0 ] || fail=1
+        shown=$((shown + 1))
+    done
+}
+
+# The images the Code Explorer lists carry source maps (Makefile, IMG_G):
+# C4IX's kernel and every c4ix-*.c4r, and the games. An image with a map
+# is longer than its body, which ends at S (c4r-body.py).
+part_maps () {
+if [ "$(sed -n 's/^IMG_G := //p' Makefile)" = "-g" ]; then
+    nomap=""
+    for f in $IMAGES/c4ix32.c4r $IMAGES/disk/c4ix-*.c4r $IMAGES/games/*.c4r; do
+        [ -f "$f" ] || continue
+        [ "$(python3 -I libjs/tests/c4r-body.py $f | cut -d' ' -f2)" -lt "$(stat -c %s $f)" ] || nomap="$nomap ${f#$IMAGES/}"
+    done
+    if [ -z "$nomap" ]; then ok "the explorer's images carry source maps"
+    else bad "the explorer's images carry source maps (none in:$nomap)"; fi
+fi
+}
+
+# ---- pure units ---------------------------------------------------------
+part_units () {
+node libjs/tests/test-printf.mjs || fail=1
+node libjs/tests/test-c4r.mjs    || fail=1
+node libjs/tests/test-opdoc.mjs  || fail=1
+node libjs/tests/test-heap.mjs   || fail=1
+node libjs/tests/test-sheap.mjs  || fail=1
+node libjs/tests/test-sswap.mjs  || fail=1   # the swap pages on threads (sswap.js)
+node libjs/tests/test-gui.mjs    || fail=1
+node libjs/tests/test-snd.mjs    || fail=1   # the sound card: a sample in one write (PCM_START), whoever else is playing; the OPL3 mode a program leaves on
+node libjs/tests/test-shared.mjs || fail=1
+node libjs/tests/test-rom.mjs    || fail=1
+node libjs/tests/test-unpack.mjs || fail=1   # a file made from its package when opened: pak0.pak from quake106.zip (QUAKE_AS_ZIP=1)
+node libjs/tests/test-kept.mjs   || fail=1   # the Uploads' folders, and Saved Files' lists and tars
+node libjs/tests/test-paste.mjs  || fail=1   # a paste typed a line at a time into C4DOS and C4KE; the terminal's cursor
+}
+
+# ---- machines booted and driven ------------------------------------------
+part_desktop () {
+node libjs/tests/test-desktop.mjs || fail=1
+node libjs/tests/test-boot-desktop.mjs || fail=1
+node libjs/tests/test-desktop-quake.mjs || fail=1  # Quake in a desktop window, with no display of its own
+node libjs/tests/test-desktop-doom.mjs || fail=1  # Doom in a desktop window, 32 MB, MMU, 4 CPUs: its lent canvas read a page at a time
+}
+part_c4dos () {
+node libjs/tests/test-c4dos-heap.mjs || fail=1   # C4DOS HEAP.SYS: Doom five times at A>
+node libjs/tests/test-persist.mjs || fail=1      # saves kept in a store per system: Doom bare and under C4DOS
+}
+part_grin () {
+node libjs/tests/test-grin.mjs || fail=1         # grin, C4DOS's graphical shell, on the page's DOS disk
+}
+part_ladder () {
+node libjs/tests/test-c4dos-ladder.mjs || fail=1 # the Build Ladder: C4DOS -> C4KE -> C4IX (skips without its disk)
+}
+part_c4ix () {
+node libjs/tests/test-c4ix-zombie.mjs || fail=1
+node libjs/tests/test-lazy-src.mjs || fail=1     # the games' sources: lazy in /usr/games, fetched once, then from the cache
+node libjs/tests/test-lazy-root.mjs || fail=1    # C4IX's root archive read from drive 1, cached, dropped when short
+node libjs/tests/test-c4ix-cpu.mjs || fail=1
+node libjs/tests/test-c4ix-sigh.mjs || fail=1
+node libjs/tests/test-c4ix-mmu.mjs || fail=1   # the MMU: a wild write is killed, the kernel and others carry on
+node libjs/tests/test-c4ix-guard.mjs || fail=1   # the boot stack's guard: a program run off the end of the heap
+node libjs/tests/test-c4ix-spawn.mjs || fail=1   # the shell says why a program did not start: not there, no memory, will not load
+node libjs/tests/test-c4ix-free.mjs || fail=1    # free: the heap's use and biggest block, in pieces or not, files not saved
+}
+part_c4m () {
+node libjs/tests/test-c4ix-c4m.mjs || fail=1
+node libjs/tests/test-c4ix-innerbench.mjs || fail=1   # innerbench: its benchmarks in /bin/c4m, not the disk's C4DOS c4m.c4r
+}
+part_swap () {
+node libjs/tests/test-c4ix-swap.mjs || fail=1   # swap: more memory than there is, out to the host and back
+CPUS=2 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... with pages going from a task another CPU runs (IPI shootdown)
+CPUS=2 IPI_AT_TRAP=1 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... each IPI landing as a trap enters its handler
+CPUS=2 PARALLEL=1 node libjs/tests/test-c4ix-swap.mjs || fail=1   # ... on threads, the pages shared (sswap.js)
+node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # a program's free and another's malloc at once, no kernel lock
+PARALLEL=1 node libjs/tests/test-c4ix-lazyrace.mjs || fail=1   # ... on threads
+node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # more programs than memory, on threads: load control, and memory in one piece after
+PARALLEL=0 node libjs/tests/test-c4ix-loadctl.mjs || fail=1   # ... on simulated CPUs
+node libjs/tests/test-c4ix-softpin.mjs || fail=1   # what draws goes to CPU 0, unless it was pinned; its children go anywhere
+node libjs/tests/test-c4ix-movable.mjs || fail=1   # images, stacks and small blocks move while they run, on threads
+PARALLEL=0 node libjs/tests/test-c4ix-movable.mjs || fail=1   # ... on simulated CPUs
+node libjs/tests/test-c4ix-pipewake.mjs || fail=1   # a reader woken by a writer on another CPU, on threads
+PARALLEL=0 node libjs/tests/test-c4ix-pipewake.mjs || fail=1   # ... on simulated CPUs
+node libjs/tests/test-c4ix-tidy.mjs || fail=1   # the kernel's own memory given back and moved once tasks have gone, on threads
+PARALLEL=0 node libjs/tests/test-c4ix-tidy.mjs || fail=1   # ... on simulated CPUs
+MMU=0 node libjs/tests/test-c4ix-tidy.mjs || fail=1   # ... and without the MMU
+node libjs/tests/test-c4ix-par.mjs || fail=1    # two CPUs on threads: cc links with libc4ix, and the program runs on each
+}
+
+# ---- programs, byte for byte against native -----------------------------
+part_native () {
+for t in hello32 test_basic test_static test_vprintf tests \
+         multifun test-order test-ptrs test_continue test_exit \
+         test_printloop mandel test_float cycles; do
+    check "$t" $IMAGES/$t.c4r
+done
+check raycast $IMAGES/disk/raycast.c4r 21x21 -s 7 -d -n 20 -g 80x22
+# gui-demo: without a display fitted (the CLI fits none) it must say
+# "not fitted" on both hosts and touch nothing.
+for t in bb_customop bb_preempt bb_pm bb_mbox gui-demo fb-demo; do
+    check "$t" $IMAGES/$t.c4r
+done
+# M4's integer-types battery, built at 32 bits by the host's c4lc
+# (tools/c4lc.sh: c4sc-host32, or c4sp32 with C4LC32=interp): here the
+# oracle is not c4m32 but gcc -m32 itself, the golden test-c4lc uses --
+# unsigned compares, helpers for 16-bit loads and unsigned division, and
+# %hu/%lu through printf.js.
+. tools/c4lc.sh
+$(lc 32) src/tests/c4lc_m4.c .libjs_m4.c4r >/dev/null 2>&1
+if [ "$(timeout 300 $LIBJS .libjs_m4.c4r 2>/dev/null)" = "$(cat src/c4sp/tests/expected/c4lc-m4-32.txt)" ]
+then ok "c4lc_m4 (gcc -m32's answers)"; else bad "c4lc_m4 (gcc -m32's answers)"; fi
+rm -f .libjs_m4.c4r
+check64 factorial   $IMAGES/factorial.c4r   src/tests/factorial.c4r
+check64 test_malloc $IMAGES/test_malloc.c4r src/tests/test_malloc.c4r
+
+argnorm () { sed 's|src/c4bb/images/|src/tests/|; /an int ptr/d'; }
+for t in test_args test_printf; do
+    extra=""; [ $t = test_args ] && extra="arg1 arg2"
+    a=$(timeout 300 $LIBJS $IMAGES/$t.c4r $extra 2>/dev/null | sed "$FILTER" | argnorm)
+    b=$(timeout 300 $C4M64 src/tests/$t.c4r $extra 2>&1 | sed "$FILTER" | argnorm)
+    if [ "$a" = "$b" ]; then ok "$t (vs 64-bit baseline)"; else
+        bad "$t"; diff <(echo "$a") <(echo "$b") | head -10; fi
+done
+
+# ---- the fused opcodes --------------------------------------------------
+# All ten, each against its unfused twin, hand-assembled by c4th's
+# assembler (the same differential c4bb runs).
+fused_out=$(timeout 300 $LIBJS -s -m 96 -d $IMAGES/fused $IMAGES/fused/c4th32.c4r core.f asm.f fused.f 2>&1)
+if echo "$fused_out" | grep -q "fused: 0 mismatches" &&
+   [ "$(echo "$fused_out" | grep -c ' ok$')" = "10" ] &&
+   echo "$fused_out" | grep -q "0 missed traps"; then
+    ok "fused all ten"
+else
+    bad "fused all ten"; echo "$fused_out" | tail -5
+fi
+
+# ---- STRC, with names from the symbol section ------------------------------
+strc_out=$($LIBJS $IMAGES/libjs-strc.c4r 2>&1 | sed 's/ \[0x[0-9A-F]*\]//')
+strc_want=$(printf 'c4m: stacktrace:\n inner()\n  inner()\n   inner()\n    middle()\n     main()\nresult 7')
+if [ "$strc_out" = "$strc_want" ]; then ok "stacktrace names every frame"
+else bad "stacktrace names every frame"; echo "$strc_out"; fi
+
+# ---- exit status ----------------------------------------------------------
+$LIBJS $IMAGES/test_exit.c4r >/dev/null 2>&1; s1=$?
+$C4M32 $IMAGES/test_exit.c4r >/dev/null 2>&1; s2=$?
+if [ "$s1" = "$s2" ]; then ok "exit-status ($s1)"; else bad "exit-status ($s1 vs $s2)"; fi
+
+# ---- the programmable interrupt timer -------------------------------------
+# The third pass: a tick due inside a handler waits for its TLEV
+# (c4m.js irqHold, as c4bb's).
+pit_out=$(timeout 120 $LIBJS -m 8 $IMAGES/bb_pit.c4r 2>&1)
+if [ "$(echo "$pit_out" | grep -c "real time")" = 2 ] && echo "$pit_out" | grep -q "pit: held"; then
+    ok "pit (free running, masked every pass, held in a handler)"
+else bad "pit"; echo "$pit_out" | tail -4; fi
+}
+
+# ---- C4KE ----------------------------------------------------------------
+# The mailbox under C4KE, c4bb's test on this machine: host frames, inboxes,
+# and a second task binding the host mailbox after the first exits.
+part_c4ke () {
+if timeout 600 node src/c4bb/tests/test-c4ke-mbox.mjs --libjs > /tmp/libjs-mbox.$$ 2>&1; then ok "c4ke-mbox"
+else bad "c4ke-mbox"; grep -v "OK  " /tmp/libjs-mbox.$$ | tail -12; fi
+rm -f /tmp/libjs-mbox.$$
+
+# Grep assertions, as c4bb does: interleavings differ from native.
+c4ke () { printf "$1" | timeout 300 $LIBJS -c "${2:-60000000}" -d $IMAGES/disk $IMAGES/c4ke32.c4r 2>/dev/null; }
+out=$(c4ke 'hello.c4r\n\\q\n')
+for want in "c4ke v" "entering task scheduling" "C4SH - The C4 SHell" "yello" "clean shutdown"; do
+    if echo "$out" | grep -qF "$want"; then ok "c4ke-boot '$want'"; else bad "c4ke-boot '$want'"; fi
+done
+out=$(c4ke 'ls -a /usr/src/bin\n\\q\n')
+counts=$(echo "$out" | grep -oE '[0-9]+/[0-9]+ entries loaded')
+n1="${counts%%/*}"; n2="${counts#*/}"; n2="${n2%% entries*}"
+if [ -n "$counts" ] && [ "$n1" = "$n2" ]; then ok "c4ke-vfs full manifest loaded ($counts)"
+else bad "c4ke-vfs full manifest loaded (got '$counts')"; fi
+if echo "$out" | grep -qF "/usr/src/bin/ls.c"; then ok "c4ke-vfs ls listing"; else bad "c4ke-vfs ls listing"; fi
+out=$(c4ke 'ls\necho second-command\n\\q\n')
+if echo "$out" | grep -qF "entries in /" && echo "$out" | grep -qF "second-command" &&
+   echo "$out" | grep -qF "clean shutdown"; then ok "c4ke two commands in one session"
+else bad "c4ke two commands in one session"; echo "$out" | tail -8; fi
+out=$(c4ke 'badop.c4r\necho survived-the-kill\n\\q\n')
+if echo "$out" | grep -qF "Custom opcode not found: 9001" && echo "$out" | grep -qF "badop.c4r:main()" &&
+   echo "$out" | grep -qF "survived-the-kill" && echo "$out" | grep -qF "clean shutdown"; then
+    ok "c4ke survives a task killed on a bad opcode"
+else bad "c4ke survives a task killed on a bad opcode"; echo "$out" | tail -10; fi
+out=$(c4ke 'cat /usr/src/bin/vfsload.c\n\\q\n')
+if echo "$out" | grep -qF "C4KE boot-time filesystem loader"; then ok "c4ke-vfs cat real content"
+else bad "c4ke-vfs cat real content"; fi
+# /proc/uptime, twice over: cat reads the kernel's (its RAM filesystem,
+# vfs_get), type the machine's (a task's open() goes to the disk device,
+# not the kernel). Both clocks move. And c4m.c under plain c4, whose
+# clock is that file (innerbench -c), sees its clock move.
+out=$(c4ke 'cat /proc/uptime\ntype /proc/uptime\nls /proc\nc4 c4m.c clock.c\ncat /proc/uptime\ntype /proc/uptime\n\\q\n' 2000000000)
+u=$(echo "$out" | uptimes)
+if [ "$(echo "$u" | wc -l)" = 4 ] &&
+   echo "$u" | awk 'NR == 1 { k = $1 } NR == 2 { m = $1 } NR == 3 && $1 <= k { exit 1 } NR == 4 && $1 <= m { exit 1 }'; then
+    ok "c4ke /proc/uptime, the kernel's and the machine's, both moving"
+else bad "c4ke /proc/uptime, the kernel's and the machine's, both moving"; echo "$out" | grep -E '^[0-9. ]+$|proc|Failed' | head -8; fi
+if echo "$out" | grep -qE "^uptime *$" && echo "$out" | grep -qF "1 entry in /proc/"; then ok "c4ke ls /proc"
+else bad "c4ke ls /proc"; echo "$out" | grep -A3 "ls /proc" | head -5; fi
+if echo "$out" | grep -qE "^clock: moved [0-9]+ ms"; then ok "c4ke: c4 c4m.c has a clock"
+else bad "c4ke: c4 c4m.c has a clock"; echo "$out" | grep -E "clock|uptime" | head -4; fi
+}
+
+# ---- C4IX ----------------------------------------------------------------
+# Each boot has the page's 64 MB arena (libjs/page.js), not the CLI's 32:
+# the root archive unpacks in the background as the commands run, and at
+# its peak holds the compressed archive, the whole tar and the files made
+# from it -- about 28 MB, which left 32 too little for a program that
+# loads a shared library meanwhile.
+part_ixsh () {
+# (with every game on the disk the boot alone is 103M cycles, for vfsload)
+out=$(printf 'c4ix-ps.c4r\nexit\n' | timeout 300 $LIBJS -m 64 -c 200000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+for want in "C4IX booting" "protected mode on for user tasks, preemption on" \
+            "c4ix-sh" "c4ix-ps.c4r" "tasks,"; do
+    if echo "$out" | grep -qF "$want"; then ok "c4ix-boot '$want'"; else bad "c4ix-boot '$want'"; fi
+done
+# The C4IX vfsload race (docs/c4bb-design.md) is a known issue carried
+# over from c4bb, so "most entries" is the pin here too: 40 or more, of 40
+# or more (the BSD games took it past 99).
+if echo "$out" | grep -qE '([4-9][0-9]|[1-9][0-9][0-9])/([4-9][0-9]|[1-9][0-9][0-9]) entries loaded from c4ix\.vfs\.txt'; then
+    ok "c4ix-vfs manifest mostly loaded ($(echo "$out" | grep -oE '[0-9]+/[0-9]+ entries loaded'))"
+else bad "c4ix-vfs manifest mostly loaded"; echo "$out" | grep -E 'entries loaded|cannot open' | head -5; fi
+
+# /proc/uptime (src/c4ix/vfs.c): made when it is read, so two reads
+# apart differ; and it is the clock c4m.c reads under plain c4.
+out=$(printf 'cat /proc/uptime\nls /proc\nc4 c4m.c clock.c\ncat /proc/uptime\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 4000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+u=$(echo "$out" | uptimes)
+if [ "$(echo "$u" | wc -l)" = 2 ] && echo "$u" | awk 'NR == 1 { a = $1 } NR == 2 && $1 <= a { exit 1 }' &&
+   echo "$out" | grep -qx "uptime"; then
+    ok "c4ix /proc/uptime, moving"
+else bad "c4ix /proc/uptime, moving"; echo "$out" | grep -E '^[0-9. ]+$|uptime' | head -5; fi
+if echo "$out" | grep -qE "^clock: moved [0-9]+ ms"; then ok "c4ix: c4 c4m.c has a clock"
+else bad "c4ix: c4 c4m.c has a clock"; echo "$out" | grep -E "clock|uptime" | head -4; fi
+
+# A nested C4KE asked for `bench` in C4IX's /bin, where bench is C4IX's
+# own: its loader refuses an image with words left for a linker, names
+# what it wanted, and goes on to bench.c4r, C4KE's. It used to run
+# C4IX's, whose first call went to address 0, and spin in the ROM.
+out=$(printf 'cd /bin\nc4m load-c4r.c -- c4ke bench\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 4000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qF "lc4r: 'bench' needs 'ucycles'" && echo "$out" | grep -qF "Benchmark complete"; then
+    ok "c4ix: a nested C4KE refuses C4IX's bench and runs its own"
+else bad "c4ix: a nested C4KE refuses C4IX's bench and runs its own"; echo "$out" | grep -E 'lc4r|Benchmark|libjs' | head -5; fi
+
+# The root archive (c4ix-root.tgz, build-images.sh) unpacks in the
+# background as task 4, which "wait 4" blocks on. Then a file deep in
+# the tree must have its real content, and the libraries must be there.
+out=$(printf 'wait 4\nls /usr/lib\ncat /usr/src/c4ix/user/tar.c\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 2000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qF "unpacking c4ix-root.tgz in the background as task 4" &&
+   echo "$out" | grep -qF "[4] done (0)" && echo "$out" | grep -qF "libarc.c4l" &&
+   echo "$out" | grep -qF "list or extract a tar archive, gzipped or not"; then
+    ok "c4ix root archive unpacked"
+else bad "c4ix root archive unpacked"; echo "$out" | grep -E 'unpack|done|tar:|cannot' | head -5; fi
+}
+
+part_ixbuild () {
+# b4ke inside C4IX. The root archive carries /build already built,
+# so the whole tree is up to date at boot: nothing runs. A source written
+# again (an edit, as the IDE saves one) remakes what it feeds and no
+# more: its object and its program. Then -B rebuilds
+# the libraries from /usr, and they must be the ones the archive
+# carries in /usr/lib, but for the source map those carry, which cc does
+# not write yet (c4r-body.py); and a run after that must do nothing again.
+# (Rebuilding the whole tree is `make test-c4ix-rebuild`: minutes.)
+E=/usr/src/c4ix/user/echo.c
+out=$(printf "wait 4\nb4ke -C /usr\ncat $E > /tmp/echo.c\ncat /tmp/echo.c > $E\nb4ke -C /usr/src/c4ix/user\n"'b4ke -B -C /usr/src/c4ix/lib\ncrc32 /build/lib/libc4ix.c4l\nb4ke -C /usr/src/c4ix/lib\nexit\n' | \
+      timeout 900 $LIBJS -m 64 -c 20000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+pre=$(echo "$out" | sed '/b4ke: all built/q')
+if echo "$pre" | grep -qF "b4ke: all built, in /build" && ! echo "$pre" | grep -qE ": [1-9][0-9]* ran, " &&
+   echo "$pre" | grep -qE "c4ix/user: 0 ran, [0-9]+ up to date, 0 failed"; then
+    ok "the root archive's /build is up to date: b4ke has nothing to do"
+else bad "the root archive's /build is up to date: b4ke has nothing to do"; echo "$pre" | grep -E 'b4ke' | head -12; fi
+if echo "$out" | grep -qE "c4ix/user: 2 ran, [0-9]+ up to date, 0 failed"; then
+    ok "an edited source remakes only its object and its program"
+else bad "an edited source remakes only its object and its program"; echo "$out" | grep -E 'c4ix/user' | head -4; fi
+a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /build/lib/libc4ix.c4l' | cut -d' ' -f1,2)
+b=$(python3 -I libjs/tests/c4r-body.py $IMAGES/libc4ix32.c4l)
+if [ -n "$a" ] && [ "$a" = "$b" ] && echo "$out" | grep -qF "c4ix/lib: 13 ran, 0 up to date, 0 failed" &&
+   echo "$out" | grep -qF "c4ix/lib: 0 ran, 13 up to date, 0 failed"; then
+    ok "b4ke rebuilds libc4ix inside C4IX, byte for byte"
+else bad "b4ke rebuilds libc4ix inside C4IX, byte for byte"; echo "$out" | grep -E 'b4ke|crc32' | head -8; fi
+
+# cc: c4sc (c4lc, compiled) with c4lc's preprocessor, and -l linking
+# against the shared libc4ix -- the userland's own recipe, so echo built
+# this way is the disk's, byte for byte, up to the disk's source map. And the repo's own programs, which
+# include u0.h and the repo's stdio.h: src/tests/mandel.c, as it is.
+out=$(printf 'wait 4\ncc -o /tmp/hello2.c4r /usr/src/c4ix/examples/hello.c\n/tmp/hello2.c4r\ncc -O -D C4IX_SHARED -l /lib/libc4ix.c4s -o /tmp/echo.c4r /usr/src/c4ix/user/echo.c\n/tmp/echo.c4r cc built it\ncrc32 /tmp/echo.c4r\ncd /usr/src/tests\ncc -O mandel.c\n./mandel.c4r\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 8000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qE "^Mandelbrot rendered in [0-9]+ms"; then ok "cc builds src/tests/mandel.c with the repo's headers, and it runs"
+else bad "cc builds src/tests/mandel.c with the repo's headers, and it runs"; echo "$out" | grep -E 'mandel|cannot|cc:' | head -5; fi
+a=$(echo "$out" | grep -oE '^[0-9a-f]{8} [0-9]+ /tmp/echo.c4r' | cut -d' ' -f1,2)
+b=$(python3 -I libjs/tests/c4r-body.py $IMAGES/disk/c4ix-echo.c4r)   # its map aside
+if echo "$out" | grep -qF "hello from a program compiled inside C4IX" && echo "$out" | grep -qxF "cc built it" &&
+   [ -n "$a" ] && [ "$a" = "$b" ]; then
+    ok "cc compiles inside C4IX, and links libc4ix"
+else bad "cc compiles inside C4IX, and links libc4ix"; echo "$out" | grep -E 'cc|c4lc|crc|hello' | head -8; fi
+}
+
+part_ixlib () {
+# Shared libraries: ls is linked with -l libc4ix.c4s, so it runs only if
+# the loader finds /lib/libc4ix.c4s and resolves what it needs from it.
+out=$(printf 'c4rdump /bin/ls\nls /lib\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 400000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qF "Needs /lib/libc4ix.c4s" && echo "$out" | grep -qF "libc4ix.c4s" &&
+   echo "$out" | grep -qE "symbol references to resolve"; then
+    ok "ls loads libc4ix as a shared library"
+else bad "ls loads libc4ix as a shared library"; echo "$out" | tail -8; fi
+
+# libc: libctest is linked with -l libc.c4s; what it prints, line by line,
+# is what libc's functions did (src/c4ix/libc/tests/libctest.txt)
+out=$(printf 'libctest -v -n 3 one two\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 600000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | sed -n '/^printf: \[42/,/libctest: done/p' | cmp -s - src/c4ix/libc/tests/libctest.txt; then
+    ok "libc: libctest's output is the reference"
+else bad "libc: libctest's output is the reference"
+     echo "$out" | sed -n '/^printf: \[42/,/libctest: done/p' | diff - src/c4ix/libc/tests/libctest.txt | head -10; fi
+
+# Shared code: libc is -fpic, so two programs at once run one copy of its
+# code, and each must still see its own errno, environment and stdout
+# buffer -- the scheduler repoints libc's data at every switch
+out=$(printf 'pictest A 15 > /tmp/a &\npictest B 15 > /tmp/b &\nwait\ncat /tmp/a\ncat /tmp/b\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 800000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qx "A: ok" && echo "$out" | grep -qx "B: ok" && ! echo "$out" | grep -qF "crossed"; then
+    ok "two tasks share libc's code and keep their own data"
+else bad "two tasks share libc's code and keep their own data"; echo "$out" | grep -E 'ok|crossed|loader' | head -6; fi
+
+# The POSIX calls Busybox needs (M7c, docs/busybox-port.md §4): lseek,
+# fstat and stat, O_APPEND and O_EXCL, link and truncate, waitpid, and
+# vfork with execve and an environment -- among them a vfork child that
+# redirects its stdout, writes, and execs. What unixtest prints, line by
+# line, is src/c4ix/libc/tests/unixtest.txt.
+out=$(printf 'unixtest\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 1000000000 -d $IMAGES/disk $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | sed -n '/^lseek: set/,/unixtest: done/p' | cmp -s - src/c4ix/libc/tests/unixtest.txt; then
+    ok "unixtest: vfork, execve, waitpid, lseek, fstat, links and truncate"
+else bad "unixtest: vfork, execve, waitpid, lseek, fstat, links and truncate"
+     echo "$out" | sed -n '/^lseek: set/,/unixtest: done/p' | diff - src/c4ix/libc/tests/unixtest.txt | head -10; fi
+}
+
+# The sound card (snd-device.js). Its AdLib, opl.js, is DOSBox's dbopl
+# ported line for line, so the C++ (libjs/tests/src/oplref) renders random
+# register streams and opl.js must make the same samples, bit for bit: at
+# three rates, as an OPL2 and as an OPL3. And its tables are the C++'s.
+part_sound () {
+if command -v g++ > /dev/null 2>&1; then
+    T=$(mktemp -d)
+    g++ -O2 -w -I libjs/tests/src/oplref -o $T/oplref libjs/tests/src/oplref/oplref.cpp
+    same=1
+    for c in "48000 48000 12345 0" "48000 48000 12345 1" "44100 96000 7 0" "49716 96000 99 1"; do
+        $T/oplref $c > $T/ref.raw
+        node libjs/tests/src/opl-stream.mjs $c > $T/js.raw
+        cmp -s $T/ref.raw $T/js.raw || { same=0; echo "  opl.js differs: $c"; }
+    done
+    $T/oplref -t > $T/tables.txt
+    python3 -I libjs/tests/src/oplref/mktables.py $T/tables.txt $T/opl-tables.js
+    cmp -s $T/opl-tables.js libjs/opl-tables.js || { same=0; echo "  libjs/opl-tables.js is not oplref -t's"; }
+    rm -rf $T
+    if [ $same = 1 ]; then ok "opl.js makes dbopl's samples, bit for bit"
+    else bad "opl.js makes dbopl's samples, bit for bit"; fi
+else echo "test-libjs: no g++, so opl.js is not compared with dbopl"; fi
+
+# snd-demo on the bare machine, its sound written to a file: the same file
+# every time (the machine's clock), sound where the tune and the sample
+# are, and quiet once the last note has died away
+T=$(mktemp -d)
+out=$($LIBJS -s --wav $T/a.wav $IMAGES/snd-demo.c4r 2>&1)
+$LIBJS --wav $T/b.wav $IMAGES/snd-demo.c4r > /dev/null 2>&1
+lev=$(node libjs/tests/src/wav-levels.mjs $T/a.wav 0.05 0.5 1.7 3.3)
+if echo "$out" | grep -qF "snd-demo: 8 notes" && echo "$out" | grep -qE "sound: [0-9]+ OPL writes, 1 samples played" &&
+   cmp -s $T/a.wav $T/b.wav && [ "$lev" = "loud loud loud quiet" ]; then
+    ok "snd-demo plays, the same every time"
+else bad "snd-demo plays, the same every time"; echo "$out" | tail -3; echo "levels: $lev"; fi
+rm -rf $T
+
+# The card's master volume (MASTER), which the C4IX desktop's tray sets:
+# it reads back, RESET leaves it, and the whole mix follows it -- the
+# speaker's tone at full, at 128 of 255, and muted
+out=$(node --input-type=module -e "
+import { SoundDevice, SND, MUTE } from './libjs/snd-device.js';
+import { SoundMixer } from './libjs/snd-mix.js';
+let t = 0;
+const d = new SoundDevice({ now: () => t });
+const reads = [d.read32(SND.MASTER)];
+d.write32(SND.SPK, 1193);
+t = 500000; d.write32(SND.MASTER, 128);
+t = 600000; d.write32(SND.RESET, 1); d.write32(SND.SPK, 1193); reads.push(d.read32(SND.MASTER));
+t = 1000000; d.write32(SND.MASTER, 128 | MUTE); reads.push(d.read32(SND.MASTER));
+const mix = new SoundMixer(8000);
+mix.push(d.drain());
+const L = new Float32Array(12000), R = new Float32Array(12000);
+mix.render(L, R, 12000);
+const rms = (a, b) => { let s = 0; for (let i = a * 8000; i < b * 8000; i++) s += L[i] * L[i]; return Math.sqrt(s / ((b - a) * 8000)); };
+const r = [rms(0.1, 0.4), rms(0.7, 0.9), rms(1.1, 1.4)];
+console.log(reads.join(' '), Math.abs(r[1] / r[0] - 128 / 255) < 0.01 && r[0] > 0.1 && r[2] === 0 ? 'follows' : 'levels ' + r.join(' '));
+" 2>&1)
+if [ "$out" = "255 128 384 follows" ]; then ok "the sound card's master volume: kept through RESET, and the mix follows it"
+else bad "the sound card's master volume: kept through RESET, and the mix follows it"; echo "  $out"; fi
+
+# Sixteen sample channels (CAPS bit 4): a sound on each at once, every one
+# busy, and the mix holds all sixteen -- channel 15 is not channel 7, and
+# playing on one channel cuts off only that channel's sound
+out=$(node --input-type=module -e "
+import { SoundDevice, SND } from './libjs/snd-device.js';
+import { SoundMixer } from './libjs/snd-mix.js';
+let t = 0;
+const mem = new Uint8Array(4096).fill(130);
+const d = new SoundDevice({ now: () => t });
+d.arena = { dmaRead: (a, n) => mem.subarray(a, a + n) };
+const caps = d.read32(SND.CAPS);
+d.write32(SND.PCM_LEN, 4000); d.write32(SND.PCM_RATE, 8000);
+for (let c = 0; c < 16; c++) { d.write32(SND.PCM_VOL, c < 8 ? 0x00ff : 0xff00); d.write32(SND.PCM_PLAY, c); }
+const busy = d.read32(SND.PCM_BUSY);
+const mix = new SoundMixer(8000);
+mix.push(d.drain());
+const L = new Float32Array(400), R = new Float32Array(400);
+mix.render(L, R, 400);
+console.log(caps & 16, busy.toString(16), (L[200] / R[200]).toFixed(3), L[200] > 0.09 ? 'all' : 'some ' + L[200]);
+" 2>&1)
+if [ "$out" = "16 ffff 1.000 all" ]; then ok "the sound card's sixteen sample channels, all sounding at once"
+else bad "the sound card's sixteen sample channels, all sounding at once"; echo "  $out"; fi
+
+# The MIDI port (CAPS bit 5), for General MIDI music: there only with a
+# synth; a short message (MIDI) and bytes (MIDI_DATA: running status, a
+# system exclusive, real time left out) stamped at the stream's cursor;
+# and the mixer's synth (snd-gm.js, with SpessaSynth's own one-preset
+# SoundFont) sounding a note while it is held, and quiet once it is let go
+out=$(node --input-type=module -e "
+import { SoundDevice, SND, EVT } from './libjs/snd-device.js';
+import { SoundMixer } from './libjs/snd-mix.js';
+import { GmSynth, sampleSoundFont } from './libjs/snd-gm.js';
+let t = 0;
+const none = new SoundDevice({ now: () => t }), d = new SoundDevice({ now: () => t, midi: true });
+none.write32(SND.MIDI, 0x7f3c90);
+const caps = [none.read32(SND.CAPS) & 32, d.read32(SND.CAPS) & 32, none.drain()];
+d.write32(SND.CLOCK, 1000);
+d.write32(SND.MIDI, 0xc0 | (5 << 8));
+d.write32(SND.MIDI, 0x90 | (60 << 8) | (100 << 16));
+d.write32(SND.WAIT, 500);
+for (const b of [0x80, 60, 0, 0xf8, 62, 0, 0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7, 0xb0, 7, 90]) d.write32(SND.MIDI_DATA, b);
+const ev = d.drain();
+const said = ev.map(e => e[0] === EVT.MIDI ? e[1] / 1000 + ':' + e[2].map(b => b.toString(16)).join('.') : '?').join(' ');
+const synth = new GmSynth(22050);
+await synth.load(sampleSoundFont(), 'sample');
+const mix = new SoundMixer(22050, { synth });
+mix.push(ev);
+const L = new Float32Array(22050), R = new Float32Array(22050);
+mix.render(L, R, 22050);
+const peak = (a, b) => { let p = 0; for (let i = Math.round(a * 22050); i < Math.round(b * 22050); i++) p = Math.max(p, Math.abs(L[i])); return p; };
+console.log(caps.join(' '), '|', said, '|', peak(0.05, 0.45) > 0.02 && peak(0.8, 1) < 0.005 ? 'held, then quiet' : 'levels ' + peak(0.05, 0.45) + ' ' + peak(0.8, 1));
+" 2>&1)
+if [ "$out" = "0 32  | 0:c0.5 0:90.3c.64 500:80.3c.0 500:80.3e.0 500:f0.7e.7f.9.1.f7 500:b0.7.5a | held, then quiet" ]; then
+    ok "the sound card's MIDI port: stamped on the stream, and played by a SoundFont"
+else bad "the sound card's MIDI port: stamped on the stream, and played by a SoundFont"; echo "  $out"; fi
+}
+
+# Persistence (src/c4ix/user/persist.c): drive 1 keeps what changed. One
+# session writes a file, makes a directory, deletes a file the root
+# archive brought and syncs; the next, on the same drive, finds all three
+# as they were left. A third, after persist forget, starts clean. The
+# first also keeps the unpacked root archive on the drive, and the two
+# after it unpack that copy instead of the archive.
+part_ixpersist () {
+T=$(mktemp -d)
+out=$(printf 'wait 4\necho kept > /usr/kept.txt\nmkdir /usr/kdir\nrm /usr/README.md\nsync\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
+# the page's Saved Files reads the same drive (kept.js): what was saved, by
+# its path, and nothing of the system's own or persist's
+# (the drive's folder as an argument, not in the script: on Windows
+# MSYS2 makes a path node can read only of an argument, docs/windows.md)
+kept=$(node --input-type=module -e "
+  import { readdirSync, readFileSync } from 'node:fs';
+  import { keptFiles } from './libjs/kept.js';
+  const T = process.argv[1];
+  const m = new Map(readdirSync(T).map(n => [n, new Uint8Array(readFileSync(T + '/' + n))]));
+  for (const [p, b] of keptFiles(m)) console.log(p + '=' + new TextDecoder().decode(b).trim());" "$T" 2>&1)
+if echo "$kept" | grep -qx "/usr/kept.txt=kept" && ! echo "$kept" | grep -q "^/var/persist\|README.md"; then
+    ok "Saved Files lists what persist kept, by its path (kept.js)"
+else bad "Saved Files lists what persist kept, by its path (kept.js)"; echo "$kept" | head -5; fi
+out2=$(printf 'wait 4\ncat /usr/kept.txt\nls /usr\npersist forget\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
+out3=$(printf 'wait 4\nls /usr\nexit\n' | \
+      timeout 300 $LIBJS -m 64 -c 3000000000 -d $IMAGES/disk -w $T $IMAGES/c4ix32.c4r 2>/dev/null)
+if echo "$out" | grep -qE "persist: [0-9]+ changes and 1 deletions kept" && [ -s $T/c4ix-persist.tar ] &&
+   echo "$out2" | grep -qE "persist: [0-9]+ files kept from the last session, 1 deleted" &&
+   echo "$out2" | grep -qx "kept" && echo "$out2" | grep -qx "kdir/" && ! echo "$out2" | grep -qx "README.md" &&
+   echo "$out3" | grep -qx "README.md" && ! echo "$out3" | grep -qx "kdir/"; then
+    ok "persist keeps a session's changes on drive 1 for the next"
+else bad "persist keeps a session's changes on drive 1 for the next"
+     echo "$out" | grep -E "persist|sync|rm:" | head -4; echo "$out2" | grep -E "persist|kept|kdir|README" | head -6; fi
+if [ -s $T/c4ix-base.tar ] && [ "$(cat $T/c4ix-base.id)" = "$(cat $IMAGES/disk/c4ix-root.tgz.id)" ] &&
+   ! echo "$out" | grep -q "from the copy kept on drive 1" &&
+   echo "$out2" | grep -qE "persist: c4ix-root.tgz: [0-9]+ files from the copy kept on drive 1" &&
+   echo "$out3" | grep -qE "persist: c4ix-root.tgz: [0-9]+ files from the copy kept on drive 1"; then
+    ok "persist keeps the unpacked root archive on drive 1, and the next boots unpack that"
+else bad "persist keeps the unpacked root archive on drive 1, and the next boots unpack that"
+     ls -l $T; echo "$out2" | grep -E "persist" | head -4; fi
+rm -rf $T
+}
+
+# Processors (smp.js, docs/c4ix-smp.md S1): c4mp's own guests, built for
+# 32 bits, print what c4mp prints -- its pinned transcripts, cycle counts
+# and all -- since the round robin is c4mp's, quantum for quantum. The
+# deadlock is diagnosed and exits 255, as c4mp's does. And the CPU-local
+# window: each CPU sees its own words at 0x800.
+part_smp () {
+for g in smp0 smp1; do
+    if $LIBJS --cpus 4 $IMAGES/c4mp-$g.c4r 2>&1 | cmp -s - src/c4mp/tests/$g-4cpu.txt; then
+        ok "--cpus 4 runs c4mp's $g as c4mp does"
+    else bad "--cpus 4 runs c4mp's $g as c4mp does"; $LIBJS --cpus 4 $IMAGES/c4mp-$g.c4r 2>&1 | diff - src/c4mp/tests/$g-4cpu.txt | head -6; fi
+done
+out=$($LIBJS --cpus 4 $IMAGES/c4mp-deadlock.c4r 2>&1); st=$?
+if [ $st = 255 ] && echo "$out" | grep -qF "deadlock: every processor is parked and none can be woken" &&
+   [ "$(echo "$out" | grep -c "waiting on 0x")" = 4 ]; then ok "a deadlock is diagnosed, each CPU named"
+else bad "a deadlock is diagnosed, each CPU named"; echo "$out" | tail -6; fi
+out=$($LIBJS --cpus 2 $IMAGES/libjs-smpwin.c4r 2>&1)
+if echo "$out" | grep -qx "smpwin: cpu 1 saw 111, cpu 0 sees 1 and 9" && $LIBJS $IMAGES/libjs-smpwin.c4r 2>&1 | grep -qx "smpwin: no SMP"; then
+    ok "each CPU sees its own words in the CPU-local window"
+else bad "each CPU sees its own words in the CPU-local window"; echo "$out" | tail -3; fi
+
+# The accelerators' loader (accel.js, docs/accel.md): each game the build
+# lists found as a number of its own, a name nobody ships as 0; without them
+# (--no-accel) the program is told so by INFO. Each game tests its own
+# accelerators against its loops (test-duke3d, test-quake).
+out=$($LIBJS $IMAGES/libjs-accel.c4r 2>&1)
+if echo "$out" | grep -qx "accel: the loader finds each game's"; then ok "the accelerators' loader finds each game's"
+else bad "the accelerators' loader finds each game's"; echo "$out" | tail -5; fi
+out=$($LIBJS --no-accel $IMAGES/libjs-accel.c4r 2>&1)
+if [ "$out" = "accel: not fitted" ]; then ok "--no-accel: INFO says the accelerators are not there"
+else bad "--no-accel: INFO says the accelerators are not there"; echo "$out" | tail -3; fi
+# C4IX's own (src/c4ix/accel.mjs, docs/accel.md 7): its switch, on unless
+# --no-osaccel, which a program turns (ACC_OS); off, ACC_FIND gives it 0.
+# test-osaccel.mjs holds its CRC-32 and inflater to zlib, through a copy of
+# libarc's C loop, on made-up data and damaged streams.
+out=$($LIBJS $IMAGES/libjs-accel.c4r 2>&1)
+out2=$($LIBJS --no-osaccel $IMAGES/libjs-accel.c4r 2>&1)
+if echo "$out" | grep -qx "accel: the OS switch was on and turns" && echo "$out2" | grep -qx "accel: the OS switch was off and turns"; then
+    ok "C4IX's accelerators: on unless --no-osaccel, and a program turns them"
+else bad "C4IX's accelerators: on unless --no-osaccel, and a program turns them"; echo "$out" "$out2" | tail -5; fi
+out=$(node libjs/tests/test-osaccel.mjs 2>&1)
+if echo "$out" | tail -1 | grep -q " cases, 0 failed$"; then ok "C4IX's accelerators: CRC-32 and inflate as libarc's C ($(echo "$out" | tail -1))"
+else bad "C4IX's accelerators: CRC-32 and inflate as libarc's C"; echo "$out" | grep FAIL | head -5; echo "$out" | tail -2; fi
+
+# The parallel engine (par.js, ap.js, docs/c4ix-smp.md S2): each CPU on a
+# thread of its own, over a SharedArrayBuffer. The interleaving is the
+# host's, so the cycle counts are not c4mp's; the answers are. Each run has
+# a timeout: a race the host's interleaving finds can hang one, and smp1's
+# lost start (fixed in smp1.c) spun a build slot for 7 hours.
+out=$(timeout 120 $LIBJS --cpus 4 --parallel $IMAGES/c4mp-smp0.c4r 2>&1)
+if echo "$out" | grep -qx "smp0: total 48000 across 4 cpu(s), expected 48000"; then ok "--parallel: smp0's counters add up"
+else bad "--parallel: smp0's counters add up"; echo "$out" | tail -3; fi
+out=$(timeout 120 $LIBJS --cpus 4 --parallel $IMAGES/c4mp-smp1.c4r 2>&1)
+if echo "$out" | grep -qx "smp1: all OK"; then ok "--parallel: smp1's atomics, parking and IPIs"
+else bad "--parallel: smp1's atomics, parking and IPIs"; echo "$out" | tail -4; fi
+out=$(timeout 120 $LIBJS --cpus 4 --parallel $IMAGES/c4mp-deadlock.c4r 2>&1); st=$?
+if [ $st = 255 ] && echo "$out" | grep -qF "deadlock: every processor is parked and none can be woken" &&
+   [ "$(echo "$out" | grep -c "waiting on 0x")" = 4 ]; then ok "--parallel: a deadlock is diagnosed, each CPU named"
+else bad "--parallel: a deadlock is diagnosed, each CPU named"; echo "$out" | tail -6; fi
+out=$(timeout 120 $LIBJS --cpus 2 --parallel $IMAGES/libjs-smpwin.c4r 2>&1)
+if echo "$out" | grep -qx "smpwin: cpu 1 saw 111, cpu 0 sees 1 and 9"; then ok "--parallel: the CPU-local window"
+else bad "--parallel: the CPU-local window"; echo "$out" | tail -3; fi
+out=$(timeout 120 $LIBJS --cpus 4 --parallel $IMAGES/libjs-spinmp.c4r 2>&1)
+if echo "$out" | grep -qx "spinmp: 4 cpus each summed 70000000"; then ok "--parallel: four CPUs work at once"
+else bad "--parallel: four CPUs work at once"; echo "$out" | tail -3; fi
+}
+
+# ---- the run ----------------------------------------------------------------
+# The longest first, so that with JOBS > 1 the short ones fill in at the end
+for p in ${PARTS:-}; do
+    declare -F part_$p > /dev/null || { echo "test-libjs: there is no part '$p'"; exit 2; }
+done
+s0=$SECONDS
+for p in desktop ladder c4ix native c4m grin ixbuild swap ixsh c4ke c4dos ixlib ixpersist smp sound units maps; do
+    part $p
+done
+wait
+flush
+# (a part that died before it could say how it went)
+for ((; shown < nparts; shown++)); do cat $W/$shown.out 2>/dev/null; echo "test-libjs: a part ended early FAILED"; fail=1; done
+echo "test-libjs: $((SECONDS - s0)) s, $JOBS at a time; the parts': $(sort -k2 -rn $W/times 2>/dev/null | sed 's/ \(.*\)/ \1 s/' | paste -sd, | sed 's/,/, /g')"
+
+if [ $fail = 0 ]; then echo "test-libjs: OK"; else echo "test-libjs: FAILURES"; exit 1; fi

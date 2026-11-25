@@ -49,13 +49,14 @@
 // With plain c4:
 //  ./c4 c4m.c [-sSdpP] <first file.c> [file n.c, ...] [-- arguments...]
 // Example:
-//  c4 c4m.c classes.c classes_test.c -- test arguments
+//  c4 c4m.c src/c4ke/stdlib/classes.c src/c4ke/stdlib/classes_test.c -- test arguments
 //
 // Parameters:
 //  -s           Print the source and exit (memory leaks)
 //  -S           Print source symbol listing
 //  -d           Enable debug output during execution
 //  -U           Disable protected mode
+//  -F           No FPU: the FPU opcode traps, and the info word says so
 //  -p           (Currently nonfunctional) Decrease pool size
 //  -P           (Currently nonfunctional)
 // TODO: Fix the above two parameters.
@@ -82,6 +83,15 @@
 //       CONF_CYCLE_INTERRUPT_HANDLER   The function address of the handler.
 //       The cycle handler signature is:
 //       void handler(int type, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {}
+//       CONF_TRAP_RESTORES_INTERVAL    1 = TLEV restores the interval that was
+//                                      in effect when the trap was taken, so
+//                                      the interrupt stays masked across the
+//                                      whole handler including its return. A
+//                                      handler that opts in and wants to choose
+//                                      the interval for the context it is about
+//                                      to resume declares an eighth parameter
+//                                      ahead of the other seven:
+//       void handler(int interval, int type, int ins, int mode, int a, int *bp, int *sp, int *returnpc) {}
 //
 // - void stacktrace();            Print a stacktrace
 // - void install_trap_handler(void (*handler)(int trap, int ins, int mode, int a, int *bp, int *sp, int *returnpc));
@@ -109,12 +119,15 @@
 //   + Used by C4KE in trap handlers.
 // - void __c4_adjust (int offset); Adjust the stack. Negative offset grows stack.
 // - int __opcode (char *name);     Request the integer value of an opcode.
-// - int __builtin (char *name);    Request the opcode for a builtin.
+// - int __builtin (char *name);    Reserved: meant to return the opcode for a
+//                                  builtin, but it is a stub that always
+//                                  returns -1 (see __builtin below). Use
+//                                  __opcode("NAME") instead.
 // - Adds JSRI: Jump to SubRoutine Indirect: 'int *f; int call_it(int a) { return f(a); }'
 // - Adds JSRS: Jump to SubRoutine on Stack: 'int call_it (int a, int *f){ return f(a); }' or
 //                                           'int call_it (int a) { int *f; f = (int *)&func; return f(a); }'
 // - Adds &function to get function address. Can be called if stored in an int*.
-//   See classes.c and classes_test.c for usage. // TODO: these files moved. Update locationj.
+//   See src/c4ke/stdlib/classes.c and classes_test.c for usage.
 // - Adds stacktrace() builtin
 // - Adds realloc() builtin
 // - Adds memcpy() builtin
@@ -125,12 +138,79 @@
 #define __C4M_C__ 1
 
 #define C4M_SIGNALS 1
+// FREESTANDING: no headers at all, and everything c4m needs it defines
+// itself -- the C4_ONLY arm further down is exactly that set.
+//
+// This is what a build through raw c4cc produced by accident, because
+// c4cc skips every '#' line and so never opened a header. The C4DOS
+// rung depends on it and nobody knew: the tree's own <string.h> defines
+// memmove() in terms of memcpy(), and memcpy is MCPY, opcode 42, ABOVE
+// the base rung c4m-dos32.c4r is pinned to (test-c4bb-rungs). Give that
+// build a real preprocessor without this switch and the census refuses
+// it, correctly -- the image would need a CPU the player has not
+// extended yet.
+//
+// So the flag exists to ASK for the headerless build. Its companions
+// are -DC4_ONLY=1 (the C4 implementations, since there is no host libc
+// to call) and -DNOT_NATIVE=1 (which c4.h would otherwise have derived
+// from __c4cc__), and c4dos.h/u0.h come in as SOURCE FILES the way c4cc
+// has always taken them.
+#ifndef C4M_FREESTANDING
 #include "c4.h"
 #include "c4m_float.h"
 #include <c4m_util.h>
+#endif
 
 #ifdef __c4cc__
+// u0 is the C4KE runtime, and it REFUSES to run under C4DOS by design
+// (docs/dos-rung-fixes.md F5: its constructor sees __c4dos_api and
+// declines rather than asking a kernel that is not there for 38
+// opcodes). So an image meant for a disk C4DOS also boots has to be
+// built without it -- ./cpp -DC4M_NO_U0=1 -- and that is a thing to
+// ASK FOR, not a thing to get because the compiler happened to have no
+// preprocessor and skipped this line.
+#ifndef C4M_NO_U0
 #include <u0.h>
+// a guest's signals, through the kernel this c4m runs on (c4m_signal.h)
+#include <c4m_signal.h>
+#endif
+#endif
+
+// The C4DOS API, when there is no C4DOS and no preprocessor to say so.
+//
+// PLAIN C4 COMPILES THE BODY OF EVERY #if. It skips the '#' lines and
+// keeps what is between them, which is the property this whole file is
+// written around -- see c4_time() below. It is also why `./c4 c4m.c`
+// stopped working when the DOS rung landed: the `#if C4M_DOS` blocks
+// call dos_can_time(), dos_readable() and friends, those live in
+// include/c4dos.h, and plain c4 takes ONE source file, so the header
+// cannot be handed to it the way c4cc takes it. The result was
+// `bad function call` at compile time, in the leg the whole project is
+// about -- c4m running under an unmodified c4.
+//
+// An `#ifdef` may only ever ADD SOMETHING HARMLESS. A call to a
+// function that does not exist is not harmless, so here is the
+// function. Inert: it says there is no DOS, the caller falls through to
+// the ordinary path, and the DOS build never sees these because it has
+// a preprocessor and passes -DC4M_DOS=1.
+//
+// If a build ever prepends c4dos.h WITHOUT that flag, these collide
+// with the real ones -- and the two hosts disagree about that ON
+// PURPOSE. Plain c4 refuses a duplicate global outright ("duplicate
+// global definition"). c4m ALLOWS redefinition, by design and as part
+// of what multiload is for, and c4cc inherited it. So a collision here
+// would be silent on the host that matters, and what keeps them apart
+// is the BUILD RULES rather than the compiler: every build that
+// prepends c4dos.h passes -DC4M_DOS=1 -- the Makefile's two c4m-dos
+// rules and src/c4bb/tests/build-images.sh, all three through ./cpp
+// for exactly this reason.
+#ifndef C4M_DOS
+int dos_readable () { return 0; }
+int dos_can_time () { return 0; }
+int dos_time     () { return 0; }
+int dos_fopen  (char *path)                { return 0 - 1; }
+int dos_fread  (int fd, char *buf, int len) { return 0 - 1; }
+int dos_fclose (int fd)                    { return 0 - 1; }
 #endif
 
 // Configurables
@@ -157,6 +237,7 @@ char *p, *lp, // current position in source code
      *data;   // data/bss pointer
 
 int *e, *le,  // current position in emitted code
+    *e_end,   // where the text area ends, less a statement's worth (stmt)
     *id,      // currently parsed identifier
     *sym,     // symbol table (simple list of identifiers)
     tk,       // current token
@@ -166,7 +247,8 @@ int *e, *le,  // current position in emitted code
     line,     // current line number
     src,      // print source and assembly flag
     debug,    // print executed instructions
-    pm_avail; // protected mode available? (disable with -U)
+    pm_avail, // protected mode available? (disable with -U)
+    fpu_avail; // the FPU opcode offered? (off with -F)
 // A special stack for traps
 // int *trap_stack, *trap_sp, *trap_bp;
 int time_altmode; // use alternate mode for reading time
@@ -177,11 +259,21 @@ enum {
   Num = 128, Fun, Sys, Glo, Loc, Id,
   Static, Extern, Attribute, Constructor, Destructor, // Ignored
   Char, Else, Enum, If, Int, Return, Sizeof, While,
+  Switch, Case, Default, Break,
   Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
 };
 
+// switch/break state (see stmt): compiled to an in-memory jumptable
+// of absolute addresses, dispatched with JMPA
+enum { BRK_MAX = 256, SWITCH_MAX_CASES = 256, SWITCH_MAX_RANGE = 4096 };
+int *brk_slots;    // pending break JMP operand slots
+int  brk_top, brk_depth;
+
 // Configure codes, for use with C4CF/__c4_configure
-enum { CONF_CYCLE_INTERRUPT_INTERVAL, CONF_CYCLE_INTERRUPT_HANDLER, CONF_PRIVS };
+enum { CONF_CYCLE_INTERRUPT_INTERVAL, CONF_CYCLE_INTERRUPT_HANDLER, CONF_PRIVS,
+       // 1 = TLEV restores the cycle interrupt interval saved at trap
+       //     entry, instead of leaving whatever the handler last set.
+       CONF_TRAP_RESTORES_INTERVAL };
 enum { PRIV_KERNEL, PRIV_USER };
 
 // C4INFO state
@@ -195,6 +287,18 @@ enum {
 	C4I_SIG  = 0x20, // Signals supported
 	C4I_FLT  = 0x40, // Floating point instruction support
 	C4I_PROT = 0x80, // Protected mode support
+	// The memory protection guard is watching (docs/c4mpg-design.md).
+	// 0x100 is the free bit between C4I_PROT and C4I_C4KE. ANNOUNCED,
+	// NEVER PROBED (include/c4bb_info.h): a program asks for this bit
+	// and adapts; nothing may detect the guard by making a bad access
+	// and seeing what happens, because the answer to a bad access is a
+	// halt.
+	C4I_C4MPG = 0x100,
+	C4I_C4KE = 0x200,  // C4KE is running -- ORed in by the kernel, not here
+	C4I_TRAPH = 0x400, // A custom trap handler is installed (safe to probe opcodes)
+	// The FPU opcode: IEEE single and double (F3, docs/c4-float.md).
+	// 0x800-0x8000 are c4bb's and libjs's devices.
+	C4I_FPU = 0x10000,
 };
 
 // Trap codes
@@ -216,6 +320,11 @@ enum {
 	TRAP_PM_VIOLATION,
 	// Debug trap, used by DBG opcode
 	TRAP_DEBUG,
+	// A load or store outside every region the running context owns.
+	// Raised only by c4mpg (docs/c4mpg-design.md); listed here so the
+	// number is reserved across the whole family and the two enums stay
+	// in step. Plain c4m never raises it.
+	TRAP_MPG_VIOLATION,
 };
 // TRAP_HARD_IRQ codes
 enum {
@@ -255,6 +364,50 @@ enum {
 	FLT ,
 	// Instructions
 	JSRI,JSRS,JMPA,TLEV,DBG ,
+	// 66-78 are c4mp's (see src/c4mp/c4mp.h). c4m does not implement
+	// them and still traps them as TRAP_ILLOP; they are named here so
+	// that every mirrored table holds the same names at the same
+	// numbers, and so the debug disassembler names them rather than
+	// printing "unknown". A guest must keep feature-testing with
+	// C4I_SMP rather than by asking for one of these by name -- and
+	// note that __opcode() will now answer with a number for them.
+	CPUI,CPUN,CPUS,CPUH,
+	CAS ,XCHG,FADD,CWAI,CWAK,IPI ,
+	LXI ,SXI ,TRAW,
+	// The fused opcodes -- see docs/fused-opcodes.md. THE SPLIT IS
+	// DELIBERATE. c4m implements exactly three of them:
+	//
+	//   LDL  a = *(bp+n)      STL  *(bp+n) = a      POPA  a = *sp++
+	//
+	// which are what a stack-machine code generator needs to treat the
+	// frame as registers -- c4th's native backend uses these three and
+	// nothing else, and without them >R, DO/LOOP and every spill cost
+	// three instructions instead of one.
+	//
+	// The other seven are compiler-shaped -- they pay for c4cc's and
+	// c4lc's output, not for a Forth's -- and they live in c4mp only.
+	// c4m is the workhorse that boots C4KE and the machine c4bb models
+	// in hardware, where each opcode is microcode and ROM depth on a
+	// breadboard. Three is about twelve microsteps; ten is forty-odd.
+	// Keeping the seven in c4mp is what lets a c4mp-capable c4bb be an
+	// EXTENSION of the base board rather than a second one.
+	//
+	// All ten are NAMED here so every mirrored table holds the same
+	// names at the same numbers, so the disassembler names one rather
+	// than printing "unknown", and so c4l can say what an image needs.
+	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+	// IEEE arithmetic, single and double (F3, docs/c4-float.md): a sub-op
+	// and its operands on the stack, as FLT's -- c4lc's helpers use it
+	// when the info word has C4I_FPU
+	FPU ,
+	// 16-bit loads and a store, and a logical shift right (docs/c4-16bit.md):
+	// what c4lc and c4fc called a helper for -- <ld16s>, <ld16u>, <st16>
+	// and <lsr> -- for short, unsigned short and an unsigned >> by a count
+	// known only at run time. A short is two bytes, low first, at any
+	// address; SH leaves a as it was, as SI does.
+	LH  ,LHU ,SH  ,LSR ,
+	// an unsigned char's load: LC without the sign (docs/c4-16bit.md)
+	LCU ,
 	// End of instructions
 	INS_SIZE,
 };
@@ -276,13 +429,32 @@ void c4m_setup_opcodes () {
 	// Unsupported float instruction
 	"FLT ,"
 	// Instructions
-	"JSRI,JSRS,JMPA,TLEV,DBG ,";
+	"JSRI,JSRS,JMPA,TLEV,DBG ,"
+	// c4mp's, which c4m names but does not implement
+	"CPUI,CPUN,CPUS,CPUH,"
+	"CAS ,XCHG,FADD,CWAI,CWAK,IPI ,"
+	"LXI ,SXI ,TRAW,"
+	// fused -- docs/fused-opcodes.md. LDL, STL and POPA are implemented
+	// here; the other seven are c4mp's, and named only.
+	"LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,"
+	// F3
+	"FPU ,"
+	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
+	"LH  ,LHU ,SH  ,LSR ,LCU ,";
+}
+// One place decides which opcodes carry an operand word. Everything that
+// walks code -- the debug disassembler, OPCD's refusal -- asks here.
+int c4m_has_operand (int i) {
+	return i <= ADJ || i == JSRI || i == JSRS
+	    || (i >= LDL && i <= IMMP)          // LIP, ADDL and POPA take none
+	    || i == STL;
 }
 char *c4m_builtins;
 void c4m_setup_builtins () {
 	c4m_builtins =
 		"static extern __attribute__ constructor destructor "    // Ignored by c4m
 		"char else enum if int return sizeof while "             // Keywords
+		"switch case default break "                             // ... with a jumptable switch
 		"open read close printf malloc free memset memcmp exit " // Syscalls
 		"putchar puts realloc memcpy stacktrace "                // C4M extended opcodes...
 		"install_trap_handler __opcode __builtin __c4_trap __c4_opcode "
@@ -367,12 +539,19 @@ void next()
     if (tk == '\n') {
       if (src) {
         printf("%d: %.*s", line, p - lp, lp);
-        lp = p;
         while (le < e) {
           printf("%8.4s", &c4m_opcodes[*++le * 5]);
           if (*le <= ADJ) printf(" %d\n", *++le); else printf("\n");
         }
       }
+      // ALWAYS, not only under -s. lp is the start of the current line
+      // and dump_exit() prints [lp, p) to show which line an error is
+      // on -- so with lp left at byte zero it printed the whole file
+      // instead, and the error message went off the top of the
+      // scrollback with it. A compiler that answers "where?" with the
+      // entire input is worse than one that says nothing, because it
+      // takes the message you already had away with it.
+      lp = p;
       ++line;
     }
     else if (tk == '#') {
@@ -595,9 +774,20 @@ void expr(int lev)
   }
 }
 
+
 void stmt()
 {
   int *a, *b, t;
+  int *swv, *swa, *tbl, *b3, *b4, *bend, *bdef;
+  int  swn, swdef, swmin, swmax, swrange, i2, v2, neg2, brk_base;
+
+  // Nothing checked the text area's end: code past it went into
+  // whatever was allocated next, harmlessly as it happened under
+  // glibc, into live memory under C4KE's heap, and the program crashed
+  // later. The kernel compiled from source (innerbench) had come within
+  // 300 words of it at 64 bits. One statement emits well under the
+  // margin e_end leaves.
+  if (e >= e_end) { printf("%d: code area full; c4m -PP doubles it\n", line); exit(-1); }
 
   if (tk == If) {
     next();
@@ -618,12 +808,121 @@ void stmt()
     a = e + 1;
     if (tk == '(') next(); else { printf("%d: open paren expected\n", line); exit(-1); }
     expr(Assign);
-	// TODO: if (tk == Num && ival) for while(1) ? 
+	// TODO: if (tk == Num && ival) for while(1) ?
     if (tk == ')') next(); else { printf("%d: close paren expected\n", line); exit(-1); }
     *++e = BZ; b = ++e;
+    brk_base = brk_top; ++brk_depth;
     stmt();
     *++e = JMP; *++e = (int)a;
     *b = (int)(e + 1);
+    --brk_depth;
+    while (brk_top > brk_base) { --brk_top; *(int *)brk_slots[brk_top] = (int)(e + 1); }
+  }
+  else if (tk == Break) {
+    next();
+    if (tk != ';') { printf("%d: semicolon expected after 'break'\n", line); exit(-1); }
+    if (!brk_depth) { printf("%d: 'break' outside of loop or switch\n", line); exit(-1); }
+    if (brk_top >= BRK_MAX) { printf("%d: too many pending breaks\n", line); exit(-1); }
+    *++e = JMP; b = ++e;
+    brk_slots[brk_top] = (int)b;
+    ++brk_top;
+  }
+  else if (tk == Switch) {
+    // switch (expr) { case C: ... default: ... }, with fallthrough and
+    // break, compiled to an in-memory jumptable of absolute addresses,
+    // dispatched via JMPA. Layout matches c4cc's (see c4cc.c), minus
+    // relocation: the table is plain malloc'd memory.
+    next();
+    if (tk == '(') next(); else { printf("%d: in 'switch': open paren expected\n", line); exit(-1); }
+    expr(Assign);
+    if (tk == ')') next(); else { printf("%d: in 'switch': close paren expected\n", line); exit(-1); }
+    if (!(swv = malloc(SWITCH_MAX_CASES * sizeof(int))) ||
+        !(swa = malloc(SWITCH_MAX_CASES * sizeof(int)))) { printf("%d: switch: out of memory\n", line); exit(-1); }
+    swn = 0; swdef = 0; bdef = 0;
+    *++e = JMP; b = ++e;                    // entry -> dispatch
+    brk_base = brk_top; ++brk_depth;
+    if (tk == '{') next(); else { printf("%d: in 'switch': open brace expected\n", line); exit(-1); }
+    while (tk != '}') {
+      if (tk == Case) {
+        next();
+        neg2 = 0;
+        if (tk == Sub) { next(); neg2 = 1; }
+        if (tk == Num) v2 = ival;
+        else if (tk == Id && id[Class] == Num) v2 = id[Val];
+        else { printf("%d: 'case' needs an integer constant\n", line); exit(-1); }
+        if (neg2) v2 = -v2;
+        next();
+        if (tk == ':') next(); else { printf("%d: colon expected after 'case'\n", line); exit(-1); }
+        i2 = 0;
+        while (i2 < swn) {
+          if (swv[i2] == v2) { printf("%d: duplicate case value %d\n", line, v2); exit(-1); }
+          ++i2;
+        }
+        if (swn >= SWITCH_MAX_CASES) { printf("%d: too many cases\n", line); exit(-1); }
+        swv[swn] = v2;
+        swa[swn] = (int)(e + 1);
+        ++swn;
+      }
+      else if (tk == Default) {
+        next();
+        if (tk == ':') next(); else { printf("%d: colon expected after 'default'\n", line); exit(-1); }
+        if (swdef) { printf("%d: duplicate 'default'\n", line); exit(-1); }
+        swdef = 1;
+        bdef = e + 1;
+      }
+      else stmt();
+    }
+    next();
+    *++e = JMP; bend = ++e;                 // running off the body -> end
+    *b = (int)(e + 1);                      // dispatch:
+    if (!swn) {
+      if (swdef) { *++e = JMP; *++e = (int)bdef; }
+    } else {
+      swmin = swmax = swv[0];
+      i2 = 1;
+      while (i2 < swn) {
+        if (swv[i2] < swmin) swmin = swv[i2];
+        if (swv[i2] > swmax) swmax = swv[i2];
+        ++i2;
+      }
+      swrange = swmax - swmin;
+      if (swrange >= SWITCH_MAX_RANGE) { printf("%d: switch range %d too sparse for a jump table\n", line, swrange); exit(-1); }
+      if (!(tbl = malloc((swrange + 1) * sizeof(int)))) { printf("%d: switch: out of memory\n", line); exit(-1); }
+      // bounds check, three copies of the index on the stack
+      if (swmin) { *++e = PSH; *++e = IMM; *++e = swmin; *++e = SUB; }
+      *++e = PSH; *++e = PSH; *++e = PSH;
+      *++e = IMM; *++e = swrange; *++e = GT; *++e = BNZ; b3 = ++e;
+      *++e = IMM; *++e = 0; *++e = LT; *++e = BNZ; b4 = ++e;
+      *++e = IMM; *++e = sizeof(int); *++e = MUL;
+      *++e = PSH; *++e = IMM; *++e = (int)tbl; *++e = ADD; *++e = LI; *++e = JMPA;
+      // out of range: drop the leftover index copies, then default or end
+      *b3 = (int)(e + 1);
+      *++e = ADJ; *++e = 2;
+      if (swdef) { *++e = JMP; *++e = (int)bdef; }
+      else { *++e = JMP; b = ++e; brk_slots[brk_top] = (int)b; ++brk_top; }
+      *b4 = (int)(e + 1);
+      *++e = ADJ; *++e = 1;
+      if (swdef) { *++e = JMP; *++e = (int)bdef; }
+      else { *++e = JMP; b = ++e; brk_slots[brk_top] = (int)b; ++brk_top; }
+      // fill the table: cases where present, else default, else end
+      // (nothing else is emitted below, so end == e + 1)
+      i2 = 0;
+      while (i2 <= swrange) {
+        neg2 = 0;
+        v2 = 0;
+        while (v2 < swn) {
+          if (swv[v2] == swmin + i2) { tbl[i2] = swa[v2]; neg2 = 1; v2 = swn; }
+          ++v2;
+        }
+        if (!neg2) tbl[i2] = swdef ? (int)bdef : (int)(e + 1);
+        ++i2;
+      }
+    }
+    // end: resolve the fallthrough jump and every pending break
+    *bend = (int)(e + 1);
+    --brk_depth;
+    while (brk_top > brk_base) { --brk_top; *(int *)brk_slots[brk_top] = (int)(e + 1); }
+    free(swv); free(swa);
   }
   else if (tk == Return) {
     next();
@@ -750,7 +1049,11 @@ void print_stacktrace (int *pc_orig, int *idmain, int *idmax, int *bp, int *sp) 
 
 // This section is only compiled when run under C4 directly.
 // Here we put stubs or alternate implementations for functions that must be emulated under C4.
+// Overridable, so a build can ASK for the C4 implementations rather
+// than only ever getting them by being compiled with no preprocessor.
+#ifndef C4_ONLY
 #define C4_ONLY 0
+#endif
 #if C4_ONLY
 int pending_signal; // if a signal is pending
 int *signal_handlers;
@@ -779,20 +1082,34 @@ void *c4_memcpy(void *dst, void *src, int len) {
 
   //printf("c4_memcpy(%p, %p, %d)\n", dst, src, len);
   //stacktrace();
+  // The loops below were `while (i++ < max) di[i] = si[i];`, which is
+  // off by one at BOTH ends: the post-increment means the body first
+  // runs with i == 1, so element 0 is never copied, and the last
+  // iteration touches element max -- one past the end of both
+  // buffers. Element 0 staying whatever the destination already held
+  // is the subtler half: a freshly malloc'd block reads as zero, so a
+  // copied .c4r image lost the first word of its code segment, and
+  // opcode 0 is LEA. An image whose entry is at offset 0 -- which is
+  // most of them -- had the ENT of its entry point silently replaced,
+  // so calling it skipped the ENT, the callee ran on its CALLER's
+  // frame, and its LEV returned through the caller's saved bp and pc.
+  // The read and write past the end is the louder half, and showed up
+  // as glibc aborting on a corrupted heap top chunk.
+  //
+  // Only reachable when c4m is interpreted by plain c4: compiled
+  // natively, c4_memcpy is #defined to the host memcpy below.
   i = 0;
   if ((int)dst % sizeof(int) == 0 &&
       (int)src % sizeof(int) == 0 &&
       len % sizeof(int) == 0) {
     // Word copy
-    di = (int*)dst; si = (int*)src; i = 0;
+    di = (int*)dst; si = (int*)src;
     max = len / sizeof(int);
-    while(i++ < max)
-      di[i] = si[i];
+    while (i < max) { di[i] = si[i]; ++i; }
   } else {
     // Byte copy
     dc = (char*)dst; sc = (char*)src;
-    while(i++ < len)
-      dc[i] = sc[i];
+    while (i < len) { dc[i] = sc[i]; ++i; }
   }
   return dst;
 }
@@ -815,7 +1132,10 @@ enum {
 //       second number updates every 100ms.
 //       This is reverse on Debian-pi.
 //       Use -a flag to use alternate format.
-int c4_time () {
+// The host clock for a c4m with no host: /proc/uptime, which exists on
+// Linux and on no breadboard. c4_time() below is what callers use; this
+// is only its last resort.
+int c4_time_host () {
 	int fd, number, r;
 	char *buf, ch;
 
@@ -873,8 +1193,11 @@ int c4_info  () {
 }
 int has_float () { return 0; }
 int do_float  (int *sp) { return 0; }
+int has_fpu   () { return 0; }
+int do_fpu    (int *sp) { return 0; }
 int do_putchar(char *c) { return printf("%c", c); }
 int do_puts   (char *str) { return printf("%s", str); }
+int *do_sigh  (int sig, int *handler) { return __c4_signal(sig, handler); }
 #else
 // When compiled natively, use whatever native functions we can.
 // TODO: native c4_malloc, etc disabled due to bad implementation.
@@ -882,17 +1205,287 @@ int do_puts   (char *str) { return printf("%s", str); }
 //#define c4_free(p)         free(p)
 //#define c4_realloc(p,ns)   realloc(p, ns)
 #define c4_memcpy(d,s,n)   memcpy(d, s, n)
-#define c4_time()          c4m_time()
+#define c4_time_host()     c4m_time()
 #define c4_plain()         0 /* Plain C4 or compiled c4m natively? */
-#define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | (pm_avail ? C4I_PROT : 0))
+#define c4_info()          (C4I_C4M | C4I_HRT | C4I_SIG | (has_float() ? C4I_FLT : 0) | (pm_avail ? C4I_PROT : 0) | (has_fpu() ? C4I_FPU : 0))
 #define c4_usleep(usec)    usleep(usec)
+#if NATIVE
 #define has_float()        1
+#define has_fpu()          fpu_avail
+#define do_fpu(sp)         c4_fpu_instruction(sp)
+#else
+// Built FOR the c4 VM by a compiler with a preprocessor -- cc (c4lc)
+// inside C4IX, or c4cc through ./cpp for the disk -- this c4m runs on
+// another one, and has float exactly when that machine does: it lends
+// the outer FLT (c4_float_instruction below).
+#define has_float()        ((__c4_info() & C4I_FLT) != 0)
+// and the FPU likewise -- lent through __c4_fpu, which c4lc and c4fc
+// have (both predefine __c4_inttypes__) and c4cc has not
+#if defined(__c4_inttypes__)
+#define has_fpu()          (fpu_avail && (__c4_info() & C4I_FPU) != 0)
+#define do_fpu(sp)         __c4_fpu((sp)[3], (sp)[2], (sp)[1], (sp)[0])
+#else
+#define has_fpu()          0
+#define do_fpu(sp)         0
+#endif
+#endif
 #define do_float(sp)       c4_float_instruction(sp)
 #define do_putchar(c)      putchar(c)
 #define do_puts(s)         puts(s)
+#if !NATIVE && defined(__c4cc__) && !defined(C4M_NO_U0)
+#define do_sigh(sig, h)    c4m_guest_signal(sig, h)
+#else
+#define do_sigh(sig, h)    __c4_signal(sig, h)
+#endif
 #endif
 
+// c4m_float.c is the HOST's float, compiled beside a native c4m. A c4m
+// built for the c4 VM has no host and does not link it: its FLT is the
+// one the machine under it executes -- the same opcode, the same operands
+// (sp[0] the sub-op, then a and b), so the outer VM does the work. Before
+// this, such a build referenced c4_float_instruction and nothing defined
+// it: c4cc let the call dangle, and cc inside C4IX could not link c4m.
+//
+// A macro, not a function, and that is the point: plain c4 compiles the
+// body of every #if but skips every '#' line, and __c4_float is no
+// builtin of plain c4's -- a function here would stop `./c4 c4m.c`. A
+// #define is invisible to it, and do_float() is the only use.
+#if !C4_ONLY && !NATIVE
+#define c4_float_instruction(sp) __c4_float((sp)[2], (sp)[1], (sp)[0])
+#endif
+
+// The clock, for every build there is.
+//
+// This sits OUTSIDE the C4_ONLY split on purpose, and the purpose is a
+// bug that cost a session. The DOS check used to live INSIDE the
+// C4_ONLY arm, which meant it existed only in builds where C4_ONLY was
+// true -- and C4_ONLY is only ever true by accident, when a build goes
+// through raw c4cc and every '#' line is skipped. Every build that has
+// a preprocessor evaluated `#define C4_ONLY 0` honestly, took the other
+// arm, and quietly had no DOS clock. Whether c4m can ask DOS the time
+// has nothing to do with whether it was compiled against a host libc;
+// nesting the one inside the other is what made "which compiler built
+// this" decide a feature.
+//
+// Additive by construction, so it survives a compiler with no
+// preprocessor at all: raw c4cc skips the '#' lines and compiles the
+// DOS check in, where it costs one runtime test on a machine that has
+// no DOS to answer it. That is the rule this file was written to and
+// had drifted from -- an '#ifdef' may only ADD something harmless,
+// never pick between two spellings of the same thing.
+int c4_time () {
+#if C4M_DOS
+	// ASK C4DOS FIRST. c4_time_host() reads /proc/uptime, which is a
+	// Linux fallback and exists on no breadboard -- so on c4bb this
+	// latched c4_time_unavailable and returned 0 FOREVER. A guest that
+	// waits for the clock to move then waits forever: the C4KE boot's
+	// "measuring instructions per second" step never finished, at any
+	// cycle budget, which looked like slowness and was actually a
+	// stopped clock.
+	//
+	// DOS has the clock (TIME opcode, serviced by the board's microcode
+	// or by a native c4m) and lends it through API slot 15. Going that
+	// way rather than calling TIME here is deliberate: TIME is opcode
+	// 53, above EXIT, and c4m-dos32.c4r is pinned in RUNG_BASE so the
+	// campaign can say the VM needs no opcode the machine did not boot
+	// with. The API table costs nothing above EXIT.
+	if (dos_can_time()) return dos_time();
+#endif
+	return c4_time_host();
+}
+
+// Guest memory: malloc(), free() and realloc() for the MALC, FREE and RALC
+// opcodes.
+//
+// The VM has no way to ask the host how large an allocation was, which is
+// why the C4 versions of malloc()/realloc() were removed in 2024 (see the
+// note at the top of this file) and why RALC has been dead ever since --
+// its case was commented out, so guest code compiled fine and then fell
+// through to the unknown-instruction path, leaving the SIZE argument in
+// the accumulator for the guest to use as a pointer. That is a segfault,
+// not a diagnostic.
+//
+// The obvious fix is a size header: over-allocate, stash the length in
+// front, hand back the word after it. DO NOT DO THAT. Guest free() is
+// reached by pointers that guest malloc() never produced -- measured, on
+// ./c4 c4m.c load-c4r.c -- prog.c4r, where the loader issues 8 MALCs and
+// 16 FREEs while the same run compiled natively is a balanced 17/17. A
+// header makes free() do free(q - 1), and on those pointers that is heap
+// corruption. (Why the counts differ between hosts is a separate open
+// question, recorded in docs/compiler-speed.md; it is not this code's to
+// answer, and this design does not care either way.)
+//
+// So sizes live in a side table keyed by pointer, and guest pointers are
+// handed out and taken back EXACTLY as before. free() of something we
+// never allocated falls through to a plain free(), which is precisely
+// what it did before this change -- the compatibility risk is zero by
+// construction rather than by audit. Only realloc() needs the table, and
+// realloc() is only ever legal on your own allocation.
+//
+// Open addressing, linear probing, power-of-two capacity, tombstones on
+// delete. Growth rehashes into a fresh pair of arrays, so it needs only
+// malloc/free/memset -- all of which plain c4 has. That matters: ONE
+// implementation serves both hosts and they cannot drift apart.
+enum { C4_MT_EMPTY = 0, C4_MT_DEAD = 1, C4_MT_MIN = 4096 };
+
+int *c4_mt_key;   // pointer keys; 0 = never used, 1 = tombstone
+int *c4_mt_val;   // sizes, parallel to c4_mt_key
+int  c4_mt_cap;   // capacity, always a power of two
+int  c4_mt_fill;  // live entries + tombstones (what probing must bound)
+int  c4_mt_live;  // live entries only
+
+// Heap pointers are at least word aligned, so the low bits carry no
+// information; fold a high slice down before masking or every allocation
+// in one arena lands in the same cluster.
+int c4_mt_slot (int p) {
+  int h;
+
+  h = (p >> 4) ^ (p >> 20);
+  if (h < 0) h = 0 - h;
+  return h & (c4_mt_cap - 1);
+}
+
+void c4_mt_setup (int cap) {
+  c4_mt_cap  = cap;
+  c4_mt_key  = malloc(cap * sizeof(int));
+  c4_mt_val  = malloc(cap * sizeof(int));
+  if (!c4_mt_key || !c4_mt_val) { c4_mt_cap = 0; return; }
+  memset((char *)c4_mt_key, 0, cap * sizeof(int));
+  memset((char *)c4_mt_val, 0, cap * sizeof(int));
+  c4_mt_fill = 0;
+  c4_mt_live = 0;
+}
+
+// Insert without growing or checking for duplicates. Used by both the
+// public insert and by rehashing, which knows its keys are distinct.
+void c4_mt_put_raw (int p, int n) {
+  int i;
+
+  i = c4_mt_slot(p);
+  while (c4_mt_key[i] != C4_MT_EMPTY && c4_mt_key[i] != C4_MT_DEAD) {
+    if (c4_mt_key[i] == p) { c4_mt_val[i] = n; return; }
+    i = (i + 1) & (c4_mt_cap - 1);
+  }
+  if (c4_mt_key[i] == C4_MT_EMPTY) ++c4_mt_fill;
+  c4_mt_key[i] = p;
+  c4_mt_val[i] = n;
+  ++c4_mt_live;
+}
+
+// Rehash into a table sized for the LIVE entries, which also sweeps the
+// tombstones away. Called when probing distance would otherwise grow.
+void c4_mt_grow () {
+  int *oldk;
+  int *oldv;
+  int  oldcap, i, want;
+
+  oldk = c4_mt_key; oldv = c4_mt_val; oldcap = c4_mt_cap;
+  want = C4_MT_MIN;
+  while (want < (c4_mt_live + c4_mt_live + c4_mt_live)) want = want + want;
+  c4_mt_setup(want);
+  if (!c4_mt_cap) { c4_mt_key = oldk; c4_mt_val = oldv; c4_mt_cap = oldcap; return; }
+  i = 0;
+  while (i < oldcap) {
+    if (oldk[i] != C4_MT_EMPTY && oldk[i] != C4_MT_DEAD)
+      c4_mt_put_raw(oldk[i], oldv[i]);
+    ++i;
+  }
+  free(oldk);
+  free(oldv);
+}
+
+void c4_mt_put (int p, int n) {
+  if (!c4_mt_cap) c4_mt_setup(C4_MT_MIN);
+  if (!c4_mt_cap) return;                       // out of memory: sizes are
+                                                // lost, realloc will refuse
+  // Keep the table at most half full counting tombstones, so a probe
+  // always terminates quickly.
+  if ((c4_mt_fill + c4_mt_fill) >= c4_mt_cap) c4_mt_grow();
+  c4_mt_put_raw(p, n);
+}
+
+// Returns the recorded size, or -1 if we did not allocate this pointer.
+int c4_mt_get (int p) {
+  int i, n;
+
+  if (!c4_mt_cap) return -1;
+  i = c4_mt_slot(p);
+  n = 0;
+  while (c4_mt_key[i] != C4_MT_EMPTY && n < c4_mt_cap) {
+    if (c4_mt_key[i] == p) return c4_mt_val[i];
+    i = (i + 1) & (c4_mt_cap - 1);
+    ++n;
+  }
+  return -1;
+}
+
+// Drop a pointer, leaving a tombstone so probe chains through it survive.
+void c4_mt_del (int p) {
+  int i, n;
+
+  if (!c4_mt_cap) return;
+  i = c4_mt_slot(p);
+  n = 0;
+  while (c4_mt_key[i] != C4_MT_EMPTY && n < c4_mt_cap) {
+    if (c4_mt_key[i] == p) {
+      c4_mt_key[i] = C4_MT_DEAD;
+      c4_mt_val[i] = 0;
+      --c4_mt_live;
+      return;
+    }
+    i = (i + 1) & (c4_mt_cap - 1);
+    ++n;
+  }
+}
+
+
+
+int c4_malloc (int n) {
+  int p;
+
+  if (n < 0) return 0;
+  if (!(p = (int)malloc(n))) return 0;
+  c4_mt_put(p, n);
+  return p;
+}
+
+void c4_free (int p) {
+  if (!p) return;
+  c4_mt_del(p);          // a no-op for pointers that were never ours
+  free((void *)p);
+}
+
+int c4_realloc (int p, int n) {
+  int r, old;
+
+  // realloc(0, n) is malloc(n); realloc(p, 0) frees and yields null,
+  // which is what glibc does and therefore what the gcc oracle in
+  // src/tests/test_realloc.c pins.
+  if (!p) return c4_malloc(n);
+  if (n <= 0) { c4_free(p); return 0; }
+  old = c4_mt_get(p);
+  // A pointer we never handed out has no recorded length, so there is no
+  // safe number of bytes to copy. Refusing is the only honest answer.
+  if (old < 0) return 0;
+  if (!(r = c4_malloc(n))) return 0;
+  if (old > n) old = n;
+  c4_memcpy((char *)r, (char *)p, old);
+  c4_free(p);
+  return r;
+}
+
 int  tlev_instruction;
+
+// When set, TLEV restores the cycle interrupt interval that was in
+// effect when the trap was taken (see the bp+9 slot below), the way a
+// real machine's interrupt return restores the interrupt flag.
+//
+// It is off by default because it changes what a handler's own
+// __c4_configure(CONF_CYCLE_INTERRUPT_INTERVAL, x) means: with this
+// on, the frame decides, not the last write before returning. C4KE
+// re-arms from inside its handler and predates all of this, so it
+// keeps the old behaviour untouched; C4IX opts in.
+int  trap_restores_interval;
 
 // Cause a trap to occur and update stack and registers so that the given
 // handler is executed.
@@ -906,16 +1499,24 @@ int  tlev_instruction;
 // to a TLEV instruction for proper trap exit.
 // The stack is further adjusted by inspecting the ENT x instruction,
 // and adding that to sp. This allows local variables to work.
-// Stack will be presented as such (offsets in words):
-//   sp+0 = trap bp      Usually an sp and return pc are on the stack.
-//   sp+1 = ptr to TLEV  Argument references (LEA) still expect these here.
-//   sp+2 = trap
-//   sp+3 = instruction
-//   sp+4 = saved mode
-//   sp+5 = saved accumulator
-//   sp+6 = saved sp
-//   sp+7 = saved bp
-//   sp+8 = return pc / instruction address
+// The frame is presented as such (offsets in words from the handler's bp):
+//   bp+0 = trap bp      Usually an sp and return pc are on the stack.
+//   bp+1 = ptr to TLEV  Argument references (LEA) still expect these here.
+//   bp+2 = return pc / instruction address
+//   bp+3 = saved sp
+//   bp+4 = saved bp
+//   bp+5 = saved accumulator
+//   bp+6 = saved mode
+//   bp+7 = instruction
+//   bp+8 = trap
+//   bp+9 = saved cycle interrupt interval
+// A C4 handler's parameters are numbered from the top of the frame
+// down, so a handler declared with the usual seven parameters reads
+// bp+8..bp+2 as (trap, instruction, mode, a, bp, sp, returnpc). The
+// interval at bp+9 is pushed FIRST for exactly that reason: it is
+// invisible to those handlers, and a handler that wants it declares
+// an eighth parameter ahead of the other seven. That is what makes
+// this slot free to add without disturbing C4KE.
 // After inspecting the trap handler's ENT x instruction, the stack is
 // further adjusted to account for it.
 void trap (int type, int parameter, int *handler, int **_sp, int **_bp, int **_pc, int a, int mode) {
@@ -950,6 +1551,16 @@ void trap (int type, int parameter, int *handler, int **_sp, int **_bp, int **_p
 	// Offset so that stack doesn't get overwritten
 	sp = sp - TRAP_OFFSET;
 
+	// The interrupt state belongs to the interrupted context, so it is
+	// saved with it. Pushed first, so it lands at bp+9, past the seven
+	// parameters an existing handler can see.
+	*--sp = cycle_interrupt_interval;
+	// Handlers run with the cycle interrupt off. Every caller of trap()
+	// already did this on the way back; doing it here as well means the
+	// mask covers the handler's own epilogue and its TLEV, which is the
+	// window a handler cannot close from the inside.
+	cycle_interrupt_interval = 0;
+
 	// Push instruction and trap number
 	*--sp = type;             // printf("*sp(0x%X) = trap type %d\n", sp, *sp);
 	*--sp = parameter;        // printf("*sp(0x%X) = parameter %d (at 0x%X)\n", sp, *sp, pc - 1);
@@ -979,6 +1590,38 @@ void trap (int type, int parameter, int *handler, int **_sp, int **_bp, int **_p
 	//trap_bp = bp;
     // Disable cycle interrupt
     // cycle_interrupt_interval = 0;
+}
+
+// The cycle interrupt is due at every cycle that is a multiple of the
+// interval: cycle % cycle_interrupt_interval == 0. Testing that at every
+// instruction was a division per instruction, which an interpreted c4m
+// pays for in full, so the main loop compares cycle with c4m_irq_at, the
+// next cycle that can be one, and asks c4m_irq_due only there. The
+// interval becomes nonzero in two places, C4CF and TLEV, and both rearm
+// c4m_irq_at; everywhere else only clears it, which needs nothing.
+int c4m_irq_at;
+
+// The first multiple of the interval after cycle c, or c itself when there
+// is no interval (c has passed, so it does not come round again). Past the
+// top of int it is the bottom, where cycle goes next, so the first multiple
+// after the wrap is not stepped over.
+int c4m_irq_next (int c) {
+	int iv, r, n;
+	iv = cycle_interrupt_interval;
+	if (iv < 0) iv = 0 - iv;
+	if (!iv) return c;
+	r = c % iv;
+	if (r < 0) r = r + iv;
+	n = c - r + iv;
+	if (n < c) n = (int)1 << (sizeof(int) * 8 - 1);
+	return n;
+}
+
+// Cycle c has reached c4m_irq_at: rearm it, and say whether the interrupt
+// is due -- exactly the old test, since the interval may have gone.
+int c4m_irq_due (int c) {
+	c4m_irq_at = c4m_irq_next(c);
+	return cycle_interrupt_interval && !(c % cycle_interrupt_interval);
 }
 
 ///
@@ -1036,12 +1679,119 @@ int c4_invoke_stub () {
 }
 
 ///
+// The VM's file syscalls, and the one place they are not just the host's.
+//
+// A program running INSIDE c4m reaches the outside world through these
+// opcodes, so whatever they can see, everything c4m interprets can see.
+// Under C4DOS that matters: the RAM disk lives in DOS's own memory and
+// a transient's open() has never heard of it, so `c4m load-c4r.c -- c4ke`
+// could not find a kernel the machine had just compiled -- load-c4r.c
+// was doing the open, one level down, and no amount of patching it
+// would help because it is compiled from source at runtime and has no
+// symbol table to inject into. Routing the VM's own OPEN/READ/CLOS
+// through the DOS API fixes it for load-c4r.c and for every other
+// program c4m will ever run, without any of them knowing.
+//
+// DOS checks the RAM disk BEFORE the real disk, so host files still
+// resolve; when there is no DOS, __c4dos_api is 0, dos_readable() is
+// false, and these are exactly the host calls they always were.
+//
+// C4M_DOS is defined only for the C4DOS-rung builds, which are the
+// ones compiled by raw c4cc -- it skips # lines, so the branch is
+// always present there and include/c4dos.h is prepended to supply it.
+// Every other build goes through gcc or gcc -E, where C4M_DOS is 0 and
+// the branch disappears: native ./c4m and the C4KE c4m.c4r are byte
+// for byte the programs they were.
+///
+
+// A path beginning "/dev/" is a HOST device, not a C4DOS file, and
+// C4DOS's open takes a NAME AND NOTHING ELSE -- so routing one through
+// it silently drops the flags. That is where O_NONBLOCK went: raycast
+// asks for /dev/tty non-blocking, gets a blocking C4DOS handle, and
+// then renders no frame until Enter, because its poll is a read that
+// waits. Native c4m never showed it (no C4M_DOS, so no dos_fopen),
+// which is why `make run` was fine and the C4DOS-hosted chain was not.
+//
+// C4DOS has no notion of a device file, so nothing is lost by letting
+// these through to the host: a name it cannot open is one it would have
+// refused anyway.
+//
+// Written to be correct under PLAIN C4 TOO, which keeps the body of
+// every #if (see the note at the top of this file): with no DOS,
+// dos_readable() is the inert stub, every path takes the host branch,
+// and the table below simply never gets consulted.
+// A BITMASK, not an array: plain c4 has no global arrays, and this file
+// has to compile under it. Descriptors here are small -- the host hands
+// out the lowest free one and c4m opens a handful -- so one word covers
+// every fd a device could land on, and anything above 31 simply is not
+// remembered and behaves as it did before.
+int c4m_devfd;
+
+int c4m_isdev (char *path) {
+	if (!path) return 0;
+	if (*path != '/') return 0;
+	if (*(path + 1) != 'd') return 0;
+	if (*(path + 2) != 'e') return 0;
+	if (*(path + 3) != 'v') return 0;
+	return *(path + 4) == '/';
+}
+
+// The read side has to agree with the open side about whose handle this
+// is: C4DOS hands out small non-negative handles and so does the host,
+// so they cannot be told apart by value. The device ones are remembered.
+int c4m_isdevfd (int fd) {
+	if (fd < 0) return 0;
+	if (fd > 31) return 0;
+	return (c4m_devfd >> fd) & 1;
+}
+
+// A guest's open() flags are Linux's numbers (include/fcntl.h), and
+// on Linux the host's too. A host that numbers them otherwise -- Windows,
+// under MSYS2 or MinGW -- has its own numbers set by c4m_util.h, which
+// only a compiler with a preprocessor reads; these declarations, zero,
+// are what plain c4 and every Linux build see.
+#ifndef C4M_OHOST
+int c4m_ohost, c4m_o_creat, c4m_o_excl, c4m_o_trunc, c4m_o_append, c4m_o_nonblock, c4m_o_binary;
+#endif
+int c4m_oflags (int f) {
+	int h;
+	if (!c4m_ohost) return f;
+	h = f & 3;                               // O_RDONLY, O_WRONLY, O_RDWR
+	if (f & 64)   h = h | c4m_o_creat;
+	if (f & 128)  h = h | c4m_o_excl;
+	if (f & 512)  h = h | c4m_o_trunc;
+	if (f & 1024) h = h | c4m_o_append;
+	if (f & 2048) h = h | c4m_o_nonblock;
+	return h | c4m_o_binary;
+}
+
+int c4m_open (char *path, int flags) {
+	int fd;
+	if (dos_readable() && !c4m_isdev(path)) return dos_fopen(path);
+	fd = open(path, c4m_oflags(flags));
+	// Only worth remembering while a C4DOS is present to be confused
+	// with; without one, c4m_isdevfd is never asked.
+	if (fd >= 0 && fd < 32 && dos_readable()) c4m_devfd = c4m_devfd | (1 << fd);
+	return fd;
+}
+
+int c4m_read (int fd, char *buf, int len) {
+	if (dos_readable() && !c4m_isdevfd(fd)) return dos_fread(fd, buf, len);
+	return read(fd, buf, len);
+}
+
+int c4m_close (int fd) {
+	if (dos_readable() && !c4m_isdevfd(fd)) return dos_fclose(fd);
+	return close(fd);
+}
+
+///
 // Callable main entry point, TODO: c4cc (should) includes this file for the opcode definitions.
 ///
 
 int c4m_main(int argc, char **argv)
 {
-  int fd, bt, ty, poolsz, printsyms;
+  int fd, bt, ty, poolsz, printsyms, textsz;
   int *pc, *sp, *bp, a; // vm registers
   int i, *t, r; // temps
   char*_p, *_data;       // initial pointer locations
@@ -1053,7 +1803,6 @@ int c4m_main(int argc, char **argv)
   int len;
   char *x;
 
-
   //debug = 1;
   debug = 0;
   verb = 0;
@@ -1062,9 +1811,14 @@ int c4m_main(int argc, char **argv)
   time_altmode = 0;
   // Used to protect traps from just returning instead of using TLEV.
   tlev_instruction = TLEV;
+  // Off by default: kernels written before this existed re-arm the
+  // cycle interrupt from inside their handler, and turning this on
+  // would overrule them.
+  trap_restores_interval = 0;
   // Start in unprotected mode with pm available
   mode = MODE_UNPROTECTED;
   pm_avail = 1;
+  fpu_avail = 1;
   // Setup invoke stub
   c4_invoke_stub();
 
@@ -1079,23 +1833,31 @@ int c4m_main(int argc, char **argv)
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'S') { printsyms = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'a') { time_altmode = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'U') { pm_avail = 0; --argc; ++argv; }
+  if (argc > 0 && **argv == '-' && (*argv)[1] == 'F') { fpu_avail = 0; --argc; ++argv; }
   // TODO: these options broken
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { i = 1; while((*argv)[1 + i++]) poolsz = poolsz / 2; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'P') { i = 1; while((*argv)[1 + i++]) poolsz = poolsz * 2; --argc; ++argv; }
-  if (argc < 1) { printf("usage: c4_multiload [-v] [-s] [-d] [-p] [-P] file1 [files...] -- args ...\n"); return -1; }
+  if (argc < 1) { printf("usage: c4_multiload [-v] [-s] [-d] [-U] [-F] [-p] [-P] file1 [files...] -- args ...\n"); return -1; }
 
   if (verb) printf("c4m: init...\n");
   if (!(sym = _sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
   idmax = sym + (poolsz / sizeof(int)); // end of symbol table
   idmax = idmax - Idsz;                 // minus one element
-  if (!(le = e = _e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
+  // The text area counts words, so it is sized in them: 64K at the
+  // default pool, whatever the word size (256 KB at 32 bits, as it
+  // always was; 512 KB at 64, where poolsz bytes held only 32K).
+  textsz = poolsz / 4 * sizeof(int);
+  if (!(le = e = _e = malloc(textsz))) { printf("could not malloc(%d) text area\n", textsz); return -1; }
+  e_end = e + textsz / sizeof(int) - 1024;
   if (!(data = _data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(sp = _sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
+  if (!(brk_slots = malloc(BRK_MAX * sizeof(int)))) { printf("could not malloc break stack\n"); return -1; }
+  brk_top = 0; brk_depth = 0;
   // if (!(trap_stack = trap_sp = malloc(poolsz))) { printf("could not malloc(%d) trap stack area\n", poolsz); return -1; }
   if ((i = __c4_signal_init())) { printf("c4m: signal init failed with reason %d\n", i); return -1; }
 
   memset(sym,  0, poolsz);
-  memset(e,    0, poolsz);
+  memset(e,    0, textsz);
   memset(data, 0, poolsz);
 
 #if C4_ONLY
@@ -1106,7 +1868,7 @@ int c4m_main(int argc, char **argv)
   c4m_setup_builtins();
 
   p = c4m_builtins;
-  i = Static; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
+  i = Static; while (i <= Break) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= FLT) {
 	next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++;
 	if (verb) { // don't be so verbose
@@ -1297,6 +2059,7 @@ int c4m_main(int argc, char **argv)
   free(_p);
   //free(_sym);
 
+
   // run...
   if (verb) printf("c4m: run!\n");
   run = 1;
@@ -1306,19 +2069,41 @@ int c4m_main(int argc, char **argv)
   cycle_interrupt_interval = 0;
   cycle_interrupt_handler = 0;
 
-  while (run) {
-	++cycle;
+  c4m_irq_at = 0;
 
-	// Allow a cycle interrupt. Since cycle is incremented above, this will
-	// not interrupt the first cycle.
-	if (cycle_interrupt_interval && !(cycle % cycle_interrupt_interval)) {
+  while (run) {
+	// Allow a cycle interrupt. cycle is incremented first, so this will
+	// not interrupt the first cycle. The interrupt is due at every
+	// multiple of the interval; c4m_irq_at is the next one, so the
+	// common case is one compare and no division (see c4m_irq_next).
+	// TLEV is a trap return: it restores five registers from a frame in
+	// one step, and there is no way to express "half returned". Landing
+	// an interrupt on it hands the handler a context that belongs to
+	// neither the outgoing nor the incoming side. Kernels that opt into
+	// trap_restores_interval never reach this instruction with the
+	// interrupt armed; for the others, stepping over it costs one tick.
+	if (++cycle == c4m_irq_at && c4m_irq_due(cycle) && *pc != TLEV) {
 		//printf("!trap_hard_irq %d using handler 0x%X\n", cycle_interrupt_interval, cycle_interrupt_handler);
 		trap(TRAP_HARD_IRQ, HIRQ_CYCLE, cycle_interrupt_handler, &sp, &bp, &pc, a, mode);
 		// Disable cycle interrupt and set unprotected mode
 		cycle_interrupt_interval = 0;
 		mode = MODE_UNPROTECTED;
-	// Check for pending signals from the signal handler
-	} else if (pending_signal) {
+	// Check for pending signals from the signal handler.
+	//
+	// A signal is an asynchronous interrupt like the cycle one, so it
+	// honours the same mask -- but only for kernels that have told us
+	// the interval IS a mask, by opting into trap_restores_interval.
+	// Without that, a masked interval and "this kernel simply never
+	// enabled preemption" are indistinguishable, and deferring would
+	// mean never delivering.
+	//
+	// Deferred, not dropped: pending_signal stays set, so the signal
+	// arrives as soon as the mask lifts. Delivering it regardless is
+	// how Ctrl-C used to vanish -- the trap landed while the kernel
+	// was inside its own handler, the handler's re-entry guard turned
+	// delivery into a no-op, and the signal was gone.
+	} else if (pending_signal
+	           && !(trap_restores_interval && !cycle_interrupt_interval)) {
 		// TODO: sometimes crashes here, as if signal_handlers[pending_signal] points to code that has been
 		//       deallocated.
 		// printf("c4m: trapping pending signal %d\n", pending_signal);
@@ -1333,7 +2118,10 @@ int c4m_main(int argc, char **argv)
     // This opcode is handled here so debug output can show the opcode
     if (i == OPCD) {
         i = *sp;
-        if (i <= ADJ) {
+        // The fused opcodes take an operand too, and it would be read
+        // out of the CALLER's instruction stream -- so OPCD has to
+        // refuse them for the same reason it refuses LEA..ADJ.
+        if (c4m_has_operand(i)) {
             printf("%.4s does not support opcodes requiring arguments (%.4s given)\n",
                    &c4m_opcodes[OPCD * 5], &c4m_opcodes[i * 5]);
 			// Raise an OPV trap
@@ -1356,114 +2144,167 @@ int c4m_main(int argc, char **argv)
       } else {
           printf("unknown %-*d (0x%X)", padding, i, i);
       }
-      if (i <= ADJ || i == JSRI || i == JSRS) printf(" %d\n", *pc); else printf("\n");
+      if (c4m_has_operand(i)) printf(" %d\n", *pc); else printf("\n");
     }
 
-    if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
-    else if (i == IMM) a = *pc++;                                         // load global address or immediate
-    else if (i == JMP) pc = (int *)*pc;                                   // jump
-    else if (i == JMPA) pc = (int *)a;                                    // jump using accumulator
-    else if (i == _JMP) pc = (int *)*sp++;                                // jump using __c4_jmp
-    else if (i == JSR) { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
+    // The chain is in two levels. Plain c4 has no switch and compiles this
+    // file as source, so it stays a chain of ifs -- but each test is a
+    // load, a compare and a branch, and an interpreted c4m pays for every
+    // one it passes. Under innerbench in C4IX that was about twenty an
+    // instruction. So the range comes first and the opcode second, and
+    // inside each range the commonest come first, as counted on
+    // load-c4r.c and C4KE booting: PSH 24%, LI 18%, LEA 17%, IMM 11%,
+    // SI 6%, ADD 5%, then a long tail. docs/c4ix-design.md has the numbers.
+    //
+    // c4's own instructions, LEA to PSH -- and anything below zero.
+    if (i <= PSH) {
+	    if (i == PSH) *--sp = a;                                         // push
+	    //else if (i == LI)  a = *(int *)a;                                     // load int
+	    else if (i == LI)  {
+	//#ifdef SEGFAULT_TRACING
+	//		// Enable segfault tracing for certain problematic values to find out where
+	//      // the issue is occurring.
+	//		if (a >= 0 && a <= 0xFFFF || a == 0xffffffffffffffff) {
+	//			print_stacktrace(pc, idmain, idmax, bp, sp);
+	//			cycle_interrupt_interval = 0;
+	//			trap(TRAP_SEGV, a, trap_handler, &sp, &bp, &pc, a);
+	//		} else
+	//#endif
+				a = *(int *)a;                                     // load int
+		}
+	    else if (i == LEA) a = (int)(bp + *pc++);                             // load local address
+	    else if (i == IMM) a = *pc++;                                         // load global address or immediate
+	    else if (i == SI)  {
+			*(int *)*sp++ = a;                                                // store int
+		}
+	    else if (i == BZ)  pc = a ? pc + 1 : (int *)*pc;                      // branch if zero
+	    else if (i == ADJ)  sp = sp + *pc++;                                  // stack adjust
+	    else if (i == JSR) { *--sp = (int)(pc + 1); pc = (int *)*pc; }        // jump to subroutine
+	    else if (i == ENT) { *--sp = (int)bp; bp = sp; sp = sp - *pc++; }     // enter subroutine
+	    else if (i == LEV) {                                                  // leave subroutine
+			sp = bp; // printf("//LEV: sp = bp 0x%X\n", bp);
+			bp = (int *)*sp++; // printf("//LEV: bp = 0x%X loaded from 0x%X\n", bp, sp - 1);
+			pc = (int *)*sp++; // printf("//LEV: pc = 0x%X loaded from 0x%X\n", sp, sp - 1);
+		}
+	    else if (i == JMP) pc = (int *)*pc;                                   // jump
+	    else if (i == LC)  {
+			a = *(char *)a;                                                   // load char
+		}
+	    else if (i == BNZ) pc = a ? (int *)*pc : pc + 1;                      // branch if not zero
+	    else if (i == SC)  {
+			a = *(char *)*sp++ = a;                                           // store char
+		}
+	    // Below LEA: outside the table, so the custom-opcode trap that the
+	    // last arm of the chain gives every opcode it does not know.
+	    else {
+			trap(TRAP_ILLOP, i, trap_handler, &sp, &bp, &pc, a, mode);
+			mode = MODE_UNPROTECTED;
+	    }
+    }
+    // The operators, OR to MOD: every one of them is here.
+    else if (i <= MOD) {
+	    if (i == ADD) a = *sp++ +  a;
+	    else if (i == SUB) a = *sp++ -  a;
+	    else if (i == EQ)  a = *sp++ == a;
+	    else if (i == MUL) a = *sp++ *  a;
+	    else if (i == LT)  a = *sp++ <  a;
+	    else if (i == NE)  a = *sp++ != a;
+	    else if (i == LE)  a = *sp++ <= a;
+	    else if (i == GE)  a = *sp++ >= a;
+	    else if (i == GT)  a = *sp++ >  a;
+	    else if (i == AND) a = *sp++ &  a;
+	    else if (i == OR)  a = *sp++ |  a;
+	    else if (i == SHL) a = *sp++ << a;
+	    else if (i == SHR) a = *sp++ >> a;
+	    else if (i == XOR) a = *sp++ ^  a;
+	    else if (i == DIV) a = *sp++ /  a;
+	    else if (i == MOD) a = *sp++ %  a;
+    }
+    // Everything else, one test each: the fused opcodes and the other
+    // instructions first, then the syscalls and extensions in enum order.
+    // The three fused opcodes c4m has: first after the two ranges,
+    // since being the commonest in a fused image is the whole point.
+    else if (i == LDL)  a = *(int *)(bp + *pc++);                         // load local
+    else if (i == STL)  *(int *)(bp + *pc++) = a;                         // store local
+    else if (i == POPA) a = *sp++;                                        // pop into the accumulator
     else if (i == JSRI) { *--sp = (int)(pc + 1); pc = (int *)*pc; pc = (int *)*pc;}  // jump to subroutine indirect
+    else if (i == TIME) a = c4_time();
+    else if (i == READ) {
+		if (mode == MODE_UNPROTECTED) {
+            a = c4m_read(sp[2], (char *)sp[1], *sp);
+        }
+		else {
+			trap(TRAP_PM_VIOLATION, READ, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
     else if (i == JSRS) { *--sp = (int)(pc + 1); pc = (int*)*(bp + *pc); }  // jump to subroutine indirect on stack
-    else if (i == BZ)  pc = a ? pc + 1 : (int *)*pc;                      // branch if zero
-    else if (i == BNZ) pc = a ? (int *)*pc : pc + 1;                      // branch if not zero
-    else if (i == ENT) { *--sp = (int)bp; bp = sp; sp = sp - *pc++; }     // enter subroutine
-    else if (i == ADJ)  sp = sp + *pc++;                                  // stack adjust
+    else if (i == _JMP) pc = (int *)*sp++;                                // jump using __c4_jmp
     else if (i == _ADJ) sp = sp + *sp;                                    // stack adjust callable function
-    else if (i == LEV) {                                                  // leave subroutine
-		sp = bp; // printf("//LEV: sp = bp 0x%X\n", bp);
-		bp = (int *)*sp++; // printf("//LEV: bp = 0x%X loaded from 0x%X\n", bp, sp - 1);
-		pc = (int *)*sp++; // printf("//LEV: pc = 0x%X loaded from 0x%X\n", sp, sp - 1);
+    else if (i == JMPA) pc = (int *)a;                                    // jump using accumulator
+    else if (i == LCU) {
+		a = *(char *)a & 255;                                             // load unsigned char
 	}
-    //else if (i == LI)  a = *(int *)a;                                     // load int
-    else if (i == LI)  {
-//#ifdef SEGFAULT_TRACING
-//		// Enable segfault tracing for certain problematic values to find out where
-//      // the issue is occurring.
-//		if (a >= 0 && a <= 0xFFFF || a == 0xffffffffffffffff) {
-//			print_stacktrace(pc, idmain, idmax, bp, sp);
-//			cycle_interrupt_interval = 0;
-//			trap(TRAP_SEGV, a, trap_handler, &sp, &bp, &pc, a);
-//		} else
-//#endif
-			a = *(int *)a;                                     // load int
+	// 16 bits, two bytes, low first, at any address (docs/c4-16bit.md).
+	// LH's high byte is a char's load, so the result has the sign of the
+	// short; SH leaves a alone, as SI does.
+    else if (i == LH)  {
+		a = (*(char *)a & 255) | (*(char *)(a + 1) << 8);                  // load short
 	}
-    else if (i == LC)  a = *(char *)a;                                    // load char
-    else if (i == SI)  *(int *)*sp++ = a;                                 // store int
-    else if (i == SC)  a = *(char *)*sp++ = a;                            // store char
-    else if (i == PSH) *--sp = a;                                         // push
-
-    else if (i == OR)  a = *sp++ |  a;
-    else if (i == XOR) a = *sp++ ^  a;
-    else if (i == AND) a = *sp++ &  a;
-    else if (i == EQ)  a = *sp++ == a;
-    else if (i == NE)  a = *sp++ != a;
-    else if (i == LT)  a = *sp++ <  a;
-    else if (i == GT)  a = *sp++ >  a;
-    else if (i == LE)  a = *sp++ <= a;
-    else if (i == GE)  a = *sp++ >= a;
-    else if (i == SHL) a = *sp++ << a;
-    else if (i == SHR) a = *sp++ >> a;
-    else if (i == ADD) a = *sp++ +  a;
-    else if (i == SUB) a = *sp++ -  a;
-    else if (i == MUL) a = *sp++ *  a;
-    else if (i == DIV) a = *sp++ /  a;
-    else if (i == MOD) a = *sp++ %  a;
+    else if (i == LHU) {
+		a = (*(char *)a & 255) | ((*(char *)(a + 1) & 255) << 8);          // load unsigned short
+	}
+    else if (i == SH)  {
+		t = (int *)*sp++; *(char *)t = a; *((char *)t + 1) = a >> 8;      // store short
+	}
+	// a = (unsigned)*sp++ >> a, the count taken modulo the word's bits:
+	// SHR's arithmetic shift with the copies of the sign bit masked off
+    else if (i == LSR) {
+		r = a & (sizeof(int) * 8 - 1); a = *sp++;
+		if (r) a = (a >> r) & ~((int)-1 << (sizeof(int) * 8 - r));
+	}
 	// SYSCALL functions
     else if (i == OPEN) {
-//		if (mode == MODE_UNPROTECTED)
-            a = open((char *)sp[1], *sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, OPEN, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
-	}
-    else if (i == READ) {
-//		if (mode == MODE_UNPROTECTED)
-        a = read(sp[2], (char *)sp[1], *sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, READ, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		if (mode == MODE_UNPROTECTED) {
+            a = c4m_open((char *)sp[1], *sp);
+        }
+		else {
+			trap(TRAP_PM_VIOLATION, OPEN, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
     else if (i == CLOS) {
-//		if (mode == MODE_UNPROTECTED)
-            a = close(*sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, CLOS, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		if (mode == MODE_UNPROTECTED)
+            a = c4m_close(*sp);
+		else {
+			trap(TRAP_PM_VIOLATION, CLOS, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
 	else if (i == PUTC) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED)
             a = do_putchar(*((char *)sp));
-//		else {
-//			trap(TRAP_PM_VIOLATION, PUTC, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		else {
+			trap(TRAP_PM_VIOLATION, PUTC, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
 	else if (i == PUTS) {
-//		if (mode == MODE_UNPROTECTED)
+		if (mode == MODE_UNPROTECTED) {
             a = do_puts((char *)*sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, PUTS, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+        }
+		else {
+			trap(TRAP_PM_VIOLATION, PUTS, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
     else if (i == PRTF) {
-//		if (mode == MODE_UNPROTECTED) {
+		if (mode == MODE_UNPROTECTED) {
 			r = pc[1];
 			t = sp + r;
 			// Fix potential access violation by not pushing arguments not given
@@ -1476,37 +2317,48 @@ int c4m_main(int argc, char **argv)
 			//else if (r == 7) a = printf((char*)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]);
 			if (r > 7) { printf("Too many arguments to printf!\n"); exit(-1); }
 			else a = printf((char*)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6], t[-7]);
-//		} else {
-//			trap(TRAP_PM_VIOLATION, PRTF, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		} else {
+			trap(TRAP_PM_VIOLATION, PRTF, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
     }
     else if (i == MALC) {
-//		if (mode == MODE_UNPROTECTED)
-            a = (int)malloc(*sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, MALC, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		if (mode == MODE_UNPROTECTED)
+            a = c4_malloc(*sp);
+		else {
+			trap(TRAP_PM_VIOLATION, MALC, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
-    //else if (i == RALC) a = (int)c4_realloc((int*)sp[1], *sp);
+    else if (i == RALC) {
+		if (mode == MODE_UNPROTECTED)
+            a = c4_realloc(sp[1], *sp);
+		else {
+			trap(TRAP_PM_VIOLATION, RALC, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
     else if (i == FREE) {
-//		if (mode == MODE_UNPROTECTED)
-            free((void *)*sp);
-//		else {
-//			trap(TRAP_PM_VIOLATION, FREE, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
+		if (mode == MODE_UNPROTECTED)
+            c4_free(*sp);
+		else {
+			trap(TRAP_PM_VIOLATION, FREE, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
 	}
-    else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
-    else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
-    else if (i == MCPY) a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
+    else if (i == MSET) {
+		a = (int)memset((char *)sp[2], sp[1], *sp);
+	}
+    else if (i == MCMP) {
+		a = memcmp((char *)sp[2], (char *)sp[1], *sp);
+	}
+    else if (i == MCPY) {
+		a = (int)c4_memcpy((void*)sp[2], (void*)sp[1], *sp);
+	}
     else if (i == STRC) {
 //		if (mode == MODE_UNPROTECTED) {
 			print_stacktrace(pc, idmain, idmax, bp, sp);
@@ -1518,21 +2370,28 @@ int c4m_main(int argc, char **argv)
 //		}
 	}
     else if (i == EXIT) {
-//		if (mode == MODE_UNPROTECTED) {
+		// Guarded like the other syscalls: a protected task calling
+		// exit() must not be able to halt the whole VM, so it traps
+		// and the kernel decides what "exit" means for that task.
+		// Unprotected code (including every kernel) is unaffected.
+		if (mode == MODE_UNPROTECTED) {
 			//printf("exit(%d) cycle = %d\n", *sp, cycle);
 			status = *sp; run = 0;
-//		} else {
-//			trap(TRAP_PM_VIOLATION, EXIT, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
-    } else if (i == _OPC) { // return an opcode
+		} else {
+			trap(TRAP_PM_VIOLATION, EXIT, trap_handler, &sp, &bp, &pc, a, mode);
+			// Disable cycle interrupt and set unprotected mode
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+    }
+    else if (i == _OPC) { // return an opcode
       a = __opcode((char *)*sp);
+    }
       //printf("_OPCD: got %d (0x%X) from request %s\n", a, a, (char *)*sp);
-    } else if (i == OPSL) { // return all opcodes
+    else if (i == OPSL) { // return all opcodes
       a = (int)c4m_opcodes; // TODO: copy?
-    } else if (i == TLEV) { // trap leave
+    }
+    else if (i == TLEV) { // trap leave
         // Restore stack to TLEV parameters
         sp = bp;
         // sp will be overwritten below, so to be less convoluted use a temporary.
@@ -1555,13 +2414,33 @@ int c4m_main(int argc, char **argv)
         a  = (int  )*t++;    // printf("From 0x%X, loaded saved a %d\n", t - 1, a);
 		mode = (int)*t++;    // printf("From 0x%X, loaded saved mode %d\n", t - 1, mode);
         //printf("Resume from pc 0x%X\n", pc);
+        // The interrupt state is part of the context too. t has walked
+        // past the instruction and trap number, so it now addresses the
+        // interval saved at bp+9.
+        if (trap_restores_interval) {
+            cycle_interrupt_interval = *(t + 2);
+            c4m_irq_at = c4m_irq_next(cycle);
+        }
 	}
 	else if (i == C4CY) a = cycle;
 	else if (i == SIGI) a = __c4_sigint();
-    else if (i == TIME) a = c4_time();
-	else if (i == USLP) a = c4_usleep(*sp);
+	else if (i == USLP) {
+		// Guarded: run here it would stop the whole machine, every
+		// other task with it. The kernel sleeps just the caller.
+		if (mode == MODE_UNPROTECTED) a = c4_usleep(*sp);
+		else {
+			trap(TRAP_PM_VIOLATION, USLP, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
     else if (i == ITH) { // install trap handler
-//		if (mode == MODE_UNPROTECTED) {
+		// Guarded: the trap handler is the MACHINE's -- the kernel's. A
+		// protected task that set it took every trap of every task, and
+		// a kernel run as a program (C4KE started from C4IX's shell) did
+		// exactly that. The kernel decides: C4IX kills the task, C4KE's
+		// PM extension hands the machine over.
+		if (mode == MODE_UNPROTECTED) {
 			if (!*sp) {
 				// Remove trap handler
 				a = (int)trap_handler;
@@ -1572,19 +2451,21 @@ int c4m_main(int argc, char **argv)
 				a = (int)trap_handler;
 				trap_handler = (int *)*sp;
 			}
-//		} else {
-//			trap(TRAP_PM_VIOLATION, ITH, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
-	} else if (i == C4CF) { // Configure system: __c4_configure(CONF_*, value)
+		} else {
+			trap(TRAP_PM_VIOLATION, ITH, trap_handler, &sp, &bp, &pc, a, mode);
+			// Disable cycle interrupt and set unprotected mode
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
+	else if (i == C4CF) { // Configure system: __c4_configure(CONF_*, value)
 		// TODO: this should be priveleged, but C4KE is using it in mode 1 (protected)
 		//printf("(c4: C4CF %d in mode %d\n", sp[1], mode);
 		//if (mode == MODE_UNPROTECTED) {
 			if (sp[1] == CONF_CYCLE_INTERRUPT_INTERVAL) {
 				a = cycle_interrupt_interval;
 				cycle_interrupt_interval = sp[0];
+				c4m_irq_at = c4m_irq_next(cycle);
 #if 0
 				// C4/C4CC only
 				// printf("(c4m: cycle interval set to %d\n", sp[0]);
@@ -1593,6 +2474,9 @@ int c4m_main(int argc, char **argv)
 				a = (int)cycle_interrupt_handler;
 				cycle_interrupt_handler = (int *)sp[0];
 				// printf("(c4m: cycle handler set to 0x%lx\n", sp[0]);
+			} else if(sp[1] == CONF_TRAP_RESTORES_INTERVAL) {
+				a = trap_restores_interval;
+				trap_restores_interval = sp[0];
 			} else {
 				printf("c4m: C4CF issue\n");
 				return -100;
@@ -1603,33 +2487,72 @@ int c4m_main(int argc, char **argv)
 		//	mode = MODE_UNPROTECTED;
 		//}
 	}
-	else if (i == SIGH) a = (int)__c4_signal(sp[1], (int *)sp[0]);
+	else if (i == SIGH) {
+		// Guarded: run here it replaces the MACHINE's handler -- the
+		// kernel's own -- with an address in the task. The kernel
+		// gives the task a handler of its own instead.
+		if (mode == MODE_UNPROTECTED) a = (int)do_sigh(sp[1], (int *)sp[0]);
+		else {
+			trap(TRAP_PM_VIOLATION, SIGH, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
 	else if (i == INFO) {
 		// Trap this under protected mode
-//		if (mode == MODE_UNPROTECTED)
-            a = c4_info();
-//		else {
-//			trap(TRAP_PM_VIOLATION, INFO, trap_handler, &sp, &bp, &pc, a, mode);
-//			// Disable cycle interrupt and set unprotected mode
-//			cycle_interrupt_interval = 0;
-//			mode = MODE_UNPROTECTED;
-//		}
-	} else if (i == _TRP) {
+		if (mode == MODE_UNPROTECTED)
+            a = c4_info() | (trap_handler ? C4I_TRAPH : 0)
+                ;
+		else {
+			trap(TRAP_PM_VIOLATION, INFO, trap_handler, &sp, &bp, &pc, a, mode);
+			cycle_interrupt_interval = 0;
+			mode = MODE_UNPROTECTED;
+		}
+	}
+	else if (i == _TRP) {
       // __c4_trap(type, signal)
       // Trigger a trap
       trap(sp[1], sp[0], trap_handler, &sp, &bp, &pc, a, mode);
+	}
 	  // Disable cycle interrupt and set unprotected mode
 //	  cycle_interrupt_interval = 0;
 //	  mode = MODE_UNPROTECTED;
-	} else if (i == DBG) {
+	else if (i == DBG) {
 		// DBG - signal the debugger
 		trap(TRAP_DEBUG, 0, trap_handler, &sp, &bp, &pc, a, mode);
+	}
 		// Disable cycle interrupt and set unprotected mode
 //		mode = MODE_UNPROTECTED;
-	} else if (i == C4IV) {
+	else if (i == C4IV) {
 		// C4 Invoke
 		// TODO: only allow in unprotected mode?
 		// Update stub function to JMP to given address in *sp
+#if C4M_DOS
+		// THE INVOKE MUST NOT ESCAPE THIS INTERPRETER WHEN WE ARE THE
+		// ONE HOLDING THE FILESYSTEM.
+		//
+		// The stub below rewrites our OWN code to jump at the target,
+		// so the invoked function stops being something we interpret
+		// and becomes something the machine runs directly. Its
+		// syscalls then go straight to the disk controller and never
+		// reach the C4DOS RAM disk -- and load-c4r.c takes exactly
+		// that route for every load it does (c4r_load_opt_pure, which
+		// c4r_load picks whenever __c4_info() says C4I_C4). That is
+		// why `c4m load-c4r.c -- c4ke` could not find a kernel BUILD
+		// had just compiled: the open happened one level above the
+		// only place that knows what a RAM disk is.
+		//
+		// A JSR is the same call without the escape -- push the return
+		// address, jump, let the callee's LEV come back -- and it is
+		// what the #else branch below has always had a TODO asking
+		// for. Only taken when DOS is actually there, so a c4m running
+		// on bare hardware still gets the stub it always did.
+		if (dos_readable()) {
+			t = (int *)*sp;
+			*--sp = (int)pc;
+			pc = t;
+		} else {
+#endif
 #if NOT_NATIVE
 		*c4_invoke_stub_addr = *sp;
 		a = c4_invoke_stub();
@@ -1641,21 +2564,60 @@ int c4m_main(int argc, char **argv)
 			a = 0;
 		}
 #endif
-	} else if (i == FLT) {
+#if C4M_DOS
+		}
+#endif
+	}
+	else if (i == FPU) {
+		if (has_fpu()) a = do_fpu(sp);
+		else trap(TRAP_ILLOP, FPU, trap_handler, &sp, &bp, &pc, a, mode);
+	}
+	else if (i == FLT) {
 		if (has_float()) a = do_float(sp);
 		else {
 			// Maybe the running code can emulate this instruction
 			trap(TRAP_ILLOP, FLT, trap_handler, &sp, &bp, &pc, a, mode);
 		}
-    } else {
-//        if (trap_handler == 0) {
-//            printf("unknown instruction = %d! cycle = %d\n", i, cycle); status = -1; run = 0;
-//        } else {
+    }
+    else if (!trap_handler && i >= 0 && i < INS_SIZE) {
+			// An opcode this machine KNOWS THE NAME OF but does not
+			// implement -- c4mp's, or one of the seven fused opcodes
+			// that live there. That is a machine mismatch, not a custom
+			// opcode, so halt and say so.
+			//
+			// Trapping into nowhere and resuming is not an option here:
+			// pc is past the opcode but NOT past its operand, so
+			// carrying on executes a data word and walks off into
+			// memory. That used to be a segfault with no explanation,
+			// which is a poor way to find out an image was built for
+			// c4mp.
+			//
+			// An opcode OUTSIDE the table keeps the old behaviour and
+			// falls through below: that is the custom-opcode
+			// convention, where a program raises an opcode a kernel
+			// emulates, and running the same program with no kernel is
+			// expected to print the missed trap and carry on (see
+			// src/oisc4/test-oisc4.sh, which filters exactly that).
+			printf("c4m: %.4s (opcode %d) at 0x%X is not an instruction this machine has,\n",
+			       &c4m_opcodes[i * 5], i, pc - 1);
+			printf("c4m: and no trap handler is installed to emulate it. Halting.\n");
+			status = -1;
+			run = 0;
+    }
+    else {
 			// printf("c4m: illegal opcode %d, invoking trap handler 0x%X\n", i, trap_handler);
 			trap(TRAP_ILLOP, i, trap_handler, &sp, &bp, &pc, a, mode);
-//        }
+			// A trap handler must run privileged, as it does at every
+			// other trap site. Without this an illegal opcode raised BY
+			// A PROTECTED TASK -- which is how custom-opcode syscalls
+			// work -- runs the handler still protected, so the first
+			// syscall opcode inside the kernel raises a SECOND trap on
+			// top of the first. (C4KE is unaffected: it compiles its
+			// protected mode out, so mode is already unprotected.)
+			mode = MODE_UNPROTECTED;
     }
   }
+
 
   // free memory
   //free(_p);

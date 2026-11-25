@@ -1,0 +1,53 @@
+B4KE2
+# C4IX's C library, /lib/libc.c4s (include/libc.h has what is in it), and
+# libctest, which exercises it. The same commands as build-images.sh, so
+# the results are the disk's byte for byte. libc carries libc4ix's syscall
+# layer, compiled -fpic here as libc is.
+SET ROOT /usr
+SET OUT /build
+# c4sc runs on a task's default stack, 256 KB. math.c and stdio.c peak
+# at 5.2 KB of it, stdlib.c at 2.7 KB
+# (measured 2026-10-25). The 4 MB this set was for a c4lc bug,
+# g:resolvecode recursing once per instruction (fixed in 29cbac9).
+SET LC c4sc -c 65536 compile -O
+# -fpic: one copy of libc's code serves every task (src/c4ix/loader.c)
+SET LCF $(LC) -fno-builtin -fpic -c -I src/c4ix/libc/include -I src/c4ix/libc
+SET H src/c4ix/libc/include/libc.h src/c4ix/libc/sys.h
+CD $(ROOT)
+MKDIR $(OUT)/libc
+MKDIR $(OUT)/lib
+MKDIR $(OUT)/bin
+DEPS $(OUT)/libc/string.c4o : src/c4ix/libc/string.c $(H)
+RUN $(LCF) src/c4ix/libc/string.c $(OUT)/libc/string.c4o
+DEPS $(OUT)/libc/stdlib.c4o : src/c4ix/libc/stdlib.c $(H)
+RUN $(LCF) src/c4ix/libc/stdlib.c $(OUT)/libc/stdlib.c4o
+DEPS $(OUT)/libc/stdio.c4o : src/c4ix/libc/stdio.c $(H)
+RUN $(LCF) src/c4ix/libc/stdio.c $(OUT)/libc/stdio.c4o
+DEPS $(OUT)/libc/unix.c4o : src/c4ix/libc/unix.c $(H)
+RUN $(LCF) src/c4ix/libc/unix.c $(OUT)/libc/unix.c4o
+# the two units that say double, so carry c4lc's float helpers: slow
+DEPS $(OUT)/libc/fp.c4o : src/c4ix/libc/fp.c
+RUN $(LCF) src/c4ix/libc/fp.c $(OUT)/libc/fp.c4o
+DEPS $(OUT)/libc/math.c4o : src/c4ix/libc/math.c
+RUN $(LCF) src/c4ix/libc/math.c $(OUT)/libc/math.c4o
+# the one file compiled without -fno-builtin: the VM's opcodes
+DEPS $(OUT)/libc/opcodes.c4o : src/c4ix/libc/opcodes.c
+RUN $(LC) -fpic -c src/c4ix/libc/opcodes.c $(OUT)/libc/opcodes.c4o
+# libc4ix's syscall layer, again, -fpic
+DEPS $(OUT)/libc/libc4ix.c4o : src/c4ix/lib/libc4ix.c src/c4ix/include/c4ix_user.h
+RUN $(LC) -fpic -c -I src/c4ix/include src/c4ix/lib/libc4ix.c $(OUT)/libc/libc4ix.c4o
+SET OBJS $(OUT)/libc/string.c4o $(OUT)/libc/stdlib.c4o $(OUT)/libc/stdio.c4o $(OUT)/libc/unix.c4o $(OUT)/libc/fp.c4o $(OUT)/libc/math.c4o $(OUT)/libc/opcodes.c4o $(OUT)/libc/libc4ix.c4o
+DEPS $(OUT)/lib/libc.c4s : $(OBJS)
+RUN c4rlink -r $(OBJS) -o $(OUT)/lib/libc.c4s
+DEPS $(OUT)/libc/libctest.c4o : src/c4ix/libc/tests/libctest.c $(H)
+RUN $(LC) -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/libctest.c $(OUT)/libc/libctest.c4o
+DEPS $(OUT)/bin/c4ix-libctest.c4r : $(OUT)/libc/libctest.c4o $(OUT)/lib/libc.c4s
+RUN c4rlink $(OUT)/libc/libctest.c4o -l $(OUT)/lib/libc.c4s -o $(OUT)/bin/c4ix-libctest.c4r
+DEPS $(OUT)/libc/pictest.c4o : src/c4ix/libc/tests/pictest.c $(H)
+RUN $(LC) -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/pictest.c $(OUT)/libc/pictest.c4o
+DEPS $(OUT)/bin/c4ix-pictest.c4r : $(OUT)/libc/pictest.c4o $(OUT)/lib/libc.c4s
+RUN c4rlink $(OUT)/libc/pictest.c4o -l $(OUT)/lib/libc.c4s -o $(OUT)/bin/c4ix-pictest.c4r
+DEPS $(OUT)/libc/unixtest.c4o : src/c4ix/libc/tests/unixtest.c $(H)
+RUN $(LC) -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/unixtest.c $(OUT)/libc/unixtest.c4o
+DEPS $(OUT)/bin/c4ix-unixtest.c4r : $(OUT)/libc/unixtest.c4o $(OUT)/lib/libc.c4s
+RUN c4rlink $(OUT)/libc/unixtest.c4o -l $(OUT)/lib/libc.c4s -o $(OUT)/bin/c4ix-unixtest.c4r

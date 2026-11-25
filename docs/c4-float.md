@@ -1,0 +1,227 @@
+# Floating point: float and double for c4
+
+Asked for 2026-10-21. The goal is IEEE single and double precision in the C99 compilers and in C4IX:
+- **Software first,** the way old DOS compilers shipped a float emulator.
+- **Then an FPU in the emulators,** used when it is there and not otherwise, with the speeds compared.
+- **Then** the Calculator gets single and double modes, and C4SK gets floats.
+
+## Status
+
+| step | what | state |
+|---|---|---|
+| F1 | `src/c4fp/softfp.c`: binary32 and binary64 in software | **done** |
+| F2 | `float` and `double` in c4lc (and so c4sc, and `cc` inside C4IX) | **done** |
+| F4 | C4IX libc: `printf` `%f %e %g`, `strtod`, `math.h` | **done** |
+| F5 | Calculator: single and double modes | **done** |
+| F3 | an FPU opcode in c4m, libjs and c4bb, which the helpers use when present | **done** |
+| F6 | libjs checks; soft against hard, timed | **done** |
+
+**Decisions (2026-10-21):**
+- c4lc first; c4fc refuses `float` for now, as it refuses `long long` at 32 bits.
+- The soft-float helpers are spliced into the unit that uses them, as the `long long` helpers are.
+- The helpers test an FPU bit and use the opcode when it is there (F3).
+
+## F1: the library
+
+`src/c4fp/softfp.c` (see its README) works on bit patterns:
+- a float is an `unsigned int`;
+- a double is an `unsigned long long`, one word on a 64-bit target and two on a 32-bit one.
+
+So it is plain C that compiles the same at either word size, and with gcc.
+
+**Behaviour:**
+- Results are correctly rounded (to nearest, ties to even), with subnormals, signed zeros, infinities and NaNs.
+- NaNs behave as x86 SSE's do, so the host can check every bit.
+- The algorithms are Berkeley SoftFloat 3's for add, subtract, multiply and the conversions.
+- Divide and square root are exact digit-at-a-time loops instead.
+
+**`make test-c4fp`:**
+- gcc builds it and checks it against SSE on 2 million random operand sets per run. 60 million were run once with none wrong.
+- Then c4lc builds it at 32 and 64 bits, plain and `-O`, and it must reproduce 6,504 vectors of the host's answers.
+
+## F2: the compilers
+
+**Types.** `float` and `double` are a band of their own in c4lc's type codes, `1024 + 64 * 16000` and the next (`p:FLOAT`, `g:FLOAT`), past any struct id a unit hands out. Pointer levels add 2, as everywhere.
+
+| | storage | how it travels | `sizeof` |
+|---|---|---|---|
+| `float` | as an `unsigned int`: a word, kept in [0, 2^32) on a 64-bit target | ordinary word loads, stores, arguments and returns | a word, as `unsigned int` is |
+| `double`, 64-bit target | the word | ordinary word path | 8 |
+| `double`, 32-bit target | two words | exactly as `long long`: the value is an address, it lives in frame temporaries, it is passed as two words and returned through a hidden pointer (`g:ll?` says yes for it there) | 8 |
+
+**Literals.** The lexer converts decimal literals with a point or an exponent (`1.5`, `.5`, `1e-3`, `2.5f`, `1e9L`) into bits. The conversion is exact, using big integers in 16-bit limbs, so a 32-bit c4sp gives the same bits. It is correctly rounded at both ends of both formats, subnormals included.
+- A float literal is `(num BITS FLOAT)`.
+- A double is `(num BITS DOUBLE)`, or `(llnum LO HI DOUBLE)` at 32 bits, which the existing constant and initializer code already handles.
+- A minus sign folds into the literal, so `-2.5f` can initialize a global.
+- Hex floats are not read.
+
+**Operations.** Every operation on a float is a call to a softfp helper. `g:fpexpr`, at the top of `g:expr`, catches every node with a float in it:
+- `+ - * /`;
+- comparisons: the helper's `-1/0/1/2` (2 is unordered), mapped so that a NaN is unequal to everything;
+- unary minus: a sign-bit XOR, or `__c4d_neg` for a double in two words;
+- `!`, and truth in `if`/`while`/`&&`/`||`/`?:`: compared with 0.0, so `-0.0` is false and a NaN is true;
+- casts both ways, to and from every integer type;
+- assignment, compound assignment and `++`/`--`.
+
+**`-mfpu`** (2026-11-06). Every operation above but `sqrt`, the `long long` and unsigned
+conversions, and the double's negate and absolute value is the `FPU` opcode where it stands
+(`g:fpuargs`, `g:fpuarith`, `g:fpuword`), not a call. For `a + b` in floats that is the operands
+and `IMMP op; FPU; ADJ 3`. The opcode wants `a` on top, so `b` goes first when neither side
+writes anything (`g:fppure?`), and otherwise `a` goes first as ever and waits in a temporary.
+Such an image needs an FPU. Where there is none the opcode is illegal: C4IX's kernel and the
+bare machine stop and say the program needs one. Only Quake is built this way, with its own copy
+of `math.c` so built (`games/quake/c4.mk`), and libc is not
+(its helpers still ask), so everything else still runs on a machine without an FPU.
+
+**A float against a double** (2026-11-06, with or without `-mfpu`). Two floats widened compare as
+floats. A float and a double constant compare as floats too, with the constant rounded the way the
+operator needs (`g:fpround`): `f > 0.1` is `f >` the float below 0.1, `f < 0.1` is `f <` the float
+above it, and `f == 0.1` stays a double compare because 0.1 is not a float.
+
+**Splicing the helpers.** The parser splices softfp.c into any unit that says `float` or `double` or writes a float literal (`p:withfp`). The spliced copy is generated by `src/c4fp/mkfpsrc.py` into `p:fpsrc` in `c4lc-parse.lisp`; `test-c4fp` checks it is up to date.
+- Every function is made `static`, and they are ordered callers first. The generator compiles only the helpers a unit calls, and what they call, not the whole library.
+- Two units that both use floats link: each has its own static copy.
+- A unit with no floats never pays for any of this: `g:fpon` stays false and nothing asks about types on its account.
+
+**Conversions C makes implicitly:**
+- **Arguments:** converted to a prototyped parameter's type. An argument with no parameter to match (a variadic call, or an unprototyped one) gets C's default promotion, float to double, so `printf("%f", x)` passes a double.
+- **Calls through function pointers:** a pointer with a float or a double in its signature carries its parameter types (`p:fnsigs`), and the arguments convert as a prototype's do. Any other pointer has only words to pass, so its arguments go as written.
+- **`return`:** converts to the function's type.
+- **Initializers:** a global initialized with an integer constant gets that integer converted at compile time.
+
+**Tests.** `src/tests/c4lc_float.c` is in `make test-c4lc`. It checks literals at the edges of both formats, arithmetic, NaN and `-0.0` comparisons, every conversion, globals and aggregates, structs, pointers, calls (through pointers too) and `?:`. Its golden output is gcc's, and it must match at 32 and 64 bits, plain, `-O` and `-minline`.
+
+### Not yet, or differently
+
+- **A pointer to a function returning `float` or `double`** has a type of its own, as above, which is the return type its call has. A double comes back through a hidden pointer on a 32-bit target, as from any function. Added for Simon Tatham's Puzzles (docs/c4lc-design.md, 14.13).
+- **`-minline` leaves a unit with floats alone.** The tree pass converts a spliced argument only by the parameter's type, and does not know an expression's type, so an `int` argument for a `double` parameter would arrive as its integer bits. (T4 also refuses a function returning a double at 32 bits, as it refuses `long long`: the result is a temporary's address.)
+- **Float constants fold in a global's brace list** (M10, docs/c4lc-design.md 14.9), exactly, rounded as C rounds them. A scalar global's float expression is computed at start-up by `__c4lc_init` (14.8). In code, float expressions are not folded: the tree pass keeps a float literal as its bits (c4lc-tree.lisp).
+- **c4fc refuses floats.** Its lexer reads `1.5` as three tokens and it has no `float` keyword. (Parity with c4lc is a later step.)
+- **On a 64-bit target** c4lc's `long long` is the word `int`. So `unsigned int + long long` follows the `int + unsigned` rule and is cut to 32 bits; gcc widens to 64. This is an existing integer-model limitation, not a float one.
+
+## F3: the FPU opcode
+
+The old DOS arrangement: one binary, software floating point, and an FPU
+used when the machine has one.
+
+- **The opcode** is `FPU`, 89, appended after the fused range and
+  mirrored in every opcode table (c4m, c4mpg, load-c4r, c4l, c4cc,
+  c4mp, oisc4, the c4bb sim and ROM names, c4r.lisp, c4fc). On the stack:
+  `sp[0]` the sub-op, `sp[1]` a, `sp[2]` b, `sp[3]` r. A float is its
+  bits in a word; a double is the address of its two words (the low one
+  first), so one opcode serves 32- and 64-bit machines, and a double
+  result is written where r points.
+- **Sub-ops**: float add, sub, mul, div, sqrt, cmp, from int, to int
+  (1-8); the same for double (17-24); float to double (25) and back
+  (26). The rest (long long and unsigned conversions, neg, abs) stay in
+  software.
+- **The info word** says `C4I_FPU` (0x10000) where there is one.
+- **The helpers** (src/c4fp/softfp.c, spliced by c4lc): each covered
+  helper is NAME_s, the software, and NAME, which asks `__c4fp_hw()` --
+  `__c4_info()` once per unit, cached in a static, since INFO traps under
+  C4IX -- and calls `__c4_fpu(r, b, a, op)`, c4lc's builtin for the
+  opcode, when it is set. Compiled code does not change: the same image
+  runs on a machine with or without one.
+- **Bit for bit.** The FPU's answers are the software's, NaNs and
+  conversions included, so nothing can tell the two paths apart but the
+  clock:
+  - native c4m, c4mpg and c4mp run softfp.c itself, compiled by gcc
+    (c4m_float.c), rather than the host's float -- c4m32's x87 would
+    round twice;
+  - libjs and the c4bb sim share `src/c4bb/sim/fpu.js`: the host's IEEE
+    doubles (exact for + - * / and sqrt, and for floats when the double
+    result is rounded to single with `Math.fround`), with x86's NaN rules
+    and softfp's integer conversions written out;
+  - a c4m built for the c4 VM by c4lc (`/bin/c4m` in C4IX) lends the FPU
+    of the machine under it through `__c4_fpu`; built by c4cc, it has
+    none. c4mp.c4r does the same.
+- **Off switches**, for the software path and for timing: `c4m -F`,
+  `c4mp -F`, `node libjs/cli.js --no-fpu`, `?fpu=0` on the page.
+- **FLT** (60, the old binary32-only opcode) is fixed while here: FTOI
+  returns an integer, not a float's bits, and 64-bit c4m no longer leaves
+  garbage in a result's upper half.
+- **Tests** (`make test-c4fp`): softfp's vectors through fpvm.c on c4m
+  with and without the FPU at both word sizes, and on libjs with and
+  without it; mathtest's output must be the same to the character on
+  every path.
+
+## F6: soft against hard
+
+`src/c4fp/tests/fpbench.c` (`make bench-c4fp`) runs three kernels:
+- **mandel**: single precision, the Mandelbrot set at 160 x 120, 64 deep;
+- **whet**: double, Whetstone's module 1 with a sqrt and a division a round;
+- **nbody**: double, five bodies, 2000 steps.
+
+The same image runs with the FPU and without (`c4m -F`, `libjs --no-fpu`).
+Its checksums are identical on every machine and path, so the two paths
+agree on these programs as they do on the test vectors. Measured
+2026-10-22 on helios.
+
+VM instructions, from `__c4_cycles` (libjs's are c4m32's exactly):
+
+| kernel | 64-bit, FPU | 64-bit, software | 32-bit, FPU | 32-bit, software |
+|---|---|---|---|---|
+| mandel | 107 M | 846 M (7.9x) | 76 M | 949 M (12.5x) |
+| whet | 18.8 M | 429 M (23x) | 38.4 M | 3271 M (85x) |
+| nbody | 26.7 M | 492 M (18x) | 48.8 M | 3929 M (80x) |
+
+Wall time:
+
+| machine | FPU | software | |
+|---|---|---|---|
+| native c4m, 64-bit | 0.64 s | 7.8 s | 12x |
+| native c4m32 | 0.73 s | 37.8 s | 52x |
+| libjs (node, unpaced) | 1.33 s | 48.9 s | 37x |
+
+- **Single precision gains least.** A float fits a word, so its software
+  is the cheapest.
+- **Double gains most on 32-bit machines,** where every double is a
+  pair of words and the software's 64-bit integer arithmetic is itself
+  helpers on helpers. Those are libjs and C4IX, which is 32-bit.
+- **libjs's own milliseconds** (what fpbench prints there) are the
+  machine's clock, paced at the CLI's 20 MHz, not the host's. Its
+  instruction counts are the comparison.
+- **libc's math.c** sees the same: tests/mathtest.c takes 0.8 s on
+  c4m32 with the FPU and 11.6 s without, and 1.4 s and 17.6 s on libjs.
+
+**libjs checks:** test-libjs boots C4IX with the FPU (the default), so
+the Calculator's Single and Double modes, libc's printf and math.c, and
+everything else that says float or double run on it there; test-c4fp
+runs the vectors through libjs both ways.
+
+## F4: C4IX's libc
+
+Two new units in `src/c4ix/libc`, in `/lib/libc.c4s`:
+
+- **`fp.c`: the conversions, exact both ways.** A double is m * 2^e, a whole number times a power of ten, and big integers carry it the whole way. So printf's `%f %F %e %E %g %G` digits are the true ones, rounded once to nearest with ties to even: glibc's answer, character for character, with every flag, width and precision. And `strtod`/`strtof` (and `atof`) return the nearest double or float to any decimal, with hex floats, `inf` and `nan`, and `ERANGE`.
+- **`math.c`: `<math.h>`, after fdlibm.**
+  - Exact: `sqrt` (softfp's), `floor ceil trunc round fmod modf frexp ldexp scalbn`.
+  - Within an ulp or two of glibc: `exp log log10 log2 log1p expm1 pow sin cos tan asin acos atan atan2 sinh cosh tanh cbrt hypot`.
+  - `pow` is e_pow.c. `sin`/`cos`/`tan` reduce past 2^20 pi/2 by Payne-Hanek, with the bits of 2/pi. `exp` uses a 32-entry table of 2^(j/32) as double pairs, and agrees with glibc in all but about one case in 200.
+  - The float versions (`sinf`, ...) are the double ones, rounded.
+
+**Headers.** `math.h` declares all of it, and `strtod`/`strtof`/`atof` too, which C puts in `stdlib.h`. A unit that says `float` or `double` gets c4lc's float helpers spliced in, which costs every compile half a second on the host and far more inside C4IX. So `libc.h`, and with it `stdlib.h`, says neither. `float.h` has the IEEE limits. stdio.c hands the double to fp.c as its two words, so it doesn't say `double` either.
+
+**Tests** (`make test-c4fp`, against glibc, at 32 and 64 bits, plain and `-O`):
+- `tests/fptest.c`: fpconvgen.c's printf/strtod/strtof vectors, all exact.
+- `tests/mathtest.c`: mathgen.c's libm vectors, each function within its ulp limit.
+- libctest (test-libjs): float lines too, against gcc's output.
+
+**Size.** math.c is the largest unit in libc (249 KB of object, -fpic), because every double operation is a helper call. Inside C4IX c4sc compiles it in 5.2 KB of stack, on a task's default 256 KB. The 4 MB libc/BUILD.B4K gave it until 2026-10-25 was for a c4lc bug, g:resolvecode recursing once per instruction (fixed in 29cbac9), not for its long expressions.
+
+## c4m inside C4IX (2026-10-21)
+
+A c4m built for the c4 VM by a compiler with a preprocessor (`cc` inside C4IX, or c4cc through `./cpp` for the disk) referenced `c4_float_instruction`, which only the host's `c4m_float.c` defines. c4cc let the call dangle, and `cc` could not link c4m at all.
+
+Now such a build lends its guest the FLT of the machine under it: the same opcode, the same operands. It reports float only when that machine does (`__c4_info`).
+
+`/bin/c4m` is c4m.c built that way (build-images.sh), and `/usr/lib/c4ke.c4r` is C4KE's kernel, so inside C4IX:
+
+    cd /usr
+    c4m load-c4r.c -- /usr/lib/c4ke.c4r
+
+boots C4KE to its shell in about 8 machine-seconds; `\q` comes back. `libjs/tests/test-c4ix-c4m.mjs` (in test-libjs) pins it.
+
+The kernel is at `/usr/c4ke.c4r` too, where the host's `make` leaves it beside `c4m.c` and `load-c4r.c`, so `c4m load-c4r.c -- c4ke.c4r` from `/usr` works as it does on the host. `cc src/c4ke/c4ke.c` builds it inside C4IX (about 40 machine-seconds); c4sc overran the 1 MB of stack cc gave it then, so cc gave 4 MB (`-stack` for more), and says what the kernel said when it stops a tool. That overrun was a c4lc bug, g:resolvecode recursing once per instruction (fixed in 29cbac9): the compile now peaks at 3.4 KB, and since 2026-10-25 cc gives a task's default 256 KB.
+
+In a Terminal, C4KE's shell used to wait for ever: it polls `/dev/stdin`, and C4IX opened the host's, the machine's console, which nobody in that window types at. A task whose stdin is a pipe now gets that pipe for `/dev/stdin` and `/dev/tty`, with `O_NONBLOCK` honoured (a read with nothing yet is -1). The lines that had waited in the pipe were what C4IX's shell ran after Ctrl-C (`top`, `raycast -f 50`); Ctrl-C now drops what the job had not read (`SYS_DISCARD`, 231), as a tty does. Ctrl-C there reaches C4KE's job, as on a host terminal: c4m used to hand its guest's `SIGH` to the machine under it, replacing C4IX's own handler, and had none itself, so C4IX cancelled c4m. Now `include/c4m_signal.h` keeps the guest's handler and asks the kernel underneath, through u0's `signal()`, for one of c4m's own that marks the signal pending. `libjs/tests/test-desktop.mjs` pins all three.

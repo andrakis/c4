@@ -1,0 +1,191 @@
+// test-web.mjs - the c4m.js page in one of the user's real browsers.
+//
+//   node libjs/tests/test-web.mjs               # C4IX and C4KE legs
+//   node libjs/tests/test-web.mjs --gui         # the display legs (M3/M4)
+//   LIBJS_CDP=http://127.0.0.1:9222 node libjs/tests/test-web.mjs
+//
+// Raw CDP (tests/cdp.mjs), no Playwright and never a local headless
+// browser: the endpoints are the user's own Chromes, 9224 (the 3060 Ti
+// desktop) and then 9222 (the Chromebook). If neither answers, this says
+// so and fails; it does not go looking for another browser.
+//
+// The page is served from here and reached through the code-server proxy
+// (https://PORT.<C4_PROXY_DOMAIN>, see src/c4bb/tools/proxy-domain.mjs)
+// when one is configured, falling back to the LAN address. If the proxy asks for a login, the code-server password from
+// ~/.config/code-server/config.yaml is used (authorised 2026-09-11).
+//
+// Only the tab this opens is closed.
+
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { homedir, networkInterfaces } from 'node:os';
+import { join } from 'node:path';
+import { Browser } from './cdp.mjs';
+import { makeServer } from '../serve.mjs';
+import { proxyUrl } from '../../src/c4bb/tools/proxy-domain.mjs';
+
+const PORT = Number(process.env.LIBJS_PORT || 8473);
+const GUI = process.argv.includes('--gui');
+const SHOTS = process.env.LIBJS_SHOTS || null;
+const CDPS = process.env.LIBJS_CDP ? [process.env.LIBJS_CDP] : ['http://127.0.0.1:9224', 'http://127.0.0.1:9222'];
+
+const lan = Object.values(networkInterfaces()).flat()
+  .find(n => n && n.family === 'IPv4' && !n.internal && !n.address.startsWith('172.17.'))?.address || '127.0.0.1';
+const BASES = process.env.LIBJS_URL ? [process.env.LIBJS_URL]
+  : [proxyUrl(PORT), `http://${lan}:${PORT}`].filter(Boolean);
+
+let password = null;
+try {
+  const m = /^password:\s*(.+)$/m.exec(readFileSync(join(homedir(), '.config/code-server/config.yaml'), 'utf8'));
+  if (m) password = m[1].trim();
+} catch { /* no code-server config */ }
+
+let fails = 0;
+const ok = (name, cond, extra = '') => {
+  console.log(`  ${cond ? 'ok  ' : 'FAIL'} ${name}${!cond && extra ? '\n       ' + extra : ''}`);
+  if (!cond) fails++;
+  return cond;
+};
+
+// Cross-origin isolated, so the page takes the shared display path by
+// default; the display legs also run once with ?shared=0 to compare.
+const server = makeServer(undefined, true);
+await new Promise(r => server.listen(PORT, '0.0.0.0', r));
+
+let browser = null, cdp = null;
+for (const c of CDPS) {
+  try { browser = await Browser.connect(c); cdp = c; break; } catch { /* next */ }
+}
+if (!browser) {
+  console.log(`test-web: no browser answered on ${CDPS.join(' or ')}.`);
+  console.log('          The CDP tunnel to the desktop or the Chromebook is down; nothing was run.');
+  server.close();
+  process.exit(2);
+}
+console.log(`test-web: ${browser.version} at ${cdp}`);
+
+const tab = await browser.newTab();
+const shot = async name => {
+  if (!SHOTS) return;
+  mkdirSync(SHOTS, { recursive: true });
+  writeFileSync(join(SHOTS, `${name}.png`), await tab.screenshot());
+};
+
+// Open the page, through the code-server login if the proxy asks.
+async function open(query) {
+  for (const base of BASES) {
+    const url = `${base}/libjs/web/?${query}`;
+    try {
+      await tab.goto(url);
+      if (await tab.eval('/\\/login/.test(location.pathname)')) {
+        if (!password) continue;
+        await tab.eval(`(() => { const i = document.querySelector('input[name=password]'); i.value = ${JSON.stringify(password)};
+                                 i.form.requestSubmit ? i.form.requestSubmit() : i.form.submit(); })()`);
+        await tab.waitFor('!/\\/login/.test(location.pathname)', 15000);
+        console.log('  (signed the browser into code-server)');
+        await tab.goto(url);
+      }
+      if (await tab.waitFor('!!window.c4m', 15000)) { await mustBeVisible(); return base; }
+    } catch (e) { console.log(`  (${base}: ${e.message})`); }
+  }
+  return null;
+}
+// Chrome delivers CDP input only to a visible tab, and a covered window
+// counts as hidden. Say that plainly rather than fail every check after it.
+async function mustBeVisible() {
+  if (await tab.eval('document.visibilityState') === 'visible') return;
+  console.log('test-web: the browser tab is hidden -- the Chrome window is covered or minimised.');
+  console.log('          Bring Chrome to the front on that machine and run this again.');
+  await tab.close(); browser.disconnect(); server.close();
+  process.exit(3);
+}
+const term = () => tab.eval('document.getElementById("terminal").innerText');
+const waitTerm = (s, t = 30000) => tab.waitFor(`document.getElementById("terminal").innerText.includes(${JSON.stringify(s)})`, t);
+const focusTerm = () => tab.eval('document.getElementById("terminal").focus()');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// A paste, as the browser delivers one to the terminal (page.js): the
+// event a Ctrl+Shift+V or Shift+Insert brings, with the text in it
+const paste = text => tab.eval(`(() => {
+  const dt = new DataTransfer(); dt.setData('text/plain', ${JSON.stringify(text)});
+  document.getElementById('terminal').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+})()`);
+const cursorShown = () => tab.eval('!!document.querySelector("#terminal .c4-term-cursor")');
+
+try {
+  if (!GUI) {
+    // ---- C4IX -----------------------------------------------------------
+    console.log('test-web: C4IX');
+    const base = await open('system=c4ix');
+    if (!ok('the page loads and window.c4m exists', !!base, BASES.join(', '))) throw new Error('no page');
+    console.log(`  (served at ${base})`);
+    const t0 = Date.now();
+    ok('C4IX boots to its shell', await waitTerm('c4ix-sh', 90000) && await waitTerm('c4ix:/$', 30000),
+       (await term()).slice(-400));
+    console.log(`  (shell prompt ${((Date.now() - t0) / 1000).toFixed(1)}s after the page loaded)`);
+    const disk = await tab.eval('window.c4m.status.disk');
+    ok(`the disk is lazy: boot fetched ${disk && disk.fetched} of ${disk && disk.files} files`,
+       !!disk && disk.lazy && disk.fetched < 15, JSON.stringify(disk));
+    ok('the terminal shows the cursor at the prompt', await cursorShown());
+    await focusTerm();
+    await tab.type('ps\n');
+    ok('typed ps lists the tasks', await waitTerm('tasks,', 30000), (await term()).slice(-400));
+    await sleep(3000);
+    const idle = await tab.eval('window.c4m.status');
+    ok(`idle at the prompt: ${idle.state}, cpu ${Math.round(idle.busy * 100)}%`,
+       (idle.state === 'sleeping' || idle.state === 'blocked') && idle.busy < 0.25, JSON.stringify(idle));
+    await tab.type('spin\n');
+    ok('spin starts', await waitTerm('spin: tick 2/', 30000));
+    await tab.key('c', { ctrl: true });
+    ok('Ctrl-C cancels it', await waitTerm('interrupt: cancelling task', 15000), (await term()).slice(-300));
+    await tab.type('echo after-the-interrupt\n');
+    ok('the shell still answers', await waitTerm('after-the-interrupt\n', 15000) || await waitTerm('after-the-interrupt', 1));
+    // The root archive unpacks in the background as task 4 (vfsload):
+    // the whole tree is one fetch, not one per file.
+    const t1 = Date.now();
+    await tab.type('wait 4\n');
+    ok('the root archive unpacks', await waitTerm('[4] done (0)', 120000), (await term()).slice(-300));
+    console.log(`  (unpacked ${((Date.now() - t1) / 1000).toFixed(1)}s after asking)`);
+    await tab.type('ls /usr\n');
+    ok('its tree is there', await waitTerm('docs/', 15000) && await waitTerm('c4m.c', 1), (await term()).slice(-300));
+    const disk2 = await tab.eval('window.c4m.status.disk');
+    ok(`and it cost one fetch: ${disk2 && disk2.fetched} of ${disk2 && disk2.files} files so far`,
+       !!disk2 && disk2.fetched < 15, JSON.stringify(disk2));
+    const busy = await tab.eval('window.c4m.status');
+    console.log(`  (${busy.ips} inst/s at the last status, simulated ${Math.round(busy.simMs / 1000)}s)`);
+    await shot('c4ix');
+    ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
+    // ---- C4KE -----------------------------------------------------------
+    console.log('test-web: C4KE');
+    tab.errors.length = 0;
+    await open('system=c4ke');
+    ok('C4KE boots to c4sh', await waitTerm('c4sh>', 90000), (await term()).slice(-400));
+    await focusTerm();
+    await tab.type('hello.c4r\n');
+    ok('runs a program from the disk', await waitTerm('yello', 30000));
+    ok('the terminal shows the cursor at the prompt', await cursorShown());
+    // two lines pasted: each typed at the prompt that reads it, the
+    // second's quotes made plain (and taken off by the shell)
+    await paste('echo paste-one\r\necho \u201cpaste-two\u201d\n');
+    ok('a pasted pair of commands runs in turn', await tab.waitFor(
+      String.raw`/c4sh>\s*echo paste-one\npaste-one\n[^]*c4sh>\s*echo "paste-two"\npaste-two\n/.test(document.getElementById("terminal").innerText)`, 30000),
+      (await term()).slice(-300));
+    // the right button: a menu with Copy (nothing selected: off) and Paste
+    await tab.eval(`document.getElementById('terminal').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 120 }))`);
+    const menu = await tab.eval(`[...document.querySelectorAll('.c4-term-menu button')].map(b => b.textContent + (b.disabled ? ':off' : ''))`);
+    ok('the right-click menu: Copy and Paste', JSON.stringify(menu) === JSON.stringify(['CopyCtrl+Shift+C:off', 'PasteCtrl+Shift+V']), JSON.stringify(menu));
+    await tab.key('Escape');
+    ok('and Escape closes it', !(await tab.eval('!!document.querySelector(".c4-term-menu")')));
+    await shot('c4ke');
+    ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+  } else {
+    await import('./test-web-gui.mjs').then(m => m.run({ tab, open, ok, term, waitTerm, focusTerm, sleep, shot }));
+  }
+} catch (e) {
+  ok(`gate ran to the end (${e.message})`, false);
+} finally {
+  await tab.close();
+  browser.disconnect();
+  server.close();
+}
+console.log(fails ? `test-web: ${fails} FAILED` : 'test-web: OK');
+process.exit(fails ? 1 : 0);

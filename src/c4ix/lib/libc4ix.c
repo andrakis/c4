@@ -1,0 +1,570 @@
+//
+// libc4ix: the C4IX userland C library, linked into every user
+// program as a .c4l archive.
+//
+// Every service goes through one gate, __c4ix_syscall, which executes
+// a custom opcode c4m does not implement, raising TRAP_ILLOP into the
+// kernel -- the syscall path, and the one that works from behind
+// protected mode.
+//
+// printf lives here as a formatter over write(fd). Userland never
+// executes PRTF; the kernel decides where fd 1 goes.
+//
+// This is one translation unit on purpose: the va area below is
+// static, and statics never merge across objects, so make_va and its
+// consumers must share a unit (the lesson from the kernel's va.c).
+//
+
+#include "c4ix_user.h"
+
+// Am I running under C4DOS? C4DOS's loader scans every image for this
+// symbol and writes
+// its API table's address into it before it runs the constructors
+// (inject_api, src/c4dos/c4dos.c), so a non-zero here means DOS and
+// nothing else. Costs no opcode -- a plain global read -- which is the
+// point, because the alternative is finding out via the first write(),
+// and that is an OPCD into a kernel that is not there.
+//
+// Magic is ('C'<<16)+('4'<<8)+'D', matching dos_present() in
+// include/c4dos.h and the copy in include/u0.h.
+int *__c4dos_api;         // patched by the C4DOS loader; 0 when not under DOS
+static int uva_ready;     // library set up? see libc4ix_ready()
+
+static void libc4ix_ready();
+
+// ---- the gate ----
+
+// A custom opcode, which the VM does not know: it traps into the kernel.
+// (There was a second door, a call through a table the loader filled in
+// for plain c4, which has no traps; no host ever used it.)
+static int __c4ix_syscall(int num, int a, int b, int c) {
+    if (!uva_ready) libc4ix_ready();
+    // __c4_opcode pushes left to right and OPCD reads the opcode
+    // number from *sp, so the arguments are listed in REVERSE --
+    // then sp[1] is the first argument, which is the shape
+    // sched_trap hands to sys_dispatch. (u0.h's wrappers do the
+    // same thing for the same reason.)
+    return __c4_opcode(c, b, a, num);
+}
+
+int write(int fd, char *buf, int len) { return __c4ix_syscall(SYS_WRITE, fd, (int)buf, len); }
+int uread(int fd, char *buf, int len) { return __c4ix_syscall(SYS_READ, fd, (int)buf, len); }
+int uopen(char *path, int flags)      { return __c4ix_syscall(SYS_OPEN, (int)path, flags, 0); }
+int uclose(int fd)                    { return __c4ix_syscall(SYS_CLOSE, fd, 0, 0); }
+int uexit(int code)                   { return __c4ix_syscall(SYS_EXIT, code, 0, 0); }
+int uyield()                          { return __c4ix_syscall(SYS_YIELD, 0, 0, 0); }
+int uwait(int id)                     { return __c4ix_syscall(SYS_WAIT, id, 0, 0); }
+int getpid()                          { return __c4ix_syscall(SYS_GETPID, 0, 0, 0); }
+int *ualloc(int bytes)                { return (int *)__c4ix_syscall(SYS_SBRK, bytes, 0, 0); }
+
+int udup(int fd)                      { return __c4ix_syscall(SYS_DUP, fd, 0, 0); }
+int udup2(int oldfd, int newfd)       { return __c4ix_syscall(SYS_DUP2, oldfd, newfd, 0); }
+int upipe(int *fds)                   { return __c4ix_syscall(SYS_PIPE, (int)fds, 0, 0); }
+// The cycle opcode is allowed behind protected mode, so this needs no
+// trap: it was a syscall, the commonest one a busy loop makes, at about
+// 400 cycles a call for what one instruction answers. SYS_CYCLES stays
+// for the programs already linked against it.
+int ucycles()                         { return __c4_cycles(); }
+int utaskinfo(int i, int *out)        { return __c4ix_syscall(SYS_TASKINFO, i, (int)out, 0); }
+int ucpustat(int *h, int *r, int max)  { return __c4ix_syscall(SYS_CPUSTAT, (int)h, (int)r, max); }
+int uevwait(int ms, int *ring, int p)  { return __c4ix_syscall(SYS_EVWAIT, ms, (int)ring, p); }
+// libjs's display, kept by the kernel (include/display.h): asking again
+// every 10 ms while the desktop gives way, which the kernel stops waiting
+// for after a second
+int udisplay(int op, int flags)       { return __c4ix_syscall(SYS_DISPLAY, op, flags, 0); }
+int udisplay_take(int flags) {
+    int r;
+    while (!(r = udisplay(DISP_TAKE, flags))) umsleep(10);
+    return r > 0;
+}
+void udisplay_give()                  { udisplay(DISP_GIVE, 0); }
+int uchdir(char *path)                { return __c4ix_syscall(SYS_CHDIR, (int)path, 0, 0); }
+int umkdir(char *path)                { return __c4ix_syscall(SYS_MKDIR, (int)path, 0, 0); }
+int ugetcwd(char *buf, int len)       { return __c4ix_syscall(SYS_GETCWD, (int)buf, len, 0); }
+int ureaddir(char *path, int i, char *nm) { return __c4ix_syscall(SYS_READDIR, (int)path, i, (int)nm); }
+int ukill(int pid, int sig)           { return __c4ix_syscall(SYS_KILL, pid, sig, 0); }
+int umsleep(int ms)                   { return __c4ix_syscall(SYS_SLEEP, ms, 0, 0); }
+int uavail(int fd)                    { return __c4ix_syscall(SYS_AVAIL, fd, 0, 0); }
+int uintr(int pid)                    { return __c4ix_syscall(SYS_INTR, pid, 0, 0); }
+int udiscard(int fd)                  { return __c4ix_syscall(SYS_DISCARD, fd, 0, 0); }
+int ucloexec(int fd, int on)          { return __c4ix_syscall(SYS_CLOEXEC, fd, on, 0); }
+int ustat(char *path, int *out)       { return __c4ix_syscall(SYS_STAT, (int)path, (int)out, 0); }
+int uunlink(char *path)               { return __c4ix_syscall(SYS_UNLINK, (int)path, 0, 0); }
+int urename(char *path, char *nn)     { return __c4ix_syscall(SYS_RENAME, (int)path, (int)nn, 0); }
+int ulazyfile(char *p, char *h, int n) { return __c4ix_syscall(SYS_LAZYFILE, (int)p, (int)h, n); }
+int urelazy(char *p, char *h, int s)  { return __c4ix_syscall(SYS_RELAZY, (int)p, (int)h, s); }
+int ustack(int bytes)                 { return __c4ix_syscall(SYS_STACK, bytes, 0, 0); }
+
+int uaffinity(int id, int mask)       { return __c4ix_syscall(SYS_AFFINITY, id, mask, 0); }
+int unice(int id, int nice)           { return __c4ix_syscall(SYS_NICE, id, nice, 0); }
+int uioperm(int bits)                 { return __c4ix_syscall(SYS_IOPERM, bits, 0, 0); }
+int umapfrom(int addr, int n)         { return __c4ix_syscall(SYS_MAPFROM, addr, n, 0); }
+int ufdgive(int pid, int fd, int to)  { return __c4ix_syscall(SYS_FDGIVE, pid, fd, to); }
+
+int spawn(char *path, int argc, char **argv) {
+    return __c4ix_syscall(SYS_SPAWN, (int)path, argc, (int)argv);
+}
+
+// The kernel returns the child from the function that executed the
+// syscall (sched_vfork), so this must execute it itself, through no
+// helper: its caller is where the child goes on.
+int vfork() { return __c4_opcode(0, 0, 0, SYS_VFORK); }
+int uexecve(char *p, char **v, char **e) { return __c4ix_syscall(SYS_EXECVE, (int)p, (int)v, (int)e); }
+int uwaitpid(int pid, int *st, int o)  { return __c4ix_syscall(SYS_WAITPID, pid, (int)st, o); }
+int ulseek(int fd, int off, int whence) { return __c4ix_syscall(SYS_LSEEK, fd, off, whence); }
+int ustat2(char *path, int *out, int n) { return __c4ix_syscall(SYS_STAT, (int)path, (int)out, n); }
+int ufstat(int fd, int *out, int n)   { return __c4ix_syscall(SYS_FSTAT, fd, (int)out, n); }
+int ulink(char *path, char *np)       { return __c4ix_syscall(SYS_LINK, (int)path, (int)np, 0); }
+int uftruncate(int fd, int len)       { return __c4ix_syscall(SYS_FTRUNCATE, fd, len, 0); }
+char **uenviron()                     { return (char **)__c4ix_syscall(SYS_ENVIRON, 0, 0, 0); }
+
+// ---- varargs, private to this image ----
+
+enum { UVA_STACK = 1024 };
+// A variadic function that never calls va_end -- Rise of the Triad's
+// SoftError is one, its body compiled out -- leaves its arguments on the
+// stack, and the stack grew past its end into whatever the heap put after
+// it (the game's zone). So a list that would not fit starts again at the
+// bottom: one left behind is overwritten, never written past.
+static int *uva_stack;
+static int  uva_vptr;
+static int *uva_m_ptr;
+static int *uva_m_arg;
+static int  uva_m_n;
+
+int *__c4cc_make_va(int count) {
+    // &count is a fixed frame slot, so the call below cannot disturb
+    // the argument walk that follows it.
+    if (!uva_ready) libc4ix_ready();
+    uva_m_n   = count;
+    uva_m_arg = &count + count;
+    if (uva_vptr < 0 || uva_vptr + count + 1 > UVA_STACK) uva_vptr = 0;
+    uva_m_ptr = &uva_stack[uva_vptr];
+
+    uva_stack[uva_vptr] = count; ++uva_vptr;
+    while (uva_m_n--) {
+        uva_stack[uva_vptr] = *uva_m_arg; ++uva_vptr;
+        --uva_m_arg;
+    }
+    return uva_m_ptr;
+}
+
+void __c4ix_uva_adj(int n) {
+    uva_vptr = uva_vptr - n;
+    if (uva_vptr < 0) uva_vptr = 0;
+}
+
+// ---- stdio over write() ----
+
+// ---- column output ----
+//
+// These helpers come from when libc4ix's printf took no width
+// specifiers; it has since 8c53fff (uformat, below). ps and top still
+// pad through them, so both look the same, and upadcycles scales a
+// cycle count, which no printf width does.
+// These build into the shared format buffer and flush once per
+// call. Writing a character at a time would be one kernel round trip
+// per character -- fine on a host, ruinous through a trap gateway.
+static void upad_emit(char *s, int len, int width, int right) {
+    char line[64];
+    int n, i;
+
+    n = 0;
+    if (right) { while (n + len < width) { line[n] = ' '; ++n; } }
+    i = 0;
+    while (i < len && n < 63) { line[n] = s[i]; ++n; ++i; }
+    if (!right) { while (n < width && n < 63) { line[n] = ' '; ++n; } }
+    write(STDOUT, line, n);
+}
+
+// A column HEADING for a right-aligned numeric column: the label
+// right-aligned in WIDTH, then the same trailing space upadnum and
+// upadcycles emit. Headings built with this cannot drift out of step
+// with their data, because both are given the same width.
+int upadhdr(char *s, int width) {
+    char line[64];
+    int n, len, i;
+
+    len = ustrlen(s);
+    n = 0;
+    while (n + len < width && n < 63) { line[n] = ' '; ++n; }
+    i = 0;
+    while (i < len && n < 63) { line[n] = s[i]; ++n; ++i; }
+    if (n < 63) { line[n] = ' '; ++n; }
+    write(STDOUT, line, n);
+    return n;
+}
+
+int upadstr(char *s, int width) {
+    int n;
+    n = ustrlen(s);
+    upad_emit(s, n, width, 0);
+    return (n > width) ? n : width;
+}
+
+// Right-aligned integer in WIDTH columns, followed by one space.
+// digits of V into BUF, most significant first; returns the length
+static int upad_digits(int v, char *buf) {
+    char tmp[24];
+    int n, i, neg;
+
+    neg = 0;
+    if (v < 0) { neg = 1; v = -v; }
+    n = 0;
+    if (v == 0) { tmp[0] = '0'; n = 1; }
+    while (v) { tmp[n] = '0' + v - (v / 10) * 10; ++n; v = v / 10; }
+    if (neg) { tmp[n] = '-'; ++n; }
+    i = 0;
+    while (n) { --n; buf[i] = tmp[n]; ++i; }
+    return i;
+}
+
+int upadnum(int v, int width) {
+    char buf[24];
+    int n;
+    n = upad_digits(v, buf);
+    buf[n] = ' ';
+    upad_emit(buf, n + 1, width + 1, 1);
+    return (n > width ? n : width) + 1;
+}
+
+// Cycle counts get large fast, so scale them the way C4KE's ps does.
+//
+// The two-word form: hi counts BILLIONS (sys.c's sys_taskinfo),
+// so a value with a high word is already at least giga and is scaled
+// from there. Nothing here is wider than an int, which is the point --
+// one word overflowed at 2^31 and printed a negative number of cycles.
+int upadcycles2(int hi, int lo, int width) {
+    char buf[32];
+    int whole, frac, n;
+    char suffix;
+
+    if (!hi) return upadcycles(lo, width);
+
+    whole = hi;
+    frac = lo / 1000000;                   // three decimals of the billions
+    suffix = 'G';
+    if (hi >= 1000000) { whole = hi / 1000000; frac = (hi / 1000) - whole * 1000; suffix = 'P'; }
+    else if (hi >= 1000) { whole = hi / 1000; frac = hi - whole * 1000; suffix = 'T'; }
+
+    n = upad_digits(whole, buf);
+    buf[n] = '.'; ++n;
+    buf[n] = '0' + frac / 100; ++n;
+    buf[n] = '0' + (frac / 10) - (frac / 100) * 10; ++n;
+    buf[n] = '0' + frac - (frac / 10) * 10; ++n;
+    buf[n] = suffix; ++n;
+    buf[n] = ' '; ++n;
+    upad_emit(buf, n, width + 1, 1);
+    return (n > width) ? n : width;
+}
+
+int upadcycles(int v, int width) {
+    char buf[32];
+    int whole, frac, n;
+
+    whole = v;
+    frac = -1;
+    if (v >= 1000000) { whole = v / 1000000; frac = (v / 1000) - whole * 1000; }
+    else if (v >= 1000) { whole = v / 1000; frac = v - whole * 1000; }
+
+    n = upad_digits(whole, buf);
+    if (frac >= 0) {
+        buf[n] = '.'; ++n;
+        buf[n] = '0' + frac / 100; ++n;
+        buf[n] = '0' + (frac / 10) - (frac / 100) * 10; ++n;
+        buf[n] = '0' + frac - (frac / 10) * 10; ++n;
+        buf[n] = (v >= 1000000) ? 'M' : 'k'; ++n;
+    }
+    buf[n] = ' '; ++n;
+    upad_emit(buf, n, width + 1, 1);
+    return (n > width) ? n : width;
+}
+
+int uputchar(int c) {
+    char b[2];
+    b[0] = c;
+    write(STDOUT, b, 1);
+    return c;
+}
+
+int ustrlen(char *s) {
+    int n;
+    n = 0;
+    while (s[n]) ++n;
+    return n;
+}
+
+int ustrcmp(char *a, char *b) {
+    int i;
+    i = 0;
+    while (a[i] && a[i] == b[i]) ++i;
+    return a[i] - b[i];
+}
+
+// Copy src into dst and return the byte after the terminator, so
+// callers can pack several strings into one buffer.
+char *ustrcpy(char *dst, char *src) {
+    int i;
+    i = 0;
+    while (src[i]) { dst[i] = src[i]; ++i; }
+    dst[i] = 0;
+    return dst + i + 1;
+}
+
+int uputs(char *s) {
+    if (!s) s = "(null)";
+    return write(STDOUT, s, ustrlen(s));
+}
+
+// Formatting accumulates into this buffer and flushes as one write:
+// each character must NOT cost a syscall -- through the trap gateway
+// that would be a kernel round trip per letter. Static is fine: one
+// task per image.
+enum { UFMT_BUF = 256 };
+static char ufmt_buf[UFMT_BUF];
+static int  ufmt_n;
+static int  ufmt_fd;
+
+static void uflush() {
+    if (ufmt_n) write(ufmt_fd, ufmt_buf, ufmt_n);
+    ufmt_n = 0;
+}
+
+static void uputb(int c) {
+    ufmt_buf[ufmt_n] = c; ++ufmt_n;
+    if (ufmt_n == UFMT_BUF) uflush();
+}
+
+static void upadch(int c, int n) {
+    while (n > 0) { uputb(c); --n; }
+}
+
+// Digits of V in BASE, most significant first, into BUF; returns the
+// length. Base 16 is UNSIGNED -- C4 has no unsigned type, so the
+// shift's top nibble is masked off rather than sign-extending: 28 bits
+// of a word on a 32-bit machine, 60 on a 64-bit one.
+static int udigits(char *buf, int v, int base) {
+    char tmp[72];
+    char *ds;
+    int n, i, mask;
+
+    ds = "0123456789abcdef";
+    mask = ~(15 << (sizeof(int) * 8 - 4));
+    n = 0;
+    if (!v) { tmp[0] = '0'; n = 1; }
+    while (v) {
+        if (base == 16) { tmp[n] = ds[v & 15]; v = (v >> 4) & mask; }
+        else { tmp[n] = ds[v - (v / base) * base]; v = v / base; }
+        ++n;
+    }
+    i = 0;
+    while (n) { --n; buf[i] = tmp[n]; ++i; }
+    return i;
+}
+
+// Flags '-' and '0' ('+', ' ', '#' accepted and ignored), a width or
+// '*', a precision or '.*', the length modifiers l/ll/h/z (every
+// integer here is one machine word), and d i u x X c s p %. %p is
+// glibc's, as c4m's PRTF prints it: %#x of the pointer, or (nil).
+//
+// This is deliberately the SAME parser as the kernel's sys_vprintf,
+// which services printf for programs that never heard of C4IX. A
+// program's output must not depend on which path it took, so the two
+// are tested against one format string -- keep them in step.
+//
+// An unrecognised conversion prints verbatim and consumes NOTHING,
+// so the remaining arguments stay aligned.
+//
+// va_end must see the va_list exactly where va_start left it (it
+// re-reads the count slot), so the format loop walks a copy.
+// Returns characters written.
+static int uformat(int fd, char *fmt, int *walk) {
+    char num[80];
+    char *s;
+    int n, c, v, width, prec, left, zero, len, neg, pre, i, base, upper;
+
+    ufmt_fd = fd;
+    n = 0;
+    while (*fmt) {
+        c = *fmt; ++fmt;
+        if (c != '%') { uputb(c); ++n; continue; }
+        if (!*fmt) { uputb('%'); ++n; break; }
+
+        left = 0; zero = 0;
+        while (1) {
+            c = *fmt;
+            if (c == '-') { left = 1; ++fmt; }
+            else if (c == '0') { zero = 1; ++fmt; }
+            else if (c == '+' || c == ' ' || c == '#') { ++fmt; }
+            else break;
+        }
+
+        width = 0;
+        if (*fmt == '*') {
+            ++fmt;
+            width = va_arg(walk, int);
+            if (width < 0) { left = 1; width = -width; }
+        } else {
+            while (*fmt >= '0' && *fmt <= '9') {
+                width = width * 10 + (*fmt - '0'); ++fmt;
+            }
+        }
+
+        prec = -1;
+        if (*fmt == '.') {
+            ++fmt; prec = 0;
+            if (*fmt == '*') {
+                ++fmt;
+                prec = va_arg(walk, int);
+                if (prec < 0) prec = -1;
+            } else {
+                while (*fmt >= '0' && *fmt <= '9') {
+                    prec = prec * 10 + (*fmt - '0'); ++fmt;
+                }
+            }
+        }
+
+        while (*fmt == 'l' || *fmt == 'h' || *fmt == 'z') ++fmt;
+
+        c = *fmt;
+        if (!c) { uputb('%'); ++n; break; }
+        ++fmt;
+
+        if (c == '%') {
+            if (!left) { upadch(' ', width - 1); n = n + width - 1; }
+            uputb('%'); ++n;
+            if (left) { upadch(' ', width - 1); n = n + width - 1; }
+            continue;
+        }
+
+        if (c != 'd' && c != 'i' && c != 'u' && c != 'x' && c != 'X'
+            && c != 'c' && c != 's' && c != 'p') {
+            uputb('%'); uputb(c); n = n + 2;
+            continue;
+        }
+
+        if (c == 'c') {
+            v = va_arg(walk, int);
+            if (!left) { upadch(' ', width - 1); if (width > 1) n = n + width - 1; }
+            uputb(v); ++n;
+            if (left) { upadch(' ', width - 1); if (width > 1) n = n + width - 1; }
+            continue;
+        }
+
+        v = va_arg(walk, int);
+
+        // a null %p is a string, and its precision means nothing
+        if (c == 's' || (c == 'p' && !v)) {
+            s = (c == 's') ? (char *)v : "(nil)";
+            if (!s) s = "(null)";
+            if (c == 'p') prec = -1;
+            len = 0;
+            while (s[len] && (prec < 0 || len < prec)) ++len;
+            if (!left) { upadch(' ', width - len); if (width > len) n = n + width - len; }
+            i = 0;
+            while (i < len) { uputb(s[i]); ++i; ++n; }
+            if (left) { upadch(' ', width - len); if (width > len) n = n + width - len; }
+            continue;
+        }
+
+        // integers, and %p as %#x
+        upper = (c == 'X');
+        base = (c == 'x' || c == 'X' || c == 'p') ? 16 : 10;
+        neg = 0;
+        if (base == 10 && v < 0) { neg = 1; v = -v; }
+        pre = neg ? 1 : (c == 'p') ? 2 : 0;     // the '-' or the 0x
+        len = udigits(num, v, base);
+        if (upper) {
+            i = 0;
+            while (i < len) {
+                if (num[i] >= 'a' && num[i] <= 'f') num[i] = num[i] - 32;
+                ++i;
+            }
+        }
+        // an explicit precision is a minimum digit count and overrides
+        // zero padding, as in C
+        if (prec >= 0) {
+            zero = 0;
+            while (len < prec) {
+                i = len;
+                while (i) { num[i] = num[i - 1]; --i; }
+                num[0] = '0';
+                ++len;
+            }
+        }
+        i = len + pre;
+        if (!left && !zero) { upadch(' ', width - i); if (width > i) n = n + width - i; }
+        if (neg) { uputb('-'); ++n; }
+        if (c == 'p') { uputb('0'); uputb('x'); n = n + 2; }
+        if (!left && zero) { upadch('0', width - i); if (width > i) n = n + width - i; }
+        i = 0;
+        while (i < len) { uputb(num[i]); ++i; ++n; }
+        if (left) { upadch(' ', width - len - pre); if (width > len + pre) n = n + width - len - pre; }
+    }
+    uflush();
+    return n;
+}
+
+int uprintf(char *fmt, ...) {
+    va_list ap;
+    va_list walk;
+    int n;
+
+    va_start(ap, fmt);
+    walk = ap;
+    n = uformat(STDOUT, fmt, walk);
+    va_end(ap);
+    return n;
+}
+
+int ufprintf(int fd, char *fmt, ...) {
+    va_list ap;
+    va_list walk;
+    int n;
+
+    va_start(ap, fmt);
+    walk = ap;
+    n = uformat(fd, fmt, walk);
+    va_end(ap);
+    return n;
+}
+
+// ---- startup ----
+//
+// Setup happens ON DEMAND, not only from the constructor, because a
+// constructor cannot know it runs first. The program's OWN
+// constructors are in the same list as this one, and one of them can
+// make a syscall, or printf, before this has run -- for want of an
+// ordering guarantee the C4R format does not actually give us (the
+// priority field exists but load-c4r.c never reads it). (It once also
+// picked the gate's door, and a call through an empty systable was a
+// call to address zero from the first line of a program.)
+//
+// So every entry point that needs the library checks. The constructor
+// stays, because doing it once up front is still cheaper than the
+// branch being taken later, and because it keeps the common case
+// exactly as it was.
+static void libc4ix_ready() {
+    if (uva_ready) return;
+    uva_ready = 1;
+    uva_stack = malloc(sizeof(int) * UVA_STACK);
+    memset(uva_stack, 0, sizeof(int) * UVA_STACK);
+    uva_vptr = 0;
+}
+
+// Returns C4DOS_REFUSE to decline the program: C4DOS's run_program
+// treats that one value as "do not run this", which is the only way a
+// transient can decline (there is no exit that does not halt the
+// machine). Without it a C4IX binary typed at the A> prompt trap-storms
+// on its first write() and takes the session down with it.
+static int __attribute__((constructor)) libc4ix_init() {
+    // 1127037010 is C4DOS_REFUSE ('C','4','D','R'): a DISTINGUISHED
+    // value, because a constructor with no return statement returns
+    // whatever was in the accumulator. See src/c4dos/c4dos.c.
+    if (__c4dos_api && __c4dos_api[0] == 4404292) {
+        printf("C4DOS: This application requires C4IX.\n");
+        return 1127037010;
+    }
+    libc4ix_ready();
+    return 0;
+}

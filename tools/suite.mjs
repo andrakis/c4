@@ -1,0 +1,366 @@
+#!/usr/bin/env node
+// tools/suite.mjs -- the full test suite, packed: as many tests at once as
+// the machine has memory and processors for, longest first.
+//
+//   node tools/suite.mjs [options] [test-X ...]     (make suite)
+//
+//   -o DIR        logs and the result go here (default .suite/)
+//   -j N          at most N tests at once (default: processors - 1)
+//   --cpus N      processors the tests may use between them (default: processors - 1)
+//                 (processors: those this process may run on, if pinned to fewer)
+//   --reserve MB  memory left free for everything else (default 300)
+//   --mem MB      memory the machine can grow to (default: $SUITE_MEM, else
+//                 what it has now). A Hyper-V guest with Dynamic Memory
+//                 shows only what it has been given so far; the rest is
+//                 counted as available, and the host adds it as it is used.
+//   --build-jobs N  make -j for the first phase (default: a job per 1.5 GB
+//                 of memory, from 2 up to the processors the tests may use)
+//   --no-build    skip the first phase
+//   --list-prep   print what the first phase would build, and stop
+//
+// Two phases. Tests share what they are built from, and two makes building
+// one file at once can corrupt it, so the first phase builds, in one make,
+// everything the tests depend on: c4bb-images, each test's prerequisites,
+// and what their recipes make again ($(MAKE) c4ix.c4r and the like). The
+// second runs each test as `make -s TEST`, which then finds all it needs
+// up to date and only tests. What the first built that is not a file
+// (c4bb-images, phony) the second is told is made (make -o c4bb-images):
+// else every test runs build-images.sh again, several at once over the
+// same src/c4bb/images, and they trip over each other's files.
+//
+// What a test needs is learned: each run keeps every test's time, its
+// peak memory (all its processes together, sampled every second) and its
+// processors (CPU time over wall time) in .suite-stats.json, and the next
+// run packs by them. A test is started when, on top of what the
+// running ones may still grow to, its peak fits in the memory available
+// now (/proc/meminfo, so everything else on the machine counts too) less
+// the reserve, and its processors fit; when nothing is running it starts
+// whatever it needs. On Linux it reads /proc; on Windows (under MSYS2,
+// docs/windows.md) MSYS2's /proc, through an MSYS2 shell.
+
+import { spawn, execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, readdirSync, existsSync } from 'node:fs';
+import { cpus, freemem, totalmem } from 'node:os';
+import { join } from 'node:path';
+import { requireSlot } from '../libjs/hostlock.mjs';
+
+requireSlot('suite');
+
+const argv = process.argv.slice(2);
+const opt = { out: '.suite', jobs: 0, cpus: 0, reserve: 300, mem: +(process.env.SUITE_MEM || 0), buildJobs: 0, build: true };
+const tests = [];
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === '-o') opt.out = argv[++i];
+  else if (a === '-j') opt.jobs = +argv[++i];
+  else if (a === '--cpus') opt.cpus = +argv[++i];
+  else if (a === '--reserve') opt.reserve = +argv[++i];
+  else if (a === '--mem') opt.mem = +argv[++i];
+  else if (a === '--build-jobs') opt.buildJobs = +argv[++i];
+  else if (a === '--no-build') opt.build = false;
+  else if (a === '--list-prep') opt.listPrep = true;
+  else if (a.startsWith('-')) { console.error(`suite: unknown option ${a}`); process.exit(2); }
+  else tests.push(a);
+}
+// The processors this process may run on: all of them, unless it was
+// pinned to fewer (taskset; Helios's c4-lock pins each job to half the
+// machine, so a suite there packs its tests onto those and no more)
+function allowedCpus() {
+  try {
+    const m = /Cpus_allowed_list:\s*(\S+)/.exec(readFileSync('/proc/self/status', 'utf8'));
+    let n = 0;
+    if (m) for (const r of m[1].split(',')) { const [a, b] = r.split('-').map(Number); n += (b ?? a) - a + 1; }
+    if (n > 0) return Math.min(n, cpus().length);
+  } catch {}
+  return cpus().length;
+}
+const NCPU = allowedCpus();
+if (!opt.cpus) opt.cpus = Math.max(1, NCPU - 1);
+if (!opt.jobs) opt.jobs = opt.cpus;
+const WIN = process.platform === 'win32';
+// MSYS2 gives node, a Windows program, PWD in Windows' form (C:/c4w/c4).
+// Passed on, it is the PWD of every shell under make, which keeps it as
+// it names the right directory: $(pwd) is then C:/..., which POSIX does
+// not take for an absolute path (cp -rs refused it). Without it, each
+// shell finds its own: /c/c4w/c4.
+if (WIN) { delete process.env.PWD; delete process.env.OLDPWD; }
+const memTotalMb = () => WIN ? totalmem() / 1048576
+  : +/MemTotal:\s+(\d+)/.exec(readFileSync('/proc/meminfo', 'utf8'))[1] / 1024;
+if (!opt.buildJobs)
+  opt.buildJobs = Math.max(2, Math.min(opt.cpus, Math.floor(Math.max(opt.mem, memTotalMb()) / 1536)));
+if (!tests.length) tests.push(...execFileSync('make', ['-s', 'print-suite'], { encoding: 'utf8' }).trim().split(/\s+/));
+mkdirSync(opt.out, { recursive: true });
+
+const STATS = '.suite-stats.json';
+let stats = {};
+try { stats = JSON.parse(readFileSync(STATS, 'utf8')); } catch {}
+// unseen: long, so that it starts early, and middling in size -- the
+// memory check is made against what is available when it starts, and an
+// underestimate costs swap, not a failure
+const UNSEEN = { wall: 1800, mem: 600, cpu: 1 };
+const est = t => {
+  const s = stats[t] || {};
+  return {
+    wall: s.wall ?? UNSEEN.wall,
+    mem: s.mem !== undefined ? s.mem * 1.15 + 50 : UNSEEN.mem,
+    cpu: s.cpu !== undefined ? Math.min(opt.cpus, Math.max(1, Math.round(s.cpu))) : UNSEEN.cpu,
+  };
+};
+
+const t0 = Date.now();
+// the host's load (1 minute), at the start and at its most: a test that
+// fails on time on a host busier than its processors may be the host's
+const loadNow = () => { try { return +readFileSync('/proc/loadavg', 'utf8').split(' ')[0]; } catch { return NaN; } };
+const load0 = loadNow();
+let peakLoad = load0;
+const secs = ms => Math.round(ms / 1000);
+const result = join(opt.out, 'result.txt');
+writeFileSync(result, '');
+const note = line => { writeFileSync(result, line + '\n', { flag: 'a' }); console.log(line); };
+
+// ---- /proc: Linux's, or on Windows MSYS2's ------------------------------
+const PAGE = 4096;
+// with --mem, what the machine has yet to be given counts as available
+function memAvailableMb() {
+  if (WIN) return freemem() / 1048576 + Math.max(0, opt.mem - totalmem() / 1048576);
+  const info = readFileSync('/proc/meminfo', 'utf8');
+  const kb = k => +(new RegExp(`${k}:\\s+(\\d+)`).exec(info) || [0, 0])[1] / 1024;
+  return kb('MemAvailable') + Math.max(0, opt.mem - kb('MemTotal'));
+}
+// On Windows (docs/windows.md) node is not an MSYS2 program and cannot
+// read MSYS2's /proc, and Windows' own idea of who started whom is no
+// use: an MSYS2 exec is a new Windows process whose parent has gone. So
+// one MSYS2 shell, kept for the whole run, reads /proc for each request:
+// every process's MSYS2 pid, parent, resident pages and Windows pid. The
+// tree is MSYS2's, and a test's root is found by the Windows pid node has
+// for it. MSYS2's pages are 64K, so it says their size first.
+let sh;
+function winProcesses() {
+  if (!sh) {
+    const script = `getconf PAGESIZE
+      while read -r _; do
+        for d in /proc/[0-9]*; do
+          read -r w < $d/winpid && read -r st < $d/stat && read -r _ r _ < $d/statm || continue
+          st=\${st##*) }; set -- $st
+          echo "\${d#/proc/} $2 $r $w"
+        done 2>/dev/null
+        echo END
+      done`;
+    sh = spawn('sh', ['-c', script], { stdio: ['pipe', 'pipe', 'ignore'] });
+    sh.buf = ''; sh.waiting = [];
+    sh.stdout.setEncoding('utf8');
+    sh.stdout.on('data', d => {
+      sh.buf += d;
+      if (!sh.page) {
+        const i = sh.buf.indexOf('\n');
+        if (i < 0) return;
+        sh.page = +sh.buf.slice(0, i); sh.buf = sh.buf.slice(i + 1);
+      }
+      let i;
+      while ((i = sh.buf.indexOf('END\n')) >= 0) {
+        const block = sh.buf.slice(0, i);
+        sh.buf = sh.buf.slice(i + 4);
+        sh.waiting.shift()?.(block);
+      }
+    });
+  }
+  return new Promise(res => { sh.waiting.push(res); sh.stdin.write('\n'); }).then(block => {
+    const kids = new Map(), rss = new Map(), root = new Map();
+    for (const line of block.split('\n')) {
+      const [pid, ppid, pages, winpid] = line.trim().split(' ').map(Number);
+      if (!pid) continue;
+      rss.set(pid, pages * sh.page / 1048576);
+      root.set(winpid, pid);
+      if (!kids.has(ppid)) kids.set(ppid, []);
+      kids.get(ppid).push(pid);
+    }
+    return { kids, rss, root };
+  });
+}
+// every process: its parent and resident size, in MB
+async function processes() {
+  if (WIN) return winProcesses();
+  const kids = new Map(), rss = new Map();
+  for (const d of readdirSync('/proc')) {
+    if (!/^\d+$/.test(d)) continue;
+    try {
+      const st = readFileSync(`/proc/${d}/stat`, 'utf8');
+      const ppid = +st.slice(st.lastIndexOf(')') + 2).split(' ')[1];
+      const pages = +readFileSync(`/proc/${d}/statm`, 'utf8').split(' ')[1];
+      rss.set(+d, pages * PAGE / 1048576);
+      if (!kids.has(ppid)) kids.set(ppid, []);
+      kids.get(ppid).push(+d);
+    } catch {}                          // gone meanwhile
+  }
+  return { kids, rss };
+}
+function treeMb(pid, p) {
+  if (p.root) pid = p.root.get(pid) ?? pid;   // Windows: node's pid for it, to MSYS2's
+  let mb = 0;
+  const stack = [pid], seen = new Set();
+  while (stack.length) {
+    const q = stack.pop();
+    if (seen.has(q)) continue;
+    seen.add(q);
+    mb += p.rss.get(q) || 0;
+    for (const k of p.kids.get(q) || []) stack.push(k);
+  }
+  return mb;
+}
+
+// ---- running one make, timed ----------------------------------------
+// /usr/bin/time gives the CPU time of everything make waited for
+function run(target, log, makeArgs) {
+  const timing = log + '.time';
+  const fd = openSync(log, 'w');
+  // MSYS2's GNU time on Windows, found on the PATH: node is not an MSYS2
+  // program, and has no /usr/bin
+  const child = spawn(WIN ? 'time' : '/usr/bin/time', ['-f', '%e %U %S', '-o', timing, 'make', ...makeArgs, target],
+    { stdio: ['ignore', fd, fd] });
+  closeSync(fd);
+  const job = { target, child, start: Date.now(), peak: 0, now: 0, timing };
+  job.done = new Promise(res => child.on('exit', code => { job.code = code; res(job); }));
+  return job;
+}
+function cpuOf(job) {
+  try {
+    const [e, u, s] = readFileSync(job.timing, 'utf8').trim().split('\n').pop().split(' ').map(Number);
+    return e > 0 ? (u + s) / e : 1;
+  } catch { return 1; }
+}
+
+// ---- phase one: everything the tests are built from ------------------
+// `make -p` prints the rules as make sees them: each test's
+// prerequisites, and its recipe, unexpanded, where $(MAKE) X shows what
+// it builds again. Asked for .DEFAULT, which has no recipe, it runs
+// nothing: asked for the tests, even -n runs every recipe line with
+// $(MAKE) in it, and with it some of the tests themselves.
+function prerequisites() {
+  let db = '';
+  try { db = execFileSync('make', ['-npq', '.DEFAULT'], { encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'ignore'] }); }
+  catch (e) { db = e.stdout || ''; }
+  // every rule: its prerequisites and its recipe
+  const rules = new Map();
+  const lines = db.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^([^\s:#=]+):(?!=)\s*(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    const recipe = [];
+    for (let j = i + 1; j < lines.length && /^(\t|#|$)/.test(lines[j]); j++)
+      if (lines[j][0] === '\t') recipe.push(lines[j]);
+    rules.set(m[1], { prereqs: m[2].split('|')[0].split(/\s+/).filter(Boolean), recipe });
+  }
+  const phony = new Set((rules.get('.PHONY') || { prereqs: [] }).prereqs);
+  // A test that is another's prerequisite (test-libc-bare, of test-doom,
+  // test-quake and test-duke3d) runs once, as a job of its own, and the
+  // others are told it is made: else each runs it again, at once, in the
+  // same scratch directory (.libc_t), and they delete each other's files.
+  // A run-* prerequisite is left to its test. Everything else is built
+  // here, phony steps too (pre copies the images into the top directory,
+  // which tests running at once would do over each other).
+  const want = new Set(['c4bb-images']);
+  const sub = new Set();
+  const add = p => {
+    if (/^test-/.test(p)) { sub.add(p); if (!tests.includes(p)) tests.push(p); return; }
+    if (tests.includes(p) || want.has(p) || /^run-/.test(p)) return;
+    want.add(p);
+  };
+  for (const t of tests) {
+    const r = rules.get(t);
+    if (!r) continue;
+    r.prereqs.forEach(add);
+    for (const line of r.recipe) {
+      const m = /\$\(MAKE\)((?:\s+-\S+)*)\s+([^\s;&|)]+)/.exec(line);
+      if (m && !m[2].startsWith('$')) add(m[2]);
+    }
+  }
+  // What this phase builds that is no file -- c4bb-images, phony, whose
+  // recipe (build-images.sh) every test would otherwise run again, all of
+  // them at once over the same src/c4bb/images -- the tests are told is
+  // made already (make -o).
+  const held = [...want].filter(p => rules.get(p)?.recipe.length && (phony.has(p) || !existsSync(p)));
+  return { prep: [...want], held: [...held, ...sub] };
+}
+
+const { prep, held } = prerequisites();
+if (opt.listPrep) { console.log(prep.join('\n') + `\n(held: ${held.join(' ')})`); process.exit(0); }
+if (opt.build) {
+  const log = join(opt.out, 'build.log');
+  const fd = openSync(log, 'w');
+  const s = Date.now();
+  const code = await new Promise(res =>
+    spawn('make', ['-s', '-k', `-j${opt.buildJobs}`, ...prep], { stdio: ['ignore', fd, fd] }).on('exit', res));
+  closeSync(fd);
+  note(`build exit=${code} ${secs(Date.now() - s)}s (${prep.length} targets, -j${opt.buildJobs})`);
+}
+
+// ---- phase two: the tests, packed -------------------------------------
+const queue = tests.slice().sort((a, b) => est(b).wall - est(a).wall);
+const running = new Set();
+const finished = [];
+let peakTotal = 0;
+
+function fits(t) {
+  if (!running.size) return true;
+  if (running.size >= opt.jobs) return false;
+  const e = est(t);
+  let cpu = e.cpu, grow = 0;
+  for (const j of running) {
+    const ej = est(j.target);
+    cpu += ej.cpu;
+    grow += Math.max(0, ej.mem - j.now);
+  }
+  return cpu <= opt.cpus && memAvailableMb() - grow - e.mem >= opt.reserve;
+}
+
+function startFitting() {
+  // the longest first; when it does not fit, a shorter one that does
+  for (let i = 0; i < queue.length; i++) {
+    if (!fits(queue[i])) continue;
+    const t = queue.splice(i, 1)[0];
+    const job = run(t, join(opt.out, `${t}.log`), ['-s', ...held.filter(h => h !== t).flatMap(h => ['-o', h])]);
+    running.add(job);
+    job.done.then(j => {
+      running.delete(j);
+      j.wall = (Date.now() - j.start) / 1000;
+      j.cpu = cpuOf(j);
+      finished.push(j);
+      // a failure's numbers are of what it did before failing: not kept
+      if (j.code === 0) {
+        stats[j.target] = { wall: Math.round(j.wall), mem: Math.round(j.peak), cpu: +j.cpu.toFixed(2) };
+        writeFileSync(STATS, JSON.stringify(stats, null, 1) + '\n');
+      }
+      note(`${j.target} exit=${j.code} ${Math.round(j.wall)}s ${Math.round(j.peak)}MB cpu ${j.cpu.toFixed(1)}`);
+    });
+    i = -1;                             // what fits has changed
+  }
+}
+
+const s2 = Date.now();
+await new Promise(res => {
+  const tick = async () => {
+    if (running.size) {
+      const p = await processes();
+      let total = 0;
+      for (const j of running) { j.now = treeMb(j.child.pid, p); j.peak = Math.max(j.peak, j.now); total += j.now; }
+      peakTotal = Math.max(peakTotal, total);
+      const l = loadNow();
+      if (l > peakLoad) peakLoad = l;
+    }
+    startFitting();
+    if (!running.size && !queue.length) return res();
+    setTimeout(tick, 1000);
+  };
+  tick();
+});
+
+const failed = finished.filter(j => j.code !== 0).map(j => j.target);
+note(`tests ${secs(Date.now() - s2)}s, at most ${Math.round(peakTotal)}MB at once; total ${secs(Date.now() - t0)}s`);
+if (!Number.isNaN(load0)) {
+  const all = cpus().length;
+  note(`host load ${load0} at the start, at most ${peakLoad}, on ${all} processors` +
+       (peakLoad > all ? ' -- OVERLOADED: a failure on time may be the host, not the test' : ''));
+}
+note(failed.length ? `FAILED: ${failed.join(' ')}` : `all ${finished.length} passed`);
+note('DONE');
+process.exit(failed.length ? 1 : 0);

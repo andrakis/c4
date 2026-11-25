@@ -1,0 +1,291 @@
+lit1 3dcccccd
+lit2 3fb99999 9999999a
+lit3 1
+lit4 1
+lit5 0 1
+lit6 100000 0
+lit7 7fefffff ffffffff
+lit8 7f7fffff
+lit9 7f800000
+lit10 0
+lit11 4ceb79a3
+lit12 3fd33333 33333333
+lit13 3f647ae1 47ae147b
+lit14 3fe00000 0
+lit15 40140000 0
+lit16 40590000 0
+lit17 3f847ae1 47ae147b
+lit18 4b800000
+lit19 43400000 0
+lit20 37d5c72f b1552d83
+lit21 0 0
+lit22 800000
+lit23 400000
+lit24 80000000 0
+g1 3dcccccd
+g2 c0200000
+g3 40e00000
+g4 3fb99999 9999999a
+g5 fe37e43c 8800759c
+g6 40c81c80 0
+ga 3f800000
+ga 40200000
+ga be800000
+ga 1
+ga 7f7fffff
+gda 3fe00000 0
+gda c0080000 0
+gda 1a56e1f c2f8f359
+gda 0 1
+gb 98 3fa00000 42
+gbv0 40040000 0
+gbv1 bfc00000 0
+add 40466666
+sub 4039999a
+mul 3e99999a
+div 41f00000
+dadd 3ff00000 0
+dsub bfd55555 55555555
+dmul 3fcc71c7 1c71c71c
+ddiv 3fe00000 0
+mix1 400aaaaa aaaaaaab
+mix2 3ff19999 a0000000
+mix3 3fd33333 40000000
+mix4 400c0000 0
+mix5 40080000 0
+inf 7f800000
+ninf ff800000
+nan ffc00000
+infsub ffc00000
+dinf 7ff00000 0
+dunder 0 0
+dsubn 622 d925a20e
+fsubn 1be0
+negz 80000000
+dnegz 80000000 0
+cmp1 0 1 1 1 1 1
+cmp2 0 0 0 1 0 0
+cmp3 1 0 1
+cmp4 1 1 1
+cmp5 2 0 1
+nan is true
+zero is false
+while 4
+andor 1 1 0
+f2i 2 -2 1000000000 -7
+d2i -1000000000 123456
+d2u 3000000000 4294967295
+d2ll -1000000 0
+d2ull 4190951585 3305635840
+narrow 65 -1234 200
+i2f 4b800000
+i2f2 cf000000
+i2d c1dfffff ffc00000
+u2f 4f800000
+u2d 41efffff ffe00000
+ll2d c3400000 0
+ll2f 5f000000
+ull2d 43f00000 0
+ull2f 5f800000
+itod c0140000 0
+c2d 40504000 0
+s2f c0080000 0
+f2d 3fb99999 a0000000
+d2f 3dcccccd
+d2f2 7f800000
+d2f3 0
+d2f4 0
+f2d2 36a00000 0
+dmix 41fa13b8 80000000
+cops 40880000
+pre 40a80000
+post 40a80000
+after 40c80000
+predec 40a80000
+postdec 40a80000
+end 40880000
+dops 3ff80000 0
+dinc 40040000 0
+iadd 12
+imul 10
+assignint 3
+la 3fc00000
+la 40000000
+la c0500000
+lda0 3fe80000 0
+lda1 40220000 0
+ptr 40000000
+ptr2 c0500000
+ptrset 41000000
+gbm 40200000
+gbv bff20000 0
+avg 40055555
+static 40600000
+scale 40900000
+scale2 40800000
+hyp 40390000 0
+fneg c0200000
+fps 23 -7
+cond1 3ff80000 0
+cond2 40000000 0
+cond3 3dcccccd
+roundtrip 1
+narrowed 0
+sizeof 8 8
+tight- bff80000 0
+tight+ 400c0000 0
+tight-e 40290000 0
+tighte- 40053333 33333333
+arr0 bf800000
+arr1 0
+arr2 40000000
+mix0 3f800000
+mix1 bf800000
+k-i2f-round 4b800000
+k-i2f-neg cb800002
+k-i2f-max 4f000000
+k-i2f-min cf000000
+k-u2f-max 4f800000
+k-zero 0
+k-char 42820000
+k-i2d 41700000 10000000
+k-i2d-neg c01c0000 0
+k-u2d-max 41efffff ffe00000
+k-d2f 497423fe
+k-d2f-round 3f8ccccd
+k-d2f-neg bf8ccccd
+k-d2f-inf 7f800000
+k-d2f-neginf ff800000
+k-d2f-under 0
+k-d2f-subnormal 116c2
+k-d2f-edge 7f7fffff
+k-d2f-carry 7f800000
+k-f2d 3ff19999 a0000000
+k-f2d-neg bff19999 a0000000
+k-negzero-d2f 80000000
+k-negzero-f2d 80000000 0
+k-neg-f bfc00000
+k-neg-d bff80000 0
+k-arg 40a00000
+k-arg-d 40140000 0
+k-cmp 1 1 0 1
+k-cmp-d 1 1
+k-cast 40400000 c0400000
+stl-f 40400000
+stl-g 3fc00000
+stl-val 40600000
+stl-val2 40200000
+stl-post 40200000
+stl-post2 40600000
+stl-pre 40200000
+stl-d 40140000 0
+stl-d2f 40a00000
+fpu-add 3fe00000
+fpu-sub 3fa00000
+fpu-mul 3ec00000
+fpu-div 40c00000
+fpu-dadd 3ffc0000 0
+fpu-dsub 3ff40000 0
+fpu-dmul 3fd80000 0
+fpu-ddiv 40180000 0
+fpu-nest 4035d174
+fpu-dnest 4006ba2e 8ba2e8ba
+fpu-mix 40208000 0
+fpu-i2f 40e00000
+fpu-i2d 401c0000 0
+fpu-c2f c0400000
+fpu-c2d c0080000 0
+fpu-f2i 1 -1 1500
+fpu-d2i 1 -1 1500
+fpu-f2c -106 44
+fpu-d2c -106 44
+fpu-f2u b2d05e00 b2d05e00
+fpu-u2f 4f32d05e
+fpu-u2d 41e65a0b c0000000
+fpu-w 3fe00000
+fpu-n 3ffc0000 0
+fpu-order bf800000
+fpu-order-d 3fe00000 0
+fpu-order-l 0
+fpu-order-r 0
+fpu-order-m c0140000 0
+fpu-order-c 1 0
+fpu-order-a 40400000
+fpu-order-b 40000000
+cmp-near a 110001 001101
+cmp-near n 110001 0011
+cmp-near x 001101 10
+cmp-near z 100101
+cmp-near f 011011
+cmp-below a 001101 110001
+cmp-below n 110001 0011
+cmp-below x 001101 10
+cmp-below z 100101
+cmp-below f 011011
+cmp-above a 110001 001101
+cmp-above n 110001 0011
+cmp-above x 001101 10
+cmp-above z 100101
+cmp-above f 011011
+cmp-nnear a 001101 110001
+cmp-nnear n 001101 1100
+cmp-nnear x 001101 10
+cmp-nnear z 010100
+cmp-nnear f 010110
+cmp-nbelow a 001101 110001
+cmp-nbelow n 110001 0011
+cmp-nbelow x 001101 10
+cmp-nbelow z 010100
+cmp-nbelow f 010110
+cmp-nabove a 001101 110001
+cmp-nabove n 001101 1100
+cmp-nabove x 001101 10
+cmp-nabove z 010100
+cmp-nabove f 010110
+cmp-half a 110001 001101
+cmp-half n 110001 0011
+cmp-half x 010110 01
+cmp-half z 100101
+cmp-half f 011011
+cmp-under a 110001 001101
+cmp-under n 110001 0011
+cmp-under x 001101 10
+cmp-under z 100101
+cmp-under f 011011
+cmp-zero a 001101 110001
+cmp-zero n 110001 0011
+cmp-zero x 001101 10
+cmp-zero z 001010
+cmp-zero f 010110
+cmp-nzero a 001101 110001
+cmp-nzero n 110001 0011
+cmp-nzero x 001101 10
+cmp-nzero z 001010
+cmp-nzero f 010110
+cmp-inf a 110001 001101
+cmp-inf n 110001 0011
+cmp-inf x 110001 00
+cmp-inf z 100101
+cmp-inf f 101001
+cmp-ninf a 001101 110001
+cmp-ninf n 001101 1100
+cmp-ninf x 001101 10
+cmp-ninf z 010100
+cmp-ninf f 010110
+cmp-nan a 000001 000001
+cmp-nan n 000001 0000
+cmp-nan x 000001 00
+cmp-nan z 000100
+cmp-nan f 000000
+cmp-max a 110001 001101
+cmp-max n 110001 0011
+cmp-max x 110001 00
+cmp-max z 100101
+cmp-max f 011011
+cmp-tiny a 001101 110001
+cmp-tiny n 110001 0011
+cmp-tiny x 001101 10
+cmp-tiny z 100101
+cmp-tiny f 011011
+cmp-both 0 1 1 1
+cmp-effect 10

@@ -1,0 +1,133 @@
+// shell.h -- inside grin, C4DOS's graphical shell (docs/grin-plan.md):
+// what its modules share. (grin.h is the applications' header.) grin is built on the window kit (src/winkit),
+// and as a shell it looks inside the kit's windows (wkwin.h) to cascade,
+// tile and list them.
+
+#ifndef GRIN_SHELL_H
+#define GRIN_SHELL_H 1
+#include "wkwin.h"
+
+// GRIN.INI (grin.c): the screen, the colours, the desktop's pattern and
+// the screen saver. Written where C4DOS writes a file with no drive: the
+// home drive (DRIVES.SYS HOME=B:), which the page keeps, else the RAM
+// disk.
+struct grin_ini {
+    int sw, sh;                       // 640x480 or 800x600
+    int scheme;                       // the kit's colour scheme
+    int pattern;                      // the desktop's (pattern_name), 0 none
+    int saver, wait;                  // the screen saver (savers.c, 0 none), after how many minutes
+    int chime;                        // the startup chime (1, the default; 0 none)
+};
+extern struct grin_ini ini;
+void ini_save();
+
+// the desktop under the windows (grin.c)
+int   pattern_count();
+char *pattern_name(int i);
+void  grin_set_scheme(int scheme);
+void  grin_set_pattern(int pattern);
+void  grin_set_screen(int sw, int sh);
+void  grin_saver_test(int which);     // the saver now, past the click that asked
+void  grin_quit();                    // the session ends: the loop stops
+void  grin_chime();                   // the startup chime, on the OPL (where there is a sound card)
+
+// the built-in windows
+int  progman_open();                  // progman.c: Program Manager
+int  grin_start(char *cmdline);       // ... a command line: a built-in window, or an application
+int  filemgr_open();                  // filemgr.c: File Manager
+int  tasklist_open();                 // tasklist.c: the Task List
+void tasklist_cascade();
+void tasklist_tile();
+int  control_open();                  // control.c: Control Panel
+
+// the applications (apps.c): the kit's table in DOS's slot 25, and the
+// programs started as applications
+void apps_init();                     // at the start: the table published
+void apps_reap();                     // every pass, at the top of the loop: the dead and windowless unloaded
+void apps_end();                      // at the end, after every window: all unloaded, the table taken back
+int  apps_count();                    // how many are loaded
+int  grin_run(char *cmdline);         // start one: 0, or -1 with a message box saying why
+                                      // (a DOS program it finds goes to grin_full)
+int  grin_heapgen();                  // grin's own heap generation (0 without HEAP.SYS)
+void apps_publish(int on);            // the table in slot 25 (1), or out of it while a program has the display (0)
+
+// a DOS program's frames in a grin window (fwin.c, docs/grin-plan.md 3.6):
+// the games. The three grin_fwin_* are the table's (gkit.h), the game's to call
+int  grin_fwin_open(char *title, int w, int h, int flags);
+void grin_fwin_frame(char *pixels, int w, int h, int pitch, int *pal);
+int  grin_fwin_poll(int *ev);
+int  grin_fwin_ctl(int op, int n, char *s);
+void fwin_init();                     // at the start: grin's image (C4DOS v8)
+int  fwin_event(int *ev);             // an event from the display: 1 if it was the game's
+int  fwin_fresh();                    // a game's frame waits to be drawn
+void fwin_run(char *cmdline);         // from the top of the loop: the program, windowed
+void fwin_end();                      // from the top of the loop: a game's window left, closed
+void fwin_name(char *title);          // the next game's window titled so (a Program Manager item's), 0 the game's own
+
+// DOS programs (docs/grin-plan.md 3.6, 3.7): one at a time, run from the
+// top of the loop, full screen (grin.c) or in a DOS Prompt (dosprmpt.c)
+extern int  dos_busy;                 // one is running
+extern char dos_busy_name[64];        // its name, in capitals
+void dos_busy_set(char *cmdline);
+int  dos_refuse();                    // one is running or waiting: a message box says so, and 1
+int  grin_full(char *cmdline);        // full screen, at the top of the loop: 0, or -1 (refused)
+int  grin_full_waiting();
+int  grin_window(char *cmdline);      // in a window of its own (fwin.c), at the top of the loop: 0, or -1
+int  grin_dos(char *cmdline);         // progman.c: as a Program Manager item that runs it says, else full screen
+// how a Program Manager item runs a program (progman.c, PROGMAN.INI's modes)
+enum { RUN_APP = 0, RUN_FULL = 1, RUN_WINDOW = 2, RUN_PROMPT = 3 };
+int  progman_mode(char *cmdline);     // ... the first that runs the same program: RUN_*, or -1 for none
+int  dosprompt_open(char *cmd);       // a DOS Prompt window; cmd (or 0) typed at its first prompt
+int  dosprompt_run(char *cmdline);    // a DOS Prompt in the program's directory, running it: the window, or -1
+void grin_where(char *cmdline, char *dir, int n);   // "A:\GAMES\DOOM" for "\GAMES\DOOM\DOOM -warp 2", "" for a bare word
+void grin_display_give();             // a DOS program is to have the display (full screen) ...
+int  grin_display_take(char *name, int st);   // ... and grin has it back after name ended with status st, everything drawn: 1, or 0 when a message box says it failed
+void dosprompt_top();                 // the top of the loop: a DOS Prompt's line runs
+void grin_pump();                     // one pass of the loop, for a DOS program waiting in grin
+void grin_pump_game();                // ... for a game's poll: no nap, its frame drawn at once
+void grin_draw_now();                 // the damage drawn now (a DOS Prompt's output, as it comes)
+
+// a 32x32 picture with a label under it, centred on cx (Program Manager's
+// items, Control Panel's), drawn client-relative; and its hit box
+enum { ITEM_W = 76, ITEM_H = 60 };
+void grin_item(int cx, int y, int pic, char *label, int sel);
+int  grin_item_hit(int px, int py, int cx, int y);
+void grin_label(int cx, int y, char *label, int sel, int colour);   // the label alone, under y: on two lines when it is long
+enum { PIC_CONTROL = 1, PIC_DISPLAY = 2, PIC_COLORS = 3, PIC_DESKTOP = 4, PIC_CLOCK = 5, PIC_CALC = 6,
+       PIC_FILES = 7, PIC_DOS = 8, PIC_NOTEPAD = 9, PIC_GAME = 10, PIC_APP = 11, PIC_SOUND = 12, N_PICS = 13 };
+void grin_item_dim(int cx, int y, int pic, char *label, int sel, int dim);   // dim: greyed, not available
+void grin_picture(int pic, int x, int y);
+
+// C4DOS's files, as grin sees them (disk.c)
+enum { DRV_RAM = 26 };                // the RAM disk, where a drive's number would be
+int   gd_drives();                    // how many drives (DRIVES.SYS), 1 without
+int   gd_home();                      // where a file with no drive is written, or -1: the RAM disk
+int   gd_unlink(char *name);          // 0, or -1
+int   gd_exec(char *line);            // a command line, as A> runs it: its status
+int   gd_sink(int w, int r, int ctx); // the console's sink (slot 24): w(ctx, buf, n), r(ctx, buf, n); 0s give it back
+int   gd_setgen(int g);               // the heap generation now: the previous one, or -1
+int   gd_drive();                     // the drive DOS's prompt is on, 0 = A: (v6)
+int   gd_image(int h);                // the image DOS counts as running made h (0: only asked): the one before (v8), 0 without
+// under C4KE, with no DOS (disk.c): its tasks, and the machine's console tap
+int   gd_c4ke();                      // 1: grin is a C4KE task, and there is no DOS
+int   gd_ke_start(int argc, char **argv);   // a program as a task: its pid, 0 if it could not start
+int   gd_ke_running(int pid);         // is it still running?
+int   gd_ke_kill(int pid, int sig);   // a signal to a task (kill): 0, or -1
+void  gd_tap(int on);                 // 1: keep what is printed; 0: the console again
+int   gd_tap_drain(char *buf, int n); // what was printed, up to n bytes: how many
+void  gd_tap_feed(char *buf, int n);  // fd 0 reads these n bytes, then end of input; -1: the keyboard
+int   gd_tap_left();                  // bytes of the feed not read yet (-1: the keyboard)
+int   gd_size(char *name);            // bytes, read through; -1 if it is not there
+int   gd_list(int drive, char *dir, char *names, int max);   // a directory's files, WK_NAME bytes each ("NAME/" a directory): how many
+char *gd_getcwd(int drive);           // a drive's current directory, "\GAMES" (v7); -1 the prompt's
+int   gd_chdir(char *path);           // CD path: 0, or -1 (v7)
+char *gd_name(int drive, char *name, char *out, int n);   // "B:NAME", "RAM:NAME"
+
+// grin's dialogs: windows of the kit's dialog chrome (WK_DIALOG), whose
+// state begins as the kit's own dialogs' does, with no buffer, so that
+// closing one from its control menu or with Esc (wk_dialog_answer) is
+// safe
+struct grin_dlg { char *buf; int max; };
+int grin_dialog(struct wk_class *c, int size, char *title, int w, int h);
+
+#endif

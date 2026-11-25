@@ -1,0 +1,7 @@
+smp1: 4 processor(s)
+smp1: atomics OK
+smp1: spinlock OK, 2000 increments
+smp1: lock-free counter OK, 2000 increments
+smp1: park and wake OK
+smp1: interrupts OK, 3 delivered
+smp1: all OK

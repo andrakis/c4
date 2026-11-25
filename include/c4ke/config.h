@@ -18,10 +18,17 @@
  * Option: Enable Protected Mode
  * Requires: c4m compiled with protected mode.
  * Notes:
- *   - Protected mode proved very unstable, and very slow.
- *   - User-mode services such as memory allocation, IO, etc, will be
- *    implemented in u0.h
+ *   - Protected mode was long shelved as unstable and slow. As of
+ *     docs/task-memory.md it is neither refused nor the default: with
+ *     it on, a task's malloc and free reach the kernel, which is the
+ *     only way the kernel can give a task's memory back when the task
+ *     ends -- see kernel_task_malloc in c4ke.c. `make test-task-mem`
+ *     pins that. It costs a trap per syscall.
+ *   - Overridable from the command line, which is how the PM kernels
+ *     the test builds are made:  $(PREPROC) -DCONFIG_ENABLE_PM=1 ...
  */
+#ifndef CONFIG_ENABLE_PM
 #define CONFIG_ENABLE_PM 0
+#endif
 
 #endif

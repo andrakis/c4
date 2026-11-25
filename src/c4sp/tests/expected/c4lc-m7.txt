@@ -1,0 +1,45 @@
+void-params 7 5 yz
+void-ptr 0 1
+static-void 42
+sizeof-scalar 1 1 1 1 1
+sizeof-array 1 1 1 1
+sizeof-member 1 1 1 1
+sizeof-struct 1 1
+sizeof-expr 1 1 1
+const-sizeof 1 1
+const-ops 1 1 0 1 0 20
+fnptr 42 8 -5 12
+fnptr-member -7 -8 neg
+fnptr-array 6 -3 -9 -2
+fnptr-cast 20
+fnptr-sizeof 1
+goto 10 100 23 7
+goto-end 5 1 5 3
+enum 6 5 0 60 4 2
+enum-size 1 1
+static 13 799 1000 hi
+agg-table a b 275 2
+agg-words one two three 3
+agg-mains 11 22
+agg-struct 3 4 2 0 5 6
+agg-sparse 0 7 0 9 10 6
+agg-nested lid 7 8 9
+agg-desig ab 0 11
+agg-elided 1 2 3 4
+agg-small 200 -1 300 0 65
+extern 107 hey 3
+union 65 1
+enum0 6 0 5 6 red
+attr 25 8 2 113 xy 3
+scopy 5 hi -2 8 9
+scopy2 5 hi 3 gl 1 2
+func whoami funcname 9
+gaddr 5 7 3 q
+gtab 5 7 2 7 q 9
+lagg 7 114 -2 15 ab ptr
+lagg2 12 0 9 11 3 hi
+lagg3 one two 1 5 4
+lagg4 q 5 0 0
+lagg5 10 3
+commas 1072 1234556 5 5 1
+commas-return 567

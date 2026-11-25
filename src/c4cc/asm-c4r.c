@@ -29,15 +29,24 @@
 //    c4cc -S include/u0.h src/tests/mandel.c
 //    c4cc -S include/u0.h src/c4ke/bin/ps.c src/c4ke/bin/top.c
 //
-// C4R File Format: Version 2 (with proposals for V3 not implemented)
+// C4R File Format: version 2 (what c4cc writes) and version 3
+// (what c4lc and c4rlink write). load-c4r.c reads both. src/c4cc/README.md
+// has the same description in prose.
 // |---------------------------------------------------------------------------|
 // | Header:                                                                   |
 // | |-----------------------------------------------------------------------| |
 // | | Type | Name           | Purpose                                       | |
 // | |-----------------------------------------------------------------------| |
 // | | B*3  | "C4R"          | Signature, 3 bytes                            | |
-// | | B    | Version        | Currently 2                                   | |
+// | | B    | Version        | 2 from c4cc; 3 from c4lc and c4rlink          | |
 // | | B    | WordBits       | How large a word is                           | |
+// | | B*8  | MEMSZ/padding  | v2: 'p' filler. v3: the first word (at byte   | |
+// | |      |                | offset 5) is the total in-memory data size;   | |
+// | |      |                | the part past DataLen is zero-filled BSS. At  | |
+// | |      |                | 32 bits the next four bytes say how much of   | |
+// | |      |                | MEMSZ, at its end, is uninitialized globals   | |
+// | |      |                | (c4lc, c4fc, c4rlink; 0 for unknown), which   | |
+// | |      |                | c4rlink lays out after all the data           | |
 // | | W    | Entry          | Position to begin code execution              | |
 // | | W    | CodeLen        | Length of code segment in words               | |
 // | | W    | DataLen        | Length of data segment in bytes               | |
@@ -47,8 +56,10 @@
 // | | W    | DestructLen    | Length of deconstruct segment in entries      | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
-// | Each segment is preceded by a symbol to indicate where in the file you    |
-// |  are when viewing. Use c4rdump for a more user-friendly way to view.      |
+// | Each segment is preceded by a one-word marker to indicate where in the    |
+// |  file you are when viewing. Use c4rdump for a more user-friendly view.    |
+// | Segments appear on disk in this order: C, D, P, c, d, S                   |
+// |  (code, data, patches, constructors, destructors, symbols).               |
 // |---------------------------------------------------------------------------|
 // | Data (D) and code segments (C) are just direct words to load into memory. |
 // |---------------------------------------------------------------------------|
@@ -61,6 +72,13 @@
 // | | W  : Value      Offset to add to patch address                        | |
 // | | Note: Type can be negative (see LT_*) or positive to refer to a symbol| |
 // | |       and resolved after linking.                                     | |
+// | | Address is a word offset into CODE for types -1/-2 and symbols, and a | |
+// | | BYTE offset into DATA for types -3/-4 (data-resident words: pointer   | |
+// | | initializers of globals, switch jump tables). Code-resident patches   | |
+// | | are written first, in emission (= ascending address) order, then the  | |
+// | | data-resident ones. The patched word itself holds Value (0 for a      | |
+// | | symbol): loaders overwrite it, and a compile-time address there would | |
+// | | make two builds of one source differ.                                 | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
 // | Construct / Destruct segment format:                                      |
@@ -70,46 +88,33 @@
 // | |-----------------------------------------------------------------------| |
 // | | Type | Name       | Purpose                                           | |
 // | |-----------------------------------------------------------------------| |
-// | |  B   | Priority   | Lower priorities run first                        | |
 // | |  W   | Value      | Code offset of function to call                   | |
+// | | (A priority byte was proposed and never written: both c4cc and    | |
+// | |  c4lc emit one word per entry, and load-c4r.c reads one.)         | |
 // |---------------------------------------------------------------------------|
 // | Symbols segment format: S                                                 |
 // | |-----------------------------------------------------------------------| |
 // | | Type | Name       | Purpose                                           | |
 // | |-----------------------------------------------------------------------| |
 // | |  W   | Id         | C4 symbol id                                      | |
-// | |  B   | Type       | C4 type                                           | |
-// | |  B   | Class      | C4 class                                          | |
+// | |  W   | Type       | C4 type                                           | |
+// | |  W   | Class      | C4 class                                          | |
 // | |  W   | Attributes | Eg static, external, etc                          | |
 // | |  B   | NameLen    |                                                   | |
 // | |  B.. | Name       | NameLen bytes, not including nul terminator       | |
 // | |  W   | Value      |                                                   | |
-// | |  W   | Length     | Useful only for functions currently               | |
+// | | Type and Class are WORDS, not bytes, and there is no trailing      | |
+// | | Length -- checked against what c4cc and c4lc actually write and    | |
+// | | against c4r.lisp, which reads it. Attribute bits in use: 0x1       | |
+// | | constructor, 0x2 destructor, 0x8 static, 0x20 variadic, 0x40       | |
+// | | aggregate (an array or a struct variable, whose name stands for    | |
+// | | its own address).                                                  | |
 // | |-----------------------------------------------------------------------| |
 // |---------------------------------------------------------------------------|
 // |---------------------------------------------------------------------------|
-// | Unimplemented proposals: Version 3                                        |
-// | Version 3 would include a method to map instructions to source code, as   |
-// | well as a check to ensure the opcodes used at compile time match the ones |
-// | being used at runtime.                                                    |
-// | The following additional header content is proposed:                      |
-// | |-----------------------------------------------------------------------| |
-// | | Type | Name           | Purpose                                       | |
-// | |-----------------------------------------------------------------------| |
-// | | W    | CodePageLen    | V3 only: code pages                           | |
-// | | W    | InstructionsLen| V3 only: length of instructions section       | |
-// | | B*N  | Instructions   | V3 only: instruction section                  | |
-// | | W    | SourceMapLen   | V3: source map to function address table      | |
-// | |-----------------------------------------------------------------------| |
-// | Source map format: M (V3 only)                                            |
-// | |-----------------------------------------------------------------------| |
-// | | Type | Name       | Purpose                                           | |
-// | |-----------------------------------------------------------------------| |
-// | |  W   | Start      | Start offset of entry                             | |
-// | |  W   | End        | End offset of entry                               | |
-// | |  B   | Length     | Length of the text of this entry                  | |
-// | |  B.. | Text       | Source code text referencing code offset          | |
-// | |-----------------------------------------------------------------------| |
+// | Version 3 as built is only the MEMSZ field above. An earlier proposal    |
+// | for v3 (a source map, and a check that compile-time opcode numbers match |
+// | the runtime's) was never implemented.                                     |
 // |---------------------------------------------------------------------------|
 
 #define C4CC_INCLUDED
@@ -178,8 +183,24 @@ int asmc4r_parse_commandline (int *_argc, char ***_argv) {
 		}
 	}
 
-	// Move back one
-	++argc; --argv;
+	// Move back one -- BUT ONLY IF THE LOOP MOVED FORWARD.
+	//
+	// The loop above steps argv on before it looks at anything, so on
+	// leaving it argv points AT the first thing that was not an option
+	// and this puts it back to the conventional argv[0]-is-ignored
+	// shape. With no arguments at all the loop never runs, and stepping
+	// back from argv[0] reads the word BEFORE the array -- whatever the
+	// caller happened to leave there -- and hands it on as a filename.
+	// It also made argc 2, so the usage check below could not fire.
+	//
+	// That is why `c4cc` with no arguments did not print usage but
+	// appeared to compile itself: it opened a pointer nobody passed,
+	// which under C4KE lands on a nearby string, and the file it named
+	// began "C4R" because the things near it are images.
+	//
+	// argc only ever decreases in the loop, so "smaller than we came in
+	// with" is exactly "the loop advanced".
+	if (argc < *_argc) { ++argc; --argv; }
 
 	if (argc == 1) {
 		printf("usage: [-g] [-o outfile]\n");
@@ -215,7 +236,38 @@ void free_c4r (int *c4r) { }
 #endif
 
 int writeoffset;
+
+// Memory-output mode: under C4KE the VM has no write syscall, so the
+// image is rendered into this growing buffer and then stored in the
+// kernel's RAM filesystem (see asmc4r_Source).
+char *asmc4r_membuf;
+int   asmc4r_memlen, asmc4r_memcap, asmc4r_use_mem;
+
+int asmc4r_memwrite (char *buf, int count) {
+	char *nb;
+	int i;
+	if (asmc4r_memlen + count > asmc4r_memcap) {
+		asmc4r_memcap = asmc4r_memcap * 2 + count + 65536;
+		if (!(nb = malloc(asmc4r_memcap))) {
+			printf("c4cc: out of memory writing image\n");
+			exit(-1);
+		}
+		i = 0;
+		while (i < asmc4r_memlen) { nb[i] = asmc4r_membuf[i]; ++i; }
+		if (asmc4r_membuf) free(asmc4r_membuf);
+		asmc4r_membuf = nb;
+	}
+	i = 0;
+	while (i < count) { asmc4r_membuf[asmc4r_memlen + i] = buf[i]; ++i; }
+	asmc4r_memlen = asmc4r_memlen + count;
+	return count;
+}
+
 int writechecked (int fd, void *buf, int count) {
+	if (asmc4r_use_mem) {
+		writeoffset = writeoffset + asmc4r_memwrite((char *)buf, count);
+		return 0;
+	}
 	writeoffset = writeoffset + write(fd, buf, count);
 }
 
@@ -234,13 +286,15 @@ enum {
 	LBL_INDEX,   // int, the code offset that needs to be patched
 	LBL_VALUE,   // int, the value it needs to be patched to
 	LBL__Sz,
-	LABELS_MAX = 8096
+	LABELS_MAX = 65536 // switch jump tables emit one label per entry
 };
 
 enum {
-	LT_CODE = -1,     // Code patch
-	LT_DATA = -2,     // Data patch
-	LT_DROP = -3      // Drop this patch
+	LT_CODE  = -1,    // code-resident word -> code address
+	LT_DATA  = -2,    // code-resident word -> data address
+	LT_DCODE = -3,    // data-resident word -> code address
+	LT_DDATA = -4,    // data-resident word -> data address
+	LT_DROP  = -5     // Drop this patch (unused)
 };
 
 int *asmc4r_labels, asmc4r_labels_count;
@@ -397,6 +451,20 @@ void asmc4r_handler_MATH(int operation) {
 	*++asmc4r_e = operation;
 }
 
+// Record a data-resident patch: the word at byte offset dataoff in the
+// data segment is relocated at load time to a code (LT_DCODE) or data
+// (LT_DDATA) target. Used for pointer initializers of globals and for
+// switch jump tables, which live in data where nothing executes them.
+void asmc4r_handler_DATAPATCH (int type, int dataoff, int value) {
+	int *lbl;
+	lbl = asmc4r_newlabel(dataoff, type);
+	// DCODE values arrive as backend code addresses (only the backend
+	// knows where its code buffer starts); DDATA values are already
+	// byte offsets into the data pool.
+	if (type == LT_DCODE) value = (int)((int *)value - asmc4r_e_start);
+	lbl[LBL_VALUE] = value;
+}
+
 int *asmc4r_handler_FunctionAddress () { return asmc4r_e + 1; }
 int *asmc4r_handler_CurrentAddress () { return asmc4r_e + 1; }
 void asmc4r_handler_UpdateAddress (int *label, int addr) {
@@ -502,11 +570,17 @@ void asmc4r_dump_symbol_to_file (int fd, int *d, int id) {
 	tmp = strc_b - strc_a; writechecked(fd, &tmp, 1); // NameLen
 	// TODO: symbols end up unaligned, need to write strings with padding.
 	writechecked(fd, strc_a, strc_b - strc_a); // Name
-	// TODO: check type, function, etc, output adjusted value
-	// Value
+	// Value, REBASED. A symbol's value has to mean something to whoever
+	// reads the image back, and a compile-time host address means
+	// nothing: functions were already emitted as an offset from the code
+	// start, and globals now get the same treatment against the data
+	// start. Leaving Glo raw is what made C4DOS's inject_api (which
+	// computes database + value) write through a wild pointer -- the
+	// bug hid because nothing had ever asked for a global by name.
 	class = d[Class];
-    value = d[Val];
+	value = d[Val];
 	if (class == Fun) value = (int *)d[emit_Val] - asmc4r_e_start;
+	else if (class == Glo) value = (char *)d[Val] - data_s;
 	writechecked(fd, &value, sizeof(int));
 	// Length
 	//writechecked(fd, &d[emit_Length], sizeof(int));
@@ -523,9 +597,12 @@ void dump_to_file (char *file) {
 	//printf("Writing output to '%s'...", file);
 	fflush(stdout);
 
-	if ((fd = open(file, O_TRUNC | O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR)) < 0) {
-		printf("failed to open file\n");
-		return;
+	fd = -1;
+	if (!asmc4r_use_mem) {
+		if ((fd = open(file, O_TRUNC | O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR)) < 0) {
+			printf("failed to open file\n");
+			return;
+		}
 	}
 
 	version = C4R__Exported_Version;
@@ -573,25 +650,78 @@ void dump_to_file (char *file) {
 	// Destructors length
 	tmp = destructor_count; writechecked(fd, &tmp, sizeof(int));
 
+	// Resolve symbol-typed patches whose symbol was defined later in this
+	// compilation (a JSR emitted while the target was only a prototype).
+	// The loader ignores symbol patches, so leaving them made standalone
+	// executables with forward declarations jump to garbage; only symbols
+	// still undefined at the end of the unit -- true externs, for
+	// c4rlink -- stay symbol-typed.
+	i = 0; lbl = asmc4r_labels;
+	while (i < asmc4r_labels_count) {
+		if (lbl[LBL_TYPE] >= 0) {
+			d = idstart + lbl[LBL_TYPE] * Idsz;
+			// ATTR_EXTERN is the discriminator: a definition clears it,
+			// and emit_Val alone cannot be trusted (prototypes carry a
+			// nonzero garbage value there).
+			if (d[Class] == Fun && d[emit_Val] && !(d[Attr] & ATTR_EXTERN)) {
+				lbl[LBL_TYPE]  = LT_CODE;
+				lbl[LBL_VALUE] = (int *)d[emit_Val] - asmc4r_e_start;
+			}
+		}
+		++i;
+		lbl = lbl + LBL__Sz;
+	}
+	// Every patched word gets its patch's value: the offset into code or
+	// data it points at (0 for a symbol, which c4rlink resolves). Each
+	// loader overwrites these words, so what they hold only matters to
+	// the file: left alone they held c4cc's own addresses (where its code
+	// buffer and data pool happened to be, IMM/JMP/JSR operands and the
+	// pointer initializers c4cc.c leaves as dead compile-time values), so
+	// under ASLR no two builds of an unchanged source were byte-identical.
+	i = 0; lbl = asmc4r_labels;
+	while (i < asmc4r_labels_count) {
+		t = lbl[LBL_TYPE];
+		if (t >= 0) lbl[LBL_VALUE] = 0;
+		if (t == LT_DCODE || t == LT_DDATA)
+			*(int *)(data_s + lbl[LBL_INDEX]) = lbl[LBL_VALUE];
+		else if (t != LT_DROP)
+			asmc4r_e_start[lbl[LBL_INDEX]] = lbl[LBL_VALUE];
+		++i;
+		lbl = lbl + LBL__Sz;
+	}
+
 	// Code
 	writechecked(fd, "C\0\0\0\0\0\0\0", sizeof(int));
-	writechecked(fd, asmc4r_e_start, sizeof(int) * (1 + asmc4r_e - asmc4r_e_start));
+	// The inner parentheses matter when c4cc compiles itself: it types
+	// 1 + pointer as int, which un-scales the following subtraction and
+	// inflates the write to byte-count words. gcc computed it correctly,
+	// so this only ever broke the self-hosted compiler's output.
+	writechecked(fd, asmc4r_e_start, sizeof(int) * (1 + (asmc4r_e - asmc4r_e_start)));
 	// printf("Wrote %d bytes of code\n", 1 + asmc4r_e - asmc4r_e_start);
 	// Data
 	writechecked(fd, "D\0\0\0\0\0\0\0", sizeof(int));
 	writechecked(fd, data_s, data - data_s);
-	// Patches
+
+	// Patches: code-resident first in emission order (readers walk them
+	// in step with the instruction stream), then data-resident.
 	writechecked(fd, "P\0\0\0\0\0\0\0", sizeof(int));
 	i = 0; lbl = asmc4r_labels;
-	// printf("Writing %d patches at 0x%lX...", asmc4r_labels_count, writeoffset); fflush(stdout);
 	while (i < asmc4r_labels_count) {
-		writechecked(fd, &lbl[LBL_TYPE], sizeof(int));
-		// printf("  patch %d type %d label index = 0x%lX  value = 0x%lX", i, lbl[LBL_TYPE], lbl[LBL_INDEX], lbl[LBL_VALUE]);
-		// printf(" (%d)\n", lbl[LBL_VALUE]);
-		writechecked(fd, &lbl[LBL_INDEX], sizeof(int));
-		//tmp = lbl[LBL_INDEX] * sizeof(int); writechecked(fd, &tmp, sizeof(int));
-		writechecked(fd, &lbl[LBL_VALUE], sizeof(int));
-		// tmp = lbl[LBL_VALUE] * sizeof(int); writechecked(fd, &tmp, sizeof(int));
+		if (lbl[LBL_TYPE] >= LT_DATA || lbl[LBL_TYPE] >= 0) {
+			writechecked(fd, &lbl[LBL_TYPE], sizeof(int));
+			writechecked(fd, &lbl[LBL_INDEX], sizeof(int));
+			writechecked(fd, &lbl[LBL_VALUE], sizeof(int));
+		}
+		++i;
+		lbl = lbl + LBL__Sz;
+	}
+	i = 0; lbl = asmc4r_labels;
+	while (i < asmc4r_labels_count) {
+		if (lbl[LBL_TYPE] == LT_DCODE || lbl[LBL_TYPE] == LT_DDATA) {
+			writechecked(fd, &lbl[LBL_TYPE], sizeof(int));
+			writechecked(fd, &lbl[LBL_INDEX], sizeof(int));
+			writechecked(fd, &lbl[LBL_VALUE], sizeof(int));
+		}
 		++i;
 		lbl = lbl + LBL__Sz;
 	}
@@ -646,7 +776,7 @@ void dump_to_file (char *file) {
 	// printf("wrote %d records\n", i);
 	
 	//printf("success\n");
-	close(fd);
+	if (fd >= 0) close(fd);
 }
 
 void read_from_file (char *file) {
@@ -680,6 +810,53 @@ void asmc4r_Source () {
 			read_from_file(asmc4r_opt_outfile);
 		return;
 	}
+
+#if !NATIVE
+	// Under C4KE: render the image into memory and store it in the
+	// kernel's RAM filesystem, from where the kernel can execute it.
+	// (The VM has no write syscall, so the host filesystem is out.)
+	// The opcode is resolved by name so this file needs nothing from u0.
+	// Probe only when a trap handler is installed (C4I_TRAPH), i.e. a
+	// kernel is servicing opcodes; an answer above 128 means it resolved
+	// the symbol (128 is what a missed trap leaves in the accumulator).
+	i = 0;
+	if (__c4_info() & C4I_TRAPH)
+		i = __c4_opcode("OP_VFS_PUT", 128); // 128 = OP_REQUEST_SYMBOL
+	if (i > 128) {
+		asmc4r_use_mem = 1;
+		asmc4r_memlen = 0;
+		dump_to_file(asmc4r_opt_outfile);
+		asmc4r_use_mem = 0;
+		if (__c4_opcode(asmc4r_memlen, asmc4r_membuf, asmc4r_opt_outfile, i))
+			printf("c4cc: unable to store '%s' in the RAM filesystem\n",
+			       asmc4r_opt_outfile);
+		else
+			printf("c4cc: wrote %d bytes to ramfs:%s\n",
+			       asmc4r_memlen, asmc4r_opt_outfile);
+		return;
+	}
+
+	// Under C4DOS: the same render-into-memory path, handed to the DOS
+	// RAM disk through __c4dos_api instead of to a kernel's ramfs.
+	// C4DOS is deliberately trap-free, so the probe above finds
+	// nothing there -- a DOS cannot answer custom opcodes and is not
+	// pretending to. dos_can_write() is false when the machine booted
+	// without DEVICE=RAMDISK.SYS, and then this falls through to the
+	// honest complaint below rather than losing the output quietly.
+	if (dos_can_write()) {
+		asmc4r_use_mem = 1;
+		asmc4r_memlen = 0;
+		dump_to_file(asmc4r_opt_outfile);
+		asmc4r_use_mem = 0;
+		if (dos_put(asmc4r_opt_outfile, asmc4r_membuf, asmc4r_memlen) < 0)
+			printf("c4cc: unable to store '%s' on the RAM disk\n",
+			       asmc4r_opt_outfile);
+		else
+			printf("c4cc: wrote %d bytes to ram:%s\n",
+			       asmc4r_memlen, asmc4r_opt_outfile);
+		return;
+	}
+#endif
 
 	// TODO: this function is outdated, and does not produce a valid c4r file.
 	printf("c4cc: output in C4KE not supported\n");
@@ -774,6 +951,99 @@ void asmc4r_Source () {
 	}
 }
 
+// -- response files ---------------------------------------------------
+//
+// An argument of the form @NAME is replaced by the whitespace-separated
+// words in the file NAME. This is the DOS-era answer to a command line
+// that will not hold the command, and it is here for exactly that
+// reason: C4DOS keeps fifteen tokens of a line (ARGVMAX, c4dos.c:72,
+// and parse_line stops at ARGVMAX - 1), while linking C4IX needs
+//
+//     RUN c4rlink.c4r <twelve objects> -o c4ix.c4r
+//
+// which is sixteen. With this, the same link is four tokens and the
+// object list lives in a file the build wrote. See
+// docs/compiler-on-the-board.md.
+//
+// The file is found the way every input here is found: ask C4DOS
+// first (its opener sees the RAM disk, so a list another tool just
+// wrote is findable), then the C4KE RAM filesystem, then the host.
+// '#' begins a comment that runs to the end of the line, so a generated
+// list can say what it is.
+enum { RESPF_MAX = 4096, RESPF_BYTES = 65536 };
+
+int respf_isspace (int c) { return c == ' ' || c == 9 || c == 10 || c == 13; }
+
+char **respfile_expand (int argc, char **argv, int *outargc) {
+	int    i, n, cap, got, fd, vfsget, vfslen;
+	char  *buf, *p, *vfsbuf;
+	char **out;
+
+	i = 0; n = 0;
+	while (i < argc) { if (argv[i] && *argv[i] == '@' && argv[i][1]) ++n; ++i; }
+	if (!n) { *outargc = argc; return argv; }
+
+	cap = RESPF_MAX;
+	if (!(out = malloc((cap + 1) * sizeof(char *)))) {
+		printf("response file: out of memory\n");
+		return 0;
+	}
+	n = 0;
+	i = 0;
+	while (i < argc) {
+		if (!(argv[i] && *argv[i] == '@' && argv[i][1])) {
+			if (n >= cap) { printf("response file: more than %d arguments\n", cap); return 0; }
+			out[n++] = argv[i];
+			++i;
+			continue;
+		}
+		if (!(buf = malloc(RESPF_BYTES))) {
+			printf("response file: out of memory\n");
+			return 0;
+		}
+		got = dos_readable() ? dos_slurp(argv[i] + 1, buf, RESPF_BYTES - 1) : -1;
+		if (got < 0) {
+			vfsget = 0;
+			vfsbuf = 0;
+#if !NATIVE
+			if (__c4_info() & C4I_TRAPH)
+				vfsget = __c4_opcode("OP_VFS_GET", 128); // 128 = OP_REQUEST_SYMBOL
+			if (vfsget > 128)
+				vfsbuf = (char *)__c4_opcode(&vfslen, argv[i] + 1, vfsget);
+#endif
+			if (vfsbuf) {
+				got = vfslen;
+				if (got > RESPF_BYTES - 1) got = RESPF_BYTES - 1;
+				memcpy(buf, vfsbuf, got);
+			}
+			else {
+				if ((fd = open(argv[i] + 1, 0)) < 0) {
+					printf("response file: cannot open '%s'\n", argv[i] + 1);
+					return 0;
+				}
+				got = read(fd, buf, RESPF_BYTES - 1);
+				close(fd);
+				if (got < 0) got = 0;
+			}
+		}
+		buf[got] = 0;
+		p = buf;
+		while (*p) {
+			while (*p && respf_isspace(*p)) ++p;
+			if (!*p) break;
+			if (*p == '#') { while (*p && *p != 10) ++p; continue; }
+			if (n >= cap) { printf("response file: more than %d arguments\n", cap); return 0; }
+			out[n++] = p;
+			while (*p && !respf_isspace(*p)) ++p;
+			if (*p) { *p = 0; ++p; }
+		}
+		++i;
+	}
+	out[n] = 0;
+	*outargc = n;
+	return out;
+}
+
 int asmc4r_main (int argc, char **argv) {
 	int poolsz, result, i;
 	char *arg;
@@ -789,6 +1059,8 @@ int asmc4r_main (int argc, char **argv) {
 	asmc4r_opt_source = 0;
 	asmc4r_opt_pie = 1;
 	//src = 0; // don't allow src output
+
+	if (!(argv = respfile_expand(argc, argv, &argc))) return -1;
 
 	if ((i = asmc4r_parse_commandline(&argc, &argv)))
 		return i;
@@ -829,6 +1101,7 @@ int asmc4r_main (int argc, char **argv) {
 	c4cc_emithandlers[EH_LEV] = (int)&asmc4r_handler_LEV;
 	c4cc_emithandlers[EH_SYSCALL] = (int)&asmc4r_handler_SYSCALL;
 	c4cc_emithandlers[EH_MATH] = (int)&asmc4r_handler_MATH;
+	c4cc_emithandlers[EH_DATAPATCH] = (int)&asmc4r_handler_DATAPATCH;
 	c4cc_emithandlers[EH_FUNCADDR] = (int)&asmc4r_handler_FunctionAddress;
 	c4cc_emithandlers[EH_CURRADDR] = (int)&asmc4r_handler_CurrentAddress;
 	c4cc_emithandlers[EH_UPDTADDR] = (int)&asmc4r_handler_UpdateAddress;

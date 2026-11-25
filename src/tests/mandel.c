@@ -10,7 +10,22 @@
 //This code frequently casts to int to ensure we're not accidentally benefitting from GCC promotion from int 16 bits to int.
 //
 
-// C4 compatibility
+// C4 compatibility.
+//
+// Nothing from u0 is used, and that is deliberate: mandel is one of
+// the programs that has to run on the C4DOS rung, where there is no
+// u0, no kernel and no opcode above EXIT to build one out of. The
+// include is here for the hosted build and skipped by c4cc, which has
+// no preprocessor -- so `c4cc -o mandel.c4r mandel.c` is already the
+// C4DOS build and needs no second source.
+//
+// What went to buy that: main() used to patch mandelbrot_render() into
+// a jump to one of two bodies, choosing __c4_invoke() when __c4_info()
+// said we were on plain c4, where a pure function is called faster.
+// That was worth some milliseconds and cost three opcodes the rung
+// does not have -- OPCD, INFO and the invoke -- and it only ever fired
+// on the one host that is not the interesting one. The picture is the
+// same.
 #include <u0.h>
 
 // Removed for C4
@@ -113,28 +128,17 @@ void mandelbrot_render_real () {
     ++py; // py = py + 1;
   }
 }
-void mandelbrot_render () {
-  mandelbrot_render_real();
-}
-void mandelbrot_render_pure () {
-  __c4_invoke((int *)&mandelbrot_render_real);
-}
 
 int main(int argc, char** argv)
 {
   int startTime;
   char **_argv, *arg;
-  int _argc, *code;
+  int _argc;
 
   mono = 0;
 
   width  = DEF_WIDTH;
   height = DEF_HEIGHT;
-
-  // Patch mandelbrot_render
-  code = (int *)&mandelbrot_render;
-  *code++ = __opcode("JMP");
-  *code = (int)((__c4_info() & C4I_C4) ? &mandelbrot_render_pure : &mandelbrot_render_real);
 
   // printf("PRECISION=%ld\n", bitsPrecision);
 
@@ -208,7 +212,7 @@ int main(int argc, char** argv)
 
   maxIters = strlen(chr);
   startTime = __time();
-  mandelbrot_render();
+  mandelbrot_render_real();
   printf("Mandelbrot rendered in %ldms\n", __time() - startTime);
 
   return 0;

@@ -1,0 +1,3 @@
+typedef 7 3 A
+init 77 572957 50
+init 15 5 90 450

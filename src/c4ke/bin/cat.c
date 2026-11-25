@@ -10,7 +10,7 @@
 
 int main (int argc, char **argv) {
 	int bufsz, fd, i;
-	char *buf, *spec;
+	char *buf, *spec, *vbuf;
 
 	bufsz = 256 * 1024;
 	if (!(buf = malloc(bufsz))) {
@@ -21,6 +21,15 @@ int main (int argc, char **argv) {
 	// Skip invocation
 	--argc; ++argv;
 	while (argc--) {
+		// The kernel RAM filesystem (populated by vfsload from
+		// c4ke.vfs.txt) is checked first; anything not registered
+		// there falls back to a real disk file, unchanged from before.
+		if ((vbuf = vfs_get(*argv, &i))) {
+			printf("%.*s", i, vbuf);
+			++argv;
+			continue;
+		}
+
 		if ((fd = open(*argv, 0)) < 0) {
 			printf("Failed to open %s\n", *argv);
 			return -2;
@@ -34,6 +43,7 @@ int main (int argc, char **argv) {
 		}
 
 		close(fd);
+		++argv;
 	}
 
 	free(buf);

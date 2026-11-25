@@ -266,9 +266,19 @@ int kill_run (int argc, char **argv) {
 // ps
 ///
 
-void ps_usage (char *argv0) { }
+void ps_usage (char *argv0) { printf("%s [-w]   -w for the wide listing\n", argv0); }
 int  ps_run   (int argc, char **argv) {
+	int i;
+	// The builtin calls ps() directly rather than exec'ing ps.c4r, so
+	// the flag ps.c's own main() would have parsed has to be set here.
+	ps_wide = 0;
+	i = 1;
+	while (i < argc) {
+		if (argv[i][0] == '-' && argv[i][1] == 'w') ps_wide = 1;
+		++i;
+	}
 	ps();
+	ps_wide = 0;
 	return CR_OK;
 }
 

@@ -1,0 +1,61 @@
+# c4ke-build.vfs.txt -- the tree for the BUILD floppy.
+#
+# The c4dos-build disk is where the machine compiles its own kernel:
+# boot C4DOS, type BUILD, then `dosload c4ke.c4r` and you are in the
+# system you just made. That floppy carries a userland and the two
+# source archives, and nothing else -- so it needs its own manifest.
+#
+# Why not reuse one of the others: c4ke.vfs.txt describes c4ke-root,
+# which has a .c beside every binary, and c4ke-climb.vfs.txt describes
+# a medium INSTALL wrote, which carries tar/save/b4ke/reboot and the
+# c4sc toolchain. Point either at this floppy and vfsload prints a
+# column of "cannot open" for files that were never meant to be here.
+# On an 80x25 console that is the whole boot.
+#
+# This file is SOURCE, not a build artifact: the Makefile copies it
+# onto c4dos-build/ as c4ke.vfs.txt. Keep it in step with the
+# $(C4DOS_BUILD_DISK) rule -- that says what is on the disk, this says
+# what the tree looks like, and a name in one and not the other is a
+# name vfsload will report.
+
+#
+# Definitions
+#
+# c4 and c4m are the u0lite/bare builds, which is what lets the same
+# two images run at the A> prompt and in here. innerbench opens
+# c4m.c, load-c4r.c and src/c4ke/c4ke.c by those exact names, and they
+# are on the floppy for it -- but they are files it reads, not entries
+# in the tree, so they are not named here.
+BIN_CORE  = c4 c4m
+BIN_BENCH = bench benchtop innerbench
+BIN_UTIL  = type xxd top ls ps echo cat kill spin c4le tar
+# b4ke drives compiles and links inside the running kernel; c4rlink is
+# what it calls to join objects.
+BIN_C4R   = c4rlink b4ke
+# c4ke itself is deliberately NOT here, for the reason c4ke.vfs.txt
+# gives: it is a kernel, and a nested copy would fight the running one
+# for the trap-handler slot and the custom-opcode table.
+BIN_C4KE  = c4ke.vfs init vfsload
+BIN_SHELL = c4sh
+# The toolchain that built this system. cpp and c4cc are C4DOS
+# transients, but they run here too, and a player who has just watched
+# the machine compile a kernel is the one most likely to want them.
+BIN_TOOLS = cpp c4cc dostar dosload
+BIN_ALL   = $(BIN_CORE) $(BIN_BENCH) $(BIN_UTIL) $(BIN_C4R) \
+            $(BIN_C4KE) $(BIN_SHELL) $(BIN_TOOLS)
+BIN_TEST  = mandel rps raycast
+
+#
+# Filesystem tree
+#
+/: root
+	each($BIN_ALL):
+		# Until c4sh uses a PATH, the names have to be in the root as
+		# well as in bin/.
+		$1: ilink(/bin/$1)
+		bin/:
+			$1: $1.c4r
+	home/:
+		user/:
+			each($BIN_TEST):
+				$1: $1.c4r

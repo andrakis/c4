@@ -1,0 +1,1024 @@
+\ c4fc gen.f -- code emission, one method per node kind.
+\
+\ Nothing here dispatches. A kind reaches a phase by having a method in
+\ it, and a kind that cannot be assigned to simply has no GEN-ADDR --
+\ which is the whole lvalue rule, enforced by the method table rather
+\ than by a flag.
+
+:M GEN n_num   >val @ oIMM OP2, ;M
+:M GEN n_str   {: n -- :}  n >off @ n >slen @ D-STR, IMMD, ;M
+
+\ -- M4: the helpers -----------------------------------------------------
+\ Two small routines called where the VM has no opcode: unsigned word
+\ division and remainder. Each is laid down ONCE, after the last
+\ function, and only if something called it; a call is a JSR to an
+\ address in the same unit, so there is no symbol and nothing for c4rlink
+\ to know. c4lc-gen.lisp's g:helpbody is the same code, instruction for
+\ instruction. The 16-bit loads and store and the logical right shift by
+\ a run-time count were helpers too; they are the VM's own now, LH LHU SH
+\ and LSR (docs/c4-16bit.md).
+0 CONSTANT h_udiv   1 CONSTANT h_umod
+CREATE HM-ID VEC ALLOT   CREATE HM-MK VEC ALLOT
+: HELP-RESET ( -- )  HM-ID 64 VEC-INIT  HM-MK 64 VEC-INIT ;
+HELP-RESET
+\ the argument(s) are on the stack but for the one in A
+: HCALL ( h n -- ) {: h n -- :}
+   oPSH OP,  oJSR BR, HM-MK V,  h HM-ID V,  n oADJ OP2, ;
+: HUSED? ( h -- f ) {: h -- f :}
+   HM-ID V# 0 ?DO I HM-ID V@ h = IF -1 UNLOOP EXIT THEN LOOP 0 ;
+: HRES ( h -- ) {: h -- :}               \ every call to it lands here
+   HM-ID V# 0 ?DO I HM-ID V@ h = IF I HM-MK V@ >RES THEN LOOP ;
+
+: L2, ( n -- )  oLEA OP2, ;
+: I2, ( n -- )  oIMM OP2, ;
+: H-ULT, ( -- )                          \ A := stack (^MIN) vs b (^MIN), flag to come
+   oPSH OP, WMIN I2, oXOR OP, oPSH OP, 2 L2, oLI OP, oPSH OP, WMIN I2, oXOR OP, ;
+: H-UDIV ( -- ) {: | m1 m2 -- :}
+   1 oENT OP2,
+   2 L2, oLI OP, oPSH OP, 0 I2, oLT OP, oBZ BR, TO m1
+   3 L2, oLI OP, H-ULT, oGE OP, oLEV OP,
+   m1 >RES
+   3 L2, oLI OP, oPSH OP, 0 I2, oGE OP, oBZ BR, TO m2
+   3 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oDIV OP, oLEV OP,
+   m2 >RES
+   -1 L2, oPSH OP, 3 L2, oLI OP, oPSH OP, 1 I2, oSHR OP,
+   oPSH OP, WMIN INVERT I2, oAND OP, oPSH OP, 2 L2, oLI OP, oDIV OP,
+   oPSH OP, 1 I2, oSHL OP, oSI OP,
+   3 L2, oLI OP, oPSH OP, -1 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oMUL OP, oSUB OP,
+   H-ULT, oGE OP,
+   oPSH OP, -1 L2, oLI OP, oADD OP, oLEV OP, ;
+: H-UMOD ( -- ) {: | m1 m2 m3 m4 -- :}
+   1 oENT OP2,
+   2 L2, oLI OP, oPSH OP, 0 I2, oLT OP, oBZ BR, TO m1
+   3 L2, oLI OP, H-ULT, oLT OP, oBZ BR, TO m2
+   3 L2, oLI OP, oLEV OP,
+   m2 >RES
+   3 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oSUB OP, oLEV OP,
+   m1 >RES
+   3 L2, oLI OP, oPSH OP, 0 I2, oGE OP, oBZ BR, TO m3
+   3 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oMOD OP, oLEV OP,
+   m3 >RES
+   -1 L2, oPSH OP, 3 L2, oLI OP, oPSH OP, 3 L2, oLI OP, oPSH OP, 1 I2, oSHR OP,
+   oPSH OP, WMIN INVERT I2, oAND OP, oPSH OP, 2 L2, oLI OP, oDIV OP,
+   oPSH OP, 1 I2, oSHL OP, oPSH OP, 2 L2, oLI OP, oMUL OP, oSUB OP, oSI OP,
+   -1 L2, oLI OP, H-ULT, oLT OP, oBZ BR, TO m4
+   -1 L2, oLI OP, oLEV OP,
+   m4 >RES
+   -1 L2, oLI OP, oPSH OP, 2 L2, oLI OP, oSUB OP, oLEV OP, ;
+: EMIT-HELPERS ( -- )
+   h_udiv  HUSED? IF h_udiv  HRES H-UDIV THEN
+   h_umod  HUSED? IF h_umod  HRES H-UMOD THEN ;
+
+\ -- M4: loads, stores and conversions by type ----------------------------
+: MASK, ( m -- )  oPSH OP, oIMM OP2, oAND OP, ;
+: SEXT, ( n -- )  WBITS SWAP - DUP oPSH OP, oIMM OP2, oSHL OP, oPSH OP, oIMM OP2, oSHR OP, ;
+: XMIN, ( -- )    oPSH OP, WMIN oIMM OP2, oXOR OP, ;
+
+\ A variable's symbol carries the LEA operand it was given: positive for
+\ a parameter, negative for a local. c4 addresses both the same way, so
+\ one method covers both and the symbol table is where the difference
+\ lives.
+: LOAD, ( ct -- ) {: t -- :}
+   t t_char = t t_schar = OR IF oLC OP, EXIT THEN
+   t t_uchar = IF oLCU OP, EXIT THEN
+   t t_short = IF oLH OP, EXIT THEN
+   t t_ushort = IF oLHU OP, EXIT THEN
+   t t_uint = W64? AND IF oLI OP, M32 MASK, EXIT THEN
+   oLI OP, ;
+: STORE, ( ct -- ) {: t -- :}
+   t T-BYTE? IF oSC OP, EXIT THEN
+   t T-HALF? IF oSH OP, EXIT THEN
+   oSI OP, ;
+\ SC leaves in A the byte it stored as a signed char (c4's own rule, right for
+\ char), so the value of an assignment to an unsigned char, or of its ++ or
+\ --, has to be cut back to 0..255. n_expst says when nobody wants the value,
+\ so that `p[i] = c;` costs what it always did. As c4lc's g:vunused.
+VARIABLE VUNUSED   0 VUNUSED !
+
+\ The conversion code for a value of type f in A, to type t: only to an
+\ integer type, and nothing when it already fits (c4lc's g:convert!).
+: CONVERT, ( f t -- ) {: f t -- :}
+   t T-ARITH? 0= IF EXIT THEN
+   t t_char = t t_schar = OR IF f t_char = f t_schar = OR 0= IF 8 SEXT, THEN EXIT THEN
+   t t_uchar = IF f t_uchar <> IF 255 MASK, THEN EXIT THEN
+   t t_short = IF f T-BYTE? f t_short = OR 0= IF 16 SEXT, THEN EXIT THEN
+   t t_ushort = IF f t_uchar = f t_ushort = OR 0= IF 65535 MASK, THEN EXIT THEN
+   t t_uint = W64? AND IF
+      f t_uchar = f t_ushort = OR f t_uint = OR 0= IF M32 MASK, THEN THEN ;
+\ ... and the one an assignment, a ++ or a return makes. char keeps c4's
+\ own rule (SC drops the rest, the value stays); the new types get C's.
+: SCONV, ( f t -- ) {: f t -- :}
+   t t_char = t t_int = OR t t_ulong = OR IF EXIT THEN
+   f t CONVERT, ;
+
+\ -- M4: const --------------------------------------------------------------
+\ Worded exactly as c4lc-gen.lisp words them, because the diagnostics
+\ battery holds the two to the same output. A warning prints only when
+\ the image goes to a file (-o): c4th has no stderr, and on stdout it
+\ would be part of the image.
+\ FNA/FNU and RETT/RETQ, the function being generated and its return
+\ type and mask, are in emit.f: the inliner swaps the latter too.
+: FN-NAME! ( a u -- )  FNU ! FNA ! ;
+: FN-RET! ( t q -- )   RETQ ! RETT ! ;
+357913940 CONSTANT CQ1                  \ the const bits of levels 1..14
+: .INFN ( -- )  ."  (in function " FNA @ FNU @ TYPE ." )" CR ;
+: WCHECK ( lvalue a u -- ) {: n a u -- :}
+   n CQ 1 AND IF ." error: " a u TYPE ."  of read-only location" .INFN ABORT THEN ;
+: DROPPED? ( lq rq -- f )  SWAP INVERT AND CQ1 AND 0<> ;
+: WARN? ( -- f )  COLLECT @ 0= OUTNAME @ 0<> AND ;
+: QWARN ( a u -- )
+   WARN? 0= IF 2DROP EXIT THEN
+   ." warning: " TYPE ."  discards const qualifier" .INFN ;
+\ argument i of a call to f, after it is generated
+: ARGCHECK ( arg i f -- ) {: a i f -- :}
+   f y.pt @ 0= IF EXIT THEN
+   i f y.nfix @ < 0= IF EXIT THEN
+   f y.pt @ i CELLS + @ T-PTR? 0= IF EXIT THEN
+   f y.pq @ i CELLS + @  a CQ  DROPPED? 0= IF EXIT THEN
+   WARN? 0= IF EXIT THEN
+   ." warning: passing argument " i 1+ .N ."  of " f y.name @ f y.nlen @ TYPE
+   ."  discards const qualifier" .INFN ;
+
+\ An AGGREGATE -- an array, or a struct variable -- is a name that
+\ stands for its own address, so its value IS the LEA and there is no
+\ load. That one flag is the whole of array decay.
+:M GEN-ADDR n_var  >sym @ y.val @ oLEA OP2, ;M
+:M GEN      n_var {: n | y -- :}
+   n >sym @ TO y   y y.val @ oLEA OP2,
+   y y.agg @ IF EXIT THEN   y y.ct @ LOAD, ;M
+\ An initialised global's address is final the moment it is declared,
+\ because region 1 begins at zero; every other global is a slot number
+\ until the end of the program.
+: GADDR, ( y -- ) {: y -- :}
+   y y.class @ c_extg = IF oIMM y y.val @ EXTREF, EXIT THEN
+   y y.ini @ IF y y.val @ IMMI, ELSE y y.val @ IMMG, THEN ;
+\ Calling through a POINTER, which is what a threaded Forth spends its
+\ life doing: JSRI through a global, JSRS through a frame slot. Only a
+\ name whose class is fun or ext is a JSR to a known address.
+: GJSRI, ( y -- ) {: y -- :}
+   y y.ini @ IF oJSRI y y.val @ DOP, ELSE oJSRI y y.val @ GOP, THEN ;
+:M GEN-ADDR n_gvar >sym @ GADDR, ;M
+:M GEN      n_gvar {: n | y -- :}
+   n >sym @ TO y   y GADDR,
+   y y.agg @ IF EXIT THEN   y y.ct @ LOAD, ;M
+
+: FNADDR, ( y -- ) {: y -- :}
+   y y.class @ c_ext = IF oIMM y y.val @ EXTREF, EXIT THEN
+   oIMM y FREF, ;
+:M GEN      n_fnref  >sym @ FNADDR, ;M
+:M GEN-ADDR n_fnref  >sym @ FNADDR, ;M
+:M CT       n_fnref  >sym @ y.ct @ ;M
+
+:M GEN      n_cast {: n -- :}  n >expr @ GEN  n >expr @ CT n >ctype @ CONVERT, ;M
+:M GEN-ADDR n_cast >expr @ GEN-ADDR ;M
+:M CT       n_cast >ctype @ ;M
+:M CQ       n_cast >cq @ ;M
+:M CQ       n_fnref DROP 0 ;M
+
+:M CT n_num  >nty @ ;M
+:M CT n_str  DROP 2 ;M                  \ char *
+:M CT n_var  >sym @ y.ct @ ;M
+:M CT n_gvar >sym @ y.ct @ ;M
+\ c4lc's g:typeof, rule for rule: c4 gives + and - the left operand's
+\ type (a band type promotes), char * - char * stays a char *, and an
+\ unsigned operand brings the usual arithmetic conversions.
+\ Two locals, as before M4: this recurses down the left operand, and
+\ c4th's locals stack is 512 cells with no check (see c4fc-design.md).
+:M CT n_bin {: n | lt -- :}
+   n >lhs @ CT TO lt
+   n >op @ oADD = n >op @ oSUB = OR IF
+      lt T-PTR? IF
+         n >op @ oADD = IF lt EXIT THEN
+         lt T-STEP 1 > n >rhs @ CT lt = AND IF t_int EXIT THEN  lt EXIT THEN
+      lt n >rhs @ CT T-UNSBIN? IF lt n >rhs @ CT T-UAC EXIT THEN
+      lt T-SUMTY EXIT THEN
+   n >op @ oSHL = n >op @ oSHR = OR IF lt T-ARITH? IF lt T-UNRES ELSE t_int THEN EXIT THEN
+   n >op @ CMPOP? IF t_int EXIT THEN
+   lt n >rhs @ CT T-UNSBIN? IF lt n >rhs @ CT T-UAC ELSE t_int THEN ;M
+:M CT n_call >fn @ y.ct @ ;M
+:M CT n_icall DROP t_int ;M
+:M CT n_asgn >lhs @ CT ;M
+
+\ The qualifier mask of an expression (c4lc's g:qualof): two bits a
+\ pointer level, level 0 the object the expression designates.
+:M CQ n_num  DROP 0 ;M
+:M CQ n_str  DROP 0 ;M
+:M CQ n_bin  DROP 0 ;M
+:M CQ n_var  >sym @ y.q @ ;M
+:M CQ n_gvar >sym @ y.q @ ;M
+:M CQ n_call >fn @ y.rq @ ;M
+:M CQ n_icall DROP 0 ;M
+:M CQ n_asgn >lhs @ CQ ;M
+
+\ -mcisc: LXI and SXI fold scale-add-load (or -store) into one opcode,
+\ but only for `var[expr]` whose base is a PLAIN VARIABLE of statically
+\ known 8-byte scalar element type. Anything more complex -- a member, a
+\ dereference, a call -- falls back, because establishing its type here
+\ would mean either evaluating it twice or duplicating the inference
+\ that codegen already does as a side effect. Deliberately the same
+\ conservatism as c4lc's, so the two agree.
+: CISC-INDEX? ( n -- f ) {: n | b t -- f :}
+   CISC @ 0= IF 0 EXIT THEN
+   n >TAG n_index <> IF 0 EXIT THEN
+   n >lhs @ TO b
+   b >TAG n_var <> b >TAG n_gvar <> AND IF 0 EXIT THEN
+   b CT TO t
+   t T-PTR? 0= IF 0 EXIT THEN
+   t T-DEREF TO t
+   t T-STRUCT? IF 0 EXIT THEN
+   t T-BAND0 < 0= IF 0 EXIT THEN        \ a band type needs a mask or a helper
+   t t_char <> ;
+
+\ struct = struct (M7b): the bytes, by the VM's own memcpy -- what a
+\ builtin memcpy(&L, &R, sizeof L) compiles to, as c4lc-gen's
+\ g:structassign. The right side must be an lvalue, so it has GEN-ADDR.
+: STRUCT-ASGN ( n -- ) {: n -- :}
+   n >lhs @ GEN-ADDR   oPSH OP,
+   n >rhs @ GEN-ADDR   oPSH OP,
+   n >lhs @ CT T-SIZE oIMM OP2,   oPSH OP,
+   oMCPY OP,   3 oADJ OP2, ;
+\ A word-sized local, under -mfuse: the value and then STL, with no address on the
+\ stack while the value is worked out (c4lc's g:stl?).
+: STL? ( lhs -- f ) {: l | y t -- f :}
+   FUSE @ 0= IF 0 EXIT THEN
+   l >TAG n_var <> IF 0 EXIT THEN
+   l >sym @ TO y
+   y y.agg @ IF 0 EXIT THEN
+   y y.ct @ TO t
+   t T-BYTE? t T-HALF? OR t T-STRUCT? OR 0= ;
+: STL, ( lhs -- )  >sym @ y.val @ oSTL OP2, ;
+
+\ x, whose value nobody wants (c4lc's g:effect).
+: EFFECT ( x -- ) {: x -- :}
+   x >TAG n_preinc =  x >TAG n_predec = OR  x >TAG n_postinc = OR  x >TAG n_postdec = OR
+   IF 1 VUNUSED ! THEN
+   x >TAG n_asgn = IF x CT t_uchar = VUNUSED ! THEN
+   x GEN ;
+
+:M GEN n_asgn {: n | u -- :}
+   n >lhs @ CT T-STRUCT? IF n STRUCT-ASGN EXIT THEN
+   VUNUSED @ TO u  0 VUNUSED !
+   \ base and index both stay on the stack, unscaled, until the value is
+   \ evaluated -- SXI wants all three, and computing the address first
+   \ would need a slot to hold it across the right-hand side.
+   n >lhs @ CISC-INDEX? IF
+      n >lhs @ >lhs @ GEN  oPSH OP,
+      n >lhs @ >rhs @ GEN  oPSH OP,
+      n >rhs @ GEN  oSXI OP,
+      u 0= n >lhs @ CT t_uchar = AND IF 255 MASK, THEN EXIT THEN
+   n >lhs @ STL? IF
+      n >lhs @ S" assignment" WCHECK
+      n >rhs @ GEN
+      n >rhs @ CT  n >lhs @ CT  SCONV,
+      n >lhs @ CT T-PTR? IF
+         n >lhs @ CQ  n >rhs @ CQ  DROPPED? IF S" assignment" QWARN THEN THEN
+      n >lhs @ STL,
+      EXIT THEN
+   n >lhs @ GEN-ADDR
+   n >lhs @ S" assignment" WCHECK
+   oPSH OP,
+   n >rhs @ GEN
+   n >rhs @ CT  n >lhs @ CT  SCONV,
+   n >lhs @ CT T-PTR? IF
+      n >lhs @ CQ  n >rhs @ CQ  DROPPED? IF S" assignment" QWARN THEN THEN
+   n >lhs @ CT STORE,
+   u 0= n >lhs @ CT t_uchar = AND IF 255 MASK, THEN ;M
+
+\ Pointer arithmetic scales by what the pointer points AT, and a step of
+\ one emits no multiply at all -- which is not an optimisation but what
+\ c4lc does: char * walks byte by byte with no MUL in sight.
+: SCALE, ( t -- )   T-STEP DUP 1 = IF DROP EXIT THEN oPSH OP, oIMM OP2, oMUL OP, ;
+: STEP-OF ( t -- n ) DUP T-PTR? IF T-STEP ELSE DROP 1 THEN ;
+
+\ M4: an unsigned operand. uint on a 64-bit host ("narrow") is kept in
+\ [0, 2^32), so the signed opcodes are right once the other side of a
+\ compare or a division is cut into range, and a result that can leave
+\ the range is cut back. A whole unsigned word flips the sign bit for an
+\ ordering, calls a helper to divide, and masks a right shift.
+: NARROW? ( n -- f )                     \ the result is a 64-bit host's uint
+   W64? 0= IF DROP 0 EXIT THEN
+   DUP >op @ DUP oSHL = SWAP oSHR = OR IF >lhs @ CT T-PROMOTE ELSE
+   DUP >lhs @ CT SWAP >rhs @ CT T-UAC THEN  t_uint = ;
+: ORD? ( op -- f )  DUP CMPOP? OVER oEQ <> AND SWAP oNE <> AND ;
+: CUT? ( op t -- f )                     \ narrow: must this operand be masked?
+   T-PROMOTE t_uint <> SWAP DUP CMPOP? SWAP DUP oDIV = SWAP oMOD = OR OR AND ;
+\ does this operator have an unsigned operand (after promotion)?
+: UNSBIN? ( n -- f )
+   DUP >op @ DUP oSHL = SWAP oSHR = OR IF
+      >lhs @ CT DUP T-ARITH? IF T-PROMOTE T-UNS? ELSE DROP 0 THEN EXIT THEN
+   DUP >lhs @ CT SWAP >rhs @ CT T-UNSBIN? ;
+
+\ ONE word, no locals, and the node kept on the DATA stack. Code
+\ generation recurses with the expression, through this word and GEN
+\ alone, so this is two return-stack cells a level -- what it was before
+\ M4 -- and no locals frame at all. c4th's return stack is 256 cells
+\ and checked; its locals stack is 512 and not (c4fc-design.md), and a
+\ frame per level is what a 60-term unsigned expression overflowed.
+:M GEN n_bin
+   DUP UNSBIN? IF
+      \ an unsigned operand: the usual arithmetic conversions
+      DUP >lhs @ GEN
+      DUP NARROW? IF DUP >op @ OVER >lhs @ CT CUT? IF M32 MASK, THEN
+      ELSE DUP >op @ ORD? IF XMIN, THEN THEN
+      oPSH OP,
+      DUP >rhs @ GEN
+      DUP NARROW? IF
+         DUP >op @ OVER >rhs @ CT CUT? IF M32 MASK, THEN
+         >op @ DUP OP,
+         DUP oADD = OVER oSUB = OR OVER oMUL = OR OVER oSHL = OR OVER oOR = OR
+         SWAP oXOR = OR IF M32 MASK, THEN
+         EXIT THEN
+      DUP >op @ ORD? IF XMIN, THEN
+      DUP >op @ oDIV = IF DROP h_udiv 2 HCALL EXIT THEN
+      DUP >op @ oMOD = IF DROP h_umod 2 HCALL EXIT THEN
+      DUP >op @ oSHR = IF
+         >rhs @ DUP NUM? IF
+            >val @ oSHR OP,
+            DUP 0> OVER WBITS < AND IF -1 WBITS ROT - LSHIFT INVERT MASK, ELSE DROP THEN
+         ELSE DROP oLSR OP, THEN
+         EXIT THEN
+      >op @ OP, EXIT
+   THEN
+   \ c4's own operators, as they always were
+   DUP >lhs @ CT T-PTR? IF
+      DUP >op @ oADD = IF
+         DUP >lhs @ GEN oPSH OP,  DUP >rhs @ GEN  >lhs @ CT SCALE,  oADD OP, EXIT THEN
+      DUP >op @ oSUB = IF
+         DUP >rhs @ CT OVER >lhs @ CT = IF   \ pointer minus pointer is a count
+            DUP >lhs @ GEN oPSH OP,  DUP >rhs @ GEN  oSUB OP,
+            >lhs @ CT T-STEP DUP 1 = IF DROP EXIT THEN
+            oPSH OP, oIMM OP2, oDIV OP, EXIT THEN
+         DUP >lhs @ GEN oPSH OP,  DUP >rhs @ GEN  >lhs @ CT SCALE,  oSUB OP, EXIT THEN
+   THEN
+   DUP >lhs @ GEN  oPSH OP,  DUP >rhs @ GEN  >op @ OP, ;M
+
+:M GEN-ADDR n_index {: n -- :}
+   n >lhs @ GEN  oPSH OP,
+   n >rhs @ GEN  n >lhs @ CT SCALE,
+   oADD OP, ;M
+:M GEN n_index {: n -- :}
+   n CISC-INDEX? IF
+      n >lhs @ GEN  oPSH OP,  n >rhs @ GEN  oLXI OP, EXIT THEN
+   n GEN-ADDR  n >lhs @ CT T-DEREF  DUP T-ROW? IF DROP ELSE LOAD, THEN ;M
+\ a row's value is its first element's address (M9)
+:M CT  n_index  >lhs @ CT T-DEREF DECAY ;M
+:M CQ  n_index  >lhs @ CQ 2 RSHIFT ;M
+
+:M GEN-ADDR n_member {: n -- :}
+   n >lhs @ GEN
+   n >moff @ ?DUP IF oPSH OP, oIMM OP2, oADD OP, THEN ;M
+:M GEN n_member {: n -- :}
+   n GEN-ADDR
+   n >magg @ IF EXIT THEN               \ an array member is its address
+   n >mtype @ LOAD, ;M
+:M CT  n_member  >mtype @ ;M
+\ a member inherits the qualifiers of the struct it is read out of; an
+\ ARRAY member hands them on to its elements. >lhs is the struct's
+\ ADDRESS (x.m is (&x)->m), so the struct's own level is level 1 there.
+:M CQ  n_member {: n | sq -- q :}
+   n >lhs @ CQ 2 RSHIFT 3 AND TO sq
+   n >mq @  n >magg @ IF sq 2 LSHIFT ELSE sq THEN OR ;M
+
+\ Arguments push left to right, then the call, then the drop. A builtin
+\ is the same shape with an opcode where the JSR goes -- which is why
+\ printf needs no special case anywhere else.
+\ Calling a variadic function: push everything, push how many of them
+\ were EXTRA, call __c4cc_make_va, drop the count and the extras, and
+\ push what it returned. The callee sees its fixed parameters plus one
+\ more -- which is why `int vsum(int n, ...)` finds n at bp+3 and not
+\ bp+2, and why the ... needs no prologue of its own.
+\ Every operand is evaluated, in order, and the value is the last one's
+\ -- so the type is the last one's too.
+:M CT n_comma {: n -- t :}  n >args @ n >argn @ 1- CELLS + @ CT ;M
+:M CQ n_comma {: n -- q :}  n >args @ n >argn @ 1- CELLS + @ CQ ;M
+:M GEN n_comma {: n | v -- :}
+   n >args @ TO v
+   n >argn @ 0 ?DO
+      I CELLS v + @  I 1+ n >argn @ = IF GEN ELSE EFFECT THEN
+   LOOP ;M
+
+\ What a call compiles to is decided entirely by the CLASS of the name
+\ being called: an opcode for a builtin, JSR to a known address, JSRI
+\ through a global, JSRS through a frame slot, and an unresolved
+\ reference for anything this unit only declares.
+: CALL, ( y -- ) {: f -- :}
+   f y.class @ c_builtin = IF f y.val @ OP, EXIT THEN
+   f y.class @ c_glo     = IF f GJSRI, EXIT THEN
+   f y.class @ c_loc     = IF f y.val @ oJSRS OP2, EXIT THEN
+   f y.class @ c_ext     = IF oJSR  f y.val @ EXTREF, EXIT THEN
+   f y.class @ c_extg    = IF oJSRI f y.val @ EXTREF, EXIT THEN
+   f JSRF, ;
+
+\ A struct passed by value (M9), as c4lc-gen's g:structpush: its words,
+\ the last pushed first, so the first lands at the parameter's address.
+\ Its address waits in a two-word temporary just past the locals, free
+\ again once the words are pushed; the function's ENT grows by the most
+\ any push needed (TMAX). Returns the words pushed.
+VARIABLE TCUR   0 TCUR !
+VARIABLE TMAX   0 TMAX !
+: STRUCT-PUSH ( node t -- w ) {: a t | d w j -- w :}
+   TCUR @   2 TCUR +!   TCUR @ TMAX @ MAX TMAX !
+   NLOC @ TCUR @ + NEGATE TO d
+   d oLEA OP2,  oPSH OP,  a GEN-ADDR  oSI OP,
+   t T-SIZE 1 CELLS 1- + 1 CELLS / TO w
+   w 1- TO j
+   BEGIN j 0< 0= WHILE
+      d oLEA OP2,  oLI OP,
+      j IF  oPSH OP,  j CELLS oIMM OP2,  oADD OP,  THEN
+      oLI OP,  oPSH OP,
+      j 1- TO j
+   REPEAT
+   TCUR !
+   w ;
+
+\ L op= R whose L does something (n_opasgn), as c4lc-gen's g:oplower: L's
+\ address goes in a two-word temporary, once, and the rest is the plain
+\ assignment over *temporary, which already knows every type's load,
+\ conversion and store. Unlike STRUCT-PUSH's, this temporary is free
+\ again only when the STATEMENT ends -- each statement method puts TCUR
+\ back as it found it, which is c4lc's g:stmt -- so two in one statement
+\ take two, at the offsets c4lc gives them.
+:M GEN n_ltempv {: n -- :}  n >off @ oLEA OP2,  oLI OP, ;M
+:M CT  n_ltempv >nty @ ;M
+:M CQ  n_ltempv DROP 0 ;M
+:M CT  n_opasgn >lhs @ CT ;M
+\ c4lc's g:qualof knows neither, so neither does this: a const L is not
+\ refused here, as it is not there
+:M CQ  n_opasgn DROP 0 ;M
+:M GEN n_opasgn {: n | off t d b -- :}
+   2 TCUR +!   TCUR @ TMAX @ MAX TMAX !
+   NLOC @ TCUR @ + NEGATE TO off
+   off oLEA OP2,  oPSH OP,
+   n >lhs @ GEN-ADDR
+   oSI OP,
+   n_ltempv 3 CELLS NEW TO t   off t >off !   n >lhs @ CT 2 + t >nty !
+   t n_deref N1 TO d
+   n_bin 4 CELLS NEW TO b
+   d b >lhs !   n >rhs @ >rhs @ b >rhs !   n >rhs @ >op @ b >op !
+   d b n_asgn N2 GEN ;M
+\ the type argument i is passed as: its parameter's, when f says, or its own
+: ARG-TYPE ( arg i f -- t ) {: a i f -- t :}
+   f IF f y.pt @ IF i f y.nfix @ < IF f y.pt @ i CELLS + @ EXIT THEN THEN THEN
+   a CT ;
+\ argument i of a call to f (0: through a pointer): pushed, and the words it took
+: PUSH-ARG ( arg i f -- w ) {: a i f | t -- w :}
+   a i f ARG-TYPE TO t
+   t T-STRUCT? IF
+      a CT t <> IF ." c4fc: passing the wrong struct in a call" CR ABORT THEN
+      a t STRUCT-PUSH EXIT
+   THEN
+   a GEN  f IF a i f ARGCHECK THEN
+   oPSH OP,  1 ;
+
+:M GEN n_call {: n | f k i w -- :}
+   \ The splice replaces the call entirely -- arguments into the
+   \ callee's parameter slots, then its body generated in place. The
+   \ value arrives the same way it would have: in A.
+   n INL-TRY TO i
+   i 0< 0= IF  n i INL-SPLICE  EXIT THEN
+   n >fn @ TO f
+   n >argn @ TO k   0 TO w
+   k 0 ?DO
+      n >args @ I CELLS + @  I f PUSH-ARG  w + TO w
+   LOOP
+   w TO k                                \ words, from here on
+   f y.va @ IF
+      k f y.nfixw @ - TO k               \ how many were extra
+      k oIMM OP2,  oPSH OP,
+      VA-MAKE @ 0= IF
+         ." c4fc: a variadic call needs __c4cc_make_va -- include stdarg.h"
+         CR ABORT THEN
+      VA-MAKE @ CALL,
+      k 1+ oADJ OP2,
+      oPSH OP,
+      f CALL,
+      f y.nfixw @ 1+ oADJ OP2,
+      EXIT
+   THEN
+   f CALL,
+   k ?DUP IF oADJ OP2, THEN ;M
+
+\ A call through an expression (M7b), as c4lc-gen's g:callexpr: the
+\ arguments, then what JSR would have pushed -- the return address, an
+\ IMM of the code just past the jump -- then the target in A and JMPA.
+\ The callee finds the frame a JSR builds.
+:M GEN n_icall {: n | k m w -- :}
+   n >argn @ TO k   0 TO w
+   k 0 ?DO  n >args @ I CELLS + @  I 0 PUSH-ARG  w + TO w  LOOP
+   w TO k
+   oIMM BR, TO m   oPSH OP,
+   n >fn @ GEN   oJMPA OP,
+   m >RES
+   k ?DUP IF oADJ OP2, THEN ;M
+
+\ goto and labels (M7b), by name and per function, as c4lc-gen's g:ulab.
+\ A label's address is -1 until it is placed; a goto that gets there
+\ first leaves a branch mark, resolved when the label is placed. Placing
+\ a label tells LABEL@ about it, so a function ending on one gets the
+\ LEV that c4lc gives it.
+32 CONSTANT ULAB-MAX
+CREATE ULA ULAB-MAX CELLS ALLOT   CREATE ULU ULAB-MAX CELLS ALLOT
+CREATE ULADDR ULAB-MAX CELLS ALLOT
+VARIABLE ULN   0 ULN !
+256 CONSTANT UFWD-MAX
+CREATE UFL UFWD-MAX CELLS ALLOT   CREATE UFM UFWD-MAX CELLS ALLOT
+VARIABLE UFN   0 UFN !
+: ULAB-RESET ( -- )  0 ULN !  0 UFN ! ;
+: ULAB ( a u -- i ) {: a u -- i :}
+   ULN @ 0 ?DO
+      I CELLS ULU + @ u = IF
+         I CELLS ULA + @ a u BYTES= IF I UNLOOP EXIT THEN
+      THEN
+   LOOP
+   ULN @ ULAB-MAX < 0= IF ." c4fc: too many labels in one function" CR ABORT THEN
+   a ULN @ CELLS ULA + !  u ULN @ CELLS ULU + !  -1 ULN @ CELLS ULADDR + !
+   1 ULN +!  ULN @ 1- ;
+: ULAB-CHECK ( -- )
+   UFN @ 0 ?DO
+      I CELLS UFL + @ CELLS ULADDR + @ 0< IF
+         ." c4fc: goto to a label the function does not have: "
+         I CELLS UFL + @ DUP CELLS ULA + @ SWAP CELLS ULU + @ TYPE CR ABORT
+      THEN
+   LOOP ;
+:M STMT n_goto {: n | i t -- :}
+   n >lname @ n >llen @ ULAB TO i
+   i CELLS ULADDR + @ TO t
+   t 0< IF
+      UFN @ UFWD-MAX < 0= IF ." c4fc: too many gotos in one function" CR ABORT THEN
+      oJMP BR,  UFN @ CELLS UFM + !  i UFN @ CELLS UFL + !  1 UFN +!
+   ELSE oJMP t BACK, THEN ;M
+:M STMT n_labeled {: n | i -- :}
+   n >lname @ n >llen @ ULAB TO i
+   i CELLS ULADDR + @ 0< 0= IF
+      ." c4fc: duplicate label: " n >lname @ n >llen @ TYPE CR ABORT THEN
+   CHERE i CELLS ULADDR + !   CHERE LABEL@
+   UFN @ 0 ?DO  I CELLS UFL + @ i = IF I CELLS UFM + @ >RES THEN  LOOP
+   n >body @ STMT ;M
+
+\ c4lc-gen's g:laddr: a local's address plus OFF -- LEA's own when it is
+\ word-aligned, else added to the base
+: LADDR, ( base off -- ) {: b o -- :}
+   o 1 CELLS 1- AND 0= IF b o 1 CELLS / + oLEA OP2, EXIT THEN
+   b oLEA OP2,  oPSH OP,  o oIMM OP2,  oADD OP, ;
+\ N bytes from OFF zeroed (c4lc-gen's g:lmset)
+: LMSET, ( base off n -- ) {: b o n -- :}
+   b o LADDR,  oPSH OP,  0 oIMM OP2,  oPSH OP,  n oIMM OP2,  oPSH OP,
+   oMSET OP,  3 oADJ OP2, ;
+
+\ A local's constants as a template (c4lc-array-init), c4lc-gen's
+\ g:ltemplate word for word. A record is parse.f's LREC, (offset type
+\ node value). With LTMPL stores or more, the constants -- a number, or a
+\ string's address for a pointer -- are written into the data, up to
+\ the last nonzero one (or the end, when no more than LTAIL words are
+\ left), and copied into the local with MCPY; the rest is zeroed with
+\ MSET, and only what is no constant is stored after. Records that go
+\ back, or a template over four words a constant, keep the stores.
+8 CONSTANT LTMPL   8 CONSTANT LTAIL
+: LR-CONST? ( r -- f ) {: r | e -- f :}
+   r 2 CELLS + @ TO e
+   e 0= IF -1 EXIT THEN
+   e @ n_str = IF r CELL+ @ T-PTR? EXIT THEN
+   0 ;
+: LR-W ( r -- n )  CELL+ @ T-SIZE ;
+\ a store's weight (c4lc-gen's g:lweight): a word 1, a byte 2, 16 bits 4
+: LWEIGHT ( w -- n )  DUP 1 = IF DROP 2 EXIT THEN  2 = IF 4 ELSE 1 THEN ;
+\ what the constants weigh, or -1 when the records do not ascend
+: LR-SCAN ( v -- n ) {: v | at n r -- n :}
+   0 TO at  0 TO n
+   v V# 0 ?DO
+      I v V@ TO r
+      n 0< 0= IF
+         r @ at < IF -1 TO n ELSE
+            r @ r LR-W + TO at
+            r LR-CONST? IF n r LR-W LWEIGHT + TO n THEN
+         THEN
+      THEN
+   LOOP n ;
+: LR-NZ? ( r -- f ) {: r -- f :}
+   r LR-CONST? 0= IF 0 EXIT THEN
+   r 2 CELLS + @ IF -1 EXIT THEN
+   r 3 CELLS + @ 0<> ;
+: LR-STR? ( r -- f )  DUP LR-NZ? SWAP 2 CELLS + @ 0<> AND ;
+\ c4lc-gen's g:iput, into region 2
+: D-PUT ( v ty off -- ) {: v t o -- :}
+   t T-BYTE? IF v 255 AND DATA @ o + C! EXIT THEN
+   t T-HALF? IF v 255 AND DATA @ o + C!  v 8 RSHIFT 255 AND DATA @ o + 1+ C! EXIT THEN
+   v DATA @ o + ! ;
+\ where the template ends: past the last nonzero constant
+: LR-END ( v -- l ) {: v | l r -- l :}
+   0 TO l
+   v V# 0 ?DO  I v V@ TO r  r LR-NZ? IF r @ r LR-W + TO l THEN  LOOP  l ;
+\ N constants make a template, unless it would be sparse
+: LTMPL? ( n v -- f )  OVER LTMPL < IF 2DROP 0 EXIT THEN  LR-END SWAP 4 * CELLS > 0= ;
+: LTEMPLATE ( base nbytes v -- ) {: b nb v | l at r ss j -- :}
+   v LR-END TO l
+   l IF  nb l - LTAIL CELLS > 0= IF nb TO l THEN  THEN   \ a short zero tail is copied too
+   l IF
+      16 NEW-VEC TO ss                  \ the strings first, in order
+      v V# 0 ?DO
+         I v V@ TO r
+         r LR-STR? IF  r 2 CELLS + @ DUP >off @ SWAP >slen @ D-STR, ss V, THEN
+      LOOP
+      D-ALIGN  l D-ALLOT TO at
+      0 TO j
+      v V# 0 ?DO
+         I v V@ TO r
+         r LR-STR? IF
+            at r @ +  j ss V@  3 -4 (TABPAT)  j 1+ TO j
+         ELSE r LR-NZ? IF  r 3 CELLS + @  r CELL+ @  at r @ +  D-PUT  THEN THEN
+      LOOP
+      b oLEA OP2,  oPSH OP,  at IMMD,  oPSH OP,  l oIMM OP2,  oPSH OP,
+      oMCPY OP,  3 oADJ OP2,
+   THEN
+   l nb < IF b l nb l - LMSET, THEN ;
+
+\ A scalar takes SI even when it is a char, which is what c4cc did and
+\ what c4lc kept; an array is stored element by element, the elements
+\ past the initialiser list zeroed -- or, with LTMPL stores or more,
+\ from a template (c4lc-gen's g:linitarr).
+: LIBYTE, ( off idx v -- ) {: off i v -- :}
+   off oLEA OP2,  oPSH OP,  i oIMM OP2,  oADD OP,  oPSH OP,
+   v oIMM OP2,  oSC OP, ;
+: LINIT-TMPL ( n -- ) {: n | et st v r -- :}
+   n >isym @ y.ct @ T-DEREF TO et
+   n >ibyte @ 1 = IF 1 ELSE n >ibyte @ 2 = IF 2 ELSE 1 CELLS THEN THEN TO st
+   16 NEW-VEC TO v
+   n >ivn @ 0 ?DO
+      4 CELLS ALLOT: TO r
+      I st * r !  et r CELL+ !  0 r 2 CELLS + !  I CELLS n >ivals @ + @ r 3 CELLS + !
+      r v V,
+   LOOP
+   n >isym @ y.val @  n >icount @ st *  v LTEMPLATE ;
+:M STMT n_linit {: n | y off v c s val -- :}
+   n >isym @ TO y   y y.val @ TO off
+   n >icount @ TO s
+   s 0< IF
+      TCUR @                               \ (n_opasgn's temporaries: see there)
+      off oLEA OP2,  oPSH OP,  n >expr @ GEN
+      y y.ct @ T-PTR? IF
+         y y.q @  n >expr @ CQ  DROPPED? IF S" initialization" QWARN THEN THEN
+      oSI OP,  TCUR !  EXIT THEN
+   n >ivals @ TO v   n >ivn @ TO c
+   s  n >ibyte @ 2 = IF 4 * ELSE n >ibyte @ 1 = IF 2* THEN THEN  LTMPL < 0=
+   y y.ct @ T-DEREF T-STRUCT? 0= AND IF  n LINIT-TMPL EXIT THEN
+   s 0 ?DO
+      I c < IF I CELLS v + @ ELSE 0 THEN TO val
+      n >ibyte @ 1 = IF
+         off I val LIBYTE,
+      ELSE n >ibyte @ 2 = IF               \ a 16-bit element: two bytes, low first
+         off I 2* val 255 AND LIBYTE,
+         off I 2* 1+ val 8 RSHIFT 255 AND LIBYTE,
+      ELSE
+         off I + oLEA OP2,  oPSH OP,  val oIMM OP2,  oSI OP,
+      THEN THEN
+   LOOP ;M
+
+\ c4lc-gen's g:localaggr: MSET zeroes the object, then each value goes to
+\ its offset (LADDR,) -- or, with LTMPL constants or more, they come from
+\ a template and only the rest are stored
+:M STMT n_lagg {: n | b v r e t -- :}
+   TCUR @
+   n >lsym @ y.val @ TO b
+   n >lrecs @ TO v
+   v LR-SCAN v LTMPL? TO t
+   t IF b n >lbytes @ v LTEMPLATE ELSE b 0 n >lbytes @ LMSET, THEN
+   v V# 0 ?DO
+      I v V@ TO r
+      t r LR-CONST? AND 0= IF
+      b r @ LADDR,  oPSH OP,
+      r 2 CELLS + @ TO e
+      e IF
+         e GEN
+         e CT T-STRUCT? IF ." c4fc: a struct value in an initializer is not supported" CR ABORT THEN
+      ELSE r 3 CELLS + @ oIMM OP2, THEN
+      r CELL+ @ STORE,
+      THEN
+   LOOP
+   TCUR ! ;M
+
+\ Every statement that evaluates an expression puts TCUR back as it found
+\ it, after the statements inside it have: an n_opasgn's temporary lives
+\ to the end of its statement (c4lc-gen's g:stmt).
+:M STMT n_expst  TCUR @ SWAP  >expr @ EFFECT  TCUR ! ;M
+\ Inside a spliced body there is no frame to leave, so a return is a
+\ jump to the end of the splice rather than a LEV. The value is already
+\ in A either way, which is the whole reason this needs no rewriting of
+\ the tree -- see inline.f.
+:M STMT n_ret {: n | e -- :}
+   TCUR @
+   n >expr @ TO e
+   e IF
+      e GEN
+      e CT RETT @ SCONV,
+      RETT @ T-PTR? IF RETQ @ e CQ DROPPED? IF S" return" QWARN THEN THEN
+   THEN
+   INLRET @ IF oJMP BR, INLM, ELSE oLEV OP, THEN
+   TCUR ! ;M
+:M STMT n_blk {: n -- :}
+   n >len @ 0 ?DO n >list @ I CELLS + @ STMT LOOP ;M
+
+\ -- unary --------------------------------------------------------------
+\ Each is what c4 emits, and each is worth reading once: ! is a compare
+\ against zero, ~ is an XOR with -1, and unary minus is a multiply by -1
+\ with the -1 pushed FIRST, because C4's MUL takes its left operand off
+\ the stack.
+
+:M GEN n_not   >opnd @ GEN  oPSH OP,  0 oIMM OP2,  oEQ  OP, ;M
+\ an unsigned operand stays unsigned, and a 64-bit host's uint is cut
+\ back into its 32 bits
+: UNCUT, ( n -- )  >opnd @ CT T-UNRES t_uint = W64? AND IF M32 MASK, THEN ;
+:M GEN n_bnot {: n -- :}  n >opnd @ GEN  oPSH OP, -1 oIMM OP2,  oXOR OP,  n UNCUT, ;M
+:M GEN n_neg  {: n -- :}  -1 oIMM OP2, oPSH OP,  n >opnd @ GEN  oMUL OP,  n UNCUT, ;M
+
+\ A pointer's VALUE is the address it points at, so dereferencing for an
+\ address is the operand's value and nothing else.
+:M GEN-ADDR n_deref  >opnd @ GEN ;M
+:M GEN      n_deref {: n -- :}
+   n >opnd @ GEN  n >opnd @ CT 2 -  DUP T-ROW? IF DROP ELSE LOAD, THEN ;M
+:M GEN      n_addr   >opnd @ GEN-ADDR ;M
+
+:M CT n_not   DROP t_int ;M
+:M CT n_bnot  >opnd @ CT T-UNRES ;M
+:M CT n_neg   >opnd @ CT T-UNRES ;M
+:M CT n_addr  >opnd @ CT 2 + ;M
+:M CT n_deref >opnd @ CT 2 - DECAY ;M
+:M CQ n_not   DROP 0 ;M
+:M CQ n_bnot  DROP 0 ;M
+:M CQ n_neg   DROP 0 ;M
+:M CQ n_addr  >opnd @ CQ 2 LSHIFT ;M
+:M CQ n_deref >opnd @ CQ 2 RSHIFT ;M
+
+\ ++ and -- reuse one address for both the load and the store, which is
+\ why the sequence is LEA, PSH, LI rather than LEA, LI, PSH. The postfix
+\ forms undo the change on the RESULT afterwards, which is exactly how
+\ c4 gets the old value without a temporary.
+\ The post forms store the new value unconverted and take the step back
+\ off it: converting first would lose the carry the undo needs, and the
+\ loads convert anyway.
+: INCDEC, ( node op post -- ) {: n op post | t u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
+   n >opnd @ CT TO t
+   n >opnd @ GEN-ADDR
+   n >opnd @ op oADD = IF S" increment" ELSE S" decrement" THEN WCHECK
+   n >opnd @ STL? 0= IF oPSH OP, THEN
+   t LOAD,
+   oPSH OP,  t STEP-OF oIMM OP2,  op OP,
+   post 0= IF t T-PROMOTE t SCONV, THEN
+   n >opnd @ STL? IF n >opnd @ STL, ELSE t STORE, THEN
+   post 0=  u 0= AND  t t_uchar = AND IF 255 MASK, THEN ;
+\ a local, wanted: the value is on the stack through the store, and POPA has it back
+: POST-LOCAL, ( node op -- ) {: n op | t -- :}
+   n >opnd @ CT TO t
+   n >opnd @ GEN-ADDR
+   n >opnd @ op oADD = IF S" increment" ELSE S" decrement" THEN WCHECK
+   t LOAD,
+   oPSH OP,  oPSH OP,  t STEP-OF oIMM OP2,  op OP,
+   n >opnd @ STL,
+   oPOPA OP, ;
+:M GEN n_preinc   oADD 0 INCDEC, ;M
+:M GEN n_predec   oSUB 0 INCDEC, ;M
+:M GEN n_postinc {: n | u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
+   u 0= IF n >opnd @ STL? IF n oADD POST-LOCAL, EXIT THEN THEN
+   n oADD 1 INCDEC,
+   u IF EXIT THEN
+   oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP,
+   n >opnd @ CT t_uchar = IF 255 MASK, THEN ;M
+:M GEN n_postdec {: n | u -- :}
+   VUNUSED @ TO u  0 VUNUSED !
+   u 0= IF n >opnd @ STL? IF n oSUB POST-LOCAL, EXIT THEN THEN
+   n oSUB 1 INCDEC,
+   u IF EXIT THEN
+   oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oADD OP,
+   n >opnd @ CT t_uchar = IF 255 MASK, THEN ;M
+:M CT n_preinc   >opnd @ CT ;M
+:M CT n_predec   >opnd @ CT ;M
+:M CT n_postinc  >opnd @ CT ;M
+:M CT n_postdec  >opnd @ CT ;M
+:M CQ n_preinc   >opnd @ CQ ;M
+:M CQ n_predec   >opnd @ CQ ;M
+:M CQ n_postinc  >opnd @ CQ ;M
+:M CQ n_postdec  >opnd @ CQ ;M
+
+\ -- short-circuit and the conditional ---------------------------------
+
+:M GEN n_lor {: n | m -- :}
+   n >lhs @ GEN   oBNZ BR, TO m   n >rhs @ GEN   m >RES ;M
+:M GEN n_land {: n | m -- :}
+   n >lhs @ GEN   oBZ  BR, TO m   n >rhs @ GEN   m >RES ;M
+\ c4's ?: has its else-arm's type; with an unsigned arm in it both arms
+\ convert to the usual arithmetic type instead, as C says.
+: CONDU? ( n -- f )  DUP >body @ CT SWAP >else @ CT T-UNSBIN? ;
+: CONDT ( n -- t )   DUP >body @ CT SWAP >else @ CT T-UAC ;
+:M GEN n_cond {: n | m1 m2 -- :}
+   n >cond @ GEN   oBZ BR, TO m1
+   n >body @ GEN
+   n CONDU? IF n >body @ CT n CONDT CONVERT, THEN
+   oJMP BR, TO m2
+   m1 >RES
+   n >else @ GEN
+   n CONDU? IF n >else @ CT n CONDT CONVERT, THEN
+   m2 >RES ;M
+:M CT n_lor  DROP t_int ;M
+:M CT n_land DROP t_int ;M
+:M CT n_cond {: n -- t :}  n CONDU? IF n CONDT ELSE n >else @ CT THEN ;M
+:M CQ n_lor  DROP 0 ;M
+:M CQ n_land DROP 0 ;M
+:M CQ n_cond {: n -- q :}  n >body @ CQ  n >else @ CQ  OR ;M
+
+\ -- statements ---------------------------------------------------------
+\ break and continue are forward branches recorded on two stacks and
+\ resolved when the loop that owns them closes. continue is forward even
+\ in a while loop, where its target is behind it -- a mark is a hole to
+\ fill, and filling it with an address already known is the same work.
+
+1024 CONSTANT MMAX
+CREATE BRKM MMAX CELLS ALLOT   VARIABLE BRKN   0 BRKN !
+CREATE CNTM MMAX CELLS ALLOT   VARIABLE CNTN   0 CNTN !
+: BRK, ( -- )  oJMP BR, BRKM BRKN @ CELLS + !  1 BRKN +! ;
+: CNT, ( -- )  oJMP BR, CNTM CNTN @ CELLS + !  1 CNTN +! ;
+: RESOLVE-LOOP ( brkbase cntbase brktarget cnttarget -- ) {: bb cb bt ct -- :}
+   BRKN @ bb ?DO BRKM I CELLS + @ bt RESTO LOOP   bb BRKN !
+   CNTN @ cb ?DO CNTM I CELLS + @ ct RESTO LOOP   cb CNTN ! ;
+
+:M STMT n_break  DROP BRK, ;M
+:M STMT n_cont   DROP CNT, ;M
+:M STMT n_empty  DROP ;M
+
+:M STMT n_if {: n | m1 m2 -- :}
+   TCUR @
+   n >cond @ GEN   oBZ BR, TO m1
+   n >body @ STMT
+   n >else @ IF
+      oJMP BR, TO m2   m1 >RES   n >else @ STMT   m2 >RES
+   ELSE
+      m1 >RES
+   THEN
+   TCUR ! ;M
+
+\ -O: a loop's condition that is a plain int constant is not tested, as
+\ c4lc's gen does (g:kint?): do ... while (K) runs its body whatever K
+\ is, and while (K) or for (;K;) with K not 0 test nothing.
+: KINT? ( n -- f )
+   OPTIMIZE @ IF DUP NUM? IF >nty @ t_int = EXIT THEN THEN DROP 0 ;
+: KTRUE? ( n -- f )  DUP KINT? IF >val @ 0<> ELSE DROP 0 THEN ;
+
+:M STMT n_while {: n | top m bb cb -- :}
+   TCUR @
+   BRKN @ TO bb   CNTN @ TO cb
+   CHERE TO top
+   -1 TO m
+   n >cond @ DUP KTRUE? IF DROP ELSE GEN  oBZ BR, TO m THEN
+   n >body @ STMT
+   oJMP top BACK,
+   m 0< 0= IF m >RES THEN
+   bb cb CHERE top RESOLVE-LOOP
+   TCUR ! ;M
+
+:M STMT n_do {: n | top m bb cb cont -- :}
+   TCUR @
+   BRKN @ TO bb   CNTN @ TO cb
+   CHERE TO top
+   n >body @ STMT
+   CHERE TO cont
+   n >cond @ DUP KINT? IF
+      >val @ IF oJMP top BACK, THEN
+   ELSE GEN  oBNZ top BACK, THEN
+   bb cb CHERE cont RESOLVE-LOOP
+   TCUR ! ;M
+
+\ continue in a for loop goes to the STEP, not to the condition, and the
+\ step is emitted after the body -- so it is a genuine forward branch.
+:M STMT n_for {: n | top m bb cb cont -- :}
+   TCUR @
+   BRKN @ TO bb   CNTN @ TO cb
+   n >init @ ?DUP IF EFFECT THEN
+   CHERE TO top
+   -1 TO m                              \ patch 0 is a real patch index
+   n >cond @ ?DUP IF DUP KTRUE? IF DROP ELSE GEN  oBZ BR, TO m THEN THEN
+   n >body @ STMT
+   CHERE TO cont
+   n >step @ ?DUP IF EFFECT THEN
+   oJMP top BACK,
+   m 0< 0= IF m >RES THEN
+   bb cb CHERE cont RESOLVE-LOOP
+   TCUR ! ;M
+
+\ -- switch -------------------------------------------------------------
+\ A jump table, not a chain of compares, because that is what c4lc emits:
+\
+\    <expr>                     JMP dispatch
+\    <case bodies, each labelled where it starts>
+\    JMP end                    -- the fall-out of the last case
+\  dispatch:
+\    PSH IMM lo SUB             -- index = value - lowest case
+\    PSH PSH PSH                -- three copies: two compares and the index
+\    IMM hi-lo GT  BNZ oob1
+\    IMM 0     LT  BNZ oob2
+\    IMM 8 MUL PSH IMM table ADD LI JMPA
+\  oob1: ADJ 2 JMP default      -- each path drops what its compare left
+\  oob2: ADJ 1 JMP default
+\  end:
+\
+\ Entries with no case of their own hold the default target, which is the
+\ end when there is no default at all.
+
+BEGIN-STRUCTURE SWC
+   FIELD: w.tab  FIELD: w.lo  FIELD: w.hi  FIELD: w.def  FIELD: w.ent
+   FIELD: w.cv   FIELD: w.ca
+END-STRUCTURE
+VARIABLE CURSW   0 CURSW !
+
+\ A switch whose cases are 4096 or more apart -- or so far apart that the
+\ difference wraps -- is a chain of compares instead (docs/ports-
+\ feasibility.md §8, step 2), c4lc-gen's g:swchain. a holds the value
+\ XORed with the case at hand, zero when it matches, so nothing is pushed
+\ that a branch would have to drop:
+\
+\    PSH IMM c1      XOR BZ case1
+\    PSH IMM c1^c2   XOR BZ case2
+\    ...
+\    JMP default     -- or the end
+\
+\ w.cv and w.ca hold its cases' values and addresses, in the order written.
+4096 CONSTANT SWRANGE
+
+:M STMT n_case {: n | w i -- :}
+   CURSW @ TO w
+   w 0= IF ." c4fc: case outside a switch" CR ABORT THEN
+   w w.cv @ IF
+      n >val @ w w.cv @ V,   CHERE w w.ca @ V,
+   ELSE
+      n >val @ w w.lo @ - TO i
+      i 0< i w w.hi @ w w.lo @ - > OR IF
+         ." c4fc: case " n >val @ .N ." is outside its switch's range " CR ABORT THEN
+      CHERE  w w.ent @  i CELLS +  !
+   THEN ;M
+:M STMT n_default {: n | w -- :}
+   CURSW @ TO w
+   w 0= IF ." c4fc: default outside a switch" CR ABORT THEN
+   CHERE w w.def ! ;M
+
+:M STMT n_switch {: n | w save m e bb m1 m2 m3 m4 end def k sp prev -- :}
+   TCUR @
+   CURSW @ TO save
+   SWC ALLOT: TO w
+   n >lo @ w w.lo !  n >hi @ w w.hi !  -1 w w.def !  0 w w.cv !
+   n >hi @ n >lo @ - TO k
+   k 0<  k SWRANGE >= OR TO sp
+   sp IF
+      VEC ALLOT: w w.cv !   w w.cv @ 16 VEC-INIT
+      VEC ALLOT: w w.ca !   w w.ca @ 16 VEC-INIT
+   ELSE
+      k 1+ TO k
+      k CELLS ALLOT: w w.ent !
+      k 0 ?DO -1 w w.ent @ I CELLS + ! LOOP
+   THEN
+   w CURSW !
+   BRKN @ TO bb
+   n >cond @ GEN
+   oJMP BR, TO m
+   n >body @ STMT
+   oJMP BR, TO e                        \ the last case falls out here
+   m >RES
+   sp IF
+      0 TO prev
+      w w.cv @ V# 0 ?DO
+         oPSH OP,   I w w.cv @ V@ prev XOR oIMM OP2,   oXOR OP,
+         oBZ  I w w.ca @ V@  BACK,
+         I w w.cv @ V@ TO prev
+      LOOP
+      w w.def @ 0< IF oJMP BR, TO m3 ELSE oJMP w w.def @ BACK, THEN
+      CHERE TO end
+      e >RES
+      w w.def @ 0< IF m3 end RESTO THEN
+   ELSE
+   \ The table is allocated HERE, after the body and before the dispatch
+   \ code, which is where c4lc puts it: a string literal inside the
+   \ switch gets the lower address.
+   D-ALIGN  k CELLS D-ALLOT w w.tab !
+   \ Subtracting the lowest case is skipped when it is zero -- four
+   \ words c4lc does not spend, and a difference invisible until a
+   \ switch happens to start at case 0.
+   n >lo @ ?DUP IF oPSH OP, oIMM OP2, oSUB OP, THEN
+   oPSH OP,  oPSH OP,  oPSH OP,
+   k 1- oIMM OP2,  oGT OP,   oBNZ BR, TO m1
+   0 oIMM OP2,     oLT OP,   oBNZ BR, TO m2
+   1 CELLS oIMM OP2,  oMUL OP,
+   oPSH OP,  w w.tab @ IMMD,  oADD OP,
+   oLI OP,   oJMPA OP,
+   m1 >RES  2 oADJ OP2,  oJMP BR, TO m3
+   m2 >RES  1 oADJ OP2,  oJMP BR, TO m4
+   CHERE TO end
+   e >RES
+   w w.def @ 0< IF end ELSE w w.def @ THEN TO def
+   m3 def RESTO   m4 def RESTO
+   k 0 ?DO
+      w w.tab @ I CELLS +
+      w w.ent @ I CELLS + @ DUP 0< IF DROP def THEN
+      TABPAT,
+   LOOP
+   THEN
+   BRKN @ bb ?DO BRKM I CELLS + @ end RESTO LOOP   bb BRKN !
+   save CURSW !
+   TCUR ! ;M

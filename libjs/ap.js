@@ -1,0 +1,314 @@
+// ap.js - one processor other than CPU 0, in a thread of its own: a Web
+// Worker in a page, a worker_threads Worker in Node (par.js, which
+// starts it; docs/c4ix-smp.md S2).
+//
+// It runs its Machine on the shared arena, flat out, while its state is
+// RUN; parks in Atomics.wait on the guest's word for CWAI; sleeps in
+// Atomics.wait for USLP; and waits on its state word while it is off or
+// halted, until a CPUS starts it again. What reaches the devices or the
+// console it asks CPU 0 for, through its request slot. The heap it uses
+// itself: its books are shared (sheap.js).
+
+import { Arena } from '../src/c4bb/sim/arena.js';
+import { OP, STOP, Machine, C4I_MMU, C4I_ACCEL } from './c4m.js';
+import { accel, loadAccel, adoptAccelSwitch } from './accel.js';
+import { Mmu, FAULT } from './mmu.js';
+import { C, K, S, R, KIND, ParCore, POSTED, PQLEN, PQSTRIDE, DMA_FAULT } from './par.js';
+import { SharedHeap } from './sheap.js';
+import { SharedSwap } from './sswap.js';
+import { Devices } from '../src/c4bb/sim/devices.js';
+
+const word = (k, f) => C.CPU0 + k * C.STRIDE + f;
+// the swap's registers (src/c4bb/sim/devices.js): this CPU's own (ApBus)
+const SWAP_ADDR = 0x11c, SWAP_CMD = 0x158;
+const devSwapOp = Devices.prototype.swapOp;
+
+// the opcodes whose work is CPU 0's: the devices, the console
+const ASK = new Set([OP.OPEN, OP.READ, OP.CLOS, OP.PRTF,
+  OP.PUTC, OP.PUTS, OP.STRC, OP._OPC, OP.DBG]);
+// guarded in protected mode, as on CPU 0 (c4m.js sys): a protected task's
+// gets the local trap, never CPU 0's service
+const GUARDED = new Set([OP.OPEN, OP.READ, OP.CLOS, OP.PRTF, OP.MALC, OP.FREE, OP.RALC,
+  OP.PUTC, OP.PUTS, OP.EXIT, OP.USLP, OP.INFO]);
+
+// Devices this CPU never touches itself; what a Machine looks at
+class ApDev {
+  constructor(ctl, cyclesPerMs) {
+    this.ctl = ctl; this.cyclesPerMs = cyclesPerMs;
+    this.halted = false; this.status = 0;
+    this.pitMs = 0; this.mboxIrq = 0; this.mbox = null; this.sleepMs = 0;
+    this.onByte = null; this.uartActivity = 0;
+  }
+  simMs() { return Atomics.load(this.ctl, C.TIMEMS) | 0; }
+  hostNow() { return Date.now(); }
+  // the boot stack's guard, as CPU 0 last set it (par.js ParHost). Plain reads:
+  // MCPY alone looks at these 15 times a call, and in Atomics.load they took 9%
+  // of Quake's time on this CPU with no MMU (docs/quake-performance.md). They
+  // change only at boot, at a guard hit, and at shutdown, and the loop's own
+  // copy (guardLo) is already up to a slice old.
+  get stackGuard() { return this.ctl[C.GUARD]; }
+  get stackBase() { return this.ctl[C.GLO]; }
+  get stackTop() { return this.ctl[C.GHI]; }
+}
+
+class ApMachine extends Machine {
+  constructor(arena, dev, bus, info, core) {
+    super(arena, dev, bus, null);
+    this.fixedInfo = info;
+    this.core = core;
+    this.posted = 0;                    // writes posted since CPU 0 was last told
+  }
+  info() { return this.fixedInfo; }
+
+  // A posted write (par.js POSTED): queued for CPU 0, which applies it
+  // before it answers this CPU's next question. A full queue waits for room.
+  post(addr, val, w8) {
+    const q = this.core.pq, b = this.cpuId * PQSTRIDE, t = q[b + 1];
+    for (;;) {
+      const h = Atomics.load(q, b);
+      if (((t - h) | 0) < PQLEN) break;
+      this.core.ring();
+      Atomics.wait(q, b, h, 5);
+      if (Atomics.load(this.core.ctl, C.HALT)) return;
+    }
+    const e = b + 2 + 2 * (t & (PQLEN - 1));
+    q[e] = addr | (w8 ? 0x10000 : 0);
+    q[e + 1] = val;
+    Atomics.store(q, b + 1, (t + 1) | 0);
+    this.posted = 1;
+  }
+  // CPU 0 told there are posted writes to apply, if it may be asleep
+  flushPosted() { if (this.posted) { this.posted = 0; this.core.ring(); } }
+
+  // one question for CPU 0, and wait for its answer
+  ask(kind, op, addr, val) {
+    const ctl = this.core.ctl, b = word(this.cpuId, 0);
+    ctl[b + K.KIND] = kind; ctl[b + K.OP] = op; ctl[b + K.SP] = this.sp; ctl[b + K.A] = this.a;
+    ctl[b + K.RPC] = this.pc;
+    ctl[b + K.ADDR] = addr | 0; ctl[b + K.VAL] = val | 0;
+    ctl[b + K.PTBR] = this.vm && this.mmu ? this.mmu.ptbr : 0;
+    ctl[b + K.UDIR] = this.udir;
+    Atomics.store(ctl, b + K.REQ, R.ASK);
+    this.core.ring();
+    while (Atomics.load(ctl, b + K.REQ) === R.ASK) {
+      Atomics.wait(ctl, b + K.REQ, R.ASK, 100);
+      if (Atomics.load(ctl, C.HALT)) { this.dev.halted = true; return STOP.HALT; }
+    }
+    const ra = ctl[b + K.RA], rstop = ctl[b + K.RSTOP];
+    Atomics.store(ctl, b + K.REQ, R.IDLE);
+    // a device refused what this task gave it: the task's page fault
+    if (rstop === DMA_FAULT) { this.mmu.refuse(ctl[b + K.FADDR], ctl[b + K.FINFO]); throw FAULT; }
+    return { ra, rstop };
+  }
+
+  sys(op) {
+    if (this.mode && GUARDED.has(op)) return this.pmTrap(op);
+    if (ASK.has(op)) {
+      const r = this.ask(KIND.OP, op, 0, 0);
+      if (r === STOP.HALT) return STOP.HALT;
+      if (r.rstop === STOP.INPUT) { this.pc -= 4; return STOP.INPUT; }   // try again later
+      this.a = r.ra;
+      return STOP.BUDGET;
+    }
+    if (op === OP.TIME) { this.a = this.dev.simMs(); return STOP.BUDGET; }
+    if (op === OP.USLP) {
+      // this CPU sleeps; the others carry on
+      this.flushPosted();
+      const ms = Math.max(1, Math.floor(this.ld32(this.sp) / 1000));
+      Atomics.wait(this.core.ctl, word(this.cpuId, K.SLEEP), 0, ms);
+      this.a = 0;
+      return STOP.BUDGET;
+    }
+    if (op === OP.EXIT) return this.halt(this.ld32(this.sp));
+    return super.sys(op);
+  }
+
+  // A byte of a page put out to swap: in the shared pages (sswap.js), or,
+  // on a host without them, CPU 0's (par.js KIND.SWAP)
+  swapRd8(slot, off) {
+    if (this.swap) return this.swap.rd8(slot, off);
+    const r = this.ask(KIND.SWAP, 0, slot, off & 4095); return r === STOP.HALT ? 0 : r.ra & 255;
+  }
+  swapWr8(slot, off, v) {
+    if (this.swap) { this.swap.wr8(slot, off, v & 255); return; }
+    this.ask(KIND.SWAP, 1, slot, (off & 4095) | ((v & 255) << 16));
+  }
+
+  // A guard hit is told where the console is, and halts the machine
+  // there: CPU 0 says it with this CPU's registers (par.js, KIND.GUARD)
+  guardHit(x, n, write, v, op = 0, from = 0) {
+    const ctl = this.core.ctl, b = word(this.cpuId, 0);
+    ctl[b + K.BP] = this.bp;
+    ctl[b + K.CYCLES] = this.cycle | 0;
+    ctl[b + K.GN] = n | 0; ctl[b + K.GFROM] = from | 0; ctl[b + K.GW] = (write ? 1 : 0) | (this.mode ? 2 : 0);
+    this.flushPosted();
+    this.ask(KIND.GUARD, op, x, v);
+    this.dev.halted = true;
+    return 0;
+  }
+
+  // EXIT: this processor, never the machine
+  halt(status) {
+    this.cpuState = 'halt';
+    this.cpuStatus = status | 0;
+    Atomics.store(this.core.ctl, word(this.cpuId, K.STATE), S.HALT);
+    this.core.ring();
+    return STOP.CPUHALT;
+  }
+}
+
+// Device registers are CPU 0's (bus.js and arena.js's ranges); everything
+// else is the shared arena's, as on CPU 0's bus: unaligned words, the low
+// memory below 0x1000 (the ROM, the trap word), and the ends of the arena,
+// read and written by arena.js, whose io is off here. (Reading unaligned
+// words as 0, as this once did, broke every C4R header a CPU other than 0
+// read: the loader's words start at byte 13.)
+//
+// But the swap's two registers, which are this CPU's (swapOp, below).
+class ApBus {
+  constructor(arena) {
+    this.arena = arena; this.m = null;
+    this.swapAddr = 0; this.swapResult = 0;     // devices.js's, this CPU's
+    this.swapPages = null; this.swapSlots = 0;  // the shared pages (sswap.js), if the host has them
+  }
+  get machine() { return this.m; }              // devices.js swapOp's heap
+  dev(addr) { return (addr >= 0x100 && addr < 0x200) || (addr >= 0x400 && addr < 0x500); }
+  read32(addr) {
+    addr = addr >>> 0;
+    if (this.dev(addr)) {
+      if ((addr & ~3) === SWAP_CMD) return this.swapResult | 0;
+      const r = this.m.ask(KIND.RD32, 0, addr & ~3, 0); return r === STOP.HALT ? 0 : r.ra | 0;
+    }
+    return this.arena.read32(addr) | 0;
+  }
+  write32(addr, val) {
+    addr = addr >>> 0;
+    if (this.dev(addr)) {
+      const w = addr & ~3;
+      if (w === SWAP_ADDR) { this.swapAddr = val >>> 0; return; }
+      if (w === SWAP_CMD) { this.swapResult = this.swapOp(val | 0); return; }
+      if (POSTED.has(addr & ~3)) { this.m.post(addr & ~3, val | 0, 0); return; }
+      this.m.ask(KIND.WR32, 0, addr & ~3, val);
+      return;
+    }
+    this.arena.write32(addr, val | 0);
+  }
+  read8s(addr) { return this.arena.read8s(addr); }
+  write8(addr, val) {
+    addr = addr >>> 0;
+    if (this.dev(addr)) {
+      const w = addr & ~3;
+      if (w === SWAP_ADDR || w === SWAP_CMD) { this.write32(w, val & 0xff); return; }   // as arena.js write8
+      if (POSTED.has(addr & ~3)) { this.m.post(addr, val & 0xff, 1); return; }
+      this.m.ask(KIND.WR8, 0, addr, val & 0xff);
+      return;
+    }
+    this.arena.write8(addr, val);
+  }
+
+  // SWAP_CMD, on the CPU that writes it: devices.js swapOp itself, on this
+  // CPU's SWAP_ADDR, the shared heap (sheap.js) and the shared pages
+  // (sswap.js). C4IX writes SWAP_ADDR, then SWAP_CMD, then reads SWAP_CMD
+  // back, holding a lock that keeps the task on its CPU (mmu.c mmu_sop,
+  // sched.c klock_take_slow), so the two registers can be each CPU's. As
+  // requests to CPU 0 -- the heap's high flag around every allocation for
+  // a task, a page brought in at every first touch -- they made a boot and
+  // a compile on 4 CPUs 25 s against 9.5 s on one. On a host without
+  // shared pages, out, in and forget (1-4) ask CPU 0, once, with the
+  // address (par.js KIND.SWAPOP).
+  swapOp(v) {
+    if (this.swapPages || (v & 15) >= 5) return devSwapOp.call(this, v);
+    const r = this.m.ask(KIND.SWAPOP, 0, this.swapAddr, v);
+    return r === STOP.HALT ? -1 : r.ra | 0;
+  }
+}
+
+function main(msg) {
+  const arena = new Arena(msg.arena);
+  const ctl = new Int32Array(msg.ctl);
+  const id = msg.id;
+  const core = new ParCore(ctl, arena.i32, msg.n, new Int32Array(msg.pq));
+  const dev = new ApDev(ctl, msg.cyclesPerMs);
+  const bus = new ApBus(arena);
+  const m = new ApMachine(arena, dev, bus, msg.info, core);
+  arena.io = null;                    // device registers go through ApBus, to CPU 0
+  bus.m = m;
+  m.noFpu = msg.noFpu;
+  // CPU 0 has an MMU: so has this CPU, its own, off until the kernel turns it on here
+  if (msg.info & C4I_MMU) m.mmu = new Mmu(m);
+  // ... and the accelerators, as CPU 0's INFO says, its modules loaded in
+  // its order (start, below): every CPU tells a task the same and runs the
+  // same numbers, wherever it runs
+  if (msg.info & C4I_ACCEL) m.accel = accel;
+  m.heap = new SharedHeap(arena, msg.heap);
+  if (msg.swap) bus.swapPages = m.swap = new SharedSwap(msg.swapSlots, msg.swap), bus.swapSlots = msg.swapSlots;
+  m.smp = core;
+  m.cpuId = id;
+  m.cpuState = 'off';
+  m.local = new Int32Array(64);
+  m.localU8 = new Uint8Array(m.local.buffer);
+  m.ipiPending = 0; m.waitAddr = 0; m.waitVal = 0; m.cpuStatus = 0;
+  const st = word(id, K.STATE);
+
+  for (;;) {
+    // off or halted: wait to be started (or for the machine to stop)
+    while (Atomics.load(ctl, st) !== S.RUN) {
+      if (Atomics.load(ctl, C.HALT)) return;
+      Atomics.wait(ctl, st, Atomics.load(ctl, st), 1000);
+    }
+    if (Atomics.load(ctl, C.HALT)) return;
+    const entry = Atomics.load(ctl, word(id, K.ENTRY)), stack = Atomics.load(ctl, word(id, K.STACK));
+    m.reset();
+    m.sp = (stack - 4) | 0;
+    m.i32[m.sp >> 2] = 0x18;            // CPU_HALT_ADDR: the entry function's LEV lands on CPUH
+    m.bp = m.sp; m.pc = entry | 0; m.a = 0;
+    m.ipiPending = 0;
+    m.cpuState = 'run';                 // (its IPI word: cleared by par.js start)
+
+    for (;;) {
+      // a slice, then an IPI or the machine's end looked for: not inside
+      // the instruction loop, which would run it at half speed
+      const r = m.run(65536);
+      m.flushPosted();
+      // Halted, its IPI word is left alone: CPU 0 may already have started
+      // it again and sent it one, which taken here the restart dropped.
+      // One sent before the start, start clears (par.js).
+      if (r !== STOP.CPUHALT) core.poll(m);
+      Atomics.store(ctl, word(id, K.CYCLES), m.cycle | 0);
+      if (dev.halted || Atomics.load(ctl, C.HALT)) return;
+      if (r === STOP.CPUHALT) break;
+      if (r === STOP.PARK) {
+        // wait for the word, a CWAK, an IPI or the machine's end; then
+        // CWAI returns 0 and its caller looks again. In slices, each
+        // looking again at the word and for an IPI: an IPI that came before
+        // CWAI said where it waits found no word to wake (par.js ipi), and
+        // the word can move on with no wake seen here -- the kernel lock,
+        // let go while this CPU parked on it, stayed free a second while
+        // it waited, and a task pinned here with it (test-c4ix-pipewake).
+        const t0 = Date.now(), wi = m.waitAddr >> 2;
+        while (!m.ipiPending && !Atomics.load(ctl, word(id, K.IPI)) && !Atomics.load(ctl, C.HALT) &&
+               Atomics.load(m.i32, wi) === m.waitVal && Date.now() - t0 < 1000)
+          Atomics.wait(m.i32, wi, m.waitVal, 10);
+        if (Atomics.load(ctl, C.HALT)) return;
+        // running again before the IPI is taken: with neither, CPU 0 would
+        // count this one parked (par.js othersRunning)
+        m.cpuState = 'run';
+        Atomics.store(ctl, word(id, K.WAITADDR), 0);
+        Atomics.store(ctl, st, S.RUN);
+        if (Atomics.load(ctl, word(id, K.IPI))) { Atomics.store(ctl, word(id, K.IPI), 0); m.ipiPending = 1; }
+      } else if (r === STOP.INPUT) {
+        Atomics.wait(ctl, word(id, K.SLEEP), 0, 5);   // a key may come; ask again soon
+      }
+    }
+  }
+}
+
+// a page's Worker, or Node's worker_threads
+const isNode = typeof process !== 'undefined' && process.versions && process.versions.node &&
+  typeof self === 'undefined';
+if (isNode) {
+  const { parentPort } = await import('node:worker_threads');
+  parentPort.once('message', async msg => { adoptAccelSwitch(msg.accelSwitch); await loadAccel(msg.accelNames); main(msg); process.exit(0); });
+} else {
+  self.onmessage = async e => { if (e.data.type === 'init') { adoptAccelSwitch(e.data.accelSwitch); await loadAccel(e.data.accelNames); main(e.data); self.close(); } };
+}

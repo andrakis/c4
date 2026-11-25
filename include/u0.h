@@ -6,6 +6,13 @@
 //   See exit() in this file.
 // - Discovers opcodes by requesting them from the kernel.
 // - C-friendly functions for using the new opcodes.
+// - Declines, with a message, when there is no kernel to discover them
+//   from: a u0 program typed at the C4DOS A> prompt says
+//   "C4DOS: This application requires C4KE." and stops, instead of
+//   trap-storming through 38 opcode requests and segfaulting. See
+//   __c4dos_api below. If what you want is a program that RUNS on the
+//   DOS rung, that is include/u0lite.h -- a different file rather than
+//   a flag, for the reason that header explains.
 //
 // In the future this will become a library and header file, but for
 // now C4CC does not have a preprocessor. It would be better to have
@@ -22,6 +29,30 @@ enum { U0_DEBUG = 0 };
 
 // C4KE opcode: int request_opcode(char *name)
 enum { OP_REQUEST_SYMBOL = 128 };
+
+// Am I running under C4DOS? C4DOS's loader scans every image it loads
+// for this symbol and writes its API table's address into it
+// (inject_api, src/c4dos/c4dos.c) BEFORE it runs the constructors;
+// anything else leaves it 0. That makes it the one host probe u0 can
+// afford, because it costs NO OPCODE AT ALL -- a plain global read.
+//
+// It has to be that cheap. __c4_info() is __c4_opcode(OP_C4INFO),
+// i.e. OPCD, opcode 48 -- the very instruction that trap-storms when
+// there is no kernel to service it. Probing with it is the thing we
+// are trying to avoid. (That is also why the C4I_C4KE check below
+// this was dead: plain __c4_info() never sets the bit.)
+//
+// Kept in step with dos_present() in include/c4dos.h, which u0 cannot
+// #include: c4cc has no preprocessor and u0.h is handed to it as a
+// source file. The magic is ('C'<<16)+('4'<<8)+'D', written out
+// because plain c4 cannot fold that in an enum.
+enum { __U0_C4DOS_MAGIC = 4404292 };
+// What a constructor returns to make C4DOS refuse the program. A
+// DISTINGUISHED value, not merely non-zero: a c4cc constructor with no
+// return statement returns whatever was in the accumulator. 'C','4',
+// 'D','R' -- see src/c4dos/c4dos.c run_program.
+enum { __U0_C4DOS_REFUSE = 1127037010 };
+int *__c4dos_api;        // patched by the C4DOS loader; 0 when not under DOS
 
 // Task priveleges
 enum { PRIV_NONE, PRIV_USER, PRIV_KERNEL };
@@ -47,6 +78,7 @@ enum {
 	KTE_TASK_PRIVS,    // int, PRIV_*
 	KTE_TASK_NICE,     // int
 	KTE_TASK_CYCLES,   // int
+	KTE_TASK_CYCLES_HI,// int, billions; total = HI * 1000000000 + CYCLES
 	KTE_TASK_TIMEMS,   // int
 	KTE_TASK_TRAPS,    // int
 	KTE_TASK_STACK,    // int
@@ -88,6 +120,7 @@ enum {
 	C4I_SIG  = 0x20, // Signals supported
 	C4I_FLT  = 0x40, // Floating point instruction support
 	C4I_PROT = 0x80, // Protected mode support
+	C4I_TRAPH = 0x400, // A custom trap handler is installed (safe to probe opcodes)
 	C4I_C4KE = 0x200, // C4KE is running
 };
 
@@ -391,6 +424,48 @@ int await_pid (int pid) {
 #define await_pid(pid)           __c4_opcode(pid, OP_AWAIT_PID)
 #endif /* if NO_INLINE */
 
+///
+// The kernel RAM filesystem (OP_VFS_*), lazily resolved so programs on a
+// kernel without it just get failures instead of startup noise.
+///
+static int __u0_vfs_resolved;
+static int OP_VFS_PUT, OP_VFS_GET, OP_VFS_UNLINK, OP_VFS_COUNT, OP_VFS_NAME;
+
+static int __u0_vfs_ok () {
+	if (!__u0_vfs_resolved) {
+		__u0_vfs_resolved = 1;
+		OP_VFS_PUT    = __c4_opcode("OP_VFS_PUT", OP_REQUEST_SYMBOL);
+		OP_VFS_GET    = __c4_opcode("OP_VFS_GET", OP_REQUEST_SYMBOL);
+		OP_VFS_UNLINK = __c4_opcode("OP_VFS_UNLINK", OP_REQUEST_SYMBOL);
+		OP_VFS_COUNT  = __c4_opcode("OP_VFS_COUNT", OP_REQUEST_SYMBOL);
+		OP_VFS_NAME   = __c4_opcode("OP_VFS_NAME", OP_REQUEST_SYMBOL);
+	}
+	return OP_VFS_PUT != 0;
+}
+
+// Store a copy of buf as name in the RAM filesystem. 0 = ok.
+static int vfs_put (char *name, char *buf, int len) {
+	if (!__u0_vfs_ok()) return -1;
+	return __c4_opcode(len, buf, name, OP_VFS_PUT);
+}
+// The kernel-owned contents of name, or 0; length through plen.
+static char *vfs_get (char *name, int *plen) {
+	if (!__u0_vfs_ok()) return 0;
+	return (char *)__c4_opcode(plen, name, OP_VFS_GET);
+}
+static int vfs_unlink (char *name) {
+	if (!__u0_vfs_ok()) return -1;
+	return __c4_opcode(name, OP_VFS_UNLINK);
+}
+static int vfs_count () {
+	if (!__u0_vfs_ok()) return 0;
+	return __c4_opcode(OP_VFS_COUNT);
+}
+static char *vfs_name (int i) {
+	if (!__u0_vfs_ok()) return 0;
+	return (char *)__c4_opcode(i, OP_VFS_NAME);
+}
+
 // Cache the pid and parent id, it presently cannot change
 static int  __u0_pid;
 static int  __u0_parent;
@@ -601,6 +676,16 @@ static int __attribute__((constructor)) __u0_init (int *c4r) {
 	int r;
 
 	__u0_c4r = c4r;
+
+	// Wrong operating system: say so and stop, rather than asking a
+	// kernel that is not there for 38 opcodes and segfaulting after.
+	// A non-zero return from a constructor aborts the load -- main
+	// never runs (src/c4dos/c4dos.c run_program). This is checked
+	// FIRST because everything below it is an OPCD.
+	if (__c4dos_api && __c4dos_api[0] == __U0_C4DOS_MAGIC) {
+		printf("C4DOS: This application requires C4KE.\n");
+		return __U0_C4DOS_REFUSE;
+	}
 
 	// TODO: this check is failing
 	//if (__c4_info() & C4I_C4KE) {

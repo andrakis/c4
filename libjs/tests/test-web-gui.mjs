@@ -1,0 +1,273 @@
+// test-web-gui.mjs - the display legs of test-web.mjs (run with --gui).
+//
+// M3: the standalone demo on a bare machine. The canvas has to change
+// between presents, follow a real mouse, and take a click and keys typed
+// with the display focused.
+// M4: the same demo as a C4IX program started from the shell, with the
+// terminal still live beside it.
+
+const canvasHash = `(() => { const c = document.getElementById('display');
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  let h = 0; for (let i = 0; i < d.length; i += 97) h = (h * 31 + d[i]) | 0; return h; })()`;
+const canvasPoint = (fx, fy) => `(() => { const r = document.getElementById('display').getBoundingClientRect();
+  return { x: r.left + r.width * ${fx}, y: r.top + r.height * ${fy} }; })()`;
+
+async function mouseAndKeys(t, { tab, ok, waitTerm, sleep }) {
+  const h1 = await tab.eval(canvasHash);
+  await sleep(500);
+  const h2 = await tab.eval(canvasHash);
+  ok(`${t}: the picture moves between presents`, h1 !== h2);
+  const p = await tab.eval(canvasPoint(0.5, 0.5));
+  await tab.mouse('mouseMoved', p.x, p.y);
+  await tab.mouse('mousePressed', p.x, p.y, 'left', 1);
+  await tab.mouse('mouseReleased', p.x, p.y, 'left', 0);
+  ok(`${t}: a click on the display reaches the program`, await waitTerm('gui: click at 3', 15000));
+  await tab.key('k');
+  ok(`${t}: a key typed on the display reaches the program`, await waitTerm("gui: key 75 'k'", 15000));
+}
+
+export async function run(ctx) {
+  const { tab, open, ok, waitTerm, focusTerm, sleep, shot, term } = ctx;
+
+  // ---- M3: bare machine ----------------------------------------------
+  console.log('test-web: the GUI demo on a bare machine');
+  tab.errors.length = 0;
+  const base = await open('system=gui-demo');
+  if (!ok('the page loads', !!base)) return;
+  ok('the demo sees the display', await waitTerm('gui: fitted, 640x480', 30000), (await term()).slice(-300));
+  ok('frames are drawn', await tab.waitFor('window.c4m.status.gui && window.c4m.status.gui.presents > 10', 15000));
+  await mouseAndKeys('bare', ctx);
+  await shot('gui-demo');
+  await tab.key('q');
+  ok('q on the display ends it', await waitTerm('gui: done after', 15000));
+  ok('the machine halts cleanly', await tab.waitFor('window.c4m.exited && window.c4m.exited.status === 0', 15000));
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
+  // ---- the framebuffer, on the shared path and the message path ----------
+  // Paced first, as a person sees it; then unpaced (?fast), which pushes
+  // the display path as hard as the machine can, once each way.
+  console.log('test-web: the framebuffer demo');
+  tab.errors.length = 0;
+  await open('system=fb-demo');
+  ok('the page is cross-origin isolated', await tab.eval('crossOriginIsolated === true'));
+  ok('the framebuffer demo starts', await waitTerm('fb: 320x240 framebuffer', 30000), (await term()).slice(-300));
+  ok('framebuffer frames arrive', await tab.waitFor('window.c4m.status.gui && window.c4m.status.gui.flips > 10', 20000));
+  ok('on the shared path', await tab.eval('window.c4m.status.gui.shared === true'));
+  {
+    const h1 = await tab.eval(canvasHash);
+    await sleep(500);
+    ok('the framebuffer animates', h1 !== await tab.eval(canvasHash));
+    const p = await tab.eval(canvasPoint(0.25, 0.25));
+    await tab.mouse('mouseMoved', p.x, p.y);
+    await sleep(300);
+    await shot('fb-demo');
+    await tab.eval("document.getElementById('display').focus()");
+    await tab.key('q');
+    const done = await waitTerm('fb: done after', 15000);
+    ok('q ends it, and the events came by interrupt', done && /[1-9]\d* event interrupts, 1 keys/.test(await term()),
+       (await term()).slice(-200));
+  }
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
+  const measure = async (label, query) => {
+    await open(query);
+    await tab.waitFor('window.c4m.status.gui && window.c4m.status.gui.flips > 20', 30000);
+    await sleep(1000);
+    const probe = `(() => { const s = window.c4m.status, d = window.c4m.display;
+      return { flips: s.gui.flips, drawn: d.framesDrawn, busy: s.busy, shared: s.gui.shared, t: performance.now() }; })()`;
+    // the page's main thread: how late animation frames run while this goes on
+    const jank = `new Promise(res => { let n = 0, worst = 0, last = performance.now(); const f = t => {
+      worst = Math.max(worst, t - last); last = t; if (++n < 120) requestAnimationFrame(f); else res(worst); };
+      requestAnimationFrame(f); })`;
+    const a = await tab.eval(probe);
+    const worst = await tab.eval(jank);
+    const b = await tab.eval(probe);
+    const dt = (b.t - a.t) / 1000;
+    const r = { label, shared: b.shared, flips: Math.round((b.flips - a.flips) / dt),
+                drawn: Math.round((b.drawn - a.drawn) / dt), busy: Math.round(b.busy * 100), worst: Math.round(worst) };
+    console.log(`  (${label}: guest flips ${r.flips}/s, page draws ${r.drawn}/s, worker ${r.busy}% busy, slowest page frame ${r.worst} ms)`);
+    return r;
+  };
+  const sh = await measure('fb-demo, shared, unpaced', 'system=fb-demo&fast');
+  const msg = await measure('fb-demo, messages, unpaced', 'system=fb-demo&fast&shared=0');
+  ok('unpaced, the shared path is taken and ?shared=0 turns it off', sh.shared === true && msg.shared === false);
+  ok('unpaced, both paths keep drawing', sh.drawn > 10 && msg.drawn > 10);
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
+  // ---- raycast at 640x480, flat out: the display path is the load -------
+  console.log('test-web: raycast -G 640x480');
+  tab.errors.length = 0;
+  const rs = await measure('raycast, shared', 'system=raycast');
+  ok('raycast draws on the display', rs.drawn > 10 && rs.flips > 10);
+  {
+    const h1 = await tab.eval(canvasHash);
+    await sleep(300);
+    ok('the view moves', h1 !== await tab.eval(canvasHash));
+    await shot('raycast');
+    await tab.eval("document.getElementById('display').focus()");
+    await tab.key('q');
+    ok('q on the display quits it', await waitTerm('raycast: ', 15000) && await tab.waitFor('window.c4m.exited && window.c4m.exited.status === 0', 15000),
+       (await term()).slice(-200));
+  }
+  const rm = await measure('raycast, messages', 'system=raycast&shared=0');
+  ok('raycast on the message path still draws', rm.drawn > 1);
+  console.log(`  (raycast: shared ${rs.flips} guest f/s vs messages ${rm.flips}; slowest page frame ${rs.worst} vs ${rm.worst} ms)`);
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
+  // ---- the C4IX desktop and its tools ---------------------------------------------
+  // The canvas cannot be read as text, so the display records the strings
+  // of the last frame it showed (display.recordText); things are clicked
+  // by the text drawn on them.
+  console.log('test-web: the C4IX desktop');
+  tab.errors.length = 0;
+  await open('system=c4ix');
+  if (!ok('C4IX boots to its shell', await waitTerm('c4ix:/$', 90000))) return;
+  await tab.eval('window.c4m.display.recordText = true');
+  await focusTerm();
+  await tab.type('desktop\n');
+  ok('desktop starts from the shell', await waitTerm('desktop: running on the display', 30000), (await term()).slice(-300));
+  ok('the display becomes 800x600', await tab.waitFor("document.getElementById('display').width === 800", 15000));
+  const shown = `window.c4m.display.shownText`;
+  const shownHas = (re, t = 30000) => tab.waitFor(`${shown}.some(t => ${re}.test(t.s))`, t);
+  const at = async (x, y) => tab.eval(canvasPoint(x / 800, y / 600));
+  const clickAt = async (x, y) => {
+    const p = await at(x, y);
+    await tab.mouse('mouseMoved', p.x, p.y); await tab.mouse('mousePressed', p.x, p.y, 'left', 1); await tab.mouse('mouseReleased', p.x, p.y, 'left', 0);
+    await sleep(120);
+  };
+  const clickText = async (re, which = 'last', dx = 5, dy = 5) => {
+    const all = await tab.eval(`${shown}.filter(t => ${re}.test(t.s))`);
+    const t = which === 'last' ? all[all.length - 1] : which(all);
+    if (!t) return false;
+    await clickAt(t.x + dx, t.y + dy);
+    return true;
+  };
+  const start = async item => {
+    await clickAt(20, 582);
+    await shownHas('/^Power Off/');
+    await clickText(item);
+    await sleep(300);
+  };
+  ok('a Terminal shows the shell prompt', await shownHas('/c4ix:\\/\\$/', 60000));
+  await clickAt(300, 200);
+  await tab.type('ps\n');
+  ok('ps typed on the display runs in that window', await shownHas('/c4ix-desktop/') && await shownHas('/tasks,/'));
+  // top keeps going until Ctrl-C
+  await tab.type('top\n');
+  ok('top starts in the Terminal', await shownHas('/top - up /'));
+  await sleep(4000);
+  ok('and is still running four seconds later', await shownHas('/top - up /', 2000));
+  await tab.key('c', { ctrl: true });
+  ok('Ctrl-C stops it', await shownHas('/\\^C/'));
+  // raycast, drawn in colour in the Terminal
+  await tab.type('raycast.c4r 21x21 -s 7 -d -n 400 -g 80x25\n');
+  // colours inside the Terminal's text area only (the desktop around
+  // it has plenty of its own): the window is found by its title
+  const termColours = `(() => {
+    const t = window.c4m.display.shownText.find(t => /^Terminal - task/.test(t.s) && t.y < 560);
+    if (!t) return 0;
+    const x0 = t.x - 27 + 8, y0 = t.y - 7 + 25;
+    const c = document.getElementById('display'), d = c.getContext('2d').getImageData(x0, y0, 640, 400).data;
+    const seen = new Set(); for (let i = 0; i < d.length; i += 4 * 13) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+    return seen.size; })()`;
+  // raycast prints its frame rate on its status line once it is drawing
+  ok('raycast draws in the Terminal', await shownHas('/ f\\/s /', 60000));
+  ok('in colour', await tab.waitFor(`${termColours} > 12`, 10000), String(await tab.eval(termColours)) + ' colours');
+  await sleep(500);
+  await shot('raycast-in-desktop');
+  await tab.key('c', { ctrl: true });
+  // the splitter: drag it left and the display grows
+  {
+    const w0 = await tab.eval("document.getElementById('display').getBoundingClientRect().width");
+    const s = await tab.eval("(() => { const r = document.getElementById('splitter').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()");
+    await tab.mouse('mouseMoved', s.x, s.y);
+    await tab.mouse('mousePressed', s.x, s.y, 'left', 1);
+    for (let k = 1; k <= 10; k++) await tab.mouse('mouseMoved', s.x - k * 40, s.y, 'left', 1);
+    await tab.mouse('mouseReleased', s.x - 400, s.y, 'left', 0);
+    await sleep(300);
+    const w1 = await tab.eval("document.getElementById('display').getBoundingClientRect().width");
+    ok(`dragging the splitter left makes the display larger (${Math.round(w0)} -> ${Math.round(w1)} px)`, w1 > w0 + 50);
+    await shot('splitter-dragged');
+    await tab.eval("document.getElementById('splitter').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))");
+  }
+  // compile a windowed program inside the machine, then run it (docs/c4ix-desktop.md part three)
+  // the window's title bar, not its taskbar button (which would minimise it)
+  await clickText('/^Terminal - task/', all => all.filter(t => t.y < 560).pop());
+  await tab.type('c4cc -o /tmp/bounce.c4r /usr/include/window.h /usr/src/c4ix/examples/bounce.c\n');
+  ok('c4cc compiles bounce.c inside C4IX', await shownHas('/c4cc: wrote \\d+ bytes to ramfs:\\/tmp\\/bounce.c4r/', 60000), (await tab.eval(`${shown}.map(t => t.s).join(' | ')`)).slice(-600));
+  await tab.type('/tmp/bounce.c4r\n');
+  ok('the program makes the Terminal its window', await shownHas('/^Bounce - compiled inside C4IX/', 30000) && await shownHas('/^Click me$/'));
+  {
+    const h1 = await tab.eval(canvasHash);
+    await sleep(400);
+    ok('and animates in it', h1 !== await tab.eval(canvasHash));
+    const sameRow = (label, value) => `(() => { const l = ${shown}.find(t => t.s === ${JSON.stringify(label)});
+      return !!l && ${shown}.some(t => t.s === ${JSON.stringify(value)} && Math.abs(t.y - l.y) < 3 && t.x > l.x); })()`;
+    await clickText('/^Click me$/');
+    ok('its button counts a click', await tab.waitFor(sameRow('Button clicks:', '1'), 15000));
+    await tab.type('x');
+    ok('a key typed on it reaches the program', await tab.waitFor(sameRow('Last key:', 'x'), 15000));
+    await shot('bounce');
+    await tab.type('q');
+    ok('q ends it and the window is a terminal again', await shownHas('/bounce: \\d+ frames, 1 clicks/', 15000));
+  }
+  // Files
+  await start('/^Files$/');
+  ok('Go > Files opens at the root', await shownHas('/^Files - \\/$/'));
+  {
+    const all = await tab.eval(`${shown}.filter(t => t.s.trim() === 'usr')`);
+    const t = all[all.length - 1];
+    if (t) { await clickAt(t.x + 5, t.y + 5); await clickAt(t.x + 5, t.y + 5); }
+    ok('double-clicking a folder opens it', await shownHas('/^Files - \\/usr$/'));
+  }
+  await shot('explorer');
+  // Text Editor
+  await start('/^Text Editor$/');
+  ok('Go > Text Editor opens', await shownHas('/^Untitled - Text Editor$/'));
+  await tab.type('Hello from the C4IX desktop.\n');
+  ok('typing in Text Editor shows', await shownHas('/Hello from the C4IX desktop/'));
+  // Calculator
+  await start('/^Calculator$/');
+  ok('Go > Calculator opens', await shownHas('/^Hex$/'));
+  await tab.type('6*7=');
+  ok('6 * 7 = 42', await shownHas('/^42$/'));
+  await shot('notepad-calc');
+  // System Monitor (from the Go menu: in a browser, Ctrl+Shift+Esc may be the host's)
+  await start('/^System Monitor$/');
+  ok('Go > System Monitor lists the processes', await shownHas('/^Name$/') && await shownHas('/^c4ix-desktop/'));
+  ok('with CPU usage', await shownHas('/^CPU Usage: \\d+%$/', 15000));
+  await clickText('/^Performance$/');
+  ok('the Performance tab shows the gauge and history', await shownHas('/^CPU Usage History$/'));
+  await sleep(3000);
+  await shot('taskmgr');
+  // Power Off
+  await start('/^Power Off/');
+  ok('Power Off hands the console back', await waitTerm('desktop: shut down', 30000));
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+
+  // ---- M4: a C4IX program ----------------------------------------------
+  if (process.argv.includes('--no-c4ix')) return;
+  console.log('test-web: gui under C4IX');
+  tab.errors.length = 0;
+  await open('system=c4ix');
+  if (!ok('C4IX boots to its shell', await waitTerm('c4ix:/$', 90000))) return;
+  await focusTerm();
+  await tab.type('gui &\n');
+  ok('gui starts from the shell', await waitTerm('gui: fitted, 640x480', 30000), (await term()).slice(-300));
+  await sleep(1000);
+  await focusTerm();
+  await tab.type('ps\n');
+  ok('the terminal still answers while it draws, and ps lists it',
+     await tab.waitFor(`/c4ix-gui/.test(document.getElementById('terminal').innerText.split('\\nps\\n').pop())`, 15000),
+     (await term()).slice(-500));
+  await mouseAndKeys('c4ix', ctx);
+  const st = await tab.eval('window.c4m.status');
+  console.log(`  (while gui runs under C4IX: ${st.state}, cpu ${Math.round(st.busy * 100)}%, ${st.gui.presents} frames)`);
+  await shot('gui-c4ix');
+  await tab.key('q');
+  ok('q on the display ends it', await waitTerm('gui: done after', 15000));
+  await focusTerm();
+  await tab.type('echo back-at-the-prompt\n');
+  ok('the shell carries on', await waitTerm('back-at-the-prompt\n', 15000) || await waitTerm('back-at-the-prompt', 1));
+  ok('no page errors', tab.errors.length === 0, tab.errors.join('\n       '));
+}

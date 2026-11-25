@@ -1,0 +1,922 @@
+// devices.js - memory-mapped peripherals of the c4bb machine.
+//
+// The device bus occupies 0x100-0x1FF, one 32-bit register per slot.
+// All host interaction (console, clock, halting) happens here and only
+// here; the CPU microcode just reads and writes these addresses.
+//
+// Determinism: there is no wall clock. TIME_MS is derived from the
+// cycle counter (CYCLES_PER_MS cycles = 1 simulated millisecond) plus
+// an offset that USLP advances, so a run is a pure function of its
+// inputs and every run of the same image produces identical timing.
+//
+// /proc/uptime: the disk controller opens that name as the HOST's file,
+// the way Linux's is for a native c4m -- made from TIME_MS, the clock the
+// TIME opcode reads, at each open, so it advances. Everything that opens
+// files through this controller sees it: C4DOS, a bare-machine program,
+// a C4KE task (whose open() never reaches its kernel). See diskOpen.
+
+export const UART_TX   = 0x100;
+export const UART_RX   = 0x104;
+export const UART_RXAVL= 0x108;
+export const TIME_MS   = 0x10c;
+export const CYCLE_LO  = 0x110;
+export const CYCLE_HI  = 0x114;
+export const USLP_US   = 0x118;
+export const DISK_NAME = 0x120;
+export const DISK_FD   = 0x124;
+export const DISK_ADDR = 0x128;
+export const DISK_LEN  = 0x12c;
+export const DISK_CLOSE= 0x130;
+export const OPNAME    = 0x134;
+export const DISK_FLAGS= 0x138;
+// Drives (docs/c4bb-storage.md). The read side above is unchanged and
+// still talks to whichever drive is selected; these say WHICH, how many
+// there are, and whether the one selected can be written to.
+export const DISK_DRIVE= 0x13c;  // r/w: selected drive, 0-based
+export const POWER     = 0x140;
+export const HEAP_BASE = 0x144;
+export const HEAP_END  = 0x148;
+export const INFO_REG  = 0x14c;
+// CPU control latches, visible to the trap/TLEV microcode (proxied to
+// machine state so both engines and the renderer agree):
+export const TRAPH_REG    = 0x150;  // ITH latch (trap handler address)
+export const INTERVAL_REG = 0x154;  // cycle-interrupt interval (0 = masked)
+export const TRESTORE_REG = 0x15c;  // CONF_TRAP_RESTORES_INTERVAL
+export const MODE_REG     = 0x160;  // 0 unprotected / 1 protected
+export const TT_REG       = 0x164;  // jam latch: trap type
+export const TP_REG       = 0x168;  // jam latch: trap parameter
+export const HND_REG      = 0x16c;  // jam latch: handler address
+// state snapshot taken by the jam BEFORE call-site effects: c4m's
+// trap() pushes the interval and mode as they were when the trap was
+// raised (c4m.c:1121,1132); the sites zero/drop them afterwards
+export const JMODE_REG    = 0x170;  // mode at jam time
+export const JINTERVAL_REG= 0x174;  // interval at jam time
+
+// The write head. Deliberately the same shape as the read side, so a
+// guest that can read a file can write one by learning four addresses
+// and no new opcode -- fw.c already drives DEV_INTERVAL this way.
+export const DISK_WNAME  = 0x178;  // w: create/truncate -> fd, or -1
+export const DISK_WADDR  = 0x17c;  // w: buffer address
+export const DISK_WLEN   = 0x180;  // w: write N bytes -> N written
+export const DISK_WCLOSE = 0x184;  // w: close and flush -> 0, or -1
+export const DISK_COUNT  = 0x188;  // r: how many drives are attached
+export const DISK_RO     = 0x18c;  // r: 1 if the selected drive is read-only
+export const DISK_EJECT  = 0x190;  // w: empty the drive whose number is written
+export const DISK_RESCAN = 0x194;  // w: re-read the drive whose number is written
+export const RESET       = 0x198;  // w: soft reset -- back to the BIOS
+// Clocks. TIME_MS above is the machine's own, derived from the cycle
+// counter and therefore repeatable; these two are about the world
+// outside it, which is not. Registers rather than opcodes on purpose:
+// a program at the base-c4 rung can read a clock with an ordinary load
+// and does not need the CPU extended to do it.
+export const RTC_MS      = 0x19c;  // r: host milliseconds since power-on
+export const PIT_MS      = 0x1a0;  // r/w: tick every N real ms (0 = off)
+// The UART's block write (docs/c4bb-uart-block.md). Same shape as the
+// disk write head above, for the same reason: a length and an address
+// are what the firmware formatter already holds for a literal run, a
+// %s argument and a converted number, and PUTS can serve none of the
+// three -- it is NUL-terminated and it appends a newline, where a
+// literal run is a SLICE of the format string and %.*s has a length.
+// Registers rather than an opcode so this works at the base-c4 rung:
+// raycast's RC_DOS build is restricted to stock c4 plus TIME and is
+// the one build that pays the per-byte cost in full, so an opcode
+// outside the stock set is exactly what it could not have used.
+export const UART_TXADDR = 0x1ac;  // w: buffer address (does not advance)
+export const UART_TXLEN  = 0x1b0;  // w: emit N bytes from it -> N written
+
+// The mailbox: a region of guest RAM the host and the guest both read
+// and write (two rings of i32 frames, host->guest and guest->host), plus
+// three registers so each side can find it and wake the other. The rings
+// themselves are plain memory -- the host reaches them through the arena
+// typed array, the guest with ordinary loads and stores -- so a frame
+// costs no opcode and no copy. docs/c4bb-design.md "The mailbox".
+export const MBOX_BASE = 0x1b4;    // r: region base address (0 = not fitted)
+export const MBOX_LEN  = 0x1b8;    // r: region length in bytes
+export const MBOX_BELL = 0x1bc;    // w: guest->host doorbell (value to onDoorbell)
+// The heap's bytes in use: what MALC and RALC have handed out and FREE
+// has not had back, where the host keeps the heap (libjs's heap.js). 0
+// where it does not. Announced by C4I_C4MJS, never probed.
+export const HEAP_USED = 0x1c0;    // r
+// Heap generations (libjs's heap.js): every block remembers the generation
+// that was current when it was allocated, and one write frees a whole
+// generation. C4DOS's DEVICE=HEAP.SYS gives each program its own and
+// releases it when the program ends. Generation 0 is the one the machine
+// boots in and cannot be released. Where the host keeps no heap, or one
+// without generations, HEAP_GEN reads 0 whatever was written, which is how
+// a guest that was told about them can still tell they are not there.
+export const HEAP_GEN     = 0x1c4;  // r/w: the generation new blocks get
+export const HEAP_RELEASE = 0x1c8;  // w: free every block of generation N
+                                    // r: bytes the last release freed
+// The write head's last register: a file taken off a writable drive.
+// Written the address of a name ("1:name", or a name on the selected
+// drive, as DISK_WNAME takes it); reads back 0, or -1 when the drive
+// cannot be written or has no such file. C4DOS's unlink (slot 18) and
+// bare.c's use it on a drive the page keeps, so a delete reaches the
+// page's store as a save does (the drive's `remove`).
+export const DISK_UNLINK = 0x1cc;   // w: name address -> r: 0, or -1
+// The console tap (C4DOS's DEVICE=REDIR.SYS TAP; docs/c4dos-design.md
+// "The console tap"). A c4cc program prints with PRTF, PUTC and PUTS and
+// reads fd 0 with READ, all straight to the host, so an operating system
+// that wants to redirect it needs the machine's help. While CON_TAP is
+// 1, every byte the console would have sent -- those opcodes, UART_TX
+// and the block write alike -- goes into a buffer the host keeps instead,
+// and the guest drains it: CON_ADDR a buffer, then CON_LEN N copies up to
+// N held bytes there and reads back how many. CON_IN N makes fd 0's
+// READs take the N bytes at CON_ADDR (copied when it is written), then
+// end of input; -1 gives fd 0 back to the keyboard. Reading CON_TAP
+// gives how many bytes are held, CON_IN how many are left to read (-1:
+// the keyboard). Announced, never probed: C4DOS is told by CONFIG.SYS.
+export const CON_TAP  = 0x1d0;   // r/w: 1 capture, 0 the console again (held bytes stay)
+export const CON_ADDR = 0x1d4;   // w: buffer address for CON_LEN and CON_IN
+export const CON_LEN  = 0x1d8;   // w: drain up to N -> r: bytes copied
+export const CON_IN   = 0x1dc;   // w: feed N bytes to fd 0 (-1: the keyboard) -> r: left
+const TAP_MAX = 16 << 20;        // held bytes past this are dropped (and counted)
+// Directories (C4DOS's CD and APPEND; docs/c4dos-design.md "Directories").
+// A drive's files are keyed by their paths from its root ("GAMES/DOOM/
+// doom.c4r"), and a name the machine is asked for that starts with a
+// slash ("A:/GAMES/DOOM/doom.c4r") is one of those. Any other is
+// relative: it is looked for in each directory of the drive's search
+// list, in order, and then at the root. DISK_DIRS is written the address
+// of that list for the selected drive -- "GAMES/DOOM;BUILD", the
+// directories from the root separated by ';', an empty one the root --
+// and reads back how many it holds. C4DOS writes it when its current
+// directory or APPEND changes; it opens every file of its own from the
+// root, so the list is for programs that know nothing of directories
+// (C4KE, C4IX's vfsload, a c4cc program's open()). A drive nobody has
+// told looks from the root, as before there were directories.
+export const DISK_DIRS = 0x1e0;  // w: list address -> r: directories in the selected drive's list
+// Where the loader put the program (libjs's boot.js): its code, its data,
+// where the file's data ends and its BSS begins, and its end -- what a
+// Linux kernel's linker symbols say (_text, _sdata, __bss_start, _end).
+// C4IX's boot report prints them. 0 where nothing says. Announced by
+// C4I_C4MJS, never probed.
+export const IMG_CODE = 0x1f0;   // r
+export const IMG_DATA = 0x1f4;   // r
+export const IMG_BSS  = 0x1f8;   // r
+export const IMG_END  = 0x1fc;   // r
+// The boot stack (libjs's boot.js): the megabyte under the arguments at the
+// top of memory, where the machine starts the program. A kernel that has
+// left it for good -- C4IX, once its kernel task has a stack of its own --
+// writes 1 to STACK_GUARD, and from then on libjs halts the machine at any
+// read or write there, naming the pc and the address (libjs/c4m.js,
+// guardHit): whatever reaches it is a program run off the end of the heap.
+// 0 lifts the guard, for the way back at shutdown. Where nothing keeps a
+// boot stack, all three read 0 and the write does nothing. Announced by
+// C4I_C4MJS, never probed.
+export const STACK_BASE  = 0x1e4;  // r: the boot stack's lowest address
+export const STACK_TOP   = 0x1e8;  // r: one past its highest: the arguments start here
+export const STACK_GUARD = 0x1ec;  // r/w: 1 while the boot stack is guarded
+
+// Swap (libjs, docs/c4ix-mmu.md 11): pages a kernel puts out of memory,
+// kept by the host, a page to a numbered slot -- memory beyond the arena,
+// which lasts as long as the machine does. Behind registers of their own,
+// so that nothing a program does with the drives comes between a
+// kernel's swap and its stores. Announced by C4I_C4MJS, never probed.
+export const SWAP_ADDR = 0x11c;   // w: the page's address in memory, for the next SWAP_CMD
+export const SWAP_CMD  = 0x158;   // w: OP | SLOT << 4 -- 1 out, 2 in (and forget it), 3 forget, 4 forget
+                                  // every slot; r: the last one's 0, or -1; after 4, how many slots there are
+                                  // 5: the heap's large blocks from its top while SLOT is 1 (C4IX's frames)
+                                  // 6: r: the biggest block the heap could hand out now (C4IX's free)
+export const SWAP_PAGE = 4096;
+
+// c4_info() capability bits (c4m.c:206)
+export const C4I_WHOWROTE = 0x1000;   // the provenance port is fitted
+export const C4I_C4M = 0x2, C4I_HRT = 0x10, C4I_SIG = 0x20,
+             C4I_FLT = 0x40, C4I_PROT = 0x80, C4I_TRAPH = 0x400,
+// This machine has the clock and timer registers (RTC_MS, PIT_MS). A
+// kernel cannot just poke 0x19c to find out, because native c4m has no
+// device window there and the poke would be a wild access -- so the
+// capability is announced the way every other one is, and a kernel that
+// does not see the bit keeps counting cycles.
+             C4I_PIT = 0x800,
+// The mailbox is fitted (MBOX_BASE/LEN/BELL). Same rule as the PIT: a
+// guest asks INFO first and never pokes 0x1b4 on a machine without it.
+             C4I_MBOX = 0x2000,
+// The drive registers are fitted: DISK_DRIVE, DISK_W* and DISK_COUNT to
+// DISK_RO, and DISK_UNLINK. A program with no operating system under it
+// (libc's bare.c) asks here before it writes a file to drive 1, since
+// under native c4m those addresses are its own memory. (0x20000 is
+// libjs's C4I_PAR.)
+             C4I_DRV = 0x40000;
+
+// How fast the machine thinks it is. This was 1000 -- a 1 MHz machine --
+// while the simulator actually executes fifteen to twenty million
+// instructions a second, so a simulated second went past in a
+// twentieth of a real one and `top`, which refreshes once a second,
+// redrew twenty times. 20 MHz is roughly what this simulator really
+// manages, so a simulated second is about a real one; cli.js -hz
+// changes it, and the interactive loop paces execution to it so the
+// match is exact rather than approximate.
+export const CYCLES_PER_MS = 20000;
+
+// Opcode-name ROM contents, 5 bytes per opcode, exactly as
+// c4m_setup_opcodes lay them out (c4m.c:278, c4l.c:110).
+//
+// A `let`: the ROM is the machine's opcode ENCODING, and a machine given
+// the same names in a different order reads a different encoding -- an
+// image built for one ROM means nothing under another. setOpnames() swaps
+// it; machine.js rebuilds every table derived from it (OP, the operand
+// set, PM_GATED).
+// ESM exports are live bindings, so every importer sees the new string.
+export let OPNAMES =
+  'LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,' +
+  'OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,' +
+  'OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,' +
+  'PUTC,PUTS,RALC,MCPY,STRC,ITH ,_OPC,_BLT,_TRP,OPCD,' +
+  '_JMP,_ADJ,C4CF,C4CY,TIME,SIGH,SIGI,USLP,INFO,OPSL,' +
+  'C4IV,FLT ,JSRI,JSRS,JMPA,TLEV,DBG ,' +
+  // c4mp's (66-78), named so a disassembler names them; this board does
+  // not execute them, exactly as c4m names them without executing them.
+  'CPUI,CPUN,CPUS,CPUH,' +
+  'CAS ,XCHG,FADD,CWAI,CWAK,IPI ,' +
+  'LXI ,SXI ,TRAW,' +
+  // fused (79-88), docs/fused-opcodes.md. All ten are microcoded here
+  // (hw/microcode.uc); c4m itself runs only LDL, STL and POPA.
+  'LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,' +
+  // F3 (89): IEEE arithmetic, src/c4bb/sim/fpu.js
+  'FPU ,' +
+  // 90-93: 16-bit loads and store, logical shift right (docs/c4-16bit.md),
+  // microcoded from the transfers the board already makes
+  'LH  ,LHU ,SH  ,LSR ,LCU ,';
+export const STOCK_OPNAMES = OPNAMES;
+export function setOpnames (names) { OPNAMES = names; }
+
+// Disk controller fd space: 0 is the blocking, line-buffered keyboard
+// (a terminal in cooked mode); opening "/dev/stdin" with O_NONBLOCK
+// (0x800) yields a nonblocking byte fd whose empty read returns -1,
+// the Linux EAGAIN convention C4IX's console expects (con.c:53).
+// Opening "/dev/tty" instead yields a RAW keyboard fd: same EAGAIN
+// convention, but no line discipline, so a keystroke is readable the
+// instant it arrives instead of when Enter is pressed. That is the
+// difference between a shell and a game; /dev/stdin's behaviour is
+// deliberately untouched so c4sh, C4IX's console and every existing
+// golden keep the cooked semantics they were written against.
+// The name is chosen because it already means this on a real host:
+// /dev/tty is the controlling terminal, so the identical guest code
+// works under native c4m, where rawness comes from stty outside.
+// Real files come from a caller-supplied name -> Uint8Array map.
+// READ returns -2 for "would block"; the microcode rewinds PC by one
+// word and retries, so the machine keeps taking interrupts while a
+// task waits for input (the C4IX blocking-syscall convention).
+const O_NONBLOCK = 0x800;
+const FD_KEYBOARD = 0, FD_FIRST = 3;
+
+// /proc/uptime as Linux words it, for MS milliseconds since power-on:
+// seconds with two decimals, then -- where Linux has its idle time --
+// the same clock in tenths of a second, which is how c4m.c's default
+// reading takes that number (c4_time_host). C4IX writes its own the
+// same way (src/c4ix/vfs.c, vfs_proc).
+function procUptime (ms) {
+  const fix = (whole, cents) => whole + '.' + String(cents).padStart(2, '0');
+  return new TextEncoder().encode(fix(Math.floor(ms / 1000), Math.floor(ms % 1000 / 10)) + ' ' +
+                                  fix(Math.floor(ms / 100), ms % 100) + '\n');
+}
+
+export class Devices {
+  constructor(arena, opts = {}) {
+    this.arena = arena;
+    this.machine = null;              // set by machine.js on attach
+    this.onByte = opts.onByte || null;// UART TX sink: fn(byteValue)
+    this.rxFifo = [];                 // keyboard bytes
+    this.rxEof = false;               // Ctrl-D / end of input stream
+    this.rxStarved = false;           // the guest read the keyboard and found
+                                      // it empty: a paste's next line may go
+                                      // in (libjs/keys.js Paste)
+    this.rawKbd = 0;                  // open raw keyboards; a host UI
+                                      // suppresses local echo while > 0
+    this.sleepMs = 0;                 // accumulated USLP time
+    this.napMs = 0;                   // of which the last USLP's, which a
+                                      // host may cut short (libjs/worker.js)
+    this.halted = false;
+    this.status = 0;
+    this.heapBase = 0;
+    this.heapEnd = 0;
+    this.img = null;                  // { code, data, bss, end }: the program as loaded (IMG_*)
+    this.stackBase = 0;               // the boot stack, where the host keeps one
+    this.stackTop = 0;
+    this.stackGuard = 0;              // 1: guarded (STACK_GUARD)
+    this.onGuard = null;              // fn(): the guard changed (libjs/par.js)
+    // swap's pages, by slot (SWAP_*), up to swapSlots of them: 256 MB
+    this.swapPages = new Map();
+    this.swapSlots = opts.swapSlots ?? 65536;
+    this.swapAddr = 0;
+    this.swapResult = 0;
+    this.uartActivity = 0;            // counters for the renderer
+    this.diskActivity = 0;
+    this.uartTxAddr = 0;              // UART block-write latch
+    this.uartTxResult = 0;            // bytes the last block write took
+    // Drives (docs/c4bb-storage.md). One machine, several media: drive
+    // 0 is what `files` used to be and every existing caller still gets
+    // exactly that. A drive is { files, writable, sink } -- sink is
+    // whatever the host does with a written file (a directory on the
+    // CLI, an image in the browser); a drive with no sink is read-only
+    // no matter what it says.
+    this.drives = opts.drives ||
+                  [{ files: opts.files || new Map(), writable: false, sink: null }];
+    this.drive = 0;                   // the selected drive
+    this.onRescan = opts.onRescan || null;
+    this.onEject = opts.onEject || null;
+    // a file written to "download:NAME", for the person (diskCreate)
+    this.onDownload = opts.onDownload || null;
+    this.resetRequested = false;
+    this.cyclesPerMs = opts.cyclesPerMs || CYCLES_PER_MS;
+    // The real clock. hostNow is injectable so a test can pin it; by
+    // default it is the wall clock, which is the whole point.
+    this.hostNow = opts.hostNow || (() => Date.now());
+    // The mailbox region {base, len}, laid out by the loader (boot's
+    // `mbox` option); onDoorbell(value) is the host's ear. mboxIrq is
+    // the host->guest side: raiseMbox() sets it, the machine jams a
+    // HARD_IRQ(HIRQ_MBOX) at the next boundary when a cycle handler is
+    // installed, and a guest with no handler polls MBOX_BELL instead.
+    this.mbox = opts.mbox || null;
+    this.onDoorbell = opts.onDoorbell || null;
+    this.mboxIrq = 0;
+    this.t0 = this.hostNow();
+    this.pitMs = 0;                   // 0 = the PIT is off (or masked)
+    this.pitArmed = 0;                // the interval last armed, masked or not
+    this.pitNext = 0;                 // when the next tick is due, host ms
+    this.fds = new Map();             // fd -> {data, pos} | {kbd, nonblock} | {w}
+    this.nextFd = FD_FIRST;
+    this.diskFlags = 0;
+    this.diskFd = 0;
+    this.diskAddr = 0;
+    this.diskResult = 0;
+    // the console tap (CON_TAP ..): capturing, what is held, the feed
+    this.tapOn = 0;
+    this.tapBuf = new Uint8Array(4096);
+    this.tapLen = 0;
+    this.tapDropped = 0;
+    this.tapAddr = 0;
+    this.tapResult = 0;
+    this.tapIn = null;                // fd 0's bytes while fed, else the keyboard
+    this.tapInPos = 0;
+  }
+
+  // A byte for the console: the UART, or the tap while it is capturing.
+  // Everything the console sends comes through here or conBytes.
+  conByte (b) {
+    if (this.tapOn) this.tapPush(b);
+    else if (this.onByte) this.onByte(b);
+  }
+  conBytes (bytes) {
+    if (this.tapOn) { for (let i = 0; i < bytes.length; i++) this.tapPush(bytes[i]); return; }
+    const f = this.onByte;
+    if (f) for (let i = 0; i < bytes.length; i++) f(bytes[i]);
+  }
+  tapPush (b) {
+    if (this.tapLen === this.tapBuf.length) {
+      if (this.tapLen >= TAP_MAX) { this.tapDropped++; return; }
+      const nb = new Uint8Array(Math.min(TAP_MAX, this.tapBuf.length * 2));
+      nb.set(this.tapBuf);
+      this.tapBuf = nb;
+    }
+    this.tapBuf[this.tapLen++] = b;
+  }
+  // up to n held bytes to the guest at CON_ADDR, oldest first
+  tapDrain (n) {
+    n = Math.max(0, Math.min(n | 0, this.tapLen));
+    const a = this.tapAddr >>> 0;
+    if (a < 0x1000 || (!this.arena.uwin || a < this.arena.uwin) && a >= this.arena.size) return 0;
+    if (!this.arena.uwin || a < this.arena.uwin) n = Math.min(n, this.arena.size - a);
+    this.arena.dmaWrite(a, this.tapBuf.subarray(0, n));
+    this.tapBuf.copyWithin(0, n, this.tapLen);
+    this.tapLen -= n;
+    return n;
+  }
+  // fd 0 while it is fed: what is left of the feed, then end of input
+  tapRead (addr, len) {
+    const n = Math.max(0, Math.min(len | 0, this.tapIn.length - this.tapInPos));
+    this.arena.dmaWrite(addr, this.tapIn.subarray(this.tapInPos, this.tapInPos + n));
+    this.tapInPos += n;
+    return n;
+  }
+
+  // Swap: one page between memory at SWAP_ADDR and its slot
+  swapOp (v) {
+    const op = v & 15, slot = v >>> 4, a = this.swapAddr, size = this.arena.size;
+    if (op === 4) { this.swapPages.clear(); return this.swapSlots; }
+    // 5: the heap's large blocks from its top while SLOT is 1 (heap.js
+    // setHigh): where C4IX takes its frames, away from its own blocks
+    if (op === 5) {
+      const h = this.machine && this.machine.heap;
+      if (!h || !h.setHigh) return -1;
+      h.setHigh(slot & 1);
+      return 0;
+    }
+    // 6: the biggest block the heap could hand out now (heap.js largest):
+    // one allocation bigger fails, however much is free in pieces
+    if (op === 6) {
+      const h = this.machine && this.machine.heap;
+      return h && h.largest ? h.largest() | 0 : -1;
+    }
+    if (slot >= this.swapSlots) return -1;
+    if (op === 3) { this.swapPages.delete(slot); return 0; }
+    if (a < 0x1000 || a + SWAP_PAGE > size) return -1;
+    if (op === 1) { this.swapPages.set(slot, this.arena.u8.slice(a, a + SWAP_PAGE)); return 0; }
+    if (op === 2) {
+      // a slot never written is a page never touched: zeros (C4IX hands
+      // out memory before it is used, docs/c4ix-mmu.md 11)
+      const p = this.swapPages.get(slot);
+      if (!p) { this.arena.u8.fill(0, a, a + SWAP_PAGE); return 0; }
+      this.arena.u8.set(p, a);
+      this.swapPages.delete(slot);
+      return 0;
+    }
+    return -1;
+  }
+  // A byte of a page put out, for a kernel that reaches it (c4m.js kld8)
+  swapRd8 (slot, off) { const p = this.swapPages.get(slot); return p ? p[off & 4095] : 0; }
+  swapWr8 (slot, off, v) {
+    let p = this.swapPages.get(slot);
+    if (!p) { if (slot >= this.swapSlots) return; p = this.swapPages.set(slot, new Uint8Array(SWAP_PAGE)).get(slot); }
+    p[off & 4095] = v;
+  }
+
+  // What `files` meant before there was more than one drive. Kept as a
+  // property so nothing that reaches for dev.files has to know.
+  get files () { return this.drives[this.drive] ? this.drives[this.drive].files : new Map(); }
+
+  // "1:name" says which drive; anything else means the selected one.
+  // C4DOS already thinks in drive letters, and a prefix costs the
+  // machine nothing -- no register to set, no state to get wrong.
+  resolveDrive (name) {
+    if (name.length > 1 && name[1] === ':') {
+      const d = name.charCodeAt(0);
+      let n = -1;
+      if (d >= 48 && d <= 57) n = d - 48;               // "0:".."9:"
+      else if (d >= 65 && d <= 90) n = d - 65;          // "A:".."Z:"
+      else if (d >= 97 && d <= 122) n = d - 97;         // "a:".."z:"
+      if (n >= 0) return { drv: n, rest: name.slice(2) };
+    }
+    return { drv: this.drive, rest: name };
+  }
+
+  diskOpen(nameAddr) {
+    const name = this.arena.dmaCstring(nameAddr >>> 0, 256);
+    if (name === '/dev/stdin' || name === '/dev/tty') {
+      const fd = this.nextFd++;
+      const raw = name === '/dev/tty';
+      this.fds.set(fd, { kbd: true, raw, nonblock: !!(this.diskFlags & O_NONBLOCK) });
+      if (raw) this.rawKbd++;
+      return fd;
+    }
+    // The host's /proc/uptime, as Linux has one for a native c4m: c4m.c
+    // run by plain c4 (innerbench -c, the C4DOS floppies' c4m) reads its
+    // time from it, and a C4DOS, bare or C4KE program's open() comes
+    // straight here -- no kernel sees it. Made from TIME_MS (simMs) at
+    // each open, so two opens apart see two times.
+    if (name === '/proc/uptime') {
+      const fd = this.nextFd++;
+      this.fds.set(fd, { data: procUptime(Math.max(0, this.simMs())), pos: 0 });
+      return fd;
+    }
+    let data = this.diskFind(name);
+    // "NAME@OFF+LEN": LEN bytes of NAME from OFF, as a file of their own,
+    // where there is no file of the whole name. C4IX reads its unpacked
+    // root archive this way, a file at a time out of the tar it keeps on
+    // drive 1 (docs/c4ix-design.md, "The root archive, read where it is
+    // kept"). Past the end it is shorter, or empty.
+    const span = data ? null : /^(.*)@(\d+)\+(\d+)$/.exec(name);
+    if (span && (data = this.diskFind(span[1]))) {
+      const at = Math.min(+span[2], data.length);
+      data = data.subarray(at, Math.min(at + +span[3], data.length));
+    }
+    if (!data) return -1;
+    const fd = this.nextFd++;
+    this.fds.set(fd, { data, pos: 0 });
+    return fd;
+  }
+
+  // The bytes of the file NAME names ("1:name" or a name on the selected
+  // drive), or undefined
+  diskFind(name) {
+    const { drv, rest } = this.resolveDrive(name);
+    const media = this.drives[drv];
+    if (!media) return undefined;
+    const files = media.files;
+    const clean = rest.startsWith('./') ? rest.slice(2) : rest;
+    let data;
+    // "/GAMES/x" is from the root; "x" is looked for along the drive's
+    // search list (DISK_DIRS), then at the root
+    if (clean.startsWith('/')) data = files.get(clean.replace(/^\/+/, '')) ?? files.get(clean);
+    else {
+      for (const d of media.dirs || []) if ((data = files.get(d ? `${d}/${clean}` : clean))) break;
+      if (!data) data = files.get(clean) ?? files.get(rest);
+    }
+    // The disk is flat, but ls/cat show the vfs.txt tree's hierarchical
+    // paths (e.g. "/home/user/hello.c") since that's what ramfs holds -
+    // real disk-I/O tools like c4cc never learned that vocabulary and
+    // ask for the path verbatim. Falling back to the basename here,
+    // once, transparently to every guest program, means "cat" showing
+    // you a path is also a path you can hand to any other tool.
+    // (Not for C4DOS's "A:/DIR/NAME", which means that file and no other.)
+    if (!data && rest.includes('/') && !(rest !== name && rest.startsWith('/'))) {
+      const base = rest.slice(rest.lastIndexOf('/') + 1);
+      data = files.get(base);
+    }
+    return data;
+  }
+
+  // Canonical-mode line buffering, unconditionally: a real terminal's
+  // line discipline holds a line in its own edit buffer (where local
+  // echo and backspace happen) and does not release ANY of it to a
+  // reader - blocking or non-blocking - until Enter or EOF, no matter
+  // which fd is doing the reading. Skipping this for the non-blocking
+  // path (as an earlier version did) let a fast reader in turbo mode
+  // drain keystrokes out of rxFifo faster than a human could press
+  // Backspace, breaking line editing; waiting for \n here is what
+  // keeps not-yet-committed characters available to erase.
+  kbdRead(addr, len, nonblock, raw) {
+    if (this.rxFifo.length === 0) { this.rxStarved = true; return this.rxEof ? 0 : (nonblock ? -1 : -2); }
+    // A raw fd is the one caller that has opted out of line buffering,
+    // so it takes whatever has arrived. Everyone else still waits for
+    // the newline that commits the line.
+    if (!raw) {
+      const nl = this.rxFifo.indexOf(10);
+      if (nl < 0 && !this.rxEof) return nonblock ? -1 : -2;
+    }
+    let n = 0;
+    while (n < len && this.rxFifo.length) {
+      const at = this.arena.dma(addr + n, 1, true);   // before the byte leaves the queue
+      if (at < 0) break;
+      const b = this.rxFifo.shift();
+      this.arena.write8(at, b);
+      n++;
+      // One line per read, for every canonical reader -- blocking or
+      // not. Stopping only on the blocking path (as this did) let a
+      // reader whose input arrived in a burst -- a paste, a scripted
+      // session, a browser that delivers a whole line at once -- take
+      // several lines in one read. c4sh reads /dev/stdin NON-blocking
+      // and keeps only what precedes the first newline, so every line
+      // after the first in such a read was silently thrown away: the
+      // shell answered the first command and then sat there with an
+      // empty queue, looking exactly like a hang. A raw fd (/dev/tty)
+      // is the one caller that asked for no line discipline and still
+      // takes whatever has arrived.
+      if (!raw && b === 10) break;
+    }
+    return n;
+  }
+
+  diskRead(len) {
+    this.diskActivity++;
+    const f = this.fds.get(this.diskFd);
+    if (this.diskFd === FD_KEYBOARD)
+      return this.tapIn ? this.tapRead(this.diskAddr, len) : this.kbdRead(this.diskAddr, len, false);
+    if (!f) return -1;
+    if (f.kbd) return this.kbdRead(this.diskAddr, len, f.nonblock, f.raw);
+    // what reached memory, not what was asked: a buffer that ends is a
+    // short read, and the rest is still there for the next
+    const n = Math.min(len, f.data.length - f.pos);
+    const got = n > 0 ? this.arena.dmaWrite(this.diskAddr, f.data.subarray(f.pos, f.pos + n)) : 0;
+    f.pos += got;
+    return got;
+  }
+
+  // Create or truncate a file on a drive. A drive with no sink is a
+  // pressed disc: it can be read forever and never written.
+  diskCreate (nameAddr) {
+    const name = this.arena.dmaCstring(nameAddr >>> 0, 256);
+    // "download:NAME": a file handed to the person (C4IX's download,
+    // src/c4ix/user/persist.c), written as any file is and given at its
+    // close to onDownload(NAME, bytes) -- the web page saves it where the
+    // browser keeps downloads -- and kept on no drive. -1 where the host
+    // has no one to give it to.
+    if (name.startsWith('download:')) {
+      const as = name.slice(9);
+      if (!this.onDownload || !as) return -1;
+      const media = { files: new Map(), writable: true, sink: (n, b) => { media.files.delete(n); this.onDownload(n, b); } };
+      const fd = this.nextFd++;
+      this.fds.set(fd, { w: { media, name: as, chunks: [], len: 0 } });
+      return fd;
+    }
+    const { drv, rest } = this.resolveDrive(name);
+    const media = this.drives[drv];
+    if (!media || !media.writable || !media.sink) return -1;
+    const fd = this.nextFd++;
+    this.fds.set(fd, { w: { media, name: this.wPath(media, rest), chunks: [], len: 0 } });
+    return fd;
+  }
+
+  // Where a name written or deleted is: "/x" from the root, any other in
+  // the first directory of the drive's search list (DISK_DIRS: the
+  // current directory C4DOS last told it), "./" or not.
+  wPath (media, rest) {
+    const clean = rest.startsWith('./') ? rest.slice(2) : rest;
+    if (clean.startsWith('/')) return clean.replace(/^\/+/, '');
+    const d = media.dirs && media.dirs[0];
+    return d ? `${d}/${clean}` : clean;
+  }
+
+  diskWrite (len) {
+    this.diskActivity++;
+    const f = this.fds.get(this.diskFd);
+    if (!f || !f.w) return -1;
+    const n = Math.max(0, len | 0);
+    const buf = this.arena.dmaRead(this.diskAddr, n);
+    f.w.chunks.push(buf);
+    f.w.len += buf.length;
+    return buf.length;
+  }
+
+  // Take a file off a writable drive: out of what the machine sees at
+  // once, and off the host's copy through the drive's `remove` when it
+  // has one (the page's store, the CLI's directory). A drive with a sink
+  // and no remove forgets the file for this session only.
+  diskUnlink (nameAddr) {
+    const name = this.arena.dmaCstring(nameAddr >>> 0, 256);
+    const { drv, rest } = this.resolveDrive(name);
+    const media = this.drives[drv];
+    if (!media || !media.writable || !media.sink) return -1;
+    const clean = this.wPath(media, rest);
+    if (!media.files.has(clean)) return -1;
+    // a file the drive will not give up (C4DOS's uploads on B:, uploads.js HomeFiles)
+    if (media.files.locked && media.files.locked(clean)) return -1;
+    media.files.delete(clean);
+    if (media.remove) { try { media.remove(clean); } catch { return -1; } }
+    return 0;
+  }
+
+  // The UART's block write: N bytes from the TXADDR latch, in order.
+  //
+  // Every byte goes through the same onByte sink one at a time and bumps
+  // the same activity counter, so nothing downstream can tell a block
+  // write from N stores to UART_TX -- the CLI's line buffering, the web
+  // terminal's parser and the board's TX lamp are all unchanged. What
+  // changes is only how many INSTRUCTIONS the guest spent getting here.
+  //
+  // A run that would fall off the end of the arena is clamped rather
+  // than wrapped or faulted: read32 already returns 0 past the end
+  // instead of trapping, and a UART is not the device to invent a new
+  // fault convention on. The count returned says how many bytes were
+  // actually taken, which is how a caller finds out.
+  uartWrite (len) {
+    const n = Math.max(0, len | 0);
+    if (!n) return 0;
+    const bytes = this.arena.dmaRead(this.uartTxAddr, n);
+    for (let i = 0; i < bytes.length; i++) {
+      this.uartActivity++;
+      this.conByte(bytes[i]);
+    }
+    return bytes.length;
+  }
+
+  // Close is where a written file becomes real, in one piece: a half
+  // written medium after a crash is a bug report nobody can read.
+  diskWClose (fd) {
+    const f = this.fds.get(fd | 0);
+    if (!f || !f.w) return -1;
+    const all = new Uint8Array(f.w.len);
+    let at = 0;
+    for (const c of f.w.chunks) { all.set(c, at); at += c.length; }
+    f.w.media.files.set(f.w.name, all);
+    this.fds.delete(fd | 0);
+    try { f.w.media.sink(f.w.name, all); } catch { return -1; }
+    return 0;
+  }
+
+  simMs() {
+    // with several CPUs (libjs's smp.js), the machine's time, not the
+    // running CPU's own count
+    const src = this.timeSource || this.machine;
+    const cyc = src ? src.cycle : 0;
+    return (Math.floor(cyc / this.cyclesPerMs) + this.sleepMs) | 0;
+  }
+
+  // the machine's heap, if it keeps generations (heap.js does; sheap.js,
+  // the parallel engine's, does not yet)
+  genHeap() {
+    const h = this.machine && this.machine.heap;
+    return h && typeof h.release === 'function' ? h : null;
+  }
+
+  read32(addr) {
+    switch (addr) {
+      case UART_RX:    if (this.rxFifo.length) return this.rxFifo.shift(); this.rxStarved = true; return -1;
+      case UART_RXAVL: if (!this.rxFifo.length) this.rxStarved = true; return this.rxFifo.length;
+      case UART_TXADDR: return this.uartTxAddr | 0;
+      case UART_TXLEN: return this.uartTxResult | 0;
+      case TIME_MS:    return this.simMs();
+      case CYCLE_LO:   return this.machine ? (this.machine.cycle | 0) : 0;
+      case CYCLE_HI:   return this.machine ? (this.machine.cycle / 0x100000000) | 0 : 0;
+      case OPNAME:     return this.opnameResult | 0;
+      case HEAP_BASE:  return this.heapBase | 0;
+      case IMG_CODE:   return this.img ? this.img.code | 0 : 0;
+      case IMG_DATA:   return this.img ? this.img.data | 0 : 0;
+      case IMG_BSS:    return this.img ? this.img.bss | 0 : 0;
+      case IMG_END:    return this.img ? this.img.end | 0 : 0;
+      case HEAP_END:   return this.heapEnd | 0;
+      case STACK_BASE: return this.stackBase | 0;
+      case STACK_TOP:  return this.stackTop | 0;
+      case STACK_GUARD: return this.stackGuard | 0;
+      case SWAP_CMD:   return this.swapResult | 0;
+      case HEAP_USED:  return this.machine && this.machine.heap ? this.machine.heap.used | 0 : 0;
+      case HEAP_GEN:     return this.genHeap() ? this.machine.heap.gen | 0 : 0;
+      case HEAP_RELEASE: return this.genHeap() ? this.machine.heap.released | 0 : 0;
+      case INFO_REG: {
+        // mirrors native c4_info() | TRAPH (c4m.c:1033, 1814)
+        const m = this.machine;
+        // C4I_WHOWROTE is set only when the provenance arena is in
+        // (cli.js --whowrote), because only then does the port at
+        // 0x1a4/0x1a8 exist. Announced, never probed: a guest asks
+        // here and stays away from those addresses otherwise, which
+        // matters because under native c4m they are its own memory.
+        // A cold path -- INFO is read once at boot.
+        return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
+               (this.noFpu ? 0 : 0x10000 /* C4I_FPU, fpu.js */) |
+               (this.mbox ? C4I_MBOX : 0) |
+               (this.arena && this.arena.writer ? C4I_WHOWROTE : 0) |
+               (m && m.trapHandler ? C4I_TRAPH : 0);
+      }
+      case TRAPH_REG:    return this.machine.trapHandler | 0;
+      case INTERVAL_REG: return this.machine.cycleInterval | 0;
+      case TRESTORE_REG: return this.machine.trapRestoresInterval | 0;
+      case MODE_REG:     return this.machine.mode | 0;
+      case TT_REG:       return this.machine.tt | 0;
+      case TP_REG:       return this.machine.tp | 0;
+      case HND_REG:      return this.machine.hnd | 0;
+      case JMODE_REG:    return this.machine.jmode | 0;
+      case JINTERVAL_REG:return this.machine.jinterval | 0;
+      case DISK_NAME:    return this.diskResult | 0;
+      case DISK_LEN:     return this.diskResult | 0;
+      case DISK_CLOSE:   return this.diskResult | 0;
+      case RTC_MS:       return (this.hostNow() - this.t0) | 0;
+      case PIT_MS:       return this.pitMs | 0;
+      case DISK_DRIVE:   return this.drive | 0;
+      case DISK_COUNT:   return this.drives.length | 0;
+      case DISK_RO: {
+        const m = this.drives[this.drive];
+        return (m && m.writable && m.sink) ? 0 : 1;
+      }
+      case DISK_WNAME:   return this.diskResult | 0;
+      case DISK_WLEN:    return this.diskResult | 0;
+      case DISK_WCLOSE:  return this.diskResult | 0;
+      case DISK_UNLINK:  return this.diskResult | 0;
+      case DISK_DIRS: {
+        const m = this.drives[this.drive];
+        return m && m.dirs ? m.dirs.length : 0;
+      }
+      case CON_TAP:      return this.tapLen | 0;
+      case CON_ADDR:     return this.tapAddr | 0;
+      case CON_LEN:      return this.tapResult | 0;
+      case CON_IN:       return this.tapIn ? (this.tapIn.length - this.tapInPos) | 0 : -1;
+      case MBOX_BASE:    return this.mbox ? this.mbox.base | 0 : 0;
+      case MBOX_LEN:     return this.mbox ? this.mbox.len | 0 : 0;
+      case MBOX_BELL: {  const n = this.mboxIrq | 0; this.mboxIrq = 0; return n; }
+      default:         return 0;
+    }
+  }
+
+  // Host->guest: an interrupt at the next instruction boundary (if the
+  // guest installed a cycle handler), or a count a polling guest reads.
+  raiseMbox () { this.mboxIrq = (this.mboxIrq | 0) + 1; }
+
+  write32(addr, val) {
+    switch (addr) {
+      case UART_TX:
+        this.uartActivity++;
+        this.conByte(val & 0xff);
+        return;
+      case UART_TXADDR: this.uartTxAddr = val | 0; return;
+      case UART_TXLEN:  this.uartTxResult = this.uartWrite(val | 0); return;
+      case USLP_US:
+        // usleep(val): advance simulated time; also count sub-ms sleeps
+        this.napMs = Math.max(1, Math.floor(val / 1000));
+        this.sleepMs += this.napMs;
+        return;
+      case OPNAME: {
+        // Written a pointer to a NUL/space-terminated name; look it up
+        // the way c4m's __opcode does: case-insensitive 4-char match.
+        this.opnameResult = this.opcodeByName(this.arena.dmaCstring(val >>> 0, 16));
+        return;
+      }
+      case DISK_FLAGS: this.diskFlags = val | 0; return;
+      case DISK_NAME:  this.diskResult = this.diskOpen(val); return;
+      case DISK_FD:    this.diskFd = val | 0; return;
+      case DISK_ADDR:  this.diskAddr = val | 0; return;
+      case DISK_LEN:   this.diskResult = this.diskRead(val | 0); return;
+      case DISK_CLOSE: {
+        const f = this.fds.get(val | 0);
+        if (f) { if (f.raw) this.rawKbd--; this.fds.delete(val | 0); this.diskResult = 0; }
+        else this.diskResult = -1;
+        return;
+      }
+      // Ask for a tick every N real milliseconds. The machine raises the
+      // same trap the cycle interrupt does, so a kernel that already
+      // has a handler needs no new one -- it just stops having to guess
+      // how many cycles a second is on this host.
+      //
+      // Arming, re-arming and MASKING are three different writes, and
+      // what tells them apart is the phase. A kernel hides from its own
+      // timer in every critical path -- 0 on the way in, the interval
+      // on the way out -- so if writing the interval always restarted
+      // the countdown, a kernel that entered a critical path more often
+      // than once an interval would never tick again. It would mask
+      // itself to death.
+      //
+      // So: 0 stops the timer and LEAVES THE DEADLINE WHERE IT IS, and
+      // re-arming the same interval resumes toward that deadline. Only
+      // a genuinely new interval starts a new countdown. The cycle
+      // interrupt gets this for free, because its counter is
+      // free-running and `cycle % interval` does not care when the
+      // interval was written; the PIT has to be told.
+      case PIT_MS: {
+        const ms = Math.max(0, val | 0);
+        if (!ms) { this.pitMs = 0; return; }          // masked, phase kept
+        if (ms !== this.pitArmed || !this.pitNext)
+          this.pitNext = this.hostNow() + ms;         // a new countdown
+        this.pitMs = this.pitArmed = ms;
+        return;
+      }
+      case DISK_DRIVE:
+        // Out of range selects nothing rather than crashing: a program
+        // asking for drive 3 on a two-drive machine should see empty
+        // media, which is what an empty drive looks like anyway.
+        this.drive = (val | 0) >= 0 ? (val | 0) : 0;
+        return;
+      case DISK_WNAME:  this.diskResult = this.diskCreate(val); return;
+      case DISK_WADDR:  this.diskAddr = val | 0; return;
+      case DISK_WLEN:   this.diskResult = this.diskWrite(val | 0); return;
+      case DISK_WCLOSE: this.diskResult = this.diskWClose(val | 0); return;
+      case DISK_UNLINK: this.diskResult = this.diskUnlink(val); return;
+      case DISK_DIRS: {
+        const m = this.drives[this.drive];
+        if (m) m.dirs = this.arena.dmaCstring(val >>> 0, 1024).split(';');
+        return;
+      }
+      case CON_TAP:  this.tapOn = (val | 0) ? 1 : 0; return;
+      case CON_ADDR: this.tapAddr = val | 0; return;
+      case CON_LEN:  this.tapResult = this.tapDrain(val | 0); return;
+      case CON_IN: {
+        const n = val | 0;
+        if (n < 0) { this.tapIn = null; return; }
+        this.tapIn = this.arena.dmaRead(this.tapAddr, n);
+        this.tapInPos = 0;
+        return;
+      }
+      case DISK_EJECT: {
+        const m = this.drives[val | 0];
+        if (m) { m.files = new Map(); m.ejected = true; }
+        // The host may be drawing what is in each drive, and a guest
+        // that takes a disk out (`reboot 0`) has just made that
+        // drawing wrong. The CLI has nothing to redraw and ignores it.
+        if (this.onEject) this.onEject(val | 0);
+        return;
+      }
+      // The BIOS's retry loop is only useful if a disk put in while it
+      // waits is actually seen, and the host read the medium once at
+      // start. This is the machine asking to look again.
+      case DISK_RESCAN:
+        if (this.onRescan) this.onRescan(val | 0);
+        return;
+      // A soft reset. An operating system that has just written a boot
+      // disk has no other way to say "start again and find it" -- the
+      // alternative is asking the player to stop the machine and start
+      // it, which on a homebrew computer is a different thing entirely.
+      // Halts like POWER, and the host boots the firmware again.
+      case RESET:
+        this.pitMs = 0;
+        this.pitArmed = 0;
+        this.pitNext = 0;
+        this.resetRequested = true;
+        this.halted = true;
+        this.status = val | 0;
+        return;
+      case POWER:
+        this.halted = true;
+        this.status = val | 0;
+        return;
+      case HEAP_BASE: this.heapBase = val | 0; return;
+      case HEAP_END:  this.heapEnd = val | 0;  return;
+      case STACK_GUARD:
+        this.stackGuard = (val && this.stackTop > this.stackBase) ? 1 : 0;
+        if (this.onGuard) this.onGuard();
+        return;
+      case SWAP_ADDR: this.swapAddr = val >>> 0; return;
+      case SWAP_CMD:  this.swapResult = this.swapOp(val); return;
+      case HEAP_GEN:     if (this.genHeap()) this.machine.heap.gen = val | 0; return;
+      case HEAP_RELEASE: if (this.genHeap()) this.machine.heap.release(val | 0); return;
+      case MBOX_BELL: if (this.onDoorbell) this.onDoorbell(val | 0); return;
+      case TRAPH_REG:    this.machine.trapHandler = val | 0; return;
+      case INTERVAL_REG: this.machine.cycleInterval = val | 0; return;
+      case TRESTORE_REG: this.machine.trapRestoresInterval = val | 0; return;
+      case MODE_REG:     this.machine.mode = val | 0; return;
+      case TT_REG:       this.machine.tt = val | 0; return;
+      case TP_REG:       this.machine.tp = val | 0; return;
+      case HND_REG:      this.machine.hnd = val | 0; return;
+      default: return;
+    }
+  }
+
+  opcodeByName(name) {
+    const want = (name + '    ').slice(0, 4).toUpperCase();
+    for (let i = 0; i * 5 + 4 <= OPNAMES.length; i++) {
+      if (OPNAMES.slice(i * 5, i * 5 + 4).toUpperCase() === want) return i;
+    }
+    return -1;
+  }
+
+  pushInput(str) {
+    for (const ch of new TextEncoder().encode(str)) this.rxFifo.push(ch);
+  }
+}

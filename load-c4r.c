@@ -27,14 +27,34 @@ enum {
 	C4I_SIG  = 0x20, // Signals supported
 	C4I_FLT  = 0x40, // Floating point support
 	C4I_PROT = 0x80, // Protected mode support
+	C4I_TRAPH = 0x400, // A custom trap handler is installed (safe to probe opcodes)
 	C4I_C4KE = 0x200, // C4KE is running
 };
 
-enum { C4R__Supported_Version = 2 };
+// Version 3 adds the data MEMSZ field (see C4R_HDR_MEMSZ): the data
+// segment's total in-memory size, which may exceed the DATALEN bytes
+// actually stored -- the excess is BSS (zero-initialized, occupies no
+// image bytes). Version 2 images have no such field; for them MEMSZ is
+// taken to equal DATALEN. Both versions load.
+//
+// At 32 bits the field's eight bytes hold MEMSZ and four more, which a
+// v3 object from c4lc or c4fc uses for the size of its BSS (see
+// C4R_HDR_BSS): the zero-filled part at the END of MEMSZ, which begins at
+// MEMSZ - BSS. Zero there (or v2's 'p' filler) says nothing; c4rlink then
+// keeps that module's whole MEMSZ together, as it always did.
+enum { C4R__Supported_Version = 3 };
 
 enum {
 	C4ROPT_NONE,
-	C4ROPT_SYMBOLS
+	C4ROPT_SYMBOLS,
+	// The source map, out of the extension trailer that follows the
+	// symbols (docs/c4-explorer.md 2.1): with SYMBOLS only, since the
+	// trailer is found by walking them.
+	C4ROPT_SRCMAP = 2,
+	// The image is to be run, not read: refuse one with words left for
+	// a linker (c4r_report_unlinked). An object (.c4o) is all such
+	// words, and c4rlink and c4rdump read them through here.
+	C4ROPT_RUN = 4
 };
 
 #ifndef FILE_OPEN_MODE
@@ -55,6 +75,11 @@ enum {
 	C4R_HDR_SYMBOLSLEN, // int
 	C4R_HDR_CONSTRUCTLEN, // int
 	C4R_HDR_DESTRUCTLEN, // int
+	C4R_HDR_MEMSZ,       // int -- data segment total in-memory size (v3+);
+	                     //        >= DATALEN, the excess is zero-filled BSS.
+	C4R_HDR_BSS,         // int -- of MEMSZ, how much at its end is BSS: the
+	                     //        uninitialized globals, no part of an
+	                     //        initialized one (v3, 32 bits); 0 for unknown
 	C4R_HDR__Sz
 };
 
@@ -64,9 +89,16 @@ enum {
 
 // Patch type. Apart from these, the patch type refers
 // to an id in the symbols table.
+// CODE/DATA patches land in the code segment (their address is a word
+// offset into it); DCODE/DDATA land in the data segment (their address
+// is a byte offset into it). The value side names the target segment.
+// The data-resident pair exists for initialized globals that hold
+// pointers, and for switch jump tables kept in data.
 enum {
-	C4R_PTYPE_CODE = -1,
-	C4R_PTYPE_DATA = -2
+	C4R_PTYPE_CODE  = -1,  // code word -> code address
+	C4R_PTYPE_DATA  = -2,  // code word -> data address
+	C4R_PTYPE_DCODE = -3,  // data word -> code address
+	C4R_PTYPE_DDATA = -4   // data word -> data address
 };
 
 // Patch Structure
@@ -124,6 +156,8 @@ enum {
 	C4R_CONSTRUCTORS,
 	C4R_DESTRUCTORS,
 	C4R_LOADCOMPLETE,
+	C4R_SRCMAP,         // char *: the SMAP chunk's payload (C4ROPT_SRCMAP), or 0
+	C4R_SRCMAPLEN,      // its length in bytes
 	C4R__Sz
 };
 
@@ -156,10 +190,38 @@ char *c4r_strcpy_alloc (char *source) {
 	return result;
 }
 
+// Memory-source support: when c4r_mem_src is set, c4r_src_read consumes
+// from it instead of the file descriptor. This is how C4KE loads programs
+// straight out of the kernel's RAM filesystem: c4r_load_mem() below sets
+// the cursor and the whole reader runs unchanged.
+char *c4r_mem_src;
+int   c4r_mem_len, c4r_mem_pos;
+
+int c4r_src_read (int fd, char *buffer, int len) {
+	int n;
+	if (!c4r_mem_src)
+		return read(fd, buffer, len);
+	n = c4r_mem_len - c4r_mem_pos;
+	if (n <= 0) return 0;
+	if (n > len) n = len;
+	len = 0;
+	while (len < n) { buffer[len] = c4r_mem_src[c4r_mem_pos + len]; ++len; }
+	c4r_mem_pos = c4r_mem_pos + n;
+	return n;
+}
+
 int c4r_readoffset;
+
+// One global to fill in: when c4r_inject_name is set, a load (keeping
+// the symbols or not) walks the symbol section and writes
+// c4r_inject_value into the image's global of that name, if it has one. This is how C4KE tells a program built for
+// the bare machine that it is a task (__c4ke_exit, src/c4ix/libc/bare.c),
+// as C4DOS writes __c4dos_api.
+char *c4r_inject_name;
+int   c4r_inject_value;
 int c4r_checked_read (int fd, char *buffer, int len) {
 	int i;
-	if ((i = read(fd, buffer, len)) <= 0) {
+	if ((i = c4r_src_read(fd, buffer, len)) <= 0) {
 		if (c4r_debug) printf("lc4r: error, read() returned %d\n", i);
 	} else {
 		if (c4r_debug) printf("lc4r: successful read of %d bytes from file.0x%lx\n", len, c4r_readoffset);
@@ -179,6 +241,8 @@ void c4r_dump_patches (int *c4r) {
 		printf("  patch type ");
 		if (patch[C4R_PAT_TYPE] == C4R_PTYPE_CODE) printf("CODE");
 		else if(patch[C4R_PAT_TYPE] == C4R_PTYPE_DATA) printf("DATA");
+		else if(patch[C4R_PAT_TYPE] == C4R_PTYPE_DCODE) printf("DCODE");
+		else if(patch[C4R_PAT_TYPE] == C4R_PTYPE_DDATA) printf("DDATA");
 		else printf("symbols[%d]", patch[C4R_PAT_TYPE]);
 		printf(" address 0x%x value 0x%x\n", patch[C4R_PAT_ADDRESS], patch[C4R_PAT_VALUE]);
 		patch = patch + C4R_PAT__Sz;
@@ -221,8 +285,11 @@ void c4r_dump_info (int *c4r) {
 		printf("  Entry = 0x%x", header[C4R_HDR_ENTRY]);
 	printf("  Code = %d", header[C4R_HDR_CODELEN]);
 	printf("  Data = %d", header[C4R_HDR_DATALEN]);
+	if (header[C4R_HDR_MEMSZ] > header[C4R_HDR_DATALEN])
+		printf(" (mem %d, +%d bss)", header[C4R_HDR_MEMSZ],
+		       header[C4R_HDR_MEMSZ] - header[C4R_HDR_DATALEN]);
 	printf("  Patch = %d", header[C4R_HDR_PATCHLEN]);
-	printf("  Symbols = %d" ,header[C4R_HDR_SYMBOLSLEN]);
+	printf("  Symbols = %d%s" ,header[C4R_HDR_SYMBOLSLEN], header[C4R_HDR_SYMBOLSLEN] ? "" : " (stripped)");
 	printf("  Cons = %d", header[C4R_HDR_CONSTRUCTLEN]);
 	printf("  Des  = %d\n", header[C4R_HDR_DESTRUCTLEN]);
 	printf("lc4r:  0x%lx\n", c4r[C4R_CODE] + header[C4R_HDR_ENTRY]);
@@ -272,8 +339,60 @@ int *c4r_create_empty () {
 	return c4r;
 }
 
+// The extension trailer (docs/c4-explorer.md 2.1): after S, a word 'X',
+// then chunks of a tag word (four ASCII bytes, low first), a length word
+// and that many bytes padded to a word, up to a 0 tag. The source map
+// (SMAP) is kept in C4R_SRCMAP; any other chunk is skipped. No trailer,
+// or a damaged one, leaves the image as loaded: nothing a loader needs
+// is in it.
+void c4r_read_trailer (int fd, int *c4r, char *buffer, int wordbytes) {
+	int tag, len, pad;
+	char *p;
+	memset(buffer, 0, wordbytes);
+	if (c4r_src_read(fd, buffer, wordbytes) < wordbytes || *buffer != 'X') return;
+	while (1) {
+		memset(buffer, 0, wordbytes);
+		if (c4r_src_read(fd, buffer, wordbytes) < wordbytes) return;
+		if (!(tag = *(int *)buffer)) return;
+		memset(buffer, 0, wordbytes);
+		if (c4r_src_read(fd, buffer, wordbytes) < wordbytes) return;
+		len = *(int *)buffer;
+		if (len < 0 || len > 16777216) return;
+		if (!(p = malloc(len + 1))) return;
+		if (len && c4r_src_read(fd, p, len) < len) { free(p); return; }
+		pad = (wordbytes - len % wordbytes) % wordbytes;
+		if (pad) c4r_src_read(fd, buffer, pad);
+		if (tag == c4r__charword('S', 'M', 'A', 'P') && !c4r[C4R_SRCMAP]) {
+			c4r[C4R_SRCMAP] = (int)p;
+			c4r[C4R_SRCMAPLEN] = len;
+		} else free(p);
+	}
+}
+
+// An image that refers to a name it does not define: a patch that names
+// a symbol (its type a symbol id, or DSYM). A C4IX program is full
+// of them -- each call into its shared libc, which src/c4ix/loader.c
+// links at load -- and nothing here links anything, so the word would
+// stay as the compiler left it, 0, and the first call through it would
+// jump to address 0. (A C4KE that took /bench in C4IX's root for its own
+// bench ran C4IX's that way, and under libjs that is ROM: it spun there
+// silently.) With C4ROPT_RUN, the load fails; this says what the image
+// wanted, by name when the symbols were read.
+void c4r_report_unlinked (char *file, int *symbols, int nsyms, int count, int id) {
+	int *s, i;
+	s = symbols;
+	i = 0;
+	while (s && i < nsyms && s[C4R_SYMB_ID] != id) { s = s + C4R_SYMB__Sz; ++i; }
+	printf("lc4r: '%s' needs ", file);
+	if (s && i < nsyms) printf("'%s'", (char *)s[C4R_SYMB_NAME]);
+	else printf("symbol %d", id);
+	printf(" (%d reference%s to link), which it does not define and no loader here links", count, count == 1 ? "" : "s");
+	printf(" -- a C4IX program? Not loading it.\n");
+}
+
 int *c4r_load_opt_real (char *file, int options) {
 	int fd, i, x;
+	int unlinked, unlinked_id;
 	char *buffer;
 	int *c4r, *header, *code, *data, *patches, *symbols, *constructors, *destructors;
 	int  wordbytes, bad;
@@ -307,9 +426,22 @@ int *c4r_load_opt_real (char *file, int options) {
 
 	// These will be set correctly later
 	code = data = patches = symbols = constructors = destructors = 0;
+	unlinked = unlinked_id = 0;
 
 	if (c4r_debug || c4r_verbose) printf("lc4r: loading '%s'...\n", file);
-	if ((fd = open(file, FILE_OPEN_MODE)) < 0) return 0;
+	fd = -1;
+	if (!c4r_mem_src) {
+		// Everything above goes back. C4KE's loader tries the bare name
+		// before the one with .c4r on every program it starts, so this
+		// is the usual path, not a rare one, and it kept 349 bytes a time.
+		if ((fd = open(file, FILE_OPEN_MODE)) < 0) {
+			free((char *)c4r[C4R_FILENAME]);
+			free(header);
+			free(c4r);
+			free(buffer);
+			return 0;
+		}
+	}
 
 	//
 	// Read header
@@ -326,21 +458,28 @@ int *c4r_load_opt_real (char *file, int options) {
 			//
 			if (c4r_verbose) printf("lc4r: load header...\n");
 			header[C4R_HDR_SIGNATURE] = c4r__charword('C', '4', 'R', 0);
-			read(fd, buffer, 1); header[C4R_HDR_VERSION] = *buffer;
-			read(fd, buffer, 1); header[C4R_HDR_WORDBITS]= *buffer;
-			// Read padding
-			// x = sizeof(int) - 6; // 5 for what was just read
+			c4r_src_read(fd, buffer, 1); header[C4R_HDR_VERSION] = *buffer;
+			c4r_src_read(fd, buffer, 1); header[C4R_HDR_WORDBITS]= *buffer;
+			// The 8 padding bytes after magic+version+wordbits are,
+			// as of format v3, the data MEMSZ field (a word at byte
+			// offset 5). v2 wrote 'p' filler here; for v2 images MEMSZ
+			// is fixed up to DATALEN below.
 			i = sizeof(int) - 1;
 			x = (5 + i) & ~i;
-			read(fd, buffer, x); // skip padding
+			c4r_src_read(fd, buffer, x); // padding word: MEMSZ (v3+)
+			header[C4R_HDR_MEMSZ] = *(int *)buffer;
+			// and at 32 bits, the BSS size beside it ('pppp' in v2)
+			header[C4R_HDR_BSS] = 0;
+			if (x == 8 && sizeof(int) == 4 && *(int *)(buffer + 4) != 1886417008)
+				header[C4R_HDR_BSS] = *(int *)(buffer + 4);
 			wordbytes = header[C4R_HDR_WORDBITS] / 8;
-			read(fd, buffer, wordbytes); header[C4R_HDR_ENTRY] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_CODELEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_DATALEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_PATCHLEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_SYMBOLSLEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_CONSTRUCTLEN] = *(int *)buffer;
-			read(fd, buffer, wordbytes); header[C4R_HDR_DESTRUCTLEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_ENTRY] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_CODELEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_DATALEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_PATCHLEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_SYMBOLSLEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_CONSTRUCTLEN] = *(int *)buffer;
+			c4r_src_read(fd, buffer, wordbytes); header[C4R_HDR_DESTRUCTLEN] = *(int *)buffer;
 			c4r[C4R_HEADER] = (int)header;
 
 			if (wordbytes != sizeof(int)) {
@@ -349,12 +488,26 @@ int *c4r_load_opt_real (char *file, int options) {
 				       header[C4R_HDR_WORDBITS], sizeof(int) * 8);
 				return c4r;
 			}
-			// Allow only current version
-			else if (header[C4R_HDR_VERSION] && header[C4R_HDR_VERSION] != C4R__Supported_Version) {
+			// Accept the current version and the immediately prior one
+			// (v2 has no MEMSZ field -- its "padding word" is filler,
+			// so MEMSZ = DATALEN for it: no BSS).
+			else if (header[C4R_HDR_VERSION] &&
+			         header[C4R_HDR_VERSION] != C4R__Supported_Version &&
+			         header[C4R_HDR_VERSION] != C4R__Supported_Version - 1) {
 				printf("lc4r: error, c4r file uses version %d and we support only %d\n",
 				       header[C4R_HDR_VERSION], C4R__Supported_Version);
 				return c4r;
 			}
+			if (header[C4R_HDR_VERSION] < C4R__Supported_Version)
+				header[C4R_HDR_MEMSZ] = header[C4R_HDR_DATALEN];
+			// A malformed/short MEMSZ must never be smaller than what is
+			// actually stored.
+			if (header[C4R_HDR_MEMSZ] < header[C4R_HDR_DATALEN])
+				header[C4R_HDR_MEMSZ] = header[C4R_HDR_DATALEN];
+			// nor a BSS that would start before the stored bytes end
+			if (header[C4R_HDR_VERSION] < C4R__Supported_Version || header[C4R_HDR_BSS] < 0 ||
+			    header[C4R_HDR_MEMSZ] - header[C4R_HDR_BSS] < header[C4R_HDR_DATALEN])
+				header[C4R_HDR_BSS] = 0;
 
 			if (c4r_verbose) c4r_dump_info(c4r);
 
@@ -369,8 +522,12 @@ int *c4r_load_opt_real (char *file, int options) {
 				bad = C4R_BAD_CODE;
 			else memset(code, 0, i);
 			if (c4r_verbose) printf("lc4r: %ld code allocated\n", i);
-			if (header[C4R_HDR_DATALEN]) {
-				if (!(data = malloc((i = sizeof(char)* header[C4R_HDR_DATALEN]))))
+			// Allocate the full in-memory size (MEMSZ >= DATALEN) and
+			// zero it, so the unstored tail [DATALEN, MEMSZ) is BSS --
+			// zero-filled and ready, having cost no image bytes. Only
+			// DATALEN bytes are read from the file, below.
+			if (header[C4R_HDR_MEMSZ]) {
+				if (!(data = malloc((i = sizeof(char)* header[C4R_HDR_MEMSZ]))))
 					bad = bad | C4R_BAD_DATA;
 				else memset(data, 0, i);
 			}
@@ -407,19 +564,19 @@ int *c4r_load_opt_real (char *file, int options) {
 
 				// Code
 				if (c4r_verbose) printf("lc4r: load code...\n");
-				read(fd, buffer, wordbytes); if (*(char *)buffer != 'C') { printf("lc4r: expected code segment, found 0x%x\n", *buffer); return c4r; }
-				read(fd, (char *)code, header[C4R_HDR_CODELEN] * wordbytes);
+				c4r_src_read(fd, buffer, wordbytes); if (*(char *)buffer != 'C') { printf("lc4r: expected code segment, found 0x%x\n", *buffer); return c4r; }
+				c4r_src_read(fd, (char *)code, header[C4R_HDR_CODELEN] * wordbytes);
 				if (c4r_debug) printf("lc4r: loaded code, now at position 0x%x\n", c4r_readoffset);
 				// target = code; i = 0; while (i++ <= header[C4R_HDR_CODELEN]) printf("  Code @ 0x%lx: %d\n", target, *target++);
 				c4r[C4R_CODE] = (int)code;
 				// Data
 				if (c4r_verbose) printf("lc4r: load data...\n");
-				read(fd, buffer, wordbytes); if (*(char *)buffer != 'D') { printf("lc4r: expected data segment, found '%c' 0x%x at file position 0x%lx %d\n", *buffer, *buffer, c4r_readoffset, c4r_readoffset); return c4r; }
-				read(fd, (char *)data, header[C4R_HDR_DATALEN]);
+				c4r_src_read(fd, buffer, wordbytes); if (*(char *)buffer != 'D') { printf("lc4r: expected data segment, found '%c' 0x%x at file position 0x%lx %d\n", *buffer, *buffer, c4r_readoffset, c4r_readoffset); return c4r; }
+				c4r_src_read(fd, (char *)data, header[C4R_HDR_DATALEN]);
 				//i = 0; x = header[C4R_HDR_DATALEN] / wordbytes; target = data;
 				//if (c4r_debug) printf("lc4r: data len %d = %d words\n", header[C4R_HDR_DATALEN], x);
 				//while (i++ < x) {
-				//	read(fd, buffer, wordbytes);
+				//	c4r_src_read(fd, buffer, wordbytes);
 				//	*target++ = *(int *)buffer;
 				//	*(int *)buffer = 0;
 				//}
@@ -431,13 +588,13 @@ int *c4r_load_opt_real (char *file, int options) {
 				// Patches
 				target = patches; i = 0; loop_target = header[C4R_HDR_PATCHLEN];
 				if (c4r_verbose) printf("lc4r: loading and apply %d patches...\n", loop_target);
-				read(fd, buffer, wordbytes); if (*(char *)buffer != 'P') { printf("lc4r: expected patch segment, found 0x%x, position 0x%x (%d)\n", *buffer, c4r_readoffset - 1, c4r_readoffset - 1); return c4r; }
+				c4r_src_read(fd, buffer, wordbytes); if (*(char *)buffer != 'P') { printf("lc4r: expected patch segment, found 0x%x, position 0x%x (%d)\n", *buffer, c4r_readoffset - 1, c4r_readoffset - 1); return c4r; }
 				percent = 0;
 				// p = __time();
 				while (i < loop_target) {
-					read(fd, buffer, wordbytes); target[C4R_PAT_TYPE]    = ptype = *(int *)buffer;
-					read(fd, buffer, wordbytes); target[C4R_PAT_ADDRESS] = paddr = *(int *)buffer;
-					read(fd, buffer, wordbytes); target[C4R_PAT_VALUE]   = pvalu = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_PAT_TYPE]    = ptype = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_PAT_ADDRESS] = paddr = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_PAT_VALUE]   = pvalu = *(int *)buffer;
 
 					// Perform the patching now
 					// if (c4r_debug) printf("Patch %d ", i);
@@ -453,9 +610,16 @@ int *c4r_load_opt_real (char *file, int options) {
 						 //      *(code + target[C4R_PAT_ADDRESS]),
 						//	    (code + target[C4R_PAT_VALUE]));
 						*(code + paddr) = (int)(((char *)data) + pvalu);
-					} else {
-						//printf("lc4r: unexpected patch type %d (not %d or %d)\n", target[C4R_PAT_TYPE], C4R_PTYPE_CODE, C4R_PTYPE_DATA);
-						//return c4r;
+					} else if(ptype == C4R_PTYPE_DCODE) {
+						*(int *)(((char *)data) + paddr) = (int)(code + pvalu);
+					} else if(ptype == C4R_PTYPE_DDATA) {
+						*(int *)(((char *)data) + paddr) = (int)(((char *)data) + pvalu);
+					} else if (ptype >= 0 || ptype == -5) {
+						// A word only a linker fills in: a symbol id in the type (a
+						// code word) or, for -5 (DSYM, c4rlink.c), in the value (a data
+						// word). Counted, and the image refused once it is read:
+						// c4r_report_unlinked.
+						if (!unlinked++) unlinked_id = ptype >= 0 ? ptype : pvalu;
 					}
 
 					++i;
@@ -478,30 +642,30 @@ int *c4r_load_opt_real (char *file, int options) {
 
 				// Constructors
 				if (c4r_verbose) printf("lc4r: load constructors and destructors...\n");
-				read(fd, buffer, wordbytes);
+				c4r_src_read(fd, buffer, wordbytes);
 				if (*(char *)buffer != 'c') {
 					printf("lc4r: expected constructors segment, found 0x%x\n", *buffer);
 					return c4r;
 				}
 				target = constructors; i = 0; // Constructors
 				while (i++ < header[C4R_HDR_CONSTRUCTLEN]) {
-					// read(fd, buffer, wordbytes); target[C4R_CNDE_Priority] = *(int *)buffer;
-					read(fd, buffer, wordbytes); target[C4R_CNDE_Value]    = *(int *)buffer;
+					// c4r_src_read(fd, buffer, wordbytes); target[C4R_CNDE_Priority] = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_CNDE_Value]    = *(int *)buffer;
 					// printf("cnde_value=%d\n", target[C4R_CNDE_Value]);
 					target = target + C4R_CNDE__Sz;
 				}
 				c4r[C4R_CONSTRUCTORS] = (int)constructors;
 				if (c4r_debug) printf("lc4r: loaded constructors, now at position 0x%x\n", c4r_readoffset);
 				// Destructors
-				read(fd, buffer, wordbytes);
+				c4r_src_read(fd, buffer, wordbytes);
 				if (*(char *)buffer != 'd') {
 					if (c4r_debug) printf("lc4r: expected destructors segment, found 0x%x (%c)\n", *buffer, *buffer);
 					return c4r;
 				}
 				target = destructors; i = 0;
 				while (i++ < header[C4R_HDR_DESTRUCTLEN]) {
-					// read(fd, buffer, wordbytes); target[C4R_CNDE_Priority] = *(int *)buffer;
-					read(fd, buffer, wordbytes); target[C4R_CNDE_Value]    = *(int *)buffer;
+					// c4r_src_read(fd, buffer, wordbytes); target[C4R_CNDE_Priority] = *(int *)buffer;
+					c4r_src_read(fd, buffer, wordbytes); target[C4R_CNDE_Value]    = *(int *)buffer;
 					target = target + C4R_CNDE__Sz;
 				}
 				c4r[C4R_DESTRUCTORS] = (int)destructors;
@@ -510,19 +674,25 @@ int *c4r_load_opt_real (char *file, int options) {
 				// Symbols
 				// TODO: symbols end up unaligned, need to write strings with padding.
 				if (options & C4ROPT_SYMBOLS) {
-					read(fd, buffer, wordbytes); if (*(char *)buffer != 'S') { printf("lc4r: expected symbols segment, found 0x%x\n", *buffer); return c4r; }
+					c4r_src_read(fd, buffer, wordbytes); if (*(char *)buffer != 'S') { printf("lc4r: expected symbols segment, found 0x%x\n", *buffer); return c4r; }
 					target = symbols; i = 0; loop_target = header[C4R_HDR_SYMBOLSLEN];
 					if (c4r_verbose) printf("lc4r: loading %d symbols...\n", loop_target);
 					while (i < loop_target) {
-						read(fd, buffer, wordbytes); target[C4R_SYMB_ID] = *(int *)buffer;
-						read(fd, buffer, wordbytes); target[C4R_SYMB_TYPE] = *(int *)buffer;
-						read(fd, buffer, wordbytes); target[C4R_SYMB_CLASS]= *(int *)buffer;
-						read(fd, buffer, wordbytes); target[C4R_SYMB_ATTRS] = *(int *)buffer;
-						read(fd, buffer, 1); target[C4R_SYMB_NAMELEN] = *buffer;
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_ID] = *(int *)buffer;
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_TYPE] = *(int *)buffer;
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_CLASS]= *(int *)buffer;
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_ATTRS] = *(int *)buffer;
+						c4r_src_read(fd, buffer, 1); target[C4R_SYMB_NAMELEN] = *buffer;
 						memset(buffer, 0, C4R_BUFFER_SIZE); // TODO: write nul terminator
-						read(fd, buffer, target[C4R_SYMB_NAMELEN]); target[C4R_SYMB_NAME] = (int)c4r_strcpy_alloc(buffer);
-						read(fd, buffer, wordbytes); target[C4R_SYMB_VALUE] = *(int *)buffer;
-						//read(fd, buffer, wordbytes); target[C4R_SYMB_LENGTH] = *(int *)buffer;
+						c4r_src_read(fd, buffer, target[C4R_SYMB_NAMELEN]); target[C4R_SYMB_NAME] = (int)c4r_strcpy_alloc(buffer);
+						c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_VALUE] = *(int *)buffer;
+						//c4r_src_read(fd, buffer, wordbytes); target[C4R_SYMB_LENGTH] = *(int *)buffer;
+						if (c4r_inject_name && target[C4R_SYMB_CLASS] == 131) {   // Glo
+							tmp = c4r_inject_name; x = (int)target[C4R_SYMB_NAME]; p = 0;
+							while (tmp[p] && tmp[p] == ((char *)x)[p]) ++p;
+							if (!tmp[p] && !((char *)x)[p])
+								*(int *)((char *)data + target[C4R_SYMB_VALUE]) = c4r_inject_value;
+						}
 						if (c4r_debug) {
 							printf("Symbol %d @ 0x%lX:\n  Type: %d\n", i, c4r_readoffset, target[C4R_SYMB_TYPE]);
 							printf("  Class: %d", target[C4R_SYMB_CLASS]);
@@ -536,9 +706,49 @@ int *c4r_load_opt_real (char *file, int options) {
 						target = target + C4R_SYMB__Sz;
 					}
 					if (c4r_debug) printf("lc4r: loaded %d symbols, now at position 0x%x\n", i, c4r_readoffset);
+					if (options & C4ROPT_SRCMAP) c4r_read_trailer(fd, c4r, buffer, wordbytes);
+				} else if (c4r_inject_name) {
+					c4r_src_read(fd, buffer, wordbytes);
+					i = 0;
+					loop_target = *(char *)buffer == 'S' ? header[C4R_HDR_SYMBOLSLEN] : 0;
+					while (i < loop_target) {
+						c4r_src_read(fd, buffer, wordbytes);              // id
+						c4r_src_read(fd, buffer, wordbytes);              // type
+						c4r_src_read(fd, buffer, wordbytes); pc = *(int *)buffer;   // class
+						c4r_src_read(fd, buffer, wordbytes);              // attrs
+						c4r_src_read(fd, buffer, 1); x = *buffer & 255;   // name length
+						memset(buffer, 0, C4R_BUFFER_SIZE);
+						c4r_src_read(fd, buffer, x);
+						// the name, against c4r_inject_name
+						tmp = c4r_inject_name; p = 0;
+						while (p < x && tmp[p] && tmp[p] == buffer[p]) ++p;
+						p = p == x && !tmp[p];
+						c4r_src_read(fd, buffer, wordbytes);              // value
+						if (p && pc == 131) {                             // Glo: an offset into data
+							*(int *)((char *)data + *(int *)buffer) = c4r_inject_value;
+							i = loop_target;
+						}
+						++i;
+					}
 				}
 				c4r[C4R_SYMBOLS] = (int)symbols;
 
+				// Words left for a linker, in an image to be run: refused,
+				// by the failure path below. What only this branch allocated
+				// goes first.
+				if (unlinked && (options & C4ROPT_RUN)) {
+					c4r_report_unlinked(file, (options & C4ROPT_SYMBOLS) ? symbols : 0,
+					                    header[C4R_HDR_SYMBOLSLEN], unlinked, unlinked_id);
+					if (options & C4ROPT_SYMBOLS) {
+						i = 0; target = symbols;
+						while (i++ < header[C4R_HDR_SYMBOLSLEN]) {
+							if (target[C4R_SYMB_NAME]) free((char *)target[C4R_SYMB_NAME]);
+							target = target + C4R_SYMB__Sz;
+						}
+					}
+					if (c4r[C4R_SRCMAP]) free((char *)c4r[C4R_SRCMAP]);
+					free((char *)c4r[C4R_FILENAME]);
+				} else {
 				// Success, cleanup buffer and file, return
 				if (c4r_debug) printf("lc4r: Successfully loaded, c4r = 0x%lx  header = 0x%lx\n", c4r, header);
 				c4r[C4R_LOADCOMPLETE] = 1;
@@ -548,6 +758,7 @@ int *c4r_load_opt_real (char *file, int options) {
 
 				if (c4r_verbose) printf("lc4r: load complete.\n");
 				return c4r;
+				}
 			}
 		}
 	}
@@ -562,7 +773,7 @@ int *c4r_load_opt_real (char *file, int options) {
 	if (header) free(header);
 	if (c4r) free(c4r);
 	if (buffer) free(buffer);
-	if (fd) close(fd);
+	if (fd >= 0) close(fd);
 
 	if (c4r_verbose) printf("lc4r: load failure.\n");
 
@@ -585,6 +796,17 @@ int *c4r_load_opt (char *file, int options) {
 	if (1 && __c4_info() & C4I_C4)
 		return c4r_load_opt_pure(file, options);
 	return c4r_load_opt_real(file, options);
+}
+
+// Load a module from a memory buffer (name is recorded for stack traces).
+int *c4r_load_mem (char *name, char *buf, int len, int options) {
+	int *r;
+	c4r_mem_src = buf;
+	c4r_mem_len = len;
+	c4r_mem_pos = 0;
+	r = c4r_load_opt(name, options);
+	c4r_mem_src = 0;
+	return r;
 }
 
 int *c4r_load (char *file) {
@@ -611,6 +833,7 @@ void c4r_free (int *c4r) {
 		free((int *)c4r[C4R_PATCHES]); c4r[C4R_PATCHES] = 0;
 	}
 	if (c4r[C4R_CONSTRUCTORS]) { free((int *)c4r[C4R_CONSTRUCTORS]); c4r[C4R_CONSTRUCTORS] = 0; }
+	if (c4r[C4R_SRCMAP]) { free((char *)c4r[C4R_SRCMAP]); c4r[C4R_SRCMAP] = 0; }
 	if (c4r[C4R_DESTRUCTORS]) {
 		if (c4r_debug) printf("lc4r: freeing destructors @ 0x%X\n", c4r[C4R_CONSTRUCTORS]);
 		free((int *)c4r[C4R_DESTRUCTORS]); c4r[C4R_DESTRUCTORS] = 0;
@@ -636,6 +859,10 @@ void c4r_free (int *c4r) {
 	if (c4r[C4R_HEADER]) {
 		if (c4r_debug) printf("lc4r: freeing header @ 0x%X\n", c4r[C4R_HEADER]);
 		free((int *)c4r[C4R_HEADER]); c4r[C4R_HEADER] = 0;
+	}
+	// Allocated by c4r_load() via c4r_strcpy_alloc(); nothing else owns it.
+	if (c4r[C4R_FILENAME]) {
+		free((char *)c4r[C4R_FILENAME]); c4r[C4R_FILENAME] = 0;
 	}
 	if (c4r_debug) printf("lc4r: freeing structure @ 0x%X\n", c4r);
 	free(c4r);
@@ -666,6 +893,18 @@ enum {
 	FLT ,
 	// Instructions
 	JSRI,JSRS,JMPA,TLEV,DBG ,
+	// c4mp's, which this loader names but never executes
+	CPUI,CPUN,CPUS,CPUH,
+	CAS ,XCHG,FADD,CWAI,CWAK,IPI ,
+	LXI ,SXI ,TRAW,
+	// The fused opcodes -- docs/fused-opcodes.md. Appended, never
+	// inserted: the list index IS the opcode number and it is mirrored
+	// across c4m.c, c4l.c, c4mp.h, oisc4.c, c4cc.c and c4r.lisp.
+	LDL ,LDG ,PSHL,PSHG,LEAP,IMMP,LIP ,ADDL,STL ,POPA,
+	// F3: IEEE arithmetic (docs/c4-float.md)
+	FPU ,
+	// 16-bit loads and store, logical shift right (docs/c4-16bit.md)
+	LH  ,LHU ,SH  ,LSR ,LCU ,
 	// End of instructions
 	INS_SIZE,
 };
@@ -1028,10 +1267,10 @@ int loadc4r_run (char *file, int argc, char **argv) {
 
 	alt_file = 0;
 
-	if (!(module = c4r_load(file))) {
+	if (!(module = c4r_load_opt(file, C4ROPT_SYMBOLS | C4ROPT_RUN))) {
 		// Attempt a version with .c4r appended
 		alt_file = strcpycat(file, ".c4r");
-		if (!(module = c4r_load(alt_file))) {
+		if (!(module = c4r_load_opt(alt_file, C4ROPT_SYMBOLS | C4ROPT_RUN))) {
 			printf("lc4r: unable to open '%s' or '%s'\n", file, alt_file);
 			free(alt_file);
 			return 1;

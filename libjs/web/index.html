@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c4m.js</title>
+<link rel="stylesheet" href="style.css">
+<!-- cross-origin isolation where the server cannot give it (GitHub Pages) -->
+<script src="../coi.js"></script>
+</head>
+<body>
+<header id="bar">
+  <span id="brand">c4m<span class="dim">.js</span></span>
+  <label>system
+    <select id="system"></select>
+  </label>
+  <button id="reset" title="boot again from the same image">Reset</button>
+  <button id="pause" title="stop the clock">Pause</button>
+  <button id="ctrlc" title="send Ctrl-C (SIGINT)">Ctrl-C</button>
+  <button id="pastebtn" title="type the clipboard into the terminal, a line at a time as the machine reads it (or Ctrl+Shift+V, Shift+Insert, or the terminal's right-click menu)">Paste</button>
+  <button id="resetfiles" style="display: none"
+          title="forget every file this system saved in this browser, and boot again from the disk as it ships">Reset Files</button>
+  <button id="savedbtn" style="display: none"
+          title="the files this system keeps in this browser, to download">Saved Files</button>
+  <button id="uploadsbtn"title="files of your own, kept in this browser and put on the machine's disk at every boot">Uploads</button>
+  <button id="configure" title="the machine's settings: they are the page's URL, and take effect on OK">Configuration</button>
+  <span id="status">loading&hellip;</span>
+</header>
+<main id="panes">
+  <section class="pane" id="term-pane">
+    <div class="pane-head">
+      <h2>terminal</h2>
+      <span id="kbd" class="pill">click to type</span>
+    </div>
+    <div id="terminal" tabindex="0" data-placeholder="booting&hellip;"></div>
+  </section>
+  <div id="splitter" title="drag to share the width between the terminal and the display; double-click to reset"></div>
+  <section class="pane" id="display-pane">
+    <div class="pane-head">
+      <h2>display</h2>
+      <span id="display-info" class="pill">no program drawing</span>
+    </div>
+    <div id="display-wrap"><canvas id="display" width="640" height="480"></canvas></div>
+  </section>
+</main>
+<dialog id="config">
+  <form method="dialog" id="config-form">
+    <h2>Configuration</h2>
+    <p class="dim">The machine's settings, which are the page's URL. OK boots it again with them.</p>
+    <div id="config-fields"></div>
+    <div class="config-buttons">
+      <button type="button" id="config-defaults" title="every setting back to its default">Defaults</button>
+      <span class="grow"></span>
+      <button type="button" id="config-cancel">Cancel</button>
+      <button type="submit" id="config-ok" class="primary">OK</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="uploads">
+  <form method="dialog">
+    <h2>Uploads</h2>
+    <p class="dim">Files of your own, kept in this browser and put on the machine's disk
+      at every boot, beside the disk's own files, so a program opens them by name. C4IX lists
+      them in <code>/home</code>, or in the folder picked below; C4DOS has them on <code>B:</code>, its home
+      drive (<code>B:\DUKE3D</code> for <code>/home/duke3d</code>), where an upload hides a file of the same
+      name of your own while it is uploaded. Names are made lower case. Drop files on the page, or add them here.
+      A game that plays your own files looks in its folder first, then in <code>/home</code>.</p>
+    <div class="uploads-to">
+      <label>Put new files in <select id="uploads-folder"></select></label>
+      <span id="uploads-folder-what" class="dim"></span>
+    </div>
+    <ul id="uploads-list"></ul>
+    <details id="uploads-needs-box" open>
+      <summary>What the games need</summary>
+      <p class="dim">Each game that plays your own files, the files it wants (put them in its folder, or in
+        <code>/home</code>), and where to start it once they are here: under C4DOS, grin's Program Manager
+        has them in its Full Games (Uploads) group, with a README.TXT that says this too.</p>
+      <ul id="uploads-needs"></ul>
+    </details>
+    <div class="config-buttons">
+      <button type="button" id="uploads-add">Add files&hellip;</button>
+      <button type="button" id="uploads-clear">Forget all</button>
+      <span class="grow"></span>
+      <button type="submit">Close</button>
+      <button type="button" id="uploads-boot" class="primary" title="boot again, with the uploads as they are now">Boot with them</button>
+    </div>
+    <input type="file" id="uploads-input" multiple hidden>
+  </form>
+</dialog>
+<dialog id="saved">
+  <form method="dialog">
+    <h2>Saved Files</h2>
+    <p class="dim" id="saved-what"></p>
+    <ul id="saved-list"></ul>
+    <div class="config-buttons">
+      <button type="button" id="saved-all" title="every file here, in one tar archive">Download all (.tar)</button>
+      <button type="button" id="saved-refresh">Refresh</button>
+      <span class="grow"></span>
+      <button type="submit" class="primary">Close</button>
+    </div>
+  </form>
+</dialog>
+<script type="module" src="app.js"></script>
+</body>
+</html>

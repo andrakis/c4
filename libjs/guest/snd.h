@@ -1,0 +1,97 @@
+// snd.h -- the libjs sound card, from inside the machine: an AdLib (OPL2,
+// and the OPL3's second bank), sixteen channels of 8-bit samples, the PC
+// speaker, and a MIDI port. docs/libjs-design.md "The sound card".
+//
+// ANNOUNCED, NEVER PROBED: call snd_present() first. On a machine without
+// the card the registers at 0x480 are ordinary memory.
+//
+// The OPL is written as a sound card's interrupt would write it: some
+// registers, then snd_wait() for the time until the next ones. Each write
+// is stamped with the stream's time, not with when the program got round
+// to it, so music plays evenly however unevenly the program runs, as long
+// as it keeps the stream ahead: make more while snd_ahead() is short.
+// Samples and the speaker play now.
+//
+// The OPL's registers are the card's, not a program's, and so is its mode:
+// it is an OPL3, and one program's 0x105 = 1 (Doom's) stays until another
+// writes it, or snd_reset(). In that mode a channel sounds only with its
+// 0xC0 left/right bits (0x10, 0x20), which an OPL2 program never sets, so
+// it plays silence. An OPL2 program puts the card back first, 0x104 and
+// 0x105 = 0, or snd_reset() (which also stops everyone's samples); an OPL3
+// program that turns the mode on turns it back off as it ends.
+//
+// The MIDI port is there to play when snd_caps() has SND_HAS_MIDI: the
+// person chose General MIDI music, and a synth hears it, as an MPU-401's
+// MIDI OUT would have had a Sound Canvas on it. A game then plays its
+// music there instead of on the OPL. Its messages are stamped with the
+// stream's time, as OPL writes are, and snd_wait() moves them on alike.
+//
+// The functions are in snd.c, beside this file, which this includes
+// unless C4IX_SHARED is defined: then a program links /lib/libgui.c4s,
+// which has them too. c4cc has no #include: pass this file and snd.c as
+// sources ahead of the program, as build-images.sh does for snd-demo.c.
+//
+//   if (!snd_present()) { printf("no sound card\n"); return 0; }
+//   snd_clock(1000);                       // snd_wait() in milliseconds
+//   snd_opl(0x20, 0x01); ... snd_opl(0xb0, 0x31);    // a note on
+//   snd_wait(500);
+//   snd_opl(0xb0, 0x11);                   // and off, half a second later
+//   snd_play(2, samples, n, 11025, 0xffff);
+
+#ifndef __C4_SND_H
+#define __C4_SND_H 1
+
+enum {
+	SND_CAPS = 0x480, SND_OPL = 0x484, SND_WAIT = 0x488, SND_AHEAD = 0x48c, SND_CLOCK = 0x490,
+	SND_PCM_ADDR = 0x494, SND_PCM_LEN = 0x498, SND_PCM_RATE = 0x49c, SND_PCM_VOL = 0x4a0,
+	SND_PCM_PLAY = 0x4a4, SND_PCM_STOP = 0x4a8, SND_PCM_SETVOL = 0x4ac, SND_PCM_BUSY = 0x4b0,
+	SND_SPK = 0x4b4, SND_RESET = 0x4b8, SND_MASTER = 0x4bc, SND_MIDI = 0x4c0, SND_MIDI_DATA = 0x4c4,
+	SND_PCM_START = 0x4c8, SND_PCM_CHVOL = 0x4cc,
+	C4I_SND = 0x8000
+};
+// CAPS
+enum { SND_HAS_OPL = 1, SND_HAS_PCM = 2, SND_HAS_SPK = 4, SND_HAS_OPL3 = 8, SND_HAS_PCM16 = 16, SND_HAS_MIDI = 32,
+	SND_HAS_START = 64 };
+// snd_play and snd_volume are each one write of the card's (PCM_START,
+// PCM_CHVOL) where it has SND_HAS_START: two programs playing samples at
+// once never mix up one's sample with the other's, as the five writes of
+// PCM_ADDR ... PCM_PLAY can (snd-device.js)
+// sample channels: sixteen since SND_HAS_PCM16, eight on a card without it.
+// Eight were too few for Quake, whose own mixer has eight for what starts
+// besides its ambience and its looped sounds.
+enum { SND_CHANNELS = 16 };
+// MASTER: every sound's volume, 0-255, and this bit to silence them all
+enum { SND_MUTE = 256 };
+
+int  snd_present ();
+int  snd_caps ();
+void snd_reset ();                         // every channel stopped, the OPL zeroed
+// the AdLib
+void snd_opl (int reg, int val);           // reg 0x00-0xff, 0x100-0x1ff the OPL3's second bank
+void snd_clock (int units);                // snd_wait's units per second (default 1000000)
+void snd_wait (int n);                     // the stream moves n units on
+int  snd_ahead ();                         // microseconds the stream is ahead of now
+// samples: unsigned 8-bit mono, copied when played; vol is left | (right << 8)
+void snd_play (int ch, char *data, int len, int rate, int vol);
+void snd_stop (int ch);                    // -1: all of them
+void snd_volume (int ch, int vol);
+int  snd_busy ();                          // a bit for each channel still playing
+// the PC speaker: a square wave at 1193180 / divisor Hz, 0 for quiet
+void snd_speaker (int divisor);
+// everything the card plays, scaled: 0-255 (255 as made), | SND_MUTE for
+// none of it. The person's to choose (the C4IX desktop's tray), not a
+// program's; snd_reset leaves it as it was.
+void snd_master (int vol);
+int  snd_master_get ();
+// the MIDI port (SND_HAS_MIDI): a whole short message, as many data bytes
+// as its status takes; or bytes one at a time, as an MPU-401's data port
+// took them in UART mode (running status, and system exclusives F0 ... F7)
+void snd_midi (int status, int data1, int data2);
+void snd_midi_byte (int b);
+void snd_midi_bytes (char *p, int n);
+
+#ifndef C4IX_SHARED
+#include "snd.c"
+#endif
+
+#endif // __C4_SND_H

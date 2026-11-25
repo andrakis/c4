@@ -23,6 +23,11 @@
 #include <string.h>
 #include <memory.h>
 #include <fcntl.h>
+// A native build opens with the host's own flags, and on Windows
+// (docs/windows.md) asks for bytes, not text: Linux has no O_BINARY.
+#if NATIVE && !defined(O_BINARY)
+#define O_BINARY 0
+#endif
 
 #ifdef __GNUC__
 #include <unistd.h>
@@ -36,7 +41,15 @@
 
 // For windows, remove __attribute__
 #ifndef __GNUC__
+// ...but NOT under c4cc. __attribute__((constructor)) is how a source
+// tells c4cc which functions belong in the image's constructor table,
+// and every C4KE extension registers itself from one. Stripping it
+// here is why a kernel PREPROCESSED BY OUR OWN cpp (the in-machine
+// build: C4DOS runs cpp.c4r, which does not define __GNUC__) came up
+// with zero extensions, while the host build via gcc -E did not.
+#ifndef __c4cc__
 #define __attribute__(x)
+#endif
 // No SIGRTMAX, define our own
 #define SIGRTMAX 64
 #endif

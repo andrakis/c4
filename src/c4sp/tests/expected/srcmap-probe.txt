@@ -1,0 +1,26 @@
+Source map: version 1, 130 bytes
+  2 files
+    0 src/tests/srcmap_probe.c, 780 bytes, crc 33791c7f
+    1 src/tests/srcmap_probe.h, 384 bytes, crc d2c5eb7d
+  3 functions
+         0    32 fact, file 1 line 14
+        32    11 add, file 0 line 14
+        43   128 main, file 0 line 16
+  17 rows
+         0 1:14
+         2 1:16
+        11 1:17
+        14 1:18
+        32 0:14
+        43 0:16
+        45 0:20
+        51 0:21
+        66 0:22
+        83 0:21
+        96 0:23
+       108 0:24
+       117 0:25
+       128 0:24
+       130 0:26
+       151 0:27
+       168 0:28

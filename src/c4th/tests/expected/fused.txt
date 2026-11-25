@@ -1,0 +1,11 @@
+LDL  ok
+LDG  ok
+PSHL ok
+PSHG ok
+LEAP ok
+IMMP ok
+LIP  ok
+ADDL ok
+STL  ok
+POPA ok
+fused: 0 mismatches

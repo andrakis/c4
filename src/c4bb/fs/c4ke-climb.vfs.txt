@@ -1,0 +1,54 @@
+# c4ke-climb.vfs.txt -- the tree for a medium INSTALL wrote.
+#
+# c4ke.vfs.txt next door describes c4ke-root, which carries every
+# binary AND a .c beside each one. A climb medium is a different shape:
+# it carries the binaries, and it carries the sources as ARCHIVES,
+# because `tar x c4ke-src.tar` inside the running system is a step the
+# player takes rather than something the disk does for them.
+#
+# So this manifest names no loose .c files. Pointing the c4ke-root one
+# at a climb medium works -- vfsload skips what it cannot find and says
+# how many it got -- but it prints two dozen "cannot open" lines on the
+# way up, for files that were never meant to be there. On an 80x25
+# console that is the whole boot.
+#
+# This file is SOURCE, not a build artifact. The Makefile copies it
+# onto the climb disk as c4ke.vfs.txt, install.lst puts it on the
+# medium, and vfsload reads it when the medium boots.
+#
+# Keep it beside src/c4dos/fs/install.lst: this says what the tree
+# looks like, that says what is on the disk, and a name in one and not
+# the other is a name vfsload will report.
+
+#
+# Definitions
+#
+# c4cc is not here: the compiler on a climb medium is c4sc (c4lc
+# compiled), and c4cc is a C4DOS tool that stayed on the floppy.
+BIN_CORE  = c4 c4m
+BIN_BENCH = bench benchtop innerbench
+BIN_C4R   = c4rlink
+BIN_UTIL  = type xxd top ls ps echo cat kill spin c4le tar save b4ke reboot
+# c4ke itself is deliberately NOT here, for the reason c4ke.vfs.txt
+# gives: it is a kernel, and a nested copy would fight the running one
+# for the trap-handler slot and the custom-opcode table.
+BIN_C4KE  = c4ke.vfs init vfsload
+BIN_SHELL = c4sh
+BIN_ALL   = $(BIN_CORE) $(BIN_BENCH) $(BIN_C4R) \
+            $(BIN_UTIL) $(BIN_C4KE) $(BIN_SHELL)
+BIN_TEST  = mandel rps raycast
+
+#
+# Filesystem tree
+#
+/: root
+	each($BIN_ALL):
+		# Until c4sh uses a PATH, the names have to be in the root as
+		# well as in bin/.
+		$1: ilink(/bin/$1)
+		bin/:
+			$1: $1.c4r
+	home/:
+		user/:
+			each($BIN_TEST):
+				$1: $1.c4r

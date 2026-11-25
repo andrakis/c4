@@ -1,0 +1,1783 @@
+# C4OR1K — jor1k ported to C, compiled by c4lc
+
+`src/c4or1k` is an OR1000/OpenRISC CPU emulator, capable of booting a
+real Linux kernel in a console, written in C and compiled by c4lc. It
+is a port of [jor1k](https://github.com/s-macke/jor1k) (a JavaScript
+OR1000 emulator originally built for the browser) to the C4 VM
+toolchain — the same toolchain that carries C4KE and C4IX. Console
+only: no framebuffer, no keyboard device.
+
+Status, 2026-09-30: M0-M18 done. Terminal raw mode was an external
+concern (`run-c4or1k.sh`) until M18, which added c4mp's `TRAW` opcode
+(`__c4_termraw`); boot mode now puts the terminal in raw mode itself,
+under c4mp and in the native build (termios in `native.h`).
+`run-c4or1k.sh` is still used by the M3 targets. "Why fd 0 needs a
+wrapper, not a VM change" below is the pre-M18 reasoning, kept as
+history.
+
+The native build boots to the BusyBox shell in about 3-4 seconds (M15
+measured ~3.6 s, M17 3 s); M14's 6.5-6.7 s is the earlier figure.
+Hosted, the best configuration (the JIT under c4mp) took about 13
+minutes for the same boot.
+
+**Use `c4or1k-boot-mp`, `-jit` or `-native`, not `c4or1k-boot`.** Boot
+mode calls `__c4_termraw` before the kernel starts; plain c4m names
+`TRAW` but does not implement it, and halts on it when no trap handler
+is installed. And booting Linux hosted under c4m takes well over ten
+minutes anyway (~25 minutes before M8's caches). c4m still runs the
+test- and console-mode checks (M1-M3), which never call `TRAW`.
+
+    make c4or1k-boot-native N=700000000     # full boot, native (the fast path)
+    make c4or1k-boot-jit N=700000000        # hosted, fastest: the JIT under c4mp
+
+`make c4or1k-m0`, named in M0 below, no longer exists; `tools/asm_m0.py`
+is still in the tree. The current targets are listed in
+[src/c4or1k/README.md](../src/c4or1k/README.md).
+
+## Why this is tractable
+
+jor1k's core CPU (`jor1k/js/worker/or1k/safecpu.js`, in the sibling
+`jorconsole` repo) is about 1,100 lines: a plain per-instruction
+switch on the primary 6-bit opcode, sub-switches on function-code
+fields, ~100 instruction forms total. c4lc already carries two
+multitasking OSes (C4KE, C4IX) and a hardware-breadboard
+reimplementation of c4m itself (C4BB) — a device-emulation program an
+order of magnitude simpler than either is a reasonable single-person
+port, provided the C4 VM is fast enough (see M0 below) and c4lc's C
+dialect covers what's needed (it does — see "Language notes").
+
+The plan (all milestones, risks, and the jor1k/toolchain findings that
+informed it) lives in the session that designed this; this doc tracks
+results as milestones land.
+
+## Language notes: what bit c4lc's dialect specifically
+
+c4lc supports everything this project needs — structs, bitwise ops,
+function pointers, switch, a real preprocessor (`-P`) — with one sharp
+edge worth calling out because it produced a real bug in M0, not a
+hypothetical one:
+
+**`int` is host-pointer-width (64-bit under the default c4sp/c4m), and
+there was no unsigned type** (c4lc has had one since M4,
+c4lc-design.md §14; `cpu.c` still uses `sext()`). The classic C sign-extension idiom
+`(v << (32 - bits)) >> (32 - bits)` relies on the left shift
+*truncating* at bit 31 — true on a real 32-bit register, false on
+c4lc's 64-bit `int`, where nothing is discarded and the shift-left/
+shift-right pair just reconstructs the original value unchanged. M0's
+first build compiled and ran (no error, no crash reported until
+deep into the loop) but a `l.j` back-branch landed the guest PC at
+`0x4000003` instead of 4 instructions back, and the VM eventually hit
+unmapped memory. `cpu.c`'s `sext(v, bits)` fixes this with a
+width-independent mask + XOR/subtract form instead of shift/truncate —
+correct at any word width, not just 32. Every subsequent milestone
+that extracts a signed field from an instruction word must use it, not
+the shift trick.
+
+Other dialect notes from the toolchain investigation, relevant from M1
+onward: `>>` on a signed `int` is arithmetic (it was the only kind
+then) — OR1000's `l.srl` (logical
+shift right) needs the same kind of explicit masking, not a shift
+trick. No multi-dimensional arrays — guest RAM and the SPR groups are
+flattened to 1-D, which is how jor1k indexes them internally anyway.
+No struct-by-value params/returns — not needed here.
+
+## Why fd 0 needs a wrapper, not a VM change
+
+*(Pre-M18. M18 gave c4mp a `TRAW` opcode, so this is no longer the
+whole story; see M18 below.)*
+
+No `ioctl`/`termios` facility exists anywhere in c4/c4m: `READ`/
+`WRITE` are thin wrappers over the host's `read()`/`write()`, so the
+guest just inherits whatever termios state fd 0 already has.
+`run-c4or1k.sh` puts the terminal in raw mode before exec'ing the
+emulator and restores it on exit via a trap — the only viable
+approach, and the same division of responsibility C4IX's `console.c` uses
+(cooked tty assumed, worked around at the OS layer). Console I/O
+(M3) will also reuse `console.c`'s non-blocking-second-fd pattern for
+stdin, since a blocking `read()` on fd 0 would freeze the whole
+single-threaded VM process while waiting for a keystroke.
+
+## Milestones
+
+**M0 — throughput sanity check + decode skeleton. Done.**
+`main.c` hand-assembles a decrement-and-branch loop (`tools/asm_m0.py`
+generates the encodings, read directly from safecpu.js's opcode
+numbers and field positions, not the OR1000 spec) over 8 real OR1000
+opcodes, using the same pc/nextpc delay-slot scheme safecpu.js uses,
+and measures wall-clock guest-instructions/sec on the real c4/c4m VM.
+
+**Result: ~1.37M guest instructions/sec** (6,000,006 instructions in
+~4.4s; `make c4or1k-m0`), against a pre-M0 worst-case estimate of only
+50K–200K/sec. VM cycle count for the same run was ~1.21B, i.e. ~200
+VM "cycles" per dispatched guest instruction (c4m's cycle counter,
+`__c4_cycles()`, does not appear to be 1:1 with dispatched VM bytecode
+ops — see caveat below).
+
+**Caveat, read before treating this as the answer for M1+:** this
+number is a best case. It's a syscall-free, trap-free, memory-array-
+free tight loop over 8 opcodes with a 2-way branch — no byte-addressed
+RAM access with endian composition + masking (M1), no SPR/exception
+overhead (M2), no per-instruction-batch host polling (M3+). The real
+ISA's ~100-form switch and the added per-access work will bring this
+down; M1 should re-measure on the full decoder before trusting a boot-
+time projection. That said, the gap between 1.37M/sec and the 50K/sec
+floor that would have made this impractical is wide enough that
+**the project is a clear go** — M1 is worth building.
+
+**M1 — full ISA decode. Done.** `cpu.c`/`cpu.h`/`mem.c`/`mem.h` (split
+out of M0's single `main.c`, linked with c4rlink the way `src/c4mp`
+does it) implement every non-privileged OR1000 integer instruction
+safecpu.js has: arithmetic, shifts, `ff1`/`fl1`, `mul`/`div`/`divu`,
+all register and immediate compares, branch-delay-slot-correct
+`l.j`/`l.jal`/`l.jr`/`l.jalr`/`l.bf`/`l.bnf`, every load/store width
+including `l.lwa`/`l.swa`'s reservation mechanism. No MMU, no SPRs, no
+exceptions yet — `l.mfspr`/`l.mtspr`/`l.rfe`/`l.sys`/`l.trap` fall
+through to an explicit "unimplemented, dump state and halt" path
+(M2's job). `main.c` now loads a flat binary of assembled words at
+guest address 0 and runs it as a test-program harness rather than
+M0's fixed throughput loop.
+
+**Verification: bit-for-bit match against jor1k.** `tools/asm.py` (a
+small two-pass assembler with labels) and `tools/or1k-oracle.js` (a
+headless Node driver that requires jor1k's actual `safecpu.js` — not
+a transcription of it) let `tests/m1_test.s` run through both
+implementations and diff every register, `SR_F`/`SR_CY`/`SR_OV`, and
+a 64-word RAM window every test result is written into (`make
+c4or1k-m1-check`). Current state: **exact match**, covering every
+instruction form at least once.
+
+Three real bugs surfaced building this, each worth keeping in mind
+for M2 onward:
+
+1. **c4lc's enum initializers must be a literal, not an expression.**
+   `enum { RAM_SIZE = 1 << 20 };` fails to compile ("bad enum
+   identifier") — c4lc's enum parser only accepts a `Num` token.
+   Write the literal (`0x100000`) instead.
+2. **c4lc's data segment is capped at 256KB** (`g:DMAX` in
+   `c4lc-gen.lisp`, shared across every global in the whole linked
+   program) — a `char ram[RAM_SIZE]` static array fails to compile
+   ("data segment full") at any size that matters, and M4 needs room
+   for a 5.7MB `vmlinux.bin` regardless. `mem.c` allocates `ram` with
+   `malloc()` instead (`mem_init()`), which comes from the VM's
+   heap, not the fixed data segment. This wasn't a workaround for a
+   one-off problem — any future large guest-RAM-shaped buffer needs
+   the same treatment.
+3. **OR1000's mandatory branch delay slot is not optional to get
+   right, including in test code.** The first draft of
+   `tests/m1_test.s` placed real instructions directly after
+   `l.bf`/`l.j` with no `nop`, so the delay-slot instruction (which
+   *always* executes, taken or not) silently overwrote every
+   compare's result — all ten compares read back "true" regardless of
+   the actual condition. cpu.c's decode was correct; the test program
+   wasn't. Caught immediately by the oracle diff, not by inspection.
+
+The oracle itself needed two rounds of fixes before it was trustworthy
+(both are `or1k-oracle.js`'s problem, not cpu.c's, but they cost real
+time misdiagnosing cpu.c first): jor1k's `SafeCPU` aliases the
+register file onto heap byte 0, so real RAM has to start at heap
+offset `0x100000` (`system.js`'s `ramoffset`) or a loaded test program
+silently clobbers `r0`-`r9` before executing a single instruction; and
+jor1k's "Big" memory accessors are not big-endian byte composition at
+all — `Read32Big`/`Write32Big` are plain native `int32mem[addr>>2]`
+access, and `Read8Big`/`Read16Big` reach the same native storage via
+XOR'd addressing (`addr^3`, `addr^2`) rather than physically
+byte-swapped storage. An oracle that invents its own "obviously
+correct" big-endian formula instead of reading `ram.js` will produce
+self-consistent-looking wrong answers, not a crash.
+
+**M2 — SPRs, exceptions, MMU, real TLB-miss vectors. Done.** `cpu.c`
+gained: the full SR flag register (`cpu_set_flags`/`cpu_get_flags`,
+packing/unpacking all 17 flag bits exactly as safecpu.js's SetFlags/
+GetFlags do); `cpu_get_spr`/`cpu_set_spr` (group 0 general SPRs +
+SR, group 1/2 DTLB/ITLB match+translate registers, group 9 PIC,
+group 10 tick timer -- TTMR/TTCR are stored but nothing fires
+`EXCEPT_TICK` automatically yet, see below); `cpu_exception` (EPCR/
+EEAR/ESR save, the EXCEPT_SYSCALL-vs-everything-else EPCR-offset
+distinction, the flag resets, the vector jump); `l.mfspr`/`l.mtspr`/
+`l.rfe`/`l.sys`/`l.trap`, all real now; and `dtlb_lookup`/`fetch_ins`,
+which check the current DTLB/ITLB match register and permission bits
+and raise `EXCEPT_DTLBMISS`/`EXCEPT_ITLBMISS`/`EXCEPT_DPF`/
+`EXCEPT_IPF` on a miss or fault -- **not** a page-table walk. Per the
+plan, that's deliberate: real OR1000 software (the guest kernel) owns
+its own page tables and installs the resulting TLB entry with
+`l.mtspr` from its own miss handler; this function's only job is to
+notice there's no entry and raise the vector, exactly as safecpu.js's
+`DTLBLookup`/`GetInstruction` do.
+
+**Verification: bit-for-bit match against jor1k, again.**
+`tests/m2_test.s` exercises: a general-SPR read/write round-trip; the
+SR flag round-trip through `l.mtspr`/`l.mfspr` (including SR_FO being
+force-set on every write, matching `cpu_set_flags`); `l.sys` and
+`l.trap` each firing their real vector, with tiny handlers planted at
+the *actual* vector addresses via a new `.org` assembler directive
+(`tools/asm.py`) rather than inline with the code that triggers
+them -- that's genuinely where the CPU jumps; and a full DTLB-miss
+round trip: an `l.lwz` faults with no TLB entry installed, the
+handler at `EXCEPT_DTLBMISS`'s vector installs a matching entry via
+two `l.mtspr`s and returns with `l.rfe`, which (per real OR1000
+semantics, `EPCR` pointed *at* the faulting instruction, not past it)
+retries the same `l.lwz` -- which now succeeds and reads back the
+value pre-stored at that physical address. `make c4or1k-m2-check`:
+**exact match**, first real run.
+
+Two things worth flagging, one a real fidelity note and one a
+deliberate scope cut:
+
+- **`EXCEPT_SYSCALL` and every other exception type save `EPCR`
+  differently, and it matters for how a handler must behave.**
+  `EXCEPT_SYSCALL` saves `(pc<<2)+4`, so a plain `l.rfe` naturally
+  continues at the instruction *after* the trap. Everything else
+  (`EXCEPT_TRAP` included) saves `(pc<<2)` — pointing *at* the
+  faulting/trapping instruction — so a handler that wants to return
+  past it (as `tests/m2_test.s`'s trap handler does) must bump `EPCR`
+  by 4 itself before `l.rfe`, and a TLB-miss handler that does
+  *nothing* to `EPCR` gets the retry-on-return behavior automatically.
+  Both are exercised in the test program precisely because they're
+  easy to get backwards.
+- **TLB entry LRU bits are not checked at all** (real jor1k aborts —
+  crashes the whole worker — if a guest ever sets them; nothing in
+  this project's test programs does either). Not a page-table walk
+  either, per above — that's the guest kernel's job starting at M4.
+  Automatic tick-timer interrupt delivery is also still deferred:
+  `TTMR`/`TTCR` are readable/writable SPRs now, but nothing fires
+  `EXCEPT_TICK` on a schedule yet, since that needs the main-loop
+  batching M3/M6 add.
+
+**M3 — UART + launch script + console I/O. Done.** `uart.c` is a
+16550-compatible device matching `jor1k/js/worker/dev/uart.js`
+exactly (register offsets, LSR/IER/IIR/FCR bits, the DLAB-aliased
+DLL/DLH pair, the CTI/THRI/MSI interrupt-priority order) at MMIO base
+`0x90000000`, IRQ line 2 (both confirmed against jor1k's `system.js`).
+`mmio.c` is a minimal top-byte dispatcher (`mem.c`'s `ram_l*`/`ram_s*`
+now check bit 31 of the address and route there instead of into
+`ram[]`) — one device today, shaped to add more at M5. `console.c` is
+`src/c4ix/console.c`'s non-blocking-second-fd pattern verbatim (same
+reason: a blocking `read(0, ...)` would freeze this single-threaded
+VM), polled every `main.c` loop iteration — cheaply, since the gate
+inside `con_poll_and_feed()` itself rate-limits the actual host
+`read()` call, the same way `con_poll()` does. `run-c4or1k.sh` (M0)
+needed no changes; it was already the correct wrapper.
+
+**Verification: two working echo servers, byte-for-byte.**
+`tests/m3_echo.s` polls `LSR` and echoes; `tests/m3_echo_int.s` does
+the same job but interrupt-driven — `UART_IER_RDI` + `SR_IEE` +
+`PICMR`, with the actual echo happening in a handler at
+`EXCEPT_INT`'s real vector, exercising the whole M2+M3 IRQ pipeline
+end to end (UART → `cpu_raise_interrupt` → `PICMR`/`PICSR` →
+`cpu_check_for_interrupt` → `EXCEPT_INT` → handler → `l.rfe`). Both
+halt on Ctrl-D (0x04) and both are checked non-interactively by piping
+a string ending in Ctrl-D through `run-c4or1k.sh` and diffing the
+echoed bytes against the input (`make c4or1k-m3-check`,
+`c4or1k-m3-int-check`) — **exact match**, first real run, for both.
+Neither is cross-checked against jor1k's own oracle the way M1/M2's
+tests are: extending `tools/or1k-oracle.js` to simulate real-time
+stdin arrival wasn't worth building for this milestone, so this is
+functional verification (the echo is provably correct) rather than
+the bit-for-bit-against-jor1k standard set earlier — worth knowing if
+a future milestone's UART-adjacent change ever needs a stronger check
+than "does it still echo."
+
+One real design decision worth recording: the interrupt-driven test's
+handler can't just `l.rfe` back to the spin loop when it sees Ctrl-D
+— main.c's `cpu_step(halt_pc)` harness needs the program to reach a
+known final address to stop, and an intentionally-infinite spin loop
+never does that on its own. The handler instead **overwrites its own
+return address**: `movhi`/`ori` builds `final_halt`'s byte address
+(the same `%hi`/`%lo` trick `tests/m1_test.s` uses for `l.jalr`),
+`l.mtspr`s it into `EPCR`, then `l.rfe`s — landing execution at
+`final_halt` instead of back in the spin loop. Ordinary OR1000 code,
+not a c4or1k-specific mechanism; worth remembering as a pattern for
+any future test whose main flow doesn't naturally terminate.
+
+**M4 — boot loader. Done — real Linux boots.** `boot.c`'s
+`load_kernel`/`patch_kernel` are a direct port of `system.js`'s
+`OnKernelLoaded`/`PatchKernel`: `jorconsole/jor1k-sysroot/or1k/
+vmlinux.bin` is already a decompressed raw flat binary (jorconsole's
+own postinstall unpacked it), so `load_kernel` is a plain streamed
+`read()` straight into `ram[]` at address 0 — no bzip2 or ELF parsing,
+and no `Little2Big` byte-swap either (mem.c already stores genuine
+big-endian bytes in the file's natural order, so there's nothing to
+swap). `patch_kernel` replicates the exact byte-offset/value guard
+`PatchKernel` uses to find the DTB's `"memory\0"` property and
+overwrite its size cell — copied verbatim rather than re-derived, per
+the original plan. `main.c` gained a boot mode (`-b [maxsteps]`) that
+starts execution at the real reset vector (`0x100`, not address 0)
+with no natural halt address, since a kernel doesn't fall off the end
+of its own image; `maxsteps` bounds a run by instruction count, the
+only stopping mechanism available before real panic detection exists.
+
+**Result: `make c4or1k-boot` reaches the exact expected panic.**
+`VFS: Cannot open root device "host" or unknown-block(0,0): error -2`
+/ `Kernel panic - not syncing: VFS: Unable to mount root fs on
+unknown-block(0,0)`, printed once, with the CPU then idle (no spin of
+repeated panic output) — the standard, generic Linux VFS failure any
+emulator without a working root filesystem produces, not jor1k- or
+c4or1k-specific text, so this is strong independent evidence on its
+own rather than something that needed a side-by-side jorconsole run
+to trust. Along the way the real kernel boot banner, memory/MMU setup
+(`setup_memory`, `map_ram`, `itlb_miss_handler`/`dtlb_miss_handler`
+registration), the full kernel command line
+(`root=host rootfstype=9p rootflags=trans=virtio console=uart,mmio,
+0x90000000,115200 ...`), and dozens of subsystem/driver init messages
+(network protocol families, TCP/UDP hash tables, SCSI, ALSA, block
+layer, io schedulers, 9P/v9fs registration) all appear correctly on
+the UART console — exercising the CPU, exceptions, DTLB/ITLB, and
+UART/MMIO layers against real, unmodified Linux code far beyond
+anything the hand-written M1-M3 test programs touched.
+
+Devices this project doesn't implement (virtio-block at three
+addresses, a second UART/`ttyS1`, DRM/framebuffer, ATA/PATA, keyboard/
+touchscreen, ethernet, RTC) all probe and fail *gracefully* — the
+kernel's own drivers print their normal "not found"-style messages
+(`Wrong magic value 0x00000000!`, etc.) and move on, rather than the
+boot wedging. `mmio.c`/`mem.c` print one diagnostic line per
+unrecognized access rather than faulting, which is what makes this
+observable at all instead of an opaque hang.
+
+**One real bug found and fixed, and it was the reason the first boot
+attempt never got here**: automatic tick-timer interrupt delivery had
+been deliberately deferred all the way from M2 ("needs the main-loop
+batching M3/M6 add" — see this doc's M2 section). The very first boot
+attempt got only as far as the ATA/PATA driver probe before getting
+stuck retry-polling forever — a strong signal that *something* waits
+on a timeout that never expires, and TTMR/TTCR being pure inert
+storage (readable/writable via `l.mtspr`/`l.mfspr`, but never firing
+`EXCEPT_TICK`) was exactly that something: any kernel code path
+blocked on jiffies advancing hangs forever without it. `cpu_tick_check`
+(cpu.c) ports safecpu.js's Step-loop tick logic — advance `TTCR`,
+raise `EXCEPT_TICK` when `SR_TEE` and the pending bit are set —
+restructured for a one-instruction-at-a-time driver instead of
+jor1k's N-at-a-time `Step(steps, clockspeed)`: `main.c` calls it every
+64 instructions, matching jor1k's own batch cadence but coarser on
+delivery latency (up to 63 instructions late), which doesn't matter
+for unblocking a timeout. Once wired in, the *same* 100M-instruction
+budget that previously never left the ATA probe reached the panic
+with room to spare. Worth remembering for M6 ("IRQ/timer tuning"):
+the tick mechanism itself was pulled forward from there because M4
+needed it, not because M6 turned out to be unnecessary — M6's job is
+tuning cadence/batch size for a full interactive boot, not building
+tick delivery from scratch.
+
+**M5 — 9P root filesystem (basefs.json only). Done — the kernel
+mounts it.** Four new modules, `tools/mkbootfs.js` (offline, Node):
+
+- `bootfs.c`/`bootfs.h` — the inode tree. `filesystem.js`'s async,
+  network-fed `FS` object has no equivalent here: everything
+  `basefs.json` describes is either already resident (loaded from
+  `bootfs.blob` at startup) or created synchronously by a 9p request,
+  so every `bootfs_*` call returns immediately — no `AddEvent`
+  deferred-callback machinery needed. Inodes are parallel `malloc`'d
+  int arrays (mode/uid/gid/parentid/firstid/nextid/size/bloboff),
+  matching mem.c's own reasoning: c4lc's 256KB data-segment cap is
+  shared across every global in the linked program, so anything
+  nontrivially sized has to be heap-allocated rather than a static
+  array. Directory listings (`.`/`..`/children, in 9p2000.L's Q/d/b/s
+  wire format) are built lazily on first open and cached, mirroring
+  `FillDirectory`'s `updatedir` dirty-flag pattern exactly.
+- `virtio.c`/`virtio.h` — the virtio-mmio transport, matched against
+  `dev/virtio.js`'s `VirtIODev` at the register level (same offsets,
+  same "modern" version=2 negotiation, so legacy-only fields like
+  `QUEUEALIGN`-driven ring layout never come into play). Only one
+  device exists (the 9p filesystem), so unlike jor1k's generic
+  `dev.ReceiveRequest`/`dev.SendReply` callback object, this calls
+  `virtio9p_receive_request()` directly.
+- `virtio9p.c`/`virtio9p.h` — the 9P2000.L protocol handler, ported
+  op-for-op from `dev/virtio/9p.js` (statfs, walk, {t,l}open, lcreate,
+  mkdir, symlink, readlink, link, mknod, getattr, setattr, read,
+  treaddir, write, renameat, unlinkat, clunk, xattrwalk, version,
+  attach, flush, lock) — everything the reference implements except
+  the "always report full capabilities" xattr behavior, deliberately
+  narrowed to "report no xattr support" instead, which just makes the
+  guest kernel fall back to the plain setuid-bit permission model any
+  real capability-less filesystem would produce.
+- `tools/mkbootfs.js` — flattens `basefs.json` plus every file's real
+  content (decompressing `bin/busybox.bz2` via the host's `bunzip2`,
+  simpler and more robust than re-hosting jor1k's own `bzip2.js` in a
+  Node build script that never runs inside `c4m`) into `bootfs.idx`
+  (fixed 64-byte records) + `bootfs.blob` (concatenated file bytes),
+  offline, at build time — `bootfs.c` has no JSON parser and no
+  network, so this has to happen before the emulator ever runs.
+
+**Verification note, a deliberate scope change from the plan.** The
+plan called for diffing a jorconsole-captured 9p request/response
+trace against this port's own trace. In practice jorconsole's own
+`fsloader.js` is async/network-fed even for `basefs.json`, so it isn't
+a clean, deterministic byte-for-byte oracle the way `safecpu.js` was
+for M1/M2 — and the more meaningful gate at this stage is simpler
+anyway: does a real, unmodified kernel actually mount the filesystem
+and exec real userspace binaries through it. It does (see below), which
+exercises the protocol far more thoroughly than a captured trace from
+one boot would.
+
+**Two real bugs found the hard way, both by bisecting a real boot
+against a c4m-level `gdb` backtrace, not by inspection:**
+
+1. **`rd_le32`'s missing sign extension (bootfs.c) — the actual root
+   cause of a SIGSEGV that took most of a day to pin down.** Every
+   `-1` sentinel `mkbootfs.js` writes (empty directories' `firstid`,
+   list-terminator `nextid`, the root's `parentid`) is stored as its
+   real byte pattern, `0xFFFFFFFF`. `bootfs.c`'s byte-composing reader
+   didn't sign-extend that back to `-1` the way `cpu.c`'s `sext()`
+   does for exactly this class of value — c4lc's 64-bit `int` reads it
+   back as the *positive* 4294967295 instead. `bootfs_search`'s
+   `while (id != -1)` loop then treats that as a real, wildly
+   out-of-bounds inode index, computes a pointer from it, and
+   dereferences it. This only ever fires when a walk reaches an empty
+   directory or a list's true end — invisible to any hand-written test
+   program, and in a real boot it first triggers resolving `/sbin/init`
+   (`/sbin` is empty in `basefs.json`; `init` only exists as a symlink
+   under `/bin`), i.e. exactly the point a kernel's own init-path probe
+   sequence is expected to try and fail. Symptoms were badly
+   misleading before this was found: the crash *looked* sensitive to
+   unrelated changes (cpu.c's dispatch style, mem.c's 16-bit MMIO
+   path, c4m's `-P` pool-size flag, even stdio buffering) because each
+   of those shifts `malloc`'s heap layout enough to sometimes land the
+   wild pointer in unmapped memory (a hard crash) and sometimes not
+   (silent, undetected corruption) — none of them were the actual bug.
+   The fix is one function: `rd_le32` masks to 32 bits then applies
+   the same mask+XOR/subtract sign-extension `cpu.c`'s `sext()` uses.
+   Pinned down by adding `stdbuf -oL`-forced unbuffered logging (stdio
+   is fully buffered against a non-tty output, so a crash mid-run was
+   silently discarding the last several KB of already-*printed*
+   diagnostic output every time) plus targeted `printf`s in the 9p walk
+   handler, which caught the exact failing call:
+   `bootfs_search(idx=30 /* /sbin */, "init")`.
+2. **A second UART is load-bearing, not optional.** `basefs.json`'s
+   `/etc/inittab` has `ttyS1::respawn:-login -f root` in addition to
+   the console's own `-login -f user` — jor1k's real device map
+   includes a second 16550 (`uartdev1` @ `0x96000000`, IRQ 3), and this
+   project's UART support was single-instance until M5. Without it,
+   `getty`'s driver on ttyS1 never gets a coherent "no data yet, sleep"
+   signal from the generic "unimplemented device" MMIO fallback and
+   hot-loops polling registers forever, burning the entire instruction
+   budget before `ttyS0`'s own login ever gets scheduled. Fixed by
+   parameterizing `uart.c` (all per-UART state as `int[2]` arrays, a
+   `unit` argument threaded through every function) rather than
+   duplicating the module — unit 1 has no real byte source (there's
+   only one host terminal, wired to unit 0 via `console.c`), so its own
+   `getty` just blocks forever exactly like a real unconnected serial
+   port would, which is the correct, harmless outcome.
+
+**A performance fix alongside these, not a correctness one:** once
+real Linux is actually running rather than panicking early, devices
+this project doesn't implement (ethernet's link-status poll, chiefly)
+get probed continuously in the background, not just once during early
+boot the way M4 saw. `mmio.c`'s per-access diagnostic `printf` — fine
+when it fired a handful of times — was measurably the dominant cost
+once it started firing millions of times; `warn_once()` now reports
+each unique top byte a single time.
+
+**M6 — IRQ/timer tuning to reach a shell prompt. Done.** No further
+IRQ/timer tuning actually needed beyond M4/M5's existing tick-check
+cadence — this milestone turned out to be entirely gated on M5's two
+bugs (`rd_le32` and the missing UART1). With those fixed, the boot
+proceeds through the full sequence without further intervention: the
+9p root filesystem mounts (`VFS: Mounted root (9p filesystem)
+readonly on device 0:12.`), real userspace execs (`/etc/init.d/rcS`:
+`mount -a`, `busybox --install`, `mkdir`/`mount` for `/dev/pts` and
+`/dev/shm`, `ifup -a`, `inetd`), `udhcpc` discovers/retries/gives up
+gracefully (no ethernet device exists), and `/etc/inittab`'s
+`ttyS1::respawn:-login -f root` reaches a real, interactive BusyBox
+shell prompt:
+
+```
+-login[130]: root login on 'ttyS1'
+*******************************************************
+* Don't know what to do? Type 'help' and press enter. *
+*******************************************************
+Note, you can exit most programs by pressing CTRL+C
+~ $
+```
+
+— a real, unmodified kernel and root filesystem, not a synthetic
+test, reached entirely through this project's own CPU, MMU, MMIO,
+UART, virtio, and 9p implementations. `stdbuf -oL` was needed to see
+this at all: stdio is fully buffered against a non-tty output, so a
+run's last several KB of already-*printed* text is silently discarded
+if the process is later killed or hits its instruction-budget cutoff
+before a flush.
+
+**One remaining rough edge, not yet fixed:** the console's own
+`::respawn:-login -f user` entry (ttyS0, this project's *only* console
+wired to a real host stdin via `console.c`) hadn't reached its own login
+prompt by the time a piped test command arrived in the same run that
+reached the ttyS1 prompt above — `ttyS1`'s root login happened to get
+scheduled first, and ttyS1 has no real byte source by design (see M5),
+so the piped input landed nowhere useful. This is a scheduling/timing
+question (which `respawn` entry's `getty` wins the race), not a
+correctness bug — the shell above is genuinely interactive, real
+Linux, real 9p, just not yet demonstrated with a live typed command
+against the specific console this project's launch script feeds.
+Worth revisiting if the `run-c4or1k.sh` interactive path (a real
+terminal, not piped input) is exercised directly.
+
+**M7 — stretch.**
+
+- **`c4lc -O`: done, enabled by default.** All ten modules compile
+  clean under `-O`; the linked image is ~1.2% smaller, and a real
+  60M-instruction boot run is ~4% faster (132.6s vs 137.6s) with
+  byte-for-byte identical output on the full M1-M4 regression suite
+  and the boot log itself. Smaller than the ~1.44x this same optimizer
+  gets on compiler-workload benchmarks elsewhere in this repo --
+  `cpu_step`'s dispatch is already a tight if/else-if chain with
+  little redundant-expression fat for the tree/peephole passes to
+  remove -- but strictly positive with zero correctness cost, and
+  worth keeping given how many guest instructions a full boot needs
+  (M6). Wired into the default `c4or1k.c4r` build rule, not a
+  separate opt-in target.
+- **`fs.json` overlay, optional virtio-block/ATA — not attempted.**
+  Framebuffer/keyboard stay explicitly out of scope regardless.
+
+**M8 — faster: a fastcpu.js-based emulator. Scoped subset implemented.**
+`jor1k/js/worker/or1k/fastcpu.js` (1,609 lines, vs. safecpu.js's ~1,100
+-- the CPU this project actually ports) turns out to be a fundamentally
+different execution model, not a drop-in faster decode loop, and its
+real speedup techniques don't decompose cleanly into a small, safely-
+verifiable patch on top of `cpu_step`'s current one-instruction-at-a-
+time structure. This milestone was first investigated and scoped
+without implementation (see below), then revisited to actually build
+the one piece that scoping pass found safely bounded, plus one
+additional main-loop optimization found while re-reading the driver
+loop for this pass:
+
+- **The actual big win is `fence`-based straight-line batch
+  execution, and it is still NOT implemented.** `fastcpu.js` runs
+  instructions in a tight inner loop until hitting a jump or a page
+  boundary (`fence`), only paying the cost of a fresh "should I check
+  for a TLB miss / interrupt / page crossing" decision at those
+  boundaries rather than on every single instruction. Porting this
+  faithfully means restructuring `cpu_step` around basic blocks, not
+  adding a helper function -- a rewrite comparable in scope to the
+  original M1 CPU port itself, with its own oracle-diffing
+  verification burden to match (nothing in the current M1/M2 test
+  suite exercises "does a batch boundary get drawn in the right place"
+  the way it exercises individual instruction semantics). That
+  cost/benefit judgment hasn't changed; this remains future work.
+- **The single-entry TLB lookup cache: implemented, with the
+  permission-check gap closed.** `fastcpu.js`'s own version
+  (`read32tlblookup`/`read32tlbcheck` and siblings, one pair per access
+  width/direction: cache the last virtual page translated, skip
+  `DTLBLookup`'s tag check entirely on a same-page hit) has a genuine,
+  undocumented correctness gap -- a cache hit skips the *permission*
+  check along with the tag check, and the permission bits depend on
+  `SR_SM` (supervisor vs. user mode), which fastcpu.js's cache key
+  doesn't include. fastcpu.js instead relies on invalidating all its
+  TLB caches inside `Exception()` (SR_SM always becomes 1 there) and on
+  SPR group1/group2 writes, but `l.rfe` and a direct `l.mtspr(SPR_SR,
+  ..)` can both change `SR_SM` without going through either of those
+  paths, which would let a stale permission decision leak across a
+  mode change on the same page. `dtlb_cache_*`/`itlb_cache_*` (cpu.h/
+  cpu.c) close this by keying the cache on `(vpage, SR_SM)` directly --
+  a hit requires both to match the cached entry, so there's no event to
+  enumerate and no way to miss one. The cache is separately invalidated
+  on any write to the owning SPR group (`cpu_set_spr`'s group 1/2
+  cases) to handle the guest rewriting a TLB entry's tag/permission
+  bits without raising an exception at all (an explicit flush). Applied
+  to both `dtlb_lookup` (every load/store) and `fetch_ins` (every
+  single instruction fetch, unconditionally -- code executes
+  sequentially within a page the overwhelming majority of the time, so
+  this path sees a very high hit rate once `SR_IME` is on).
+- **`con_poll_and_feed()` moved off the per-instruction hot path.**
+  Found while re-reading `main.c`'s driver loop for this milestone, not
+  from fastcpu.js: it was called once per *guest instruction* --
+  cheaply, thanks to its own internal rate gate (`console.c`'s
+  `CON_POLL_CYCLES`), but the call+gate-check overhead itself was still
+  paid every instruction regardless of whether the gate was open. Moved
+  onto `cpu_tick_check`'s existing once-per-64-instructions cadence;
+  the internal gate already tolerates far coarser polling than that
+  (order 1,000+ guest instructions between real `read()`s), so this
+  doesn't change observable input latency, just how often the call
+  itself happens.
+- **`doze` (SPR group 8 / power-management, `fastcpu.js` lines
+  ~393-394 and ~1168-1174) is not the idle-skip optimization it first
+  looks like, and still isn't implemented.** It makes `Step()` return
+  early to jor1k's own browser-hosted scheduler when the guest enters
+  its idle loop with no interrupt imminent -- a JS-event-loop
+  cooperation mechanism (don't hog the browser tab), not a "fast-
+  forward wall-clock time past an idle period" mechanism.
+  `cpu_tick_check`'s existing per-64-instruction cadence already
+  handles tick delivery correctly during idle; `doze` wouldn't reduce
+  the guest-instruction count a real idle period costs in this
+  project's headless, single-process model the way it looked like it
+  might before reading the actual code.
+
+**Verification and measured result.** The TLB-cache change touches
+every load/store/fetch, so it's verified the same way M1/M2 are: the
+full `c4or1k-m1-check`/`m2-check`/`m3-check`/`m3-int-check` suite
+passes unchanged after this change (bit-for-bit against the jor1k
+oracle, byte-for-byte echoed I/O). For the boot path specifically (no
+oracle exists past early boot -- see "Where jor1k stops being an
+oracle" below), a 60M-instruction `-b` boot run was captured before and
+after this milestone's changes and diffed: **byte-for-byte identical
+boot log**, confirming the cache and the polling-cadence change are
+behaviorally invisible, only faster. Wall-clock, same 60M-instruction
+run, same host, back-to-back: **134.6s before, 124.3s after -- about
+7.6% faster**, on top of M7's `-O`. Smaller than the multiple-times
+speedup `fence`-based batching would give (that's still unbuilt), but
+real, measured, and free of the correctness risk that made the full
+fastcpu.js port a same-session no-go the first time through this
+milestone.
+
+## M9 — where next: three directions, one implemented
+
+After M8, a boot to the interactive shell (§M6) still takes on the
+order of 5-25 minutes of wall time depending how far past the shell
+prompt the run is left going, prompting a look at whether to keep
+pushing on c4or1k specifically, change the guest ISA, or abandon CPU
+emulation altogether in favor of a native kernel. Grounded in real
+numbers rather than intuition:
+
+**The baseline.** c4m's own raw ceiling is ~4.4M VM-instructions/sec.
+Post-M8, c4or1k sustains ~483K-500K guest OR1000 instructions/sec,
+i.e. each emulated guest instruction costs **~9-10 c4m VM instructions**
+on average (fetch, decode, dispatch, execute, writeback) -- already
+tight, which is consistent with M8 only finding 7.6%: there wasn't
+much bookkeeping fat left to cache away.
+
+**Option A -- keep optimizing c4or1k. Implemented, in two passes.**
+The original scoping here assumed the payoff was in porting
+fastcpu.js's fence-at-jump/page-boundary scheme, which amortizes
+per-instruction exception/TLB-check *logic*. Revisiting that
+assumption before building it: that scheme was designed for jor1k's
+V8 host, where function calls are nearly free after JIT and
+per-instruction branch logic is what's left to cut. c4m has no JIT --
+calls cost real bytecode overhead on every invocation -- so the more
+relevant cost for *this* host is call overhead, not per-instruction
+exception-check logic (M8's lookup caches already made that cheap).
+Two rounds of work followed that reasoning rather than porting
+fastcpu.js's scheme literally:
+
+1. **Batching.** `cpu_step(halt_pc)` (one instruction per call) became
+   `cpu_run_batch(halt_pc, max_batch, *ran)` (cpu.c/cpu.h): the entire
+   per-instruction switch now runs inside a `for` loop within one
+   function call, executing up to `max_batch` instructions (main.c
+   passes 64, matching the cadence already established for
+   interrupt/tick delivery in M8) before returning to main.c's driver
+   loop. Every mid-switch `return 0` (branch taken, `l.rfe`,
+   `l.mtspr`) became `continue`; the five "unimplemented" fault paths
+   set a `fault` flag and `break` out to a single post-switch check,
+   since c4lc has no labeled break/goto to exit nested switches
+   directly (confirmed via `c4lc-gen.lisp`: `continue` inside a
+   `switch` correctly targets the enclosing `for` loop, not the
+   switch, since `g:switchstmt` only saves/restores `g:brk`, not
+   `g:cont` -- verified against the compiler source before relying on
+   it, not assumed). This collapses main.c's own per-iteration
+   overhead (status check, step counting, maxsteps check) from once
+   per instruction to once per batch, on top of the `cpu_run_batch`
+   call itself.
+2. **Inlined TLB fast paths -- the actual "fence" idea, adapted.**
+   Even after batching, every fetch still called `fetch_ins()` and
+   every load/store still called `dtlb_lookup()`, paying a function
+   call on every cache *hit* too, not just on a miss. `itlb_cache_*`
+   and `dtlb_cache_*` (cpu.h) were extended to cache the *decided*
+   permission result (`itlb_cache_xok`, `dtlb_cache_rok`/`_wok`), not
+   just the raw `tlbtr` bits -- correct because that decision can't
+   change while the cache entry stays valid (invalidated on any
+   group1/group2 SPR write, same as M8). `cpu_run_batch` now checks
+   `itlb_cache_vpage`/`_sm` directly and, on a hit, reads
+   `itlb_cache_phys`/`_xok` inline -- no call to `fetch_ins` at all.
+   `fetch_ins`/`dtlb_lookup` became cold-path-only, called solely on
+   an actual miss. The ten load/store sites share this logic via a
+   `DTLB_FAST(addr, write, out)` function-like macro (cpu.c) rather
+   than ten hand-copied inline blocks -- verified c4lc's preprocessor
+   handles a multi-line, brace-bodied function-like macro correctly
+   (`c4lc-pp.lisp` splices backslash-newlines) before relying on it
+   for something used at ten call sites. This is the real "fence"
+   concept -- treat a validated region as needing no per-instruction
+   re-validation -- but implemented as call-avoidance (inlining a
+   cached decision) rather than fastcpu.js's literal basic-block
+   restructuring, because call avoidance is what actually matters on
+   a no-JIT host.
+
+**Verified**, same standard both times: full `c4or1k-m1-check`/
+`m2-check`/`m3-check`/`m3-int-check` pass unchanged, a 60M-instruction
+`-b` boot run byte-for-byte identical to the previous stage's boot
+log at every step, and (both stages) a full 700M-instruction boot
+reaching the identical interactive shell prompt as M6/M8.
+
+**Measured**, same 60M-instruction run throughout:
+
+| stage | time | vs. previous |
+|---|---|---|
+| pre-M8 baseline | 134.6s | -- |
+| M8 (TLB cache + poll batching) | 124.3s | -7.6% |
+| M9 batching (`cpu_run_batch`) | 119.85s | -3.6% |
+| M9 inlined ITLB fast path | 117.35s | -2.1% |
+| M9 inlined DTLB fast path | 116.18s | -1.0% |
+
+**~13.7% cumulative** since pre-M8, ~6.6% since M8. Each pass gave a
+real, verified, byte-identical-output gain, but each smaller than the
+last -- consistent with the ~9-10 VM-op/instruction budget being
+dominated by fetch/decode/execute/writeback, not by anything
+TLB/exception/call-related left to cut. Hard-capped regardless by
+c4m's own ~4.4M-instr/sec ceiling: no amount of restructuring
+`cpu_run_batch` beats that ceiling, and the remaining ~90% of the
+per-instruction cost isn't addressable without either a different
+execution model or reducing c4m's own per-VM-instruction cost (out of
+scope -- would mean changing c4m.c/c4.c itself, well beyond this
+project). This is very likely close to the practical ceiling for
+"emulate OR1000 by interpretation on c4m as it exists today."
+
+**Option B -- target a CISC guest ISA (e.g. x86) instead of OR1000.**
+The intuition -- fewer, denser CISC instructions mean less total guest-
+instruction count for the same boot workload -- is real but outweighed
+by the other side of the ledger in a non-JIT interpreter: x86 code
+density buys maybe 1.5-3x fewer static instructions over an equivalent
+RISC build, but x86's variable-length, prefix-laden decode costs
+several times more c4m VM-ops per instruction to interpret than
+OR1000's fixed 32-bit format does today. Likely a wash at best,
+plausibly a net loss. Separately, the implementation cost dwarfs what
+c4or1k took: safecpu.js was ~1,100 lines and this project was still a
+full multi-milestone build; a Linux-capable x86 core plus its own
+PC-platform device set (8259 PIC, 8253 PIT, real-mode boot sequence,
+etc. -- none of which exist anywhere in this repo yet) is a
+substantially larger, higher-risk redo for uncertain-to-negative
+payoff. **Not recommended.**
+
+**Option C -- a Tilck-style native kernel instead of CPU emulation.**
+This is the one with real payoff, and this repo already has most of
+the infrastructure: `docs/c4ix-design.md`'s C4IX is a from-scratch OS
+compiled by c4lc -- protected mode, trap-based syscalls
+(open/read/write/spawn/wait/pipe/dup2/exit/...), a real interactive
+shell with pipelines and redirection -- running as *native* c4m code,
+paying zero CPU-emulation tax. Measured (§7 of that doc): C4IX boots to
+a userland shell in ~343K VM cycles, well under a tenth of a second at
+c4m's raw throughput -- roughly four to five orders of magnitude faster
+than c4or1k's Linux boot, because it isn't paying an emulation tax *or*
+real Linux's much heavier device/driver init at all.
+
+The catch is real and worth stating precisely, because "Tilck-style"
+undersells it: Tilck's actual trick is running *unmodified x86 ELF
+binaries* (real busybox, real bash) under a much simpler kernel -- the
+CPU still has to execute that real x86 machine code somehow (Tilck
+runs on real or emulated x86 hardware). c4m has no such escape hatch:
+it only executes c4lc-compiled code, so nothing built for x86/ARM/
+OR1000 can run on it unmodified regardless of kernel design. A "Tilck
+for C4" gets syscall-ABI compatibility, not binary compatibility -- a
+busybox-equivalent userland would need its C source recompiled by
+c4lc, and would likely need real porting work rather than a drop-in
+recompile, since real busybox's build system, macro use, and libc
+surface go beyond c4lc's L7/L8 dialect (`docs/c4lc-design.md`) as it
+stands today.
+
+**Where this leaves it.** Option A landed in full, including a fence-
+style rewrite adapted to c4m's cost model (~13.7% cumulative over M8 --
+see the table below). Option C remains the highest-payoff direction
+and is mostly a matter of widening C4IX's existing syscall/libc surface
+rather than a from-scratch project -- next up when picked up. Option A
+still preserves "boots a real, unmodified vmlinux.bin," which C4IX's
+approach cannot ever claim, so it's not superseded, just capped.
+Option B remains not recommended. §M10 below investigates two further
+angles specifically asked about after M9 landed: a genuinely different
+execution model, and changes to c4m itself.
+
+## M10 — investigation: a different execution model, and changes to c4m
+
+M9 squeezed real but shrinking gains out of `cpu_run_batch` itself
+(7.6%, 3.6%, 2.1%, 1.0% -- each pass targeting real overhead but
+finding less of it left). This section asks two harder questions
+instead of continuing to tune that same function: would a genuinely
+different execution model for c4or1k help, and is there room in c4m
+itself? Both investigated with real measurements, nothing implemented
+here -- this is scoping, matching the M8/M9 house style.
+
+### Finding 1: guest code reuse is extreme
+
+A throwaway instrumentation pass (a `malloc`'d bitmap over guest RAM,
+one byte per instruction word, set on first fetch; reverted after
+measuring, never committed) counted distinct instruction *addresses*
+fetched against total fetches during a real boot:
+
+| total instructions fetched | distinct addresses ever fetched |
+|---|---|
+| 10,000,000 | 47,348 |
+| 50,000,000 | 160,946 |
+| 100,000,000 | 172,418 |
+| 180,000,000 | 188,521 |
+| 270,000,000 | 188,528 |
+
+By 270M instructions, the distinct-address count has essentially
+stopped growing (188,521 -> 188,525 -> 188,526 -> 188,528 across the
+last 90M instructions) while the total keeps climbing -- the system
+has settled into steady-state idle/polling behavior (busy-wait loops,
+periodic retries) re-executing the same ~188K-instruction working set
+over and over. **Average reuse by 270M instructions: ~1,430x per
+distinct address.** cpu_run_batch re-fetches and re-decodes every one
+of those repeat visits from scratch today -- M8/M9's caching avoided
+redundant *TLB* lookups on a repeat visit, but not redundant *decode*
+(the `(ins >> N) & mask` field extraction) or redundant *dispatch*
+(the `switch (opcode)`, and for four opcode classes a second inner
+`switch (func)`).
+
+### Finding 2: c4m's own native dispatch is a linear scan, not a jump table
+
+Checked rather than assumed, since M5's cpu.c switch/if-else bisection
+already burned real time on an unverified belief about codegen:
+`objdump -d c4m` on the `-O2 -g` build shows `c4m_main`'s bytecode
+dispatch (`if (i == LEA) ... else if (i == IMM) ... else if (i == JMP)
+...`, c4m.c around line 1563) contains **no indexed/computed jump
+anywhere in the function** -- no `jmp *(...,%reg,N)` jump-table
+pattern, just a straight-line chain of compare-and-branch. GCC did not
+convert this to a jump table at `-O2`, likely because it isn't a
+literal C `switch` (the debug-output and `OPCD`-special-case code
+immediately above it breaks the canonical shape GCC's switch-lowering
+pass looks for) and a hand-rolled if-chain doesn't get the same
+treatment reliably. Consequence: opcodes further down the enum pay
+more sequential comparisons to reach than ones near the top --
+`ADD`/`SUB` (extremely common: every pointer-offset calculation and
+most arithmetic) are comparisons **#26/#27** in the chain; `LEA`/`IMM`
+(also extremely common: every variable access) are comparisons #1/#2.
+This is a real, fixable inefficiency in shared infrastructure, not
+speculative -- every C4-family project pays it, not just c4or1k.
+
+(A back-of-envelope cross-check: c4or1k's ~500K guest-instr/sec at
+~7-8 c4m VM-ops/guest-instruction post-M9 implies roughly 3.5-4M c4m
+VM-ops/sec sustained, well under the ~4.4M VM-instr/sec ceiling
+measured on a trivial 8-opcode loop back in M0 -- consistent with
+real workloads exercising opcodes further down the (unordered) chain
+than that loop did, though this is inference from wall-clock timing,
+not a direct cycle measurement: `perf` isn't available in this
+sandbox (`perf_event_paranoid` blocks it), so this is corroborating,
+not conclusive on its own.)
+
+(2026-11-14, 5dede1a: the chain is in two levels now, `i <= PSH` then
+`i <= MOD`, each ordered by how often load-c4r.c and C4KE's boot run
+them. Still ifs, because plain c4 compiles c4m.c and has no switch. A
+c4lc-built c4m went from 164 to 86 instructions per instruction it
+interprets.)
+
+### Option 1: a decode/dispatch cache in c4or1k (different execution model, no c4m changes)
+
+Given Finding 1, a per-guest-instruction-address cache of already-
+*decoded* fields (opcode, rd, ra, rb, imm, and for the four sub-
+switched opcode classes, `func` too) -- populated on first visit to an
+address, read directly on every subsequent visit -- would skip the
+`>>`/`&` field-extraction work entirely on what the data shows is the
+overwhelming majority of fetches. Pushed further (cache a single,
+pre-combined dispatch key spanning opcode+func so a second inner
+`switch` is never needed on a hit), it approaches genuine "direct
+threaded code," a well-established interpreter technique. Estimated
+effect: decode/sub-dispatch is roughly 2-4 of the ~7-8 VM-ops a guest
+instruction costs today; cutting most of that on a >99%-hit-rate cache
+plausibly drops the average to roughly 4-5 VM-ops, i.e. **very roughly
+another 30-45% wall-clock improvement**, in the same spirit as M8/M9
+but hitting a cost center they didn't touch (decode/dispatch itself,
+not TLB lookups or call overhead). Risk: moderate, confined entirely
+to c4or1k's own code (no shared-infrastructure blast radius) -- the
+one real correctness concern is self-modifying guest code invalidating
+a stale cache entry (module loading, JIT'd BPF); this project's fixed
+kernel+busybox boot workload plausibly never exercises that, but it
+would need either a check (any RAM write inside the "ever cached"
+range invalidates that entry) or an explicit documented assumption,
+not silence. Verification burden: same standard as M8/M9 (regression
+suite + byte-identical boot-log diffing) should suffice, since this is
+"cache values that don't change" applied one layer higher.
+
+### Option 2: changes to c4m itself
+
+Two tiers, clearly different in risk:
+
+- **Fix the dispatch (Finding 2).** Reordering the if-chain by real
+  hot/cold frequency, or (better, more reliably optimizable) rewriting
+  it as an actual C `switch (i)` so GCC's own switch-lowering has a
+  clean shape to work with, is small, mechanical, and localized to one
+  function. It benefits every C4-family project (c4ke, c4ix, c4bb,
+  c4sp, c4mp, oisc4), not just c4or1k -- real payoff, genuinely low
+  risk, but needs the same broad regression pass across all of them
+  before it could be trusted, not just c4or1k's own suite. Estimated
+  effect: hard to pin precisely without `perf` access in this sandbox,
+  but a **rough 10-30%** reduction in c4m's own per-VM-instruction
+  native cost is a defensible estimate given the confirmed linear-scan
+  finding, not a guess pulled from nothing.
+- **New fused opcodes** (e.g. a combined "load local variable value"
+  op collapsing today's `LEA`+`LI`/`LC` pair, which is an extremely
+  common pattern in c4lc-emitted code) would cut VM-op *count*, on top
+  of Option 1's cache reducing *redundant* decode of the ops that
+  remain. Needs matching changes in both c4m.c (new opcode handling)
+  and `c4lc-gen.lisp` (peephole recognition to actually emit it,
+  building on the pattern `-O`'s existing peephole pass already
+  establishes) -- moderate effort, moderate-to-good payoff (**rough
+  20-40%** VM-op-count reduction is plausible given how pervasive
+  local-variable access is), moderate risk (touches the compiler and
+  the interpreter in lockstep; must not silently break any other
+  project built on this toolchain).
+- **A real JIT (bytecode -> host native code)** is the only lever
+  that could plausibly deliver an order-of-magnitude win (**5-20x**,
+  based on typical interpreter-to-simple-JIT ratios), and Finding 1's
+  ~1,430x reuse ratio is close to the ideal profile for one --
+  translate a hot address once, run native code on every subsequent
+  visit instead of re-interpreting. But this is an enormous
+  undertaking: register allocation from c4's stack-based execution
+  model onto host registers, native code generation (x86-64 here),
+  and correct interaction with every existing c4m feature this
+  investigation didn't even need to touch (traps, protected mode,
+  signals, C4KE's task switching, self-modifying-code invalidation).
+  It is comparable in scope to writing a new compiler backend, touches
+  the shared foundation every other project in this repo depends on,
+  and failure modes (a JIT miscompilation) are substantially harder to
+  diagnose than anything hit so far -- M5's SIGSEGV saga was hard
+  *with* pure interpretation as the baseline. **Not recommended to
+  start casually**; if ever pursued, it should be its own dedicated,
+  heavily-gated project, not a c4or1k milestone.
+
+### Where this leaves it
+
+Options 1 and 2's first tier (decode cache in c4or1k; dispatch fix in
+c4m) target *different, complementary* cost centers -- one cuts VM-op
+*count* via redundant-decode avoidance, the other cuts native cost
+*per* VM-op that still runs. Combined, compounding rather than
+additive, a **very rough 1.5-2x** total improvement over the current
+post-M9 baseline seemed like a defensible estimate (e.g. ~0.65 x 0.80 ~
+0.5, i.e. roughly half the wall time) -- real and worth having, but
+still not the order-of-magnitude a JIT could give, and still bounded
+by needing to actually build and verify both pieces. Nothing here was
+implemented as of this write-up; this was investigation only, as
+asked.
+
+**Important correction, acted on in M11: the "dispatch fix in c4m"
+half of this was wrong to propose and was reverted before being
+committed.** c4m.c must stay parseable by plain, unmodified c4 --
+`./c4 c4m.c ...` is a real, exercised bootstrapping/self-hosting path
+(`test-c4`), and plain c4's own compiler cannot parse a `switch`
+statement. This is not new information this project should have had
+to rediscover: `src/c4mp/vm.c`'s own header comment documents that
+exact if-chain-to-switch conversion being tried in c4m and reverted
+for precisely this reason (commit `29d6f57`), and separately notes it
+measured as **no faster natively even ignoring the breakage** -- both
+facts this investigation's Option 2 missed by reasoning from a
+disassembly finding (§Finding 2 above) without checking prior art
+first. c4m.c was changed, fully regression-tested across every
+dependent project in this repo (all green), and then reverted anyway
+once this was pointed out, because passing tests was never the actual
+bar -- staying parseable by plain c4 is a hard constraint testing
+alone doesn't surface. See M11 below for what was built instead.
+
+## M11 — decode-cache pivot, and c4mp: a free native speedup
+
+Two results this milestone, neither the one originally scoped:
+
+### The "decode cache" reconsidered, and replaced with lazy `imm`
+
+M10 estimated a decode cache (opcode/rd/ra/rb/func, cached per guest
+instruction address) at roughly 30-45%, reasoning from the >99% code
+reuse Finding 1 measured. Working out the actual implementation before
+committing to the memory cost (parallel arrays sized to guest RAM, or
+a hash-indexed cache with its own tag-comparison overhead) surfaced a
+problem with that estimate: c4or1k runs *interpreted*, under c4m/
+c4mp, so "cost" here means c4-bytecode VM-op count, not native CPU
+cycles. Under that accounting, the opcode/rd/ra/rb shift-and-mask
+extraction this would cache is already cheap (a `SHR`+`AND` pair per
+field, 2 VM-ops each) -- a cache *lookup* (address arithmetic + a
+tag-compare + several array reads) costs a comparable number of VM-ops
+to just re-deriving the fields, so caching *that* specifically isn't
+clearly a win at all once counted honestly, which is consistent with
+the c4m dispatch-fix mistake above: assuming "fewer native operations"
+without checking what actually costs what under *this* execution
+model.
+
+What *is* expensive: `imm = sext(ins, 16)`, computed unconditionally
+at the top of `cpu_run_batch` for every single instruction regardless
+of type, where `sext()` is a real function call (`JSR`/`ENT`/body/
+`LEV` -- c4lc has no inlining). `simm` (the store/`l.mtspr` operand)
+was already computed lazily, only inside the specific cases that use
+it; `imm` wasn't, for no principled reason. Of the ~29 core opcodes,
+only 9 (the loads, `l.addi`, `l.xori`, `l.sfXXi`) actually use `imm` --
+roughly two thirds of dispatched instructions (branches, register-
+register ALU, `l.mtspr`, `l.rfe`, stores, ...) were paying a full
+function call for a value they never read. Fixed by moving
+`imm = sext(ins, 16)` out of the unconditional prelude and into each
+of the nine case bodies that need it (cpu.c), matching the pattern
+`simm` already used. No caching, no extra memory, no self-modifying-
+code correctness question to reason about -- pure removal of
+unconditional waste.
+
+**Verified**: full regression suite unchanged, 60M-instruction boot
+byte-for-byte identical, full 700M-instruction boot reaches the same
+shell prompt. **Measured** (60M-instruction run, under c4m):
+109.14s vs. the post-M9 116.18s baseline -- **~6.1% faster**.
+
+### c4mp: opcode-compatible, native, and already faster -- with zero source changes
+
+Per explicit correction mid-milestone: c4m must not change (see above).
+Asked to look at `src/c4mp` instead -- a second C4 host, written in
+c4lc's fuller dialect (structs, `switch`, a real preprocessor) rather
+than the minimal subset plain c4 must still parse, and buildable two
+ways from one source: `./c4mp` (native, `gcc`-compiled directly, no
+self-hosting constraint to preserve) and `c4mp.c4r` (the same source
+compiled by c4lc, so it can also run *hosted under c4m* -- "a
+backwards-compatibility proof, since c4m has no multiprocessing to
+offer," per `src/c4mp/vm.c`'s own header comment).
+
+That header comment turned out to be exactly the prior art this
+milestone needed and initially missed (see the correction above): c4m
+*was* tried with a real `switch` dispatch once, reverted for the
+self-hosting reason, and **measured as no faster natively even
+setting the breakage aside** -- switch's only confirmed win was 1.79x
+for *nested* interpretation (a switch-based guest under an if-chain
+host benefits from the guest needing fewer VM-instructions to express
+its own dispatch; this is about guest code *shape*, not host dispatch
+*mechanism*, and is exactly what `cpu_run_batch`'s own
+`switch (opcode)` already exploits, unrelated to c4m's or c4mp's own
+native dispatch).
+
+Given that, the useful question about c4mp isn't "does its switch
+dispatch make it faster" (prior art says: not for this reason) --
+it's simpler: **c4mp's instruction semantics are c4m's, opcode for
+opcode, "guest images cannot tell the two apart"** (same source
+comment). Since c4or1k.c4r is a completely ordinary `.c4r` image with
+nothing c4-specific in it, and `./c4mp image.c4r [args...]` runs any
+`.c4r` directly (no `load-c4r.c` wrapper needed -- c4mp "carries no
+compiler, it loads .c4r images"), the obvious experiment is just
+running it, unmodified:
+
+    ./c4mp c4or1k.c4r <vmlinux.bin> -b <N> <bootfs.idx> <bootfs.blob>
+
+**It works, with zero source changes to c4or1k.** Verified: `m1_test.bin`/
+`m2_test.bin` output byte-for-byte identical to c4m's; a 60M-instruction
+boot byte-for-byte identical to c4m's boot log; a full 700M-instruction
+boot reaches the same interactive shell prompt. **Measured** (60M-
+instruction run, pre-lazy-`imm` c4or1k.c4r): **95.05s under c4mp vs.
+116.18s under c4m -- ~18.2% faster**, from nothing but running the
+identical bytecode on a different, already-existing host. Combined
+with the lazy-`imm` fix above (still c4or1k-side, applies to either
+host): **93.11s under c4mp -- ~19.9% faster than the post-M9 c4m
+baseline**, ~30.8% faster than the pre-M8 starting point.
+
+A `c4or1k-boot-mp` Makefile target now runs the same boot via `./c4mp`
+directly, alongside the existing `c4or1k-boot` (c4m).
+
+**Why this is faster is not fully pinned down** -- the switch-vs-if-
+chain distinction specifically was already ruled out by prior art, so
+it's likely some combination of c4mp's fuller C dialect letting gcc
+make different (not necessarily "better dispatch," just different)
+codegen choices elsewhere in the interpreter loop, and/or the register-
+struct-based design `vm.c`'s header comment describes ("`c4_run` loads
+registers into locals, runs a quantum, stores them back") producing
+tighter code than c4m's globals-based interpreter body. Worth a closer
+look if pushed further, but not required to *use* the result: the
+measurement is real and reproducible regardless of full attribution.
+
+**Where new VM-level work belongs, going forward:** c4mp, not c4m.
+It has the language features (real `switch`, structs, a preprocessor)
+that make adding new fused opcodes safe and ordinary to write, without
+c4m's plain-c4-parseability constraint standing in the way. That work
+-- e.g. the fused-opcode idea from M10's Option 2 -- was not attempted
+this milestone (out of scope for what was asked), but c4mp is now
+confirmed as the right place for it whenever it's picked up, and
+already delivers a real, free, zero-risk speedup on its own before any
+new opcodes are added at all.
+
+## M12 — lazy rB, and new CISC opcodes in c4mp (-mcisc)
+
+Two more results, following directly from measuring c4lc's actual
+generated bytecode for the hottest pattern in `cpu_run_batch` rather
+than continuing to guess at costs.
+
+### Lazy `rB`, the same shape as M11's `imm`
+
+`rB = r[rb]` was computed unconditionally every instruction, same
+mistake as the pre-M11 `imm`, except worse: dumping the real bytecode
+for `x = arr[i]` (a global int array, variable index) showed **~10
+c4-bytecode VM-ops** -- `IMM &arr; PSH; <load i>; PSH; IMM 3; SHL;
+ADD; LI; SI` -- not the 1-2 a native-code mental model would suggest.
+Only 9 of ~29 opcodes read `rB` (`l.jr`/`l.jalr`, the four stores,
+`l.mtspr`, and the two func-switched reg-reg classes). Moved into
+those nine case bodies, exactly mirroring M11's fix.
+
+**Verified**: full regression suite unchanged, 60M-instruction boot
+byte-for-byte identical under c4mp. **Measured**: 93.11s -> 87.17s on
+that run (~6.4% faster alone) -- bigger than `imm`'s 6.1%, consistent
+with the higher per-access cost just measured.
+
+### New CISC opcodes: LXI/SXI in c4mp, gated by c4lc's `-mcisc`
+
+That 10-op cost for a single array read/write, paid on effectively
+every instruction (`r[]`) or SPR access (`group0[]`/`group1[]`/
+`group2[]`), is bigger than anything M8-M11 touched. Fixing it means
+changing what code gets *generated*, not just when -- a genuinely
+different lever from every prior milestone.
+
+**c4m stays out of this entirely**, per the standing constraint (§M11):
+new opcodes went into c4mp only, appended past its existing
+processor/atomic opcodes (`CPUI`..`IPI`) using the exact same
+mechanism and the exact same safety property those already rely on --
+opcode numbering is append-only and mirrored across `c4m.c`,
+`c4mp.h`, `c4r.lisp`, `oisc4.c`, and `c4cc.c` (per `c4mp.h`'s own
+header comment); c4m's own enum simply stops before the new numbers,
+so it structurally cannot be affected -- an unknown opcode there
+already traps as `TRAP_ILLOP` (verified, not assumed, by first
+building this the "obvious" wrong way -- see below).
+
+**The opcodes** (`src/c4mp/vm.c`, `src/c4mp/c4mp.h`):
+- `LXI` (load indexed int): `a = *(int*)(*sp++ + a*8)` -- pops one
+  value (base) off the stack, uses the accumulator as the index,
+  scales by the word size, loads.
+- `SXI` (store indexed int): `*(int*)(sp[1] + sp[0]*8) = a; sp += 2`
+  -- base and index both already on the stack (pushed unscaled,
+  value computed last into the accumulator), so the whole address-
+  compute-and-store collapses into one opcode.
+
+**The codegen** (`src/c4sp/lisp/c4lc-gen.lisp`, `-mcisc` flag added to
+`c4lc.lisp`): a new `g:cisc-eligible-index?` recognizes a plain
+`var[expr]` (deliberately not more complex bases -- a struct member,
+a dereferenced pointer expression -- which would need evaluating
+twice or duplicating this file's type inference; those fall back to
+the general path unchanged) whose array has a statically-known
+8-byte scalar element type -- int, or any pointer-of-pointer level,
+explicitly never a struct and never `char*` (that would need a
+separate 1-byte-scale opcode, not built this round). `gen:cisc`
+(default `false`) gates two new codegen paths, `g:indexload-cisc` and
+`g:indexstore-cisc`, which replace the generic `g:indexaddr`+load/
+store sequence with the fused opcodes wherever the guard passes;
+everything else -- struct arrays, `char*`, complex bases, and the
+entire compiler by default -- is byte-for-byte unaffected, verified
+by rebuilding the *default* (no `-mcisc`) `c4or1k.c4r` and diffing
+runtime behavior against a pre-M12-compiler-change build (raw file
+bytes turned out to already be non-reproducible build-to-build from
+an unrelated, pre-existing source -- confirmed by building the *old*
+compiler twice and diffing those against each other -- so behavioral
+diffing, this project's standard verification method throughout, is
+what was trusted here, not a raw byte comparison).
+
+**A real bug found and fixed before trusting any of this**: the
+first attempt to run a `-mcisc`-compiled test program under a freshly
+rebuilt `c4mp` produced `TRAP_ILLOP` on instructions 76/77 (LXI/SXI's
+new numbers) and silently wrong output -- because the `./c4mp` binary
+being invoked was still the *stale* pre-M12 build (only a throwaway
+`gcc` command in `/tmp` had actually picked up the new opcodes; the
+repo-root `c4mp` binary needed its own explicit rebuild). Rebuilding
+it fixed the trap; a hand-written loop test (write 32 values via
+`SXI`, read them back via `LXI`, compare against the same program
+compiled without `-mcisc`) then matched exactly. Caught by testing
+execution, not just instruction counts -- fewer VM-ops proves nothing
+about correctness by itself. A second, smaller gap: `src/c4cc/c4cc.c`
+maintains its own opcode-name table for `c4rdump`'s disassembly
+output, indexed **with no bounds check** (its own comment says so,
+for the same reason `CPUI`..`IPI` are already listed there) -- LXI/SXI
+were added there too, not just for cosmetics but to avoid an
+out-of-bounds read the moment anyone disassembles a `-mcisc` image.
+
+**Verified**: full regression suite (`m1`/`m2`/`m3`/`m3-int` checks)
+unchanged under c4mp with the `-mcisc` build; a 60M-instruction boot
+byte-for-byte identical to the non-CISC boot log; a full 700M-
+instruction boot reaches the same interactive shell (see below for
+the final confirmation). Every cross-project suite this repo has
+(`test`, `test-c4bb`, `test-oisc4`, `test-c4sp`, `test-c4ix`,
+`test-c4mp`, `test-link`, `test-c4l`) re-run and green with the
+*default* (non-`-mcisc`) compiler, confirming zero blast radius
+outside code that opts in.
+
+**Measured**: same-session, back-to-back pairs to control for real
+timing noise observed mid-measurement (a single non-CISC run read
+87.17s in one session and 91.87s/92.76s in the next, same binary,
+same build -- noisy enough that a single before/after pair isn't
+trustworthy here). Two CISC runs: 89.39s, 89.45s (tight). Two non-CISC
+runs measured back-to-back with them: 91.87s, 92.76s. **~3.1% faster**
+on average -- real and reproducible, but far short of the ~23%
+VM-op reduction an isolated micro-benchmark showed for the exact
+`r[]` access pattern (53 -> 41 instructions for a tiny hand-written
+test function) -- real boot workloads dilute any single fix's relative
+share of total cost, the same diminishing-returns pattern every
+milestone since M8 has shown. Cumulative since the pre-M8 baseline
+(134.6s): **~34%**.
+
+Makefile additions: `c4or1k-cisc.c4r` (built with `-mcisc`) and
+`c4or1k-boot-cisc` (runs it under `c4mp` -- `c4m` cannot run this
+image at all, not just slower).
+
+### Where this leaves it
+
+The int-array-only, plain-variable-base scope here was deliberately
+conservative. A `char*`/byte-array variant (`LXC`/`SXC`, scale 1,
+matching `SC`'s truncate-and-return-the-stored-byte semantics) would
+extend the same idea to `mem.c`'s `ram[]`, not attempted this round.
+Extending `g:cisc-eligible-index?` past bare-variable bases (struct
+members, pointer expressions) would widen how much code qualifies but
+needs either double-evaluation avoidance or reusing this file's
+existing single-pass type inference more cleverly than a quick
+lookup allows. Both are real future increments on the same idea, not
+new ideas.
+
+## M13 — a JIT targeting c4m bytecode: built, verified, measured, off by default
+
+M10 had scoped "a real JIT" as the only order-of-magnitude lever and
+recommended against starting it casually. Asked to try it anyway --
+with the twist of targeting c4m's own bytecode rather than host
+machine code, which sidesteps the entire native-codegen problem: emit
+real c4m opcodes into a `malloc`'d buffer and let the (native, gcc-
+compiled) interpreter execute them at its full native dispatch rate.
+
+### Feasibility, proven first
+
+Three mechanisms were verified in throwaway programs before any real
+code was written: (1) `__opcode("IMM")` etc. resolve opcode numbers at
+runtime, under both c4m and c4mp; (2) a hand-assembled buffer of those
+opcodes executes correctly when jumped into; (3) most importantly, a
+buffer wrapped in `ENT 0`/`LEV` is callable as an ordinary function
+through a plain `int *` variable -- including from c4lc-compiled code
+(verified with a dedicated test, since c4or1k is c4lc-compiled and
+this was not previously exercised anywhere).
+
+### What was built (src/c4or1k/jit.c, jit.h)
+
+A translation cache keyed on guest PHYSICAL instruction address
+(131072 direct-mapped entries) holding blocks of emitted c4m bytecode
+(16MB bump-allocated arena). A block covers a straight-line run of
+"safe" opcodes -- no memory access, no possible exception, no control
+flow: l.nop, l.movhi, l.andi/ori/xori, l.addi (full SR_CY/SR_OV
+semantics), the 0x38 add/sub/and/or/xor and all three register shifts,
+l.slli/srli/srai, and every l.sfXX/l.sfXXi compare. Blocks bake
+everything decidable at translation time as IMM constants: register
+addresses, sign-extended immediates, pre-masked unsigned operands,
+even `imm ^ -1` for the overflow formula -- the specialization an
+interpreter can never do. Emitted code uses only original plain-c4
+subset opcodes, so blocks run identically under c4m and c4mp.
+
+Correctness machinery, each protecting against a failure mode that is
+REAL for this workload:
+- **Page generations**: every guest RAM store (mem.c, which is also
+  virtio9p's DMA path -- how busybox's code physically arrives in
+  guest memory) bumps `jit_pagegen[page]`; a cached block is valid
+  only while its recorded generation matches. Handles page-cache
+  reuse and any self-modifying code.
+- **Virtual-alias guard**: blocks bake the guest VIRTUAL pc into
+  their epilogue, so each block also records its vpc and is
+  retranslated if the same physical code is reached via a different
+  virtual mapping (the kernel's pre-MMU/post-MMU split hits this on
+  literally the first pages it runs).
+- **Delay-slot exclusion** (`nextpc == pc+1` gate), **batch-budget
+  fitting** (a block never overruns the 64-instruction tick/interrupt
+  cadence, keeping timing bit-identical to interpretation), **halt-pc
+  exclusion** (test mode), r0-write refusal, and page-boundary
+  truncation.
+- **An init-time self-test**: one hand-assembled block exercising
+  every opcode the JIT can ever emit, executed through the same
+  indirect-call path, checked against a known answer; any failure
+  disables the JIT rather than letting it run.
+
+### The bug that mattered: `__opcode("LE")` returns LEA
+
+c4m's `__opcode_match` treats either string ending as a match, and
+"LEA " is the FIRST table entry -- so "LE" resolves to opcode 0 (LEA),
+and no name string can ever reach the real LE (a trailing-space
+variant terminates the comparison the same way). An emitted "LE"
+compare therefore became a LEA that swallowed the following SI as its
+operand: a corrupted block that silently left SR_F unwritten.
+**m1-check passed anyway** -- the corrupted path still produced
+oracle-matching final state for that particular test program -- and
+the bug surfaced only as a boot-log divergence, pinned by
+per-instruction trace diffing against a JIT-disabled build to one
+`l.sfles` in the kernel's early string-scan loop. The fix derives
+`jc_LE = jc_GT + 1` from the enum's comparison block (cross-checked
+against an independently resolved GE), and the init self-test now
+catches this entire class. Two supporting lessons, both now
+documented where they bit: c4m's PRTF rejects printf calls with more
+than 7 arguments by exiting (which silently killed an early debug
+build), and "the oracle suite passed" is necessary but NOT sufficient
+-- byte-identical boot logs against a JIT-off build are the real gate.
+
+### Measured, and the honest verdict
+
+With translation verified byte-identical on the 60M-instruction boot
+(and bit-for-bit on m1/m2 with blocks executing), the numbers, all
+same-session against an M12 baseline re-measured at 94.5s that day:
+
+| configuration | time | jit stats |
+|---|---|---|
+| M12 baseline (re-measured same session) | 94.5s | -- |
+| JIT, lookup every instruction | 116.3s | -- |
+| JIT, lookup at control-flow targets only | 106.1s | -- |
+| + two-entry negative cache | 104.8s | 1.85M blocks, 3.46M instrs |
+| JIT compiled in but disabled | 101.6s | -- |
+| hooks compiled out (default build, final) | 95.1s | -- |
+
+The decisive line is the stats one: **only 5.8% of guest instructions
+execute via blocks, and the average block is 1.87 instructions long.**
+Real kernel code interleaves loads/stores every 2-3 ALU instructions,
+and every memory op ends a block -- so the safe-subset JIT simply
+cannot reach the coverage where its per-block overhead (a c4lc-hosted
+cache lookup is several ~10-VM-op global reads, plus an indirect call,
+plus the block's own ENT/epilogue/LEV) amortizes. Even with the
+lookup gated to control-flow targets and a negative cache, the net is
+~11% SLOWER than M12. And merely compiling the hooks in -- one local
+assignment per instruction plus a page-generation bump per store --
+costs ~7% with the JIT off, which is why the hooks are now behind
+`-D C4OR1K_JIT` (the `c4or1k-jit.c4r` target) and the default/-mcisc
+builds compile to exactly the M12 code (re-verified: 95.1s, byte-
+identical logs).
+
+### v2: loads, stores, fused loops, and branch terminators -- the JIT flips decisively positive
+
+v1's diagnosis (coverage is the whole game) drove a second
+implementation round, landed the same milestone:
+
+- **Loads and stores execute inside blocks** through helpers
+  (jit_h_lwz and friends) replicating the interpreter's DTLB fast
+  path and fault protocol exactly: the helper materializes the
+  faulting instruction's guest pc BEFORE the full walk (so EPCR is
+  captured correctly), emulates the interpreter's per-instruction
+  tail on a fault, reports the dynamically-executed count through
+  jit_ran, and sets jit_fault so the emitted code bails to a shared
+  LEV. The destination register is provably not written on a faulting
+  load (the value is parked on the stack across the fault test; a
+  bailing LEV restores sp from bp so stack junk is free). l.lwa/l.swa
+  (the EA reservation pair) stay interpreter-only.
+- **Self-loops become emitted loops**: l.bf/l.bnf back to the block's
+  own head runs whole guest iterations inside one invocation, with an
+  emitted per-iteration budget check against the caller's remaining
+  batch budget -- so a single call NEVER exceeds the 64-instruction
+  tick/interrupt cadence, which stays bit-identical to
+  interpretation. Boot mode only (a halt_pc could otherwise hide
+  inside the loop's instruction range).
+- **Every other branch became a block TERMINATOR instead of a
+  breaker**: l.j/l.jal exit to a translation-time-constant target
+  (l.jal's r9 return address folds to a constant); l.jr/l.jalr exit
+  to r[rb]>>2 computed at exit (refused if the delay slot writes rb,
+  or rb==9 for jalr, whose r9 write precedes the jump-register read);
+  non-self-loop l.bf/l.bnf exit two ways on the SR_F value captured
+  AT the branch, before the slot runs, in a second scratch global the
+  ALU emitters never touch (the slot may legally write SR_F). Since
+  the driver re-arms its lookup after every block, control CHAINS
+  block-to-block through calls, returns, and taken branches.
+- **Delay slots -- including memory slots -- execute inside the
+  fused forms.** A faulting delay slot has different exception
+  semantics (delayedins=1: EPCR points at the BRANCH and resume
+  re-executes it); the helpers take a `di` argument, materialized
+  from the captured flag for conditional branches (constant 1 for
+  unconditional jumps), and set delayedins before the walk so
+  cpu_exception's own -4 adjustment reproduces the protocol exactly.
+- **l.mfspr joined the eligible set** (a pure read -- cpu_get_spr
+  raises nothing) after per-opcode instrumentation of the still-
+  interpreted stream showed 1.25M interpreted mfsprs each stranding
+  the eligible run behind it until the next branch target.
+
+**Measured** (same-session 60M-instruction boots, c4mp, byte-identical
+logs at every step; M12 baseline re-measured that session at 94.5s):
+
+| stage | time | coverage | blocks | avg len |
+|---|---|---|---|---|
+| v1 (ALU only, lookup gated) | 104.8s | 5.8% | 1.85M | 1.87 |
+| v2: + loads/stores | 88.6s | 32.2% | 2.43M | 7.9 |
+| v2: + loops + jump/branch terminators | 74.5s | 46.2% | 3.68M | 7.5 |
+| v2: + memory delay slots | 72.9s | 48.1% | 3.73M | 7.7 |
+| v2: + l.mfspr | 69.7s | 56.4% | 4.24M | 8.0 |
+| final (default-on, no flag scan overhead) | **67.7s** | 56.4% | 4.24M | 8.0 |
+
+**~28% faster than M12**, on top of everything M8-M12 won -- the
+largest single improvement of the entire performance arc, and the
+first one that grew the more it was fed. A control experiment
+re-confirmed v1's lookup-tax lesson at v2 coverage: arming the block
+lookup on EVERY instruction instead of only at control-flow targets
+measured 94.5s -- worse than never looking up at all -- so the
+branch-target gating plus the negative cache stays.
+
+**Ship state**: `make c4or1k-boot-jit` -- the recommended fast HOSTED
+path. Translation is ON by default in the c4or1k-jit.c4r image
+(`-nojit` opts out); the default and -mcisc images compile the hooks
+out and are unchanged from M12. m1/m2-check run the default, JIT, and
+(M14) native builds every time; boot logs byte-identical in every
+configuration. Both v1 and v2 are verified byte-identical through
+full 700M-instruction boots to the interactive shell (v2's landed
+shortly after the commit that introduced it, run in the background
+rather than blocking ~13 hosted minutes; two independent v2 700M
+runs also produced identical block statistics -- 17,847,288 blocks
+covering 102,723,897 instructions -- confirming the JIT is fully
+deterministic at depth). One cautionary artifact worth
+recording: an earlier "divergence" in a v2 700M log turned out to be
+two processes (an interrupted background run and its relaunch)
+writing the same log file -- sparse-file NUL holes, not guest
+output. The instinct to suspect the JIT was right in general and
+wrong in the particular; single-writer logs or unique filenames are
+now the rule here.
+
+### What's left on the table (v3, not attempted)
+
+Per-opcode instrumentation of the remaining interpreted 44%: mostly
+eligible opcodes stranded in runs the branch-target-gated lookup
+never sees (fall-through entries after mtspr/mul/div breakers), plus
+branches whose slots failed a fusion guard, plus the genuine
+breakers (mtspr ~1.0M, sys/rfe, mul/div). The bigger structural
+ideas: inline the DTLB fast path and ram access INTO emitted code
+(eliminating the per-memory-op helper call, at the cost of a much
+larger emitter), direct block-to-block linking (patch a block's exit
+to JMP straight into the next block's mainline, skipping the driver
+loop and cache lookup entirely -- the classic trace-linking step,
+which would also need an invalidation story for patched links), and
+emitted-code specialization of the ITLB fetch path. Each is bounded;
+none was needed to hit this milestone's goal.
+
+## M14 — the native build: the emulator itself is fast enough
+
+Asked directly after M13: is c4or1k -- the emulator, as written --
+actually fast enough to use, once the hosted interpretation tax is
+taken out of the picture? c4mp already established the pattern
+("two builds from one source"); the same c4or1k sources now compile
+directly under gcc.
+
+**The build** (`make c4or1k-native`): one gcc invocation over the
+same ten modules, with `src/c4or1k/native.h` force-included in front
+of each -- system headers, then `#define int long` (exactly c4.c's
+own trick, so the dialect's pointer-width `int` and every
+pointer<->int cast keep working), plus two tiny shims for the c4lc
+builtins the sources use (`__c4_cycles` for console.c's poll gate,
+`__time` for the stats clock). No c4m, no c4mp, no JIT -- the
+C4OR1K_JIT hooks stay compiled out, so this measures the emulator
+alone.
+
+**One real portability bug surfaced, worth recording as a class**:
+`sext()` computed `1 << bits` with bits=32 -- fine under c4lc, where
+every literal is word-width, but undefined behavior natively where
+the literal `1` is a 32-bit C int (x86 masks the shift count: 1<<32
+silently becomes 1). Same latent issue in ff1/fl1's `1 << i` at i=31
+(INT_MIN instead of +2^31). Fixed with `(int)1` casts -- int being
+`long` natively -- which are byte-for-byte no-ops under c4lc. The
+full hosted regression suite re-verified after the change.
+
+**Verified** to the same standard as every hosted configuration:
+m1/m2 bit-for-bit against the jor1k oracle, m3 echo byte-for-byte,
+the 60M-instruction boot log byte-identical to the hosted runs, and
+the full 700M-instruction boot byte-identical to the verified hosted
+full boot, reaching the same interactive shell.
+
+**Measured** (same host, same session):
+
+| configuration | 60M-instr boot | full boot to shell (700M) |
+|---|---|---|
+| c4m, pre-M8 (where this arc started) | ~134.6s | ~25 minutes |
+| c4mp + M12 (same-session baseline) | 94.5s | ~18 minutes |
+| c4mp + M13 v2 JIT | 67.7s | ~13 minutes |
+| **native** | **0.63s** | **6.73s** |
+
+**~95-105M guest instructions/sec** -- roughly 100x the best hosted
+configuration, ~220x where the performance arc started. A full,
+unmodified Linux kernel boots to an interactive BusyBox shell in
+under seven seconds.
+
+The answer to the question asked, then: **yes -- the emulator design
+itself (the M8/M9 TLB caches, the batching, the whole cpu_run_batch
+structure) is genuinely fast enough for real use.** Every hosted
+number above is the cost of running it *under another interpreter*,
+which is the point of the hosted builds (a Linux-booting emulator
+running on the C4 toolchain's own VM, compiled by its own compiler)
+-- self-hosting depth, not user experience. When the goal is using
+the emulated system, `make c4or1k-boot-native` is the answer; when
+the goal is exercising the C4 stack, the c4mp+JIT path is the fastest
+hosted configuration and the M13 machinery (a JIT written in the
+c4lc dialect, emitting the VM's own bytecode, running hosted) remains
+the more interesting artifact.
+
+## M14 — the native build: the emulator with the interpretation tax at zero
+
+Asked directly after M13: does the EMULATOR design hold up if the C4
+toolchain is taken out of the picture entirely? `make c4or1k-native`
+compiles the same, unmodified sources with gcc, via a ~50-line shim
+(`src/c4or1k/native.h`, force-included) doing exactly three things:
+real libc headers for what c4lc provides as builtins; `#define int
+long` -- the identical trick c4.c itself has used from the start,
+since the dialect's `int` is host-pointer-width; and the two non-libc
+builtins (`__time`, and a synthetic `__c4_cycles` advancing 10000 per
+call so console.c's stdin poll gate opens on the same order of cadence
+as the hosted builds).
+
+One genuine dialect/C mismatch surfaced: `#define int long` widens
+VARIABLES but not LITERALS, so `1 << bits` with bits = 32 -- exact,
+well-defined 2^32 under c4lc -- is undefined behavior in native C
+(x86 masks the shift count: `1 << 32` = 1, which would have zeroed
+every sext() result). The literal-shift sites that can exceed 32-bit
+range now carry `(int)1` casts (audited: sext, ff1/fl1 -- grep
+`(int)1 <<`), which are no-ops under c4lc; every other literal that
+looked risky (0x80000000/0xFFFFFFFF hex literals, byte-compose
+shifts, the MMIO_BIT enum) checks out as equivalent under C's
+promotion rules, and the oracle diff is the arbiter regardless.
+
+**Results** (all outputs byte-identical to the hosted builds -- m1/m2
+bit-for-bit against the jor1k oracle, both m3 echo tests, the 60M
+boot log, and the full 700M boot log):
+
+| configuration | 60M boot | full 700M boot-to-shell |
+|---|---|---|
+| M12, c4mp (hosted interpreter) | 94.5s | ~25 min (original complaint) |
+| M13 v2 JIT, c4mp (best hosted) | 67.7s | ~13 min |
+| **native (gcc -O2)** | **0.63s** | **6.5s** |
+
+~108M guest instructions/sec, 12MB resident. **The full Linux boot a
+user waited 25 minutes for takes 6.5 seconds natively** -- same
+sources, same devices, same 9p filesystem, same byte-for-byte
+console output. `c4or1k-native` is now part of the permanent
+m1/m2-check matrix (default, -jit, and native all diffed against the
+oracle on every run).
+
+What this proves, precisely: the emulator design itself -- the
+decode, the TLB caches, the 9p stack, all of M8-M12's structural
+work -- is fast enough for real interactive use, with ~two orders of
+magnitude to spare. The entire remaining cost of the hosted
+configurations is the C4 toolchain's interpretation tax
+(c4m/c4mp executing c4lc bytecode), which is exactly the layer the
+M13 JIT nibbles at from inside (~1.4x recovered of the ~150x gap) --
+useful as toolchain R&D, irrelevant next to running the emulator
+natively when speed is what matters. Both configurations remain
+first-class: hosted is the point of the project (an OS booting on an
+emulator running on the C4 stack); native is how you'd actually use
+it.
+
+## M15 — ethernet: the guest gets a network (eth0, DHCP)
+
+The boot log had always carried `libphy: ethoc-mdio: probed` and a
+failed device probe at `0x92000000`, and ended userspace with
+`udhcpc: no lease, failing`: the guest kernel's stock OpenCores
+`ethoc` driver was looking for a MAC that was not there. M15 supplies
+it, and something for it to talk to.
+
+**The device (`eth.c`, `eth.h`).** A port of jor1k's
+`dev/ethmac.js`, op for op, under the same bit-for-bit-oracle
+discipline the CPU used against `safecpu.js`: MMIO at `0x92000000`
+(routed from `mmio.c`), IRQ line 4, the MII PHY register file (with
+the basic-mode-status bits set so the driver sees "link up, autoneg
+complete" and binds rather than parking on "no carrier"), the 128
+64-bit transmit/receive buffer descriptors, and the frame paths that
+read a TX frame out of guest RAM and write an RX frame into it. FCS is
+omitted throughout, exactly as ethmac.js does (its TX CRC path is
+commented out; its RX path asserts CRC=0 "we don't get a CRC from TAP
+devices"), so no frame on any path carries a checksum and the length
+fields follow ethmac.js's payload+4 convention.
+
+**The interrupt discipline is the one real subtlety.** A guest store
+to the device (arming a TX descriptor, unmasking an interrupt) runs
+deep inside `cpu_run_batch`'s store handler, which is about to advance
+`pc`/`nextpc`. If the device asserted the CPU IRQ line right there,
+interrupt delivery could rewrite those registers mid-instruction. So
+the device NEVER touches the IRQ line during an MMIO access -- it only
+sets `INT_SOURCE` bits -- and `eth_poll()` reconciles the line from
+`(INT_MASK & INT_SOURCE)` once per main-loop iteration (`net_poll`),
+the same between-instructions cadence `con_poll`/`cpu_tick_check`
+already use. Symmetrically, an inbound frame is never injected into
+the RX ring from inside a store: `net_tx` (called from the store)
+only enqueues, and `net_poll` drains the queue into `eth_rx` on that
+same cadence.
+
+**The peer (`net.c`, `net.h`).** A device with nothing on the other
+end is just a probe that succeeds. Rather than reach for a host socket
+(which the hosted builds cannot do, and which needs a new VM
+primitive -- see below), `net.c` is a synthetic LAN peer at 10.0.0.1
+that answers, in pure computation:
+- **ARP** -- "who has 10.0.0.1" gets our MAC, so the guest can address
+  the gateway.
+- **DHCP** -- DISCOVER -> OFFER and REQUEST -> ACK, handing the guest
+  10.0.0.2 with router and DNS 10.0.0.1 and an 86400s lease (full
+  BOOTP frame, IP + UDP framing, IP header checksum).
+- **ICMP echo** -- echo request -> reply, so `ping 10.0.0.1` from the
+  guest shell round-trips.
+
+Because it is pure byte manipulation with no host calls, the exact
+same code proves the whole guest<->NIC path in the native build AND
+the hosted (c4m/c4mp) builds -- no new VM primitive required.
+
+**Result.** eth0 comes up and gets a real lease:
+
+```
+udhcpc: started, v1.26.2
+Setting IP address 0.0.0.0 on eth0
+udhcpc: sending discover
+udhcpc: sending select for 10.0.0.2
+udhcpc: lease of 10.0.0.2 obtained, lease time 86400
+Setting IP address 10.0.0.2 on eth0
+Adding router 10.0.0.1
+ Adding DNS server 10.0.0.1
+```
+
+That exercises the entire path end to end: the guest's IP stack
+builds a DISCOVER, the driver DMAs it through a TX descriptor,
+`eth_transmit` hands the frame to `net_tx`, the responder synthesizes
+an OFFER, `net_poll` lands it in an RX descriptor and `eth_poll`
+raises IRQ 4, the driver's ISR reads it, and udhcpc completes the
+four-way exchange. The full 700M-instruction boot still reaches the
+interactive shell (native: ~3.6s), and the m1/m2 oracle checks
+(default/-jit/native) are untouched -- they never address the
+ethernet device. This is the deliberately fast proof the methodology
+asked for: prove the emulator can carry a real network, native-fast,
+before wiring real external connectivity.
+
+**What real connectivity needs (the c4mp step).** The synthetic peer
+is a stand-in for the actual host network. To bridge the emulated NIC
+to the real world -- a TAP interface, or a userspace socket -- the
+hosted VM needs a way to do host I/O beyond the file/stdio calls c4/
+c4m/c4mp expose today: a socket/packet primitive (open a TAP fd or a
+datagram socket, non-blocking read/write). That is a c4mp addition,
+not a c4or1k one, and is the natural next step now that the device
+and the guest-facing path are proven. In the native build a TAP
+backend could be dropped in behind `net_tx`/`net_poll` immediately
+(the host has `/dev/net/tun`), gated on privileges; the interface
+(`net_tx` out, `eth_rx` in) is already the right seam for it.
+
+## M16 — the extended filesystem, and floating point (native)
+
+Two changes that only matter once the guest runs a *real* userland
+rather than basefs's busybox-only tree.
+
+**Extended filesystem.** jor1k boots from a tiny `basefs.json` and then
+overlays the full `fs.json` (~7000 inodes, ~127MB of bz2-compressed
+backing: real bash/perl/X libs/man pages). c4or1k has no network to
+lazy-load over, so `tools/mkbootfs.js` now flattens BOTH manifests into
+one resident `bootfs-ext.idx/.blob`, merging shared directories exactly
+the way jor1k's `fsloader.js` does (a re-seen directory is merged into,
+a re-seen file shadows the earlier one). `BOOTFS_NAME_LEN` went 32->64
+(the longest name is 54 bytes) and `BOOTFS_MAX_INODES` 1024->16384. The
+record layout is now parametric on `BOOTFS_NAME_LEN` in both the tool
+and `bootfs.c`. NATIVE-ONLY for now (`make c4or1k-boot-native-ext`): the
+~300MB resident blob is impractical under c4m/c4mp, exactly the "prove
+it native first" call the rest of this project follows.
+
+**Floating point (opcode 0x32, `lf.*`).** basefs never executed an FP
+instruction; the real userland does immediately (`help`, awk, perl).
+The OR1000 single-precision group keeps binary32 values in the GPRs, so
+`fpu.c` takes/returns raw float32 bit patterns. It has two
+implementations, chosen by `native.h`'s `C4OR1K_NATIVE_FLOAT`:
+
+  * NATIVE: real host floats via a `float`/`unsigned` union
+    bit-reinterpret (the `#define int long` leaves `unsigned`/`float`
+    genuinely 32-bit). Complete and exact: add/sub/mul/div/madd,
+    itof/ftoi (floor, matching jor1k), and the six ordered compares.
+  * HOSTED: the c4lc dialect had no `float` type when this landed (it
+    has `float` and `double` now, docs/c4-float.md, not yet wired in
+    here), and the FLT opcode is stubbed on several loaders, so the hosted path is a native-only
+    stub that warns once and yields 0. It never fires on the tested
+    hosted paths (basefs's shell and the m-checks use no FP); a hosted
+    soft-float or verified `__c4_float` wiring is future work.
+
+`cpu.c`'s `case 0x32` is a pure dispatch into `fpu.c`; the register
+fields are the standard rd/ra/rb. Verified end to end: on the extended
+fs, `awk 'BEGIN{printf "%.4f", 22/7}'` prints `3.1429` and perl's
+`sqrt(2)` is `1.4142135623731`.
+
+## M17 — idle nicely (PMR doze), the fastcpu.js lesson
+
+The native build pegged a host core at 100% even with the guest doing
+nothing, because OpenRISC's `arch_cpu_idle` enters "doze" (a write to
+the power-management SPR, group 8) and then, since doze is a no-op in
+emulation, the guest just spins its idle loop waiting for the next
+interrupt. jor1k's `fastcpu.js` solves the same problem by RETURNING to
+the browser scheduler on the doze write, which sleeps until the next
+timer event (fastcpu.js:394 sets `doze`, :1168 returns).
+
+c4or1k has no outer scheduler to return to, so it naps in place.
+`case 8` sets `cpu_dozed`; `main.c` resets that flag before each batch
+and, if it is still set afterwards (the batch ended idle) and no
+interrupt is pending, sleeps `IDLE_NAP_US` (200us) and advances the
+clock over the nap via `cpu_tick_check`. Result: 3s boot to the shell,
+**~4% idle CPU** (was 100%), console input still wakes the guest within
+one nap.
+
+Three traps found the hard way, all worth stating:
+
+  1. **cpu_dozed must be a ONE-SHOT, reset per batch.** A first version
+     checked a persistent flag at the top of the loop; the guest dozes
+     once during an msleep, then does real polling work with no
+     intervening exception, so the flag stayed set and every batch
+     napped -- throttling the ethernet PHY probe to a crawl (it looked
+     like a hang).
+  2. **Never move TTCR backwards, and advance it at the NATURAL rate.**
+     The guest reads TTCR directly for `udelay`/delay-calibration.
+     Writing it backwards hangs a delay loop; advancing it faster or
+     slower than the real execution rate desyncs the boot's timer state
+     machines. The nap advances TTCR by `ipms * nap` cycles (ipms = the
+     ACTIVE instruction rate, measured against wall time MINUS time
+     already slept -- dividing by raw elapsed collapses the estimate
+     once naps dominate and starves tick delivery).
+  3. **Block-buffering hid all of this.** Redirecting boot stdout to a
+     file is block-buffered, so the last visible line lagged the real
+     boot position by up to 4KB -- for a long time it looked stuck at a
+     partial "lib" line when the boot was in fact progressing. Always
+     verify boot progress with `stdbuf -oL`.
+
+## M18 — raw terminal mode + Ctrl+C forwarding, and synthetic DNS
+
+**Ctrl+C to the guest.** Before this, a typed Ctrl+C hit the emulator's
+own (cooked) terminal and killed the process. It should reach the guest
+so the guest's tty line discipline signals the guest's foreground
+process. The fix is to put fd 0 in raw mode from inside the VM, which
+the C4 VM historically could not do (no termios -- that was the whole
+reason `run-c4or1k.sh` existed). So c4mp grows one new opcode, **TRAW**
+(`__c4_termraw(on)`): a host `tcsetattr`/`cfmakeraw` toggle, tty-aware
+(a no-op returning 0 on a pipe), restored on exit via atexit and on
+SIGTERM/SIGHUP. It is appended to the opcode enum (c4mp.h, vm.c's name
+table, `c4r.lisp`'s `c4r:ops`, and c4lc-gen's syscall table -- appended,
+never inserted, same rule as the M12 cisc opcodes). The native build
+implements the same contract with real termios in `native.h`.
+
+`console.c` enables raw mode in BOOT MODE ONLY (the m1/m2/m3 checks run
+test/console mode under c4m, which has no TRAW opcode) and forwards
+every byte to the guest -- Ctrl+C (0x03) included. A two-key escape
+`Ctrl-] x` quits the emulator (Ctrl-] chosen over qemu's Ctrl-A so the
+guest shell keeps Ctrl-A for beginning-of-line); `Ctrl-] Ctrl-]` sends a
+literal Ctrl-]. Verified: with `sleep 30` running, a typed Ctrl+C
+interrupts the sleep and returns to the shell while the emulator stays
+alive.
+
+**Synthetic DNS.** The guest gets `10.0.0.1` as its DNS server from the
+M15 DHCP OFFER, but nothing answered port 53, so name resolution failed
+(direct IPs pinged fine). `net.c` now has a synthetic resolver: it
+answers A queries from a deterministic, made-up `11.x.x.x` address
+(the QNAME hashed via FNV-1a), other qtypes with a well-formed
+NOERROR/0-answer. Off-subnet on purpose -- the guest then routes to it
+via the gateway, whose ARP and ICMP echo this peer already answers, so
+`ping google.com` resolves AND gets replies. Real name resolution still
+needs the c4mp socket bridge below.
+
+## Toward real connectivity: c4mp host sockets + a C4IX Linux-compat layer (plan)
+
+Everything above is self-contained: the guest network is a synthetic
+peer (ARP/DHCP/ICMP/DNS) with no host I/O, so it works identically
+native and hosted. Real external connectivity -- the guest actually
+reaching the host's network -- is the one piece still missing, and it
+is deliberately scoped as future work because it needs new primitives
+BELOW c4or1k, in c4mp. This section records the agreed direction.
+
+**Step 1 -- native TAP backend (small, immediate).** The native build
+already has a real host; a TAP/socket backend can drop straight in
+behind the `net_tx` (guest->host) / `eth_rx` (host->guest) seam that
+M15 shaped for exactly this. Open `/dev/net/tun` (or a datagram
+socket), non-blocking; `net_poll` drains it into `eth_rx`. Gated on
+privileges. This proves end-to-end external traffic native-first,
+same methodology as the rest of the project, without touching the VM.
+
+**Step 2 -- a c4mp socket/packet primitive (the VM piece).** For the
+HOSTED builds to reach the host network, c4mp must grow host I/O beyond
+the file/stdio calls it exposes today: a small socket/packet opcode
+family (open a TAP fd or datagram socket, non-blocking read/write),
+added the same way M18's TRAW was -- appended opcodes, native
+implementation in `vm.c`, stubbed under a hosted c4mp. c4or1k then uses
+it behind the same `net_tx`/`eth_rx` seam, so the guest-facing code is
+unchanged.
+
+**Step 3 -- the bigger vehicle: a Linux-compat layer on C4IX (opt-in,
+cisc-only).** The proposed longer-term home for host networking is not
+c4or1k at all but C4IX (this repo's Linux-like OS, `src/c4ix`, compiled
+by c4lc): add an opt-in, `-mcisc`-only Linux syscall-compatibility
+layer so real OpenRISC/Linux userland -- starting with busybox -- runs
+directly on C4IX, backed by a real TCP/IP stack over the c4mp socket
+primitive from Step 2. That turns "emulate a whole Linux kernel to get
+a shell" into "run the Linux userland on C4IX directly," which is
+dramatically cheaper than the full-system emulation c4or1k does, while
+reusing the socket primitive. Rough milestone shape:
+
+  * L0 -- syscall shim: map the busybox-critical Linux syscalls
+    (open/read/write/close/stat/mmap-ish/brk/clone-lite/wait/execve,
+    the socket set) onto C4IX's own, behind an opt-in ABI flag; cisc
+    only, so it never touches the base C4IX build.
+  * L1 -- ELF/loader for static OpenRISC busybox, or a c4lc-compiled
+    busybox subset; get `sh` + coreutils applets running.
+  * L2 -- TCP/IP: a minimal stack (ARP/IP/UDP/TCP/DNS) over the c4mp
+    socket/packet primitive, exposed through the Step-1 syscalls.
+  * L3 -- reconcile with c4or1k: the two share the ethernet framing and
+    the synthetic-peer test harness, so c4or1k's `net.c` becomes the
+    offline oracle for C4IX's stack.
+
+(2026-11-21: Busybox is being ported from source instead, compiled by
+c4lc as an ordinary C4IX program: docs/busybox-port.md, where the
+compiler and kernel steps are done. No ELF loader or Linux ABI is in
+it.)
+
+This is a multi-part initiative spanning c4mp and C4IX, not a c4or1k
+change, and is written here as the shared plan of record; the concrete
+next step whenever it is picked up is Step 1 (native TAP), which is
+low-risk and immediately demonstrable.

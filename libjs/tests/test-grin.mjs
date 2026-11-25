@@ -1,0 +1,1384 @@
+// test-grin.mjs - grin, C4DOS's graphical shell, headless
+// (docs/grin-plan.md, G2 to G6).
+//
+// Boots C4DOS on the page's own disk (libjs/images/dos, build-images.sh)
+// with a display fitted, as ?system=c4dos does. Its AUTOEXEC.BAT ends
+// with GRIN, so grin comes up with nothing typed. The test then drives it
+// as a person would, with clicks and keys on the display, finding things
+// by the text drawn on them (as test-desktop.mjs does): the Task List,
+// minimising to an icon and back, Control Panel's Display at 800x600 and
+// back, and File > Exit grin, which returns to A>. Then grin's
+// applications: two Clocks ticking and closed one at a time, with the
+// heap back where it was; Calculator's 12*12=; a DOS program refused by
+// File > Run; and EXITKEY, whose exit() from a key callback unloads it.
+// Then G4's: the machine has a drive B: that the test keeps as the page
+// keeps its store (C4DOS's HOME=B:), and Program Manager's groups from
+// PROGMAN.INI, each item launching what it should, an item made with
+// File > New, changed with Properties and deleted; Notepad saving
+// NOTE.TXT through its file box onto B:, File Manager listing it there
+// with its size and copying it to the RAM disk; and a second boot with
+// the files B: kept: grin at the resolution Control Panel chose, NOTE.TXT
+// still there and opening in Notepad, and File Manager's Delete taking
+// it off B: and out of the store.
+// Then G5's: at A>, redirection (REDIR.SYS TAP on this disk): DIR into a
+// file, a c4cc program's printf through the console tap, a bare.c
+// program's line from < IN.TXT, and pipes; in grin, File > Run of a DOS
+// program, two DOS Prompt windows each with its own output, a bare.c
+// program reading a line in one while a Clock ticks and the other says
+// busy, a c4cc program and a pipe in one, EXIT, File Manager running a
+// .bat in a DOS Prompt, and Doom full screen from Program Manager, twice,
+// quit with keys, grin drawn again and the heap where it was.
+// Then G6's: the games in a window of grin's. Doom from Program Manager
+// beside a Clock whose seconds go on and a Notepad that takes typing,
+// frames arriving in the window's rectangle; closing its window ends it,
+// with the heap where it was; Wolfenstein 3D (from File Manager), Tyrian
+// and Rise of the Triad each drawing in a window and closed; and a dialog
+// opened while Doom plays a timedemo, which still works after Doom has
+// ended by itself.
+// Then G7's, on a machine with a sound card: the startup chime; Program
+// Manager's groups as windows inside it (MDI), cascaded, tiled, minimised,
+// maximised, dragged and kept; the clipboard across applications, after
+// the one that copied has gone; the screen saver's Test; and Control
+// Panel's Sound.
+//
+//   node libjs/tests/test-grin.mjs
+
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { createMachine, boot } from '../boot.js';
+import { STOP } from '../c4m.js';
+import { GuiDevice, CMD } from '../gui-device.js';
+import { HomeFiles } from '../uploads.js';
+import { SoundDevice, EVT } from '../snd-device.js';
+import { fileURLToPath } from 'node:url';
+
+const DISK = fileURLToPath(new URL('../images/dos/', import.meta.url));
+let fail = 0;
+const check = (cond, what, extra = '') => {
+  console.log(`test-grin: ${what} ${cond ? 'OK' : 'FAILED'}${!cond && extra ? '\n  ' + String(extra).slice(-1500) : ''}`);
+  if (!cond) fail = 1;
+  return cond;
+};
+if (!existsSync(join(DISK, 'index.json')) || !existsSync(join(DISK, 'GRIN/grin.c4r'))) {
+  console.log('test-grin: SKIPPED, no libjs/images/dos (make c4bb-images builds it)');
+  process.exit(0);
+}
+
+// the disk as the page serves it: a file read the first time the machine opens it
+const index = JSON.parse(readFileSync(join(DISK, 'index.json'), 'utf8'));
+class LazyDisk extends Map {
+  constructor(idx) { super(); this.sizes = new Map(idx); }
+  has(n) { return super.has(n) || this.sizes.has(n); }
+  get(n) {
+    if (super.has(n)) return super.get(n);
+    if (!this.sizes.has(n)) return undefined;
+    const b = new Uint8Array(readFileSync(join(DISK, n)));
+    super.set(n, b);
+    return b;
+  }
+}
+const image = new Uint8Array(readFileSync(join(DISK, 'c4dos32.c4r')));
+
+// ---- without a display: grin says so, and DOS carries on ------------------------
+{
+  const out = [];
+  const vm = createMachine({ arenaMb: 64, mhz: 400, drives: [{ files: new LazyDisk(index), writable: false, sink: null }], onByte: b => out.push(b) });
+  boot(vm, image, ['c4dos32.c4r']);
+  const text = () => Buffer.from(out).toString('latin1');
+  for (let i = 0; i < 2000 && !/grin: this machine has no display[^]*A:\\>/.test(text()); i++) if (vm.run(4e6) === STOP.HALT) break;
+  check(/grin: this machine has no display[^]*A:\\>/.test(text()), 'with no display, grin says so and DOS comes back to A:\\>', text());
+}
+
+// ---- with one ----------------------------------------------------------------------
+// Drive B: as the page keeps it (worker.js's persist drive, page.js's
+// store): what the machine closes there lands in `store`, what it deletes
+// leaves it, and the next boot is given what the store holds.
+const store = new Map();
+const homeDrive = () => ({
+  files: new Map([...store].map(([n, b]) => [n, b.slice()])), writable: true,
+  sink: (n, b) => store.set(n, b.slice()), remove: n => store.delete(n),
+});
+const files = new LazyDisk(index);
+let gui = new GuiDevice({ w: 640, h: 480 });
+let out = [];
+let vm = createMachine({ arenaMb: 64, mhz: 400, gui, drives: [{ files, writable: false, sink: null }, homeDrive()], onByte: b => out.push(b) });
+boot(vm, image, ['c4dos32.c4r']);
+const text = () => Buffer.from(out).toString('latin1');
+
+// The screen: every string and rectangle of the last frame presented. A
+// frame that does not begin with CLEAR paints over part of the one
+// before, as the display does (test-desktop.mjs has the same reader).
+let frame = [], cur = [], presents = 0, rects = [], curRects = [];
+// every 8-bit image the display was sent (GUI_BLIT8, which the host turns
+// into 32-bit pixels): a game's frames
+let blits = [], blitCount = 0;
+const timesSeen = new Set();
+let gen = 0, clip = null, partial = false;
+const imgSize = new Map();
+const resized = [];
+const within = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
+const cut = (a, b) => {
+  const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+  return { x, y, w: Math.min(a.x + a.w, b.x + b.w) - x, h: Math.min(a.y + a.h, b.y + b.h) - y };
+};
+const pump = () => {
+  const words = gui.drain();
+  for (let i = 0; words && i < words.length; i += words[i]) {
+    const t = words[i + 1];
+    if (t === CMD.CLEAR) { cur = []; curRects = []; partial = false; }
+    if (t === CMD.IMGDEF) imgSize.set(words[i + 2], { w: words[i + 3], h: words[i + 4] });
+    if (t === CMD.CLIP) clip = { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5] };
+    if (t === CMD.NOCLIP) clip = null;
+    const z = t === CMD.IMG ? imgSize.get(words[i + 2]) : null;
+    if (t === CMD.RECT || z) {
+      const r = z ? { x: words[i + 3], y: words[i + 4], w: z.w, h: z.h, rgb: -1, gen }
+                  : { x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], rgb: words[i + 6], gen };
+      const v = clip ? cut(r, clip) : r;
+      if (partial && v.w > 0 && v.h > 0) {
+        cur = cur.filter(s => s.gen === gen || !within(v, s.x, s.y));
+        curRects = curRects.filter(q => q.gen === gen || !(within(v, q.x, q.y) && within(v, q.x + q.w - 1, q.y + q.h - 1)));
+      }
+      // The same rectangle again, from an earlier frame, stands for it. A
+      // redraw under a clip draws a window's whole frame, which the clip
+      // leaves covering nothing; each was kept, and by the end of the
+      // timedemo (below) a quarter of a million of them were filtered at
+      // every rectangle drawn: twenty minutes of the test's twenty-one.
+      if (partial) curRects = curRects.filter(q => q.gen === gen || q.x !== r.x || q.y !== r.y || q.w !== r.w || q.h !== r.h || q.rgb !== r.rgb);
+      curRects.push(r);
+    }
+    if (t === CMD.TEXT2) {
+      const n = words[i + 8];
+      let s = '';
+      for (let k = 0; k < n; k++) s += String.fromCharCode((words[i + 9 + (k >> 2)] >>> ((k & 3) * 8)) & 0xff);
+      if (!partial || !clip || within(clip, words[i + 2], words[i + 3]))
+        cur.push({ x: words[i + 2], y: words[i + 3], s, rgb: words[i + 4], gen });
+      if (/^\d\d:\d\d:\d\d$/.test(s.trimEnd())) timesSeen.add(s.trimEnd());
+    }
+    if (t === CMD.RGB) {
+      blitCount++;
+      blits.push({ x: words[i + 2], y: words[i + 3], w: words[i + 4], h: words[i + 5], dw: words[i + 6], dh: words[i + 7] });
+      if (blits.length > 64) blits.shift();
+    }
+    if (t === CMD.PRESENT) { frame = cur.slice(); rects = curRects.slice(); presents++; gen++; partial = true; }
+    // a new size asked for (gui_size): the page's display takes it and
+    // says so with a resize event (display.js), which is what sets GUI_W
+    if (t === CMD.SIZE) resized.push({ kind: 'resize', w: words[i + 2], h: words[i + 3] });
+  }
+  while (resized.length) gui.event(resized.shift());
+};
+let halted = false;
+const run = (cycles = 2e6) => { const r = vm.run(cycles); pump(); if (r === STOP.HALT) halted = true; return r; };
+const until = (cond, budget = 1500) => { for (let i = 0; i < budget && !halted; i++) { if (cond()) return true; run(); } return cond(); };
+const settle = () => { for (let i = 0; i < 20; i++) run(); };
+const has = s => frame.some(t => (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
+const find = s => frame.filter(t => (typeof s === 'string' ? t.s.trimEnd() === s : s.test(t.s)));
+const lastIndex = s => { let k = -1; frame.forEach((t, i) => { if (t.s.trimEnd() === s) k = i; }); return k; };
+const ev = e => { gui.event(e); run(3e5); };
+const click = (x, y, button = 0) => { ev({ kind: 'move', x, y, buttons: 0 }); ev({ kind: 'down', x, y, button }); ev({ kind: 'up', x, y, button }); };
+const at = (s, pick = 'last') => { const all = find(s); return pick === 'last' ? all[all.length - 1] : pick(all); };
+const clickText = (s, pick) => { const t = at(s, pick); if (!t) return false; click(t.x + 5, t.y + 5); settle(); return true; };
+const dbl = (s, pick) => { const t = at(s, pick); if (!t) return false; click(t.x + 5, t.y + 5); click(t.x + 5, t.y + 5); settle(); return true; };
+const key = (code, ch = 0, mods = 0) => {
+  ev({ kind: 'keydown', code, char: ch, mods }); ev({ kind: 'keyup', code, char: ch, mods }); settle();
+};
+// A window, found by the first menu on its bar ("File" for Program
+// Manager, "Settings" for Control Panel): Windows 3.1's chrome puts it 14
+// px in from the window's left and 27 down, and the frame's first
+// rectangle is the whole window.
+const BORDER = 4, BOX = 18;
+const win = menu => {
+  const t = at(menu);
+  if (!t) return null;
+  const x = t.x - 14, y = t.y - 27;
+  const r = rects.find(r => r.x === x && r.y === y && r.w > 100);
+  return r ? { x, y, w: r.w, h: r.h } : null;
+};
+const minButton = w => [w.x + w.w - BORDER - 2 * BOX + 9, w.y + BORDER + 9];
+const maxButton = w => [w.x + w.w - BORDER - BOX + 9, w.y + BORDER + 9];
+// DOS's prompt, A:\> (its current directory in it: A:\GAMES>)
+const prompts = () => (text().match(/A:\\[^>\n]*>/g) || []).length;
+
+// ---- boot to grin, with nothing typed ---------------------------------------------
+check(until(() => has('Program Manager') && has('Main'), 3000), 'C4DOS boots into grin: Program Manager is drawn', text());
+check(text().includes("installed: each program's memory is freed when it ends"), 'the disk\'s CONFIG.SYS has HEAP.SYS', text());
+check(gui.w === 640 && gui.h === 480, `grin asks for 640x480 (${gui.w}x${gui.h})`);
+check(has('Control Panel') && has('File') && has('Help'), 'Program Manager has its File menu and the Main group\'s Control Panel');
+const pm0 = win('File');
+check(pm0 && find('Program Manager').some(t => Math.abs(t.x + 7 * 15 / 2 - (pm0.x + pm0.w / 2)) < 30),
+  'the Windows 3.1 look: the title is centred', JSON.stringify(pm0));
+
+// a double click on the desktop opens the Task List; Esc closes it
+// (bottom right: Program Manager covers most of the screen, all but a margin)
+click(632, 472); click(632, 472); settle();
+check(until(() => has('Task List') && has('Switch To') && has('Arrange Icons')), 'a double click on the desktop opens the Task List');
+key(27); until(() => !has('Switch To'));
+check(!has('Switch To'), 'Esc closes it');
+
+// ---- Control Panel, minimised to an icon and restored ------------------------------
+dbl('Control Panel');
+check(until(() => has('Settings') && has('Display') && has('Colors') && has('Desktop')),
+  'a double click on Control Panel opens it: Colors, Desktop, Display');
+let cp = win('Settings');
+check(!!cp, 'Control Panel\'s window is found', JSON.stringify(cp));
+if (cp) click(...minButton(cp));
+settle();
+const label = () => find('Control').filter(t => t.y > 480 - 64);
+check(until(() => !has('Settings') && label().length > 0), 'its minimise button makes it an icon along the bottom, labelled',
+  JSON.stringify(find(/Control|Panel/)));
+const ic = label()[0];
+if (ic) { click(ic.x + 5, ic.y + 5); click(ic.x + 5, ic.y + 5); settle(); }
+check(until(() => has('Settings') && !label().length), 'a double click on the icon restores the window');
+// a single click opens the icon's control menu, and Restore there brings it back too
+cp = win('Settings');
+if (cp) click(...minButton(cp));
+settle();
+until(() => label().length > 0);
+const ic2 = label()[0];
+if (ic2) click(ic2.x + 5, ic2.y + 5);
+settle();
+check(until(() => has('Restore') && has('Minimize')), 'a click on the icon opens its control menu');
+clickText('Restore');
+check(until(() => has('Settings') && !label().length), '... and its Restore brings the window back');
+
+// ---- Program Manager maximised; the Task List's Switch To --------------------------
+let pm = win('File');
+if (pm) click(...maxButton(pm));
+settle();
+pm = win('File');
+check(pm && pm.x === 0 && pm.y === 0 && pm.w === 640 && pm.h === 480, 'Program Manager maximised fills 640x480', JSON.stringify(pm));
+check(lastIndex('File') > lastIndex('Settings'), 'and it is in front of Control Panel');
+// minimised, and back by its icon's Restore: maximised again, as it was
+click(...minButton(pm));
+settle();
+const pmIcon = () => find('Program').filter(t => t.y > 480 - 64);
+check(until(() => !has('File') && pmIcon().length > 0), 'Program Manager minimised: its icon\'s label is on two lines',
+  JSON.stringify(find(/Program|Manager/)));
+if (pmIcon()[0]) click(pmIcon()[0].x + 5, pmIcon()[0].y + 5);
+settle();
+clickText('Restore');
+pm = win('File');
+check(until(() => (pm = win('File')) && pm.w === 640 && pm.h === 480), '... and Restore brings it back maximised', JSON.stringify(pm));
+key(27, 0, 2);                          // Ctrl+Esc
+check(until(() => has('Switch To')), 'Ctrl+Esc opens the Task List');
+// (a row of the Task List's list: above its buttons, inside it)
+// (a row of the Task List: drawn after its title and before its buttons,
+// in its column -- a window behind it may have texts in the same place)
+const inList = t => {
+  const tl = at('Switch To'), i = frame.indexOf(t);
+  return tl && i > lastIndex('Task List') && i < lastIndex('Switch To') && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x;
+};
+const list = find('Control Panel').filter(inList);
+check(list.length === 1 && find('Program Manager').length >= 2, 'it lists Program Manager and Control Panel',
+  JSON.stringify(frame.map(t => [t.s, t.x, t.y])));
+if (list[0]) click(list[0].x + 5, list[0].y + 5);
+settle();
+clickText('Switch To');
+check(until(() => !has('Switch To') && lastIndex('Settings') > lastIndex('File')), 'Switch To brings Control Panel to the front');
+
+// ---- Control Panel > Display: 800x600 and back -------------------------------------
+const display = (choice, w, h) => {
+  dbl('Display');
+  if (!check(until(() => has('800 x 600') && has('640 x 480') && has('OK')), `Display offers 640 x 480 and 800 x 600 (for ${choice})`)) return;
+  clickText(choice);
+  clickText('OK');
+  check(until(() => gui.w === w && gui.h === h && !has('640 x 480')), `${choice}: GUI_W and GUI_H read ${gui.w}x${gui.h}`);
+  settle();
+  const p = win('File');
+  check(p && p.x === 0 && p.y === 0 && p.w === w && p.h === h, `... and the maximised Program Manager fills ${w}x${h}`, JSON.stringify(p));
+  check(has('Settings'), '... and Control Panel is still there');
+};
+display('800 x 600', 800, 600);
+display('640 x 480', 640, 480);
+
+// ---- Colors: another scheme, drawn at once -------------------------------------------
+dbl('Colors');
+if (check(until(() => has('Granite') && has('OK')), 'Colors lists the schemes')) {
+  clickText('Granite'); clickText('OK');
+  check(until(() => !has('Granite') && rects.some(r => r.rgb === 0x384c60)), 'Granite\'s title colour is drawn after OK');
+}
+
+// ---- Desktop: a pattern under the windows ---------------------------------------------
+dbl('Desktop');
+if (check(until(() => has('Boxes') && has('Screen Saver') && has('OK')), 'Desktop offers the patterns and the screen savers')) {
+  clickText('Boxes'); clickText('OK');
+  check(until(() => !has('Screen Saver') && rects.filter(r => r.rgb === -1 && r.w === 64 && r.h === 64).length >= 50),
+    'Boxes is tiled over the desktop after OK');
+}
+
+// ---- File > Exit grin, back to A> ---------------------------------------------------------
+const exitGrin = () => {
+  // Program Manager's File menu: in front first (the Task List again)
+  key(27, 0, 2);
+  until(() => has('Switch To'));
+  const row = find('Program Manager').filter(inList)[0];
+  if (row) click(row.x + 5, row.y + 5);
+  clickText('Switch To');
+  clickText('File');
+  until(() => has('Exit grin...'));
+  clickText('Exit grin...');
+  return until(() => has('This will end your grin session.') && has('Cancel'));
+};
+check(exitGrin(), 'File > Exit grin asks: This will end your grin session.');
+clickText('Cancel');
+check(until(() => !has('This will end your grin session.')) && has('Program Manager'), 'Cancel keeps the session');
+let p0 = prompts();
+exitGrin();
+clickText('OK');
+check(until(() => prompts() > p0 && !gui.stats().attached, 3000), 'OK ends it: the display is let go and DOS is at A>', text().slice(-300));
+const typed = (line, budget = 1500) => { const p = prompts(), a = text().length; vm.dev.pushInput(line + '\n'); until(() => prompts() > p, budget); return text().slice(a); };
+check(/C4DOS version \d+\.\d+/.test(typed('VER')), 'VER answers at A>');
+const iniText = typed('TYPE GRIN.INI');
+check(/width=640/.test(iniText) && /height=480/.test(iniText) && /scheme=1/.test(iniText) && /pattern=2/.test(iniText), 'GRIN.INI keeps the choices', iniText);
+check(store.has('GRIN.INI') && /scheme=1/.test(Buffer.from(store.get('GRIN.INI')).toString('latin1')), 'GRIN.INI is on B:, the home drive, which the page keeps');
+
+// ---- G5: redirection at A> -----------------------------------------------------------
+// The disk's CONFIG.SYS has DEVICE=REDIR.SYS TAP: > >> < and | for DOS's
+// builtins, for bare.c programs through DOS's console slots, and for
+// c4cc programs through the machine's console tap.
+check(text().includes('installed: > >> < and |, with the console tap'), "the disk's CONFIG.SYS has REDIR.SYS TAP", text().slice(0, 800));
+check(text().includes('Starting grin') && !store.has('.'), "the AUTOEXEC's ECHO lines have no > for REDIR.SYS to take (no file '.' on B:)", [...store.keys()].join(' '));
+let o = typed('DIR > LIST.TXT');
+check(!/c4dos32\.c4r/i.test(o), 'DIR > LIST.TXT prints nothing at A>', o);
+o = typed('TYPE LIST.TXT');
+check(/c4dos32\.c4r/i.test(o) && /^GRIN  <DIR>$/m.test(o), '... and TYPE LIST.TXT shows the listing: the root, its directories too', o);
+check(store.has('LIST.TXT') && /c4dos32\.c4r/i.test(Buffer.from(store.get('LIST.TXT')).toString('latin1')), '... which is on B:, the home drive');
+o = typed('HELLO > OUT.TXT');
+check(!/yello/.test(o), "HELLO > OUT.TXT: a c4cc program's printf goes into the file, through the console tap", o);
+check(/yello/.test(typed('TYPE OUT.TXT')), '... TYPE OUT.TXT: yello');
+typed('ECHO Ada > IN.TXT');
+o = typed('ASKLINE < IN.TXT');
+check(/askline: hello, Ada \(3 letters\)/.test(o), 'ASKLINE < IN.TXT: a bare.c program reads its line from the file', o);
+o = typed('DIR | DOSFILT');
+check(/^> C4DOS32\.C4R$/mi.test(o) && /dosfilt: \d+ lines/.test(o), 'DIR | DOSFILT: a pipe, through a RAM-disk file', o);
+o = typed('TYPE IN.TXT | DOSFILT -r');
+check(/^ADA$/m.test(o), "TYPE IN.TXT | DOSFILT -r: a c4cc program's READ fed from the pipe (the tap)", o);
+check(!/PIPE\d+\.\$\$\$/.test(typed('DIR')), '... and no pipe file is left on the RAM disk');
+for (const n of ['LIST.TXT', 'OUT.TXT', 'IN.TXT']) typed('DEL ' + n);
+check(!store.has('LIST.TXT') && !store.has('IN.TXT'), 'DEL takes them off B: again');
+
+// ---- GRIN again --------------------------------------------------------------------------
+const f0 = presents;
+vm.dev.pushInput('GRIN\n');
+check(until(() => presents > f0 && has('Program Manager'), 3000) && gui.w === 640, 'GRIN at A> starts it again');
+check(rects.some(r => r.rgb === 0x384c60), 'with the scheme GRIN.INI keeps');
+
+// ---- applications (G3): Clock, Calculator, and one that exits ------------------------
+// grin's applications are programs of their own (clock.c4r, calc.c4r),
+// loaded by DOS, kept while they have a window, and unloaded with their
+// memory when the last one goes. The windows are found by their first
+// menu ("Settings" for a Clock) and closed with the Task List's End Task.
+// A window by its title (Windows 3.1's chrome draws it 7 px down and
+// centred), as the rectangle under it whose middle is nearest the title's
+const winByTitle = title => {
+  const t = find(title).pop();
+  if (!t) return null;
+  const mid = t.x + t.s.trimEnd().length * 7 / 2;
+  const all = rects.filter(r => r.y === t.y - 7 && r.x < t.x && r.x + r.w > t.x && r.w > 100);
+  all.sort((a, b) => Math.abs(a.x + a.w / 2 - mid) - Math.abs(b.x + b.w / 2 - mid));
+  return all.length ? { x: all[0].x, y: all[0].y, w: all[0].w, h: all[0].h } : null;
+};
+// Program Manager's window, by its title (other windows have a File menu too)
+const pmWin = () => winByTitle('Program Manager') || win('File');
+const inPm = all => { const p = pmWin(); return p ? all.filter(t => within(p, t.x, t.y) && t.y > p.y + 40).pop() : undefined; };
+// Program Manager to the front first (a click on its title bar), then a
+// double click on the item
+const groupOf = { Clock: 'Accessories', Calculator: 'Accessories', 'Control Panel': 'Main', 'File Manager': 'Main',
+                  'DOS Prompt': 'Main', Notepad: 'Main', Doom: 'Action Games', 'Wolfenstein 3D': 'Action Games',
+                  Tyrian: 'Action Games', 'Rise of the': 'Action Games' };
+// (an item's label longer than fourteen letters is on two lines, as 3.1
+// broke them: Rise of the Triad is "Rise of the" over "Triad")
+// a group shown: Program Manager's Window menu lists the groups ("2
+// Accessories"), and choosing one brings its window in front, restored
+// if it was an icon (G7's MDI)
+const showGroup = g => {
+  const p = pmWin();
+  const m = p && find('Window').filter(t => t.y === p.y + 27 && t.x > p.x && t.x < p.x + p.w)[0];
+  if (!m) return false;
+  click(m.x + 5, m.y + 5); settle();
+  const re = new RegExp('^\\d+ ' + g + '$');
+  if (!until(() => find(re).length > 0)) { key(27); return false; }
+  clickText(re);
+  return true;
+};
+const startItem = (s, group = groupOf[s] || 'Accessories') => {
+  const p = pmWin();
+  if (p) { click(p.x + 40, p.y + BORDER + 9); settle(); }
+  showGroup(group);
+  return dbl(s, inPm);
+};
+const figures = () => find(/^\d\d:\d\d:\d\d$/);
+const taskList = () => { key(27, 0, 2); return until(() => has('Switch To') && has('End Task')); };
+// a row of the Task List's list: in its column, which starts a little left
+// of its Switch To button's label (a window behind it, redrawn as a Clock
+// ticks, may put a title of the same text into the frame after the rows)
+const inTasks = inList;
+const switchTo = title => {
+  if (!taskList()) return false;
+  const row = find(title).filter(inTasks)[0];
+  if (row) { click(row.x + 5, row.y + 5); settle(); }
+  clickText('Switch To');
+  return until(() => !has('Switch To'));
+};
+const endTask = title => {
+  if (!taskList()) return false;
+  const row = find(title).filter(inTasks)[0];
+  if (!row) { key(27); return false; }
+  click(row.x + 5, row.y + 5); settle();
+  clickText('End Task');
+  return until(() => !has('Switch To'));
+};
+const running = () => {
+  clickText('Help'); until(() => has('About grin...'));
+  clickText('About grin...');
+  until(() => find(/running: \d+/).length > 0);
+  const m = (at(/running: \d+/) || { s: '' }).s.match(/running: (\d+)/);
+  clickText('OK'); until(() => !find(/running: \d+/).length);
+  return m ? +m[1] : -1;
+};
+// every clock showing figures shows new ones (the seconds moved on)
+const tick = n => {
+  const a = figures(), t0 = Date.now();
+  if (a.length !== n) return false;
+  const moved = () => {
+    const b = figures();
+    return b.length === n && a.every(o => b.some(t => t.x === o.x && t.y === o.y && t.s !== o.s));
+  };
+  // the Clocks read the host's time of day, so this waits in the host's time
+  while (!moved() && !halted && Date.now() - t0 < 5000) run();
+  return moved();
+};
+const digital = () => { clickText('Settings'); until(() => has('Digital')); clickText('Digital'); settle(); };
+
+settle();
+const heap0 = vm.heap.used;
+showGroup('Accessories');
+check(has('Accessories') && !!inPm(find('Clock')) && !!inPm(find('Calculator')), 'Program Manager has the Accessories group: Clock and Calculator');
+startItem('Clock');
+check(until(() => has('Settings')), 'Accessories > Clock opens a Clock (clock.c4r)');
+digital();
+check(until(() => figures().length === 1), 'Settings > Digital shows the time in figures', JSON.stringify(frame.map(t => t.s)));
+startItem('Clock');
+check(until(() => find('Settings').length === 2), 'a second launch opens a second Clock');
+digital();
+// side by side: the Task List's Tile
+taskList(); clickText('Tile'); settle(); until(() => !has('Switch To'));
+check(until(() => figures().length === 2), 'tiled, both Clocks show their figures', JSON.stringify(frame.map(t => [t.s, t.x, t.y])));
+check(running() === 1, 'Help > About: one application running, the second Clock on the same image');
+check(tick(2), 'both Clocks tick', JSON.stringify(figures()));
+endTask('Clock');
+check(until(() => figures().length === 1), 'End Task closes one Clock');
+check(tick(1), '... and the other ticks on', JSON.stringify(figures()));
+check(running() === 1, '... on the image still loaded');
+endTask('Clock');
+check(until(() => !figures().length && !has('Settings')), 'End Task closes the other');
+settle();
+check(running() === 0, 'with its last window gone, Clock is unloaded');
+check(Math.abs(vm.heap.used - heap0) < 512, `HEAP_USED is back where it started (${heap0} -> ${vm.heap.used})`);
+
+// Calculator: the C4IX desktop's, as calc.c4r
+startItem('Calculator');
+check(until(() => has('Hex') && has('Dec') && has('Bin')), 'Accessories > Calculator opens the desktop\'s Calculator (calc.c4r)');
+for (const [code, ch, mods] of [[49, '1'], [50, '2'], [56, '*', 1], [49, '1'], [50, '2'], [187, '=']]) key(code, ch.charCodeAt(0), mods || 0);
+check(until(() => has('144')), 'typing 12*12= into it shows 144', JSON.stringify(frame.map(t => t.s)));
+endTask('Calculator');
+check(until(() => !has('Hex')), 'End Task closes it');
+
+// File > Run...: a program that is not an application is a DOS program,
+// and runs full screen (G5): HELLO prints at the console and returns, and
+// grin takes the display back
+const runCmd = cmd => {
+  clickText('File'); until(() => has('Run...'));
+  clickText('Run...');
+  if (!until(() => has('Command Line:'))) return false;
+  for (const c of cmd) key(c.charCodeAt(0), c.charCodeAt(0));
+  key(13);
+  return true;
+};
+const heap1 = vm.heap.used;
+let a0 = text().length;
+runCmd('HELLO');
+check(until(() => text().slice(a0).includes('yello') && gui.stats().attached && has('Program Manager'), 3000),
+  'File > Run... HELLO: not an application, so a DOS program, full screen; grin comes back after it', text().slice(a0));
+check(running() === 0, '... and it is not kept loaded');
+// an application that calls exit() from its key callback
+runCmd('EXITKEY');
+check(until(() => has('A key here calls exit(3).')), 'File > Run... EXITKEY starts the test application');
+check(running() === 1, '... which is loaded');
+// (About raised Program Manager over it: the Task List's Switch To brings it back)
+switchTo('Exit Test');
+check(lastIndex('A key here calls exit(3).') > lastIndex('File'), 'Switch To brings it to the front');
+key(65, 97);
+check(until(() => !has('A key here calls exit(3).') && !has('Exit Test')), 'a key in it calls exit(): its window is closed');
+settle();
+check(running() === 0, '... and it is unloaded');
+check(Math.abs(vm.heap.used - heap1) < 512, `... with its memory (HEAP_USED ${heap1} -> ${vm.heap.used})`);
+startItem('Clock');
+check(until(() => has('Settings')), 'grin carries on: Clock starts again');
+endTask('Clock');
+check(until(() => !has('Settings')) && has('Program Manager'), '... and closes');
+
+// a Clock left open when the session ends goes with it
+startItem('Clock');
+check(until(() => has('Settings')), 'a Clock is open as the session ends');
+p0 = prompts();
+// Program Manager's control menu: Close asks the same
+pm = win('File');
+if (pm) click(pm.x + BORDER + 9, pm.y + BORDER + 9);
+settle();
+clickText('Close');
+until(() => has('This will end your grin session.'));
+clickText('OK');
+check(until(() => prompts() > p0 && !gui.stats().attached, 3000), 'Close on Program Manager\'s control menu ends the session too');
+const mem = typed('MEM');
+check(/programs loaded: 0/.test(mem), 'at A>, MEM: no program is left loaded, the Clock unloaded with grin', mem);
+check(/Clock is a grin application/.test(typed('CLOCK')), 'and CLOCK at A> says it needs grin: grin took its table back');
+
+// ---- G4: Program Manager's groups and items, Notepad, File Manager, B: --------------------------
+// a window's menu bar's texts, 27 px down from its corner
+const menuOf = (w, label) => w && find(label).filter(t => t.y === w.y + 27 && t.x > w.x && t.x < w.x + w.w)[0];
+const menu = (title, label, item) => {
+  const w = winByTitle(title);
+  const m = menuOf(w, label);
+  if (!m) return false;
+  click(m.x + 5, m.y + 5); settle();
+  if (!until(() => has(item))) return false;
+  return clickText(item);
+};
+// (keyCodes as a browser's: '.' is 190, not 46, which is Delete)
+const typeText = s => { for (const c of s) key(c === ' ' ? 32 : c === '.' ? 190 : c.toUpperCase().charCodeAt(0), c.charCodeAt(0), /[A-Z]/.test(c) ? 1 : 0); };
+// Help > About's count, from Program Manager's own menu
+const aboutCount = () => {
+  switchTo('Program Manager');
+  if (!menu('Program Manager', 'Help', 'About grin...')) return -1;
+  until(() => find(/running: \d+/).length > 0);
+  const m = (at(/running: \d+/) || { s: '' }).s.match(/running: (\d+)/);
+  okBox(); until(() => !find(/running: \d+/).length);
+  return m ? +m[1] : -1;
+};
+const endSession = () => { switchTo('Program Manager'); return menu('Program Manager', 'File', 'Exit grin...') && until(() => has('This will end your grin session.')); };
+const okBox = () => { clickText('OK'); settle(); };
+const storeText = n => store.has(n) ? Buffer.from(store.get(n)).toString('latin1') : null;
+
+p0 = prompts();
+vm.dev.pushInput('GRIN\n');
+check(until(() => has('Program Manager'), 3000), 'GRIN again, for the shell applications (G4)');
+check(text().includes('files are written to B:'), "the disk's CONFIG.SYS has DRIVES.SYS HOME=B:, and B: can be written", text().slice(0, 600));
+const pmIni = storeText('PROGMAN.INI');
+const GAME_GROUPS = ['Action Games', 'Full Games (Uploads)', 'Cards & Puzzles', 'Classic Games', 'Text Games'];
+const groupLine = g => new RegExp('^\\[' + g.replace(/[()]/g, '\\$&') + '\\]( |$)', 'm');
+check(pmIni && /^Version=4$/m.test(pmIni) && groupLine('Main').test(pmIni) && groupLine('Accessories').test(pmIni) &&
+      GAME_GROUPS.every(g => groupLine(g).test(pmIni)) &&
+      /^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(pmIni) && /^Quake=\\GAMES\\QUAKE\\QUAKE -home,game,full$/m.test(pmIni) &&
+      /^Net=\\GAMES\\PUZZLES\\NET,game,window$/m.test(pmIni) && /^Zork I=\\GAMES\\FROTZ\\FROTZ ZORK1\.Z3,game,prompt$/m.test(pmIni) &&
+      /^Notepad=NOTEPAD,notepad,app$/m.test(pmIni),
+  'PROGMAN.INI, written with the default groups (the games in five, the action games full screen), is on B:', pmIni);
+showGroup('Main');
+check(['File Manager', 'DOS Prompt', 'Control Panel', 'Notepad'].every(s => inPm(find(s))), 'Main: File Manager, DOS Prompt, Control Panel, Notepad');
+// A game's items are shown only where the game is on the disk, with its
+// data (progman.c, pm_hide): a tree may be built without a game, and the
+// site has no Tyrian data (libjs/pages.sh). PROGMAN.INI keeps them all.
+const onDisk = f => existsSync(join(DISK, 'GAMES', f));
+const haveTyrData = onDisk('TYRIAN/tyrian/data/tyrian1.lvl');
+const ACTION = [[['Doom'], 'DOOM/doom.c4r'], [['Duke Nukem 3D'], 'DUKE3D/duke3d.c4r'], [['Quake'], 'QUAKE/quake.c4r'],
+  [['Rise of the', 'Triad'], 'ROTT/rott.c4r'], [['Super Blit', 'Kart'], 'SBK/sbk.c4r'],
+  [['Tyrian'], 'TYRIAN/tyrian.c4r', 'TYRIAN/tyrian/data/tyrian1.lvl'], [['Wolfenstein 3D'], 'WOLF3D/wolf3d.c4r']];
+const actionThere = ACTION.filter(([, prog, data]) => onDisk(prog) && (!data || onDisk(data)));
+// a group window by its title (groupWin, below, is the same, for G7)
+const groupRect = name => {
+  const p = pmWin();
+  const t = p && find(name).filter(t => within(p, t.x, t.y) && t.y > p.y + 40).pop();
+  const r = t && rects.filter(r => r.y === t.y - 6 && r.x < t.x && r.x + r.w > t.x && r.w >= 140 && r.h >= 60 && within(p, r.x, r.y)).pop();
+  return r ? { x: r.x, y: r.y, w: r.w, h: r.h } : null;
+};
+showGroup('Action Games');
+{
+  const aw = groupRect('Action Games');
+  const shown = labels => !!aw && labels.every(l => find(l).some(t => within(aw, t.x, t.y)));
+  const wrong = ACTION.filter(a => shown(a[0]) !== actionThere.includes(a));
+  check(!!aw && wrong.length === 0,
+    `Action Games: the ${actionThere.length} on the disk (${actionThere.map(a => a[0].join(' ')).join(', ')}), and only those`,
+    wrong.map(a => a[0].join(' ')).join(', ') + ' ' + JSON.stringify(frame.map(t => t.s.trimEnd())));
+  check(/^Super Blit Kart=\\GAMES\\SBK\\SBK,game,full$/m.test(pmIni) && /^Tyrian=\\GAMES\\TYRIAN\\TYRIAN,game,full$/m.test(pmIni),
+    '... PROGMAN.INI has them all, those not shown too', pmIni);
+}
+
+// each item launches what it should (DOS Prompt and Doom: G5's, below)
+startItem('Control Panel');
+check(until(() => has('Settings') && has('Display')), 'Main > Control Panel opens Control Panel');
+startItem('File Manager');
+check(until(() => has('File Manager') && has('RAM:') && has('A:') && has('B:')), 'Main > File Manager opens File Manager: A:, B: and RAM:');
+check(has('(files are saved here)'), '... on B:, the home drive');
+startItem('Notepad');
+check(until(() => has('Untitled - Notepad')), 'Main > Notepad opens Notepad (notepad.c4r)');
+check(aboutCount() === 1, '... a grin application: one running');
+
+// File > New, Properties, Delete
+startItem('Clock');
+endTask('Clock'); settle();
+showGroup('Accessories');
+check(menu('Program Manager', 'File', 'New...') && until(() => has('New Program Item') && has('Command Line:')), 'File > New opens New Program Item');
+typeText('Second Clock'); key(9); typeText('CLOCK'); key(13);
+check(until(() => !has('New Program Item') && !!inPm(find('Second Clock'))), '... OK: Accessories has Second Clock');
+check(/^Second Clock=CLOCK,app,app$/m.test(storeText('PROGMAN.INI') || ''), '... and PROGMAN.INI on B: has it', storeText('PROGMAN.INI'));
+dbl('Second Clock', inPm);
+check(until(() => has('Settings')), '... which starts a Clock');
+endTask('Clock'); settle();
+showGroup('Accessories');
+clickText('Second Clock', inPm);
+check(menu('Program Manager', 'File', 'Properties...') && until(() => has('Program Item Properties')), 'File > Properties opens the item');
+for (let i = 0; i < 5; i++) key(8);
+typeText('Ticker'); key(13);
+check(until(() => !has('Program Item Properties') && !!inPm(find('Second Ticker'))), '... changed: Second Ticker');
+check(/^Second Ticker=CLOCK,app,app$/m.test(storeText('PROGMAN.INI') || ''), '... in PROGMAN.INI too');
+check(menu('Program Manager', 'File', 'Delete') && until(() => find(/delete the item 'Second Ticker'/).length > 0), 'File > Delete asks');
+clickText('Yes');
+check(until(() => !inPm(find('Second Ticker'))) && !/Second Ticker/.test(storeText('PROGMAN.INI') || 'x'), '... Yes: the item is gone, from PROGMAN.INI too');
+
+// Notepad: some text, saved as NOTE.TXT through the file box
+switchTo('Untitled - Notepad');
+typeText('hello from grin');
+check(until(() => has('hello from grin')), 'Notepad takes typing');
+check(menu(/ - Notepad$/, 'File', 'Save As...') && until(() => has('Save as:') && has('/B:')), 'Save As is the file box, in /B:, the home drive', JSON.stringify(frame.map(t => t.s)));
+for (let i = 0; i < 16; i++) key(8);
+typeText('NOTE.TXT'); key(13);
+check(until(() => has('NOTE.TXT - Notepad')), 'it saves as NOTE.TXT', JSON.stringify(frame.map(t => t.s)));
+check(storeText('NOTE.TXT') === 'hello from grin', 'NOTE.TXT is on B:, as the page would keep it', storeText('NOTE.TXT'));
+check(/^NOTE\.TXT$/m.test(storeText('c4dos.dir') || ''), "... and in B:'s c4dos.dir", storeText('c4dos.dir'));
+
+// File Manager lists it on B:, with its size
+switchTo('File Manager');
+check(until(() => has('NOTE.TXT')), 'File Manager lists NOTE.TXT on B:');
+clickText('NOTE.TXT');
+check(until(() => has('B:\\NOTE.TXT   15 bytes')), '... its size when selected', JSON.stringify(frame.map(t => t.s)));
+check(menu('File Manager', 'File', 'Copy...') && until(() => has('Copy B:\\NOTE.TXT to:')), 'File > Copy... asks where, offering RAM:');
+key(13);
+clickText('RAM:');
+check(until(() => has('NOTE.TXT') && has('RAM:\\   1 file')), '... COPY through DOS: the RAM disk has NOTE.TXT');
+clickText('B:');
+until(() => has('(files are saved here)'));
+
+// 800x600, for the next boot to find
+startItem('Control Panel');
+dbl('Display');
+until(() => has('800 x 600'));
+clickText('800 x 600'); clickText('OK');
+check(until(() => gui.w === 800), 'Display: 800 x 600, kept in GRIN.INI on B:');
+check(/width=800/.test(storeText('GRIN.INI') || ''), '... width=800 there', storeText('GRIN.INI'));
+endSession(); clickText('OK');
+check(until(() => prompts() > p0 && !gui.stats().attached, 3000), 'File > Exit grin, Notepad and File Manager open: back at A>');
+check(/hello from grin/.test(typed('TYPE B:NOTE.TXT')), 'TYPE B:NOTE.TXT at A>');
+check(/NOTE\.TXT/.test(typed('DIR B:')), 'DIR B: lists it');
+
+// ---- a second boot, with what B: kept --------------------------------------------------
+gui = new GuiDevice({ w: 640, h: 480 });
+out = []; frame = []; cur = []; rects = []; curRects = []; partial = false; halted = false;
+vm = createMachine({ arenaMb: 64, mhz: 400, gui, drives: [{ files: new LazyDisk(index), writable: false, sink: null }, homeDrive()], onByte: b => out.push(b) });
+boot(vm, image, ['c4dos32.c4r']);
+check(until(() => has('Program Manager'), 3000), 'boot again, with the files B: kept');
+check(until(() => gui.w === 800 && gui.h === 600), `grin comes up at 800x600, as Control Panel left it (${gui.w}x${gui.h})`);
+startItem('File Manager');
+check(until(() => has('File Manager') && has('NOTE.TXT')), 'File Manager: NOTE.TXT is still on B:');
+dbl('NOTE.TXT');
+check(until(() => has('NOTE.TXT - Notepad') && has('hello from grin')), 'a double click opens it in Notepad, text and all');
+endTask('NOTE.TXT - Notepad');
+switchTo('File Manager');
+clickText('NOTE.TXT');
+check(menu('File Manager', 'File', 'Delete...') && until(() => has('Delete B:\\NOTE.TXT?')), 'File > Delete... asks');
+clickText('Yes');
+check(until(() => !has('NOTE.TXT')), '... Yes: NOTE.TXT is gone from the list');
+check(!store.has('NOTE.TXT') && !/NOTE\.TXT/.test(storeText('c4dos.dir') || ''), "... from B:, its c4dos.dir, and the page's store");
+
+// ---- G5: DOS programs from grin --------------------------------------------------------
+// A window's texts: drawn inside it (another window drawn under it in the
+// same frame can put texts there too, so a check that something is NOT in
+// a window is made with no other window over the place)
+const inWin = (w, re) => !!w && frame.some(t => within(w, t.x, t.y) && re.test(t.s.trimEnd()));
+// (by its title, as winByTitle, but the whole window: the other DOS
+// Prompt's frame has lines at the same height)
+const dosWin = n => {
+  const t = find('DOS Prompt ' + n).pop();
+  if (!t) return null;
+  const r = rects.filter(r => r.y === t.y - 7 && r.x < t.x && r.x + r.w > t.x && r.h > 200).sort((a, b) => b.h - a.h)[0];
+  return r ? { x: r.x, y: r.y, w: r.w, h: r.h } : null;
+};
+const typeLine = s => { typeText(s); key(13); };
+// (typeText knows letters, digits, spaces and '.'; these need the rest)
+const typeRaw = s => { for (const c of s) key(c.charCodeAt(0), c.charCodeAt(0)); key(13); };
+
+startItem('Clock');
+digital();
+check(until(() => figures().length === 1), 'a Clock, in figures, for the DOS Prompt to run beside');
+startItem('DOS Prompt');
+check(until(() => !!dosWin(1) && has(/^EXIT closes it\./)), 'Main > DOS Prompt opens DOS Prompt 1: C4DOS in a window', JSON.stringify(frame.map(t => t.s)));
+check(until(() => inWin(dosWin(1), /^A:\\>$/)), '... at A:\\>');
+typeLine('ECHO in the first window');
+check(until(() => inWin(dosWin(1), /^in the first window$/)), 'ECHO in it answers in it');
+startItem('DOS Prompt');
+check(until(() => !!dosWin(2)), 'a second DOS Prompt: DOS Prompt 2');
+typeLine('DIR');
+check(until(() => inWin(dosWin(2), /^c4dos32\.c4r$/i) && inWin(dosWin(2), /^GAMES  <DIR>$/)), 'DIR in DOS Prompt 2 lists A: there');
+// directories (C4DOS's API v7): each window keeps its own current one
+typeRaw('CD \\GAMES\\DOOM');
+check(until(() => inWin(dosWin(2), /^A:\\GAMES\\DOOM>$/)), 'CD \\GAMES\\DOOM in DOS Prompt 2: its prompt says where it is');
+typeLine('DIR');
+check(until(() => inWin(dosWin(2), /^doom1\.wad$/i)), '... and DIR lists Doom there');
+switchTo('DOS Prompt 1');
+typeLine('CD');
+check(until(() => inWin(dosWin(1), /^A:\\$/)), 'CD in DOS Prompt 1 says A:\\: the other window\'s directory is its own');
+switchTo('DOS Prompt 2');
+typeRaw('CD \\');
+check(until(() => inWin(dosWin(2), /^A:\\>$/)), 'CD \\ takes DOS Prompt 2 back to the root');
+
+// a bare.c program reading a line in its window: its read pumps grin's
+// loop, so the Clock ticks while it waits, and the other DOS Prompt is busy
+typeLine('ASKLINE');
+check(until(() => inWin(dosWin(2), /^askline: what is your name\?$/)), 'ASKLINE in DOS Prompt 2 asks, in that window');
+const seen0 = timesSeen.size, t0 = Date.now();
+while (timesSeen.size < seen0 + 2 && Date.now() - t0 < 6000 && !halted) run();
+check(timesSeen.size >= seen0 + 2, `... and the Clock keeps ticking while it waits (${timesSeen.size - seen0} new times drawn)`);
+startItem('Doom');
+check(until(() => find(/A DOS program is running \(ASKLINE\)/).length > 0), 'Games > Doom meanwhile: one DOS program at a time, says grin');
+okBox();
+switchTo('DOS Prompt 1');
+typeLine('DIR');
+check(until(() => inWin(dosWin(1), /^grin: busy -- ASKLINE is running/)), 'DIR in DOS Prompt 1 meanwhile: busy');
+switchTo('DOS Prompt 2');
+typeLine('Ada');
+check(until(() => inWin(dosWin(2), /^askline: hello, Ada \(3 letters\)$/)), 'Ada typed in DOS Prompt 2 is the line it reads');
+
+// a c4cc program (its printf through the console tap), redirection and a pipe
+typeLine('HELLO');
+check(until(() => inWin(dosWin(2), /^yello$/)), "HELLO in DOS Prompt 2: a c4cc program's output, from the tap");
+typeRaw('DIR | DOSFILT');
+check(until(() => inWin(dosWin(2), /^> C4DOS32\.C4R$/i) && inWin(dosWin(2), /^dosfilt: \d+ lines$/)), 'DIR | DOSFILT in it: a pipe');
+typeRaw('ECHO ECHO from a batch file > B:RUNME.BAT');
+check(until(() => /from a batch file/.test(storeText('RUNME.BAT') || '')), 'ECHO ... > B:RUNME.BAT: redirected onto B:', storeText('RUNME.BAT'));
+typeLine('EXIT');
+check(until(() => !dosWin(2)), 'EXIT closes DOS Prompt 2');
+check(until(() => inWin(dosWin(1), /^in the first window$/)) && !has(/^c4dos32\.c4r$/i) && !has(/^yello$/),
+  'DOS Prompt 1 has its own lines and none of the other window\'s');
+
+// File Manager runs a batch file in a DOS Prompt
+switchTo('File Manager');
+menu('File Manager', 'File', 'Refresh');
+check(until(() => has('RUNME.BAT')), 'File Manager lists RUNME.BAT on B:');
+dbl('RUNME.BAT');
+check(until(() => !!dosWin(2) && inWin(dosWin(2), /^from a batch file$/)), '... and a double click runs it in a DOS Prompt', JSON.stringify(frame.map(t => t.s)));
+typeLine('EXIT');
+switchTo('DOS Prompt 1');
+typeLine('EXIT');
+check(until(() => !dosWin(1) && !dosWin(2)), 'EXIT closes the other one too');
+
+// File Manager in directories (C4DOS's API v7): A:'s root has folders; a
+// double click opens one, .. comes back up
+switchTo('File Manager');
+clickText('A:');
+check(until(() => has('GAMES') && has('c4dos32.c4r')), 'File Manager on A:: the root, its folders in it', JSON.stringify(frame.map(t => t.s)));
+dbl('GAMES');
+check(until(() => has('DOOM') && has('..') && has(/^A:\\GAMES +\d+ files$/)), '... a double click opens GAMES', JSON.stringify(frame.map(t => t.s)));
+dbl('DOOM');
+check(until(() => has('doom1.wad')), '... and DOOM in it');
+dbl('..'); dbl('..');
+check(until(() => has('c4dos32.c4r') && !has('..')), '... and .. twice comes back up to the root');
+clickText('B:');
+endTask('Clock');
+until(() => !figures().length);
+
+// ---- G6: games in a window ------------------------------------------------------------
+// A game's window: found by its Size menu, the first on its bar (win), or
+// by its title. Its control menu's Close closes it.
+// (each game in its directory, A:\GAMES\NAME: doom.c4r in GAMES/DOOM)
+const gameDir = c4r => 'GAMES/' + c4r.replace(/\.c4r$/i, '').toUpperCase();
+const haveGame = (c4r, data) => existsSync(join(DISK, gameDir(c4r), c4r)) && existsSync(join(DISK, gameDir(c4r), data));
+const gameWin = () => win('Size');
+const closeBox = w => {
+  click(w.x + BORDER + 9, w.y + BORDER + 9); settle();
+  if (until(() => has('Close'), 200)) clickText('Close');
+};
+const framesIn = (w, n) => !!w && blits.length >= n && blits.slice(-n).every(b =>
+  within(w, b.x, b.y) && within(w, b.x + b.dw - 1, b.y + b.dh - 1));
+// The Task List's rows, by where they are under its buttons (a partial
+// frame may draw them after the buttons, where inTasks does not look);
+// and End Task on one of them
+const taskRows = () => { const tl = at('Switch To'); return frame.filter(t => tl && t.y < tl.y && t.y > tl.y - 180 && t.x > tl.x - 40 && t.x < tl.x); };
+// (title a string, or a pattern; a "Save changes?" it raises is answered No)
+const endTask2 = title => {
+  if (!taskList()) return false;
+  const row = taskRows().filter(t => typeof title === 'string' ? t.s.trimEnd() === title : title.test(t.s.trimEnd()))[0];
+  if (!row) { key(27); until(() => !has('Switch To')); return false; }
+  click(row.x + 5, row.y + 5); settle();
+  clickText('End Task');
+  const r = until(() => !has('Switch To'));
+  if (until(() => find(/Save changes/).length > 0, 30)) clickText('No');
+  return r;
+};
+const NOTEPAD = /^Untitled( \*)? - Notepad$/;
+const haveDoom = haveGame('doom.c4r', 'doom1.wad');
+if (!haveDoom) console.log('test-grin: Doom in a window SKIPPED (no doom on the disk)');
+// The action games' items run them full screen; G6's checks are of games
+// in a window, so four are set to run in one first, by their Properties,
+// as a person would (and Doom back to full screen after G6, below)
+const setMode = (title, label, group = 'Action Games') => {
+  switchTo('Program Manager');
+  showGroup(group);
+  clickText(title, inPm);
+  if (!menu('Program Manager', 'File', 'Properties...') || !until(() => has('Program Item Properties'))) return false;
+  clickText(label);
+  key(13);
+  return until(() => !has('Program Item Properties'));
+};
+// (Tyrian's item is there only with its data: else Tyrian is left as it is)
+for (const t of ['Doom', 'Wolfenstein 3D', ...(haveTyrData ? ['Tyrian'] : []), 'Rise of the']) setMode(t, 'DOS program, in a window');
+check(['Doom=\\\\GAMES\\\\DOOM\\\\DOOM', 'Wolfenstein 3D=\\\\GAMES\\\\WOLF3D\\\\WOLF3D', ...(haveTyrData ? ['Tyrian=\\\\GAMES\\\\TYRIAN\\\\TYRIAN'] : []),
+       'Rise of the Triad=\\\\GAMES\\\\ROTT\\\\ROTT'].every(l => new RegExp(`^${l},game,window$`, 'm').test(storeText('PROGMAN.INI') || '')),
+  `Properties, with its fourth mode: Doom, Wolfenstein 3D, ${haveTyrData ? 'Tyrian ' : ''}and Rise of the Triad set to run in a window`, storeText('PROGMAN.INI'));
+if (haveDoom) {
+  startItem('Clock');
+  digital();
+  until(() => figures().length === 1);
+  startItem('Notepad');
+  until(() => has('Untitled - Notepad'));
+  settle();
+  const heapW0 = vm.heap.used;
+  const b0 = blitCount;
+  startItem('Doom');
+  check(until(() => !!gameWin() && blitCount > b0 + 40, 4000), "Games > Doom plays in a window of grin's: its frames arrive", text().slice(-400));
+  let dw = gameWin();
+  check(framesIn(dw, 20) && blits.slice(-20).every(b => b.w === 320 && b.h === 200 && b.dw === 640 && b.dh === 400),
+    `... 320x200 frames, at 2x (640x400) in the window's rectangle at 800x600 (${JSON.stringify(dw)}, ${JSON.stringify(blits[blits.length - 1])})`);
+  check(gui.stats().attached && has('Program Manager'), '... and grin keeps the display: Program Manager is drawn beside it');
+  // the cooperation: Doom runs grin's loop in its polls, so the Clock ticks
+  const seen0 = timesSeen.size, f0 = blitCount, t0 = Date.now();
+  while (timesSeen.size < seen0 + 2 && Date.now() - t0 < 8000 && !halted) run();
+  check(timesSeen.size >= seen0 + 2 && blitCount > f0 + 20,
+    `... while Doom plays, the Clock's seconds advance (${timesSeen.size - seen0} new times, ${blitCount - f0} frames meanwhile)`);
+  // keys go to the window with the focus: Notepad, clicked, takes typing
+  // while Doom plays on; then Doom's window, clicked, has them again
+  switchTo('Untitled - Notepad');
+  typeText('typed beside Doom');
+  const f1 = blitCount;
+  check(until(() => has('typed beside Doom')) && until(() => blitCount > f1 + 10),
+    'Notepad, switched to, takes typing while Doom plays on in its window');
+  switchTo('Doom');
+  // closing the window ends Doom; grin carries on, with the heap where it was
+  dw = gameWin();
+  if (dw) closeBox(dw);
+  check(until(() => !gameWin(), 3000), 'its control menu\'s Close closes Doom\'s window, and Doom ends', text().slice(-400));
+  const f2 = blitCount;
+  settle();
+  check(blitCount === f2 && gui.stats().attached && has('Program Manager') && has('typed beside Doom'),
+    'grin carries on: no more frames, Program Manager and Notepad still there');
+  endTask2(NOTEPAD);
+  until(() => !has('typed beside Doom'));
+  settle();
+  // (Notepad's text and window gone, the Clock still open: as before Doom)
+  startItem('Notepad'); until(() => has('Untitled - Notepad')); settle();
+  const heapW1 = vm.heap.used;
+  check(Math.abs(heapW1 - heapW0) / heapW0 <= 0.01, `HEAP_USED after Doom in a window is where it was before (${heapW0} -> ${heapW1}; Notepad was closed and opened again)`);
+  // and Doom alone, again, beside the same windows: to the byte
+  settle();
+  const heapW2 = vm.heap.used, b2 = blitCount;
+  startItem('Doom');
+  until(() => !!gameWin() && blitCount > b2 + 20, 4000);
+  if (gameWin()) closeBox(gameWin());
+  until(() => !gameWin(), 3000);
+  settle();
+  check(vm.heap.used === heapW2 && blitCount > b2 + 20, `Doom again, closed: HEAP_USED the same to the byte (${heapW2} -> ${vm.heap.used})`);
+  endTask2(NOTEPAD);
+  endTask2('Clock');
+  check(until(() => !find(NOTEPAD).length && !figures().length), "Notepad and the Clock closed by the Task List's End Task");
+}
+
+// Wolfenstein 3D from File Manager (a .C4R that Program Manager runs in a
+// window runs in one from there too), Tyrian and Rise of the Triad from
+// Program Manager: each draws in a window, and closes
+const oneFrame = (name, start, data, c4r) => {
+  if (!haveGame(c4r, data)) { console.log(`test-grin: ${name} in a window SKIPPED (not on the disk)`); return; }
+  const b0 = blitCount;
+  start();
+  if (!check(until(() => !!gameWin() && blitCount > b0 && framesIn(gameWin(), 1), 4000), `${name} draws a frame in a window of grin's`, text().slice(-300))) return;
+  closeBox(gameWin());
+  check(until(() => !gameWin(), 3000) && has('Program Manager'), `... and its window closes, and ${name} with it`, text().slice(-300));
+  settle();
+};
+oneFrame('Wolfenstein 3D', () => {
+  startItem('File Manager');
+  until(() => has('File Manager'));
+  clickText('A:');
+  // A:\GAMES\WOLF3D, and a double click on wolf3d.c4r there. GAMES has
+  // more folders than File Manager's list has rows (thirteen and .., in
+  // thirteen rows), and WOLF3D is the last: Down moves the selection, and
+  // the list with it, until WOLF3D is drawn
+  until(() => has('GAMES'));
+  dbl('GAMES');
+  until(() => has(/^A:\\GAMES +\d+ files$/));
+  for (let i = 0; i < 40 && !has('WOLF3D'); i++) key(40);
+  dbl('WOLF3D');
+  until(() => has('wolf3d.c4r'));
+  dbl('wolf3d.c4r');
+}, 'vswap.wl1', 'wolf3d.c4r');
+endTask2('File Manager');
+oneFrame('Tyrian', () => startItem('Tyrian'), 'tyrian', 'tyrian.c4r');
+oneFrame('Rise of the Triad', () => startItem('Rise of the'), 'HUNTBGIN.WAD', 'rott.c4r');
+
+// A dialog opened while a game plays is grin's, in grin's heap generation,
+// and still works once the game has ended (docs/grin-plan.md 3.3): File >
+// Run... DOOM -timedemo demo3 -show (in a window, as its item says), which
+// ends by itself; meanwhile Program Manager's File > Run... box, left
+// open; after Doom, CLOCK typed into it starts a Clock.
+if (haveDoom) {
+  const b0 = blitCount;
+  switchTo('Program Manager');
+  runCmd('\\GAMES\\DOOM\\DOOM -timedemo demo3 -show -nosound');
+  check(until(() => !!gameWin() && blitCount > b0 + 20, 4000), 'File > Run... \\GAMES\\DOOM\\DOOM -timedemo demo3 -show: a timedemo, in a window', text().slice(-300));
+  switchTo('Program Manager');
+  menu('Program Manager', 'File', 'Run...');
+  const b1 = blitCount;
+  check(until(() => has('Command Line:')) && until(() => blitCount > b1 + 10),
+    '... and meanwhile File > Run... opens its box, Doom drawing on under it', `${blitCount - b1} frames; ${JSON.stringify(frame.map(t => t.s.trimEnd()))}`);
+  // (Program Manager, maximised, covers Doom's window: the end is when its
+  // frames stop for good -- 400 runs, two seconds of the machine's, as a
+  // timedemo pauses for less -- and the Task List has no Doom any more)
+  let last = blitCount, still = 0;
+  const tq = Date.now();
+  while (still < 400 && Date.now() - tq < 1800000 && !halted) { run(); if (blitCount === last) ++still; else { still = 0; last = blitCount; } }
+  check(still >= 400, `... the timedemo ends by itself (${blitCount - b0} frames in all)`, text().slice(-300));
+  settle();
+  for (const c of 'CLOCK') key(c.charCodeAt(0), c.charCodeAt(0));
+  key(13);
+  check(until(() => !has('Command Line:') && has('Settings')), 'the box opened during the game still works after it: CLOCK typed there starts a Clock',
+    JSON.stringify(frame.map(t => t.s.trimEnd())));
+  taskList();
+  // (its rows by where they are: a partial frame may draw them after its buttons)
+  const rows = taskRows().map(t => t.s.trimEnd());
+  check(rows.includes('Clock') && !rows.includes('Doom'), "... and the Task List has the Clock, and Doom's window no more", JSON.stringify(rows));
+  key(27); until(() => !has('Switch To'));
+  endTask2('Clock');
+  check(until(() => !has('Settings')), "... and End Task closes the Clock");
+}
+
+// Doom full screen from Program Manager: grin gives the display up, Doom
+// takes it; F10 then Y quits; grin takes the display back, at its size,
+// and draws everything. Twice, with HEAP_USED where it was each time.
+const slowKey = (code, ch = 0) => {
+  gui.event({ kind: 'keydown', code, char: ch, mods: 0 }); for (let i = 0; i < 10; i++) run(2e6);
+  gui.event({ kind: 'keyup', code, char: ch, mods: 0 }); for (let i = 0; i < 10; i++) run(2e6);
+};
+// (its item runs it in a window since G6: Properties sets it to full screen)
+if (haveDoom) {
+  switchTo('Program Manager');
+  showGroup('Action Games');
+  clickText('Doom', inPm);
+  check(menu('Program Manager', 'File', 'Properties...') && until(() => has('Program Item Properties')), "Doom's Properties, to run it full screen");
+  clickText('DOS program, full screen');
+  key(13);
+  check(until(() => !has('Program Item Properties')) && /^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(storeText('PROGMAN.INI') || ''),
+    '... full screen, in PROGMAN.INI too', storeText('PROGMAN.INI'));
+}
+const doomHeap = [];
+settle();
+const doomHeap0 = vm.heap.used;
+for (let r = 1; haveDoom && r <= 2; r++) {
+  const f0 = presents;
+  startItem('Doom');
+  if (!check(until(() => presents > f0 + 40, 4000), `Doom ${r}: Games > Doom runs it full screen (frames arrive)`, text().slice(-400))) break;
+  frame = []; cur = []; rects = []; curRects = [];
+  slowKey(121);                       // F10: quit
+  slowKey(89, 121);                   // Y
+  if (!check(until(() => gui.stats().attached && has('Program Manager') && gui.w === 800 && gui.h === 600, 4000),
+    `Doom ${r}: F10 and Y quit it, and grin takes the display back at 800x600 and draws everything`, text().slice(-400))) break;
+  settle();
+  doomHeap.push(vm.heap.used);
+}
+if (doomHeap.length === 2) {
+  const worst = Math.max(...doomHeap.map(u => Math.abs(u - doomHeap0) / doomHeap0));
+  check(worst <= 0.01, `HEAP_USED after each Doom is where it was before (${doomHeap0} -> ${doomHeap.join(', ')})`);
+}
+const loadedAfter = aboutCount();
+check(loadedAfter === 0, `grin carries on after Doom: Help > About, no application loaded (${loadedAfter})`);
+startItem('Clock');
+check(until(() => has('Settings')), '... a Clock starts');
+endTask('Clock');
+
+// ---- G7: finishing -----------------------------------------------------------------------
+// A boot with a sound card fitted (snd-device.js), with what B: kept: the
+// startup chime on the OPL, written once grin's first frame is up.
+// Program Manager's groups as windows inside it (MDI), from its Window
+// menu: listed, cascaded and tiled, one minimised to an icon and back,
+// one maximised and back, one dragged by its title bar and its place kept
+// in PROGMAN.INI. The clipboard, one for every application and grin's own
+// memory: text copied in Notepad pasted into Calculator after Notepad has
+// gone, Calculator's figure pasted into the Run box's field, the field's
+// line pasted into a DOS Prompt, and the DOS Prompt's screen pasted into
+// Notepad. The screen saver (G2's, Control Panel's Desktop): its Test
+// runs Marquee until a key. Control Panel's Sound: No chime, kept in
+// GRIN.INI. Then one more boot: no chime, and the group where it was left.
+let snd = new SoundDevice();
+const keyOns = [];
+let oplWrites = 0;
+const drainSnd = () => {
+  const evs = snd.drain() || [];
+  for (const e of evs) {
+    if (e[0] === EVT.OPL) ++oplWrites;
+    if (e[0] === EVT.OPL && e[2] >= 0xb0 && e[2] <= 0xb8 && (e[3] & 0x20)) keyOns.push({ t: e[1], reg: e[2], presents });
+  }
+};
+const bootG7 = () => {
+  gui = new GuiDevice({ w: 640, h: 480 });
+  out = []; frame = []; cur = []; rects = []; curRects = []; partial = false; halted = false;
+  presents = 0; keyOns.length = 0; oplWrites = 0;
+  snd = new SoundDevice();
+  vm = createMachine({ arenaMb: 64, mhz: 400, gui, snd, drives: [{ files: new LazyDisk(index), writable: false, sink: null }, homeDrive()], onByte: b => out.push(b) });
+  boot(vm, image, ['c4dos32.c4r']);
+  // until grin has the display, then in steps of a hundred cycles until its
+  // first frame: nothing may be written to the OPL before it
+  for (let i = 0; i < 20000 && !gui.stats().attached && !halted; i++) { vm.run(2e5); pump(); drainSnd(); }
+  for (let i = 0; i < 2000000 && !presents && !halted; i++) { vm.run(100); pump(); drainSnd(); }
+  const before = oplWrites;
+  check(until(() => has('Program Manager'), 3000), 'boot with a sound card: grin comes up');
+  return before;
+};
+const chimeBefore = bootG7();
+for (let i = 0; i < 200 && keyOns.length < 4; i++) { run(); drainSnd(); }
+check(chimeBefore === 0 && keyOns.length === 4 && keyOns.every(k => k.presents > 0),
+  `the startup chime: four notes struck on the OPL, written after grin's first frame (${chimeBefore} OPL writes before it; ${keyOns.length} notes)`, JSON.stringify(keyOns));
+const gaps = keyOns.slice(1).map((k, i) => Math.round((k.t - keyOns[i].t) / 1000));
+check(keyOns.length === 4 && gaps.every(g => g === 150) && keyOns.map(k => k.reg).join() === [0xb0, 0xb1, 0xb2, 0xb3].join(),
+  `... on channels 0 to 3, 150 ms apart on the card's stream (${gaps.join(', ')} ms)`);
+
+// Program Manager's group windows: a group's frame by its name in its
+// title bar, drawn 6 px below the frame's top (its border and the bar's)
+const groupWin = name => {
+  const p = pmWin();
+  if (!p) return null;
+  const t = find(name).filter(t => within(p, t.x, t.y) && t.y > p.y + 40).pop();
+  if (!t) return null;
+  // (the last such rectangle: the frame, drawn after Program Manager's
+  // client area, which starts at the same height for a group at its top)
+  const r = rects.filter(r => r.y === t.y - 6 && r.x < t.x && r.x + r.w > t.x && r.w >= 140 && r.h >= 60 && within(p, r.x, r.y)).pop();
+  return r ? { x: r.x, y: r.y, w: r.w, h: r.h, i: frame.indexOf(t) } : null;
+};
+const CB = 3, CT = 18, CLIENT_DY = BORDER + 18 + 1 + 20;   // a window's client area: below its title bar and menu bar
+const overlap = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const pmMenu = (label, item) => { switchTo('Program Manager'); return menu('Program Manager', label, item); };
+const GROUPS3 = ['Main', 'Accessories', 'Action Games'];
+// (all three open: a PROGMAN.INI from before G7 has Main open and the others icons)
+switchTo('Program Manager');
+for (const g of GROUPS3) showGroup(g);
+check(menu('Program Manager', 'Window', 'Cascade'), "Program Manager's Window menu: Cascade");
+let gws = GROUPS3.map(groupWin);
+check(gws.every(Boolean), 'Window > Cascade: the three groups are windows inside Program Manager', JSON.stringify(gws));
+const byX = gws.filter(Boolean).sort((a, b) => a.x - b.x);
+check(byX.length === 3 && byX[1].x - byX[0].x === 22 && byX[2].x - byX[1].x === 22 && byX[1].y - byX[0].y === 22 &&
+      byX.every(g => g.w === byX[0].w && g.h === byX[0].h),
+  '... each 22 px down and right of the one behind it, all the same size', JSON.stringify(byX));
+pmMenu('Window', 'Tile');
+settle();
+gws = GROUPS3.map(groupWin);
+check(gws.every(Boolean) && !overlap(gws[0], gws[1]) && !overlap(gws[0], gws[2]) && !overlap(gws[1], gws[2]),
+  'Window > Tile: side by side, none over another', JSON.stringify(gws));
+switchTo('Program Manager');
+const wm = menuOf(pmWin(), 'Window');
+if (wm) { click(wm.x + 5, wm.y + 5); settle(); }
+check(until(() => has('Arrange Icons') && has('1 Main') && has('2 Accessories') && has('3 Action Games')),
+  'the Window menu lists the groups, numbered, under Cascade, Tile and Arrange Icons');
+key(27); settle();
+
+// Action Games minimised to an icon along Program Manager's bottom, and back
+let gg = groupWin('Action Games');
+if (gg) click(gg.x + gg.w - CB - 2 * CT + 9, gg.y + CB + 9);
+settle();
+const gamesIcon = () => { const p = pmWin(); return p && find('Action Games').filter(t => within(p, t.x, t.y) && t.y > p.y + p.h - 64)[0]; };
+check(until(() => !groupWin('Action Games') && !!gamesIcon()), "Action Games' minimise button: an icon along Program Manager's bottom",
+  JSON.stringify(find('Action Games')));
+check(/^\[Action Games\] -?\d+,-?\d+,\d+,\d+,1,/m.test(storeText('PROGMAN.INI') || ''), '... minimised in PROGMAN.INI too', storeText('PROGMAN.INI'));
+const gi = gamesIcon();
+if (gi) { click(gi.x + 5, gi.y + 5); click(gi.x + 5, gi.y + 5); settle(); }
+check(until(() => !!groupWin('Action Games') && !gamesIcon()), '... and a double click on the icon restores it');
+check(until(() => inPm(find('Doom'))), '... with its items');
+// Main maximised: it fills Program Manager, whose title names it; and back
+let gm = groupWin('Main');
+if (gm) click(gm.x + gm.w - CB - CT + 9, gm.y + CB + 9);
+settle();
+check(until(() => has('Program Manager - [Main]')), "Main's maximise button: Program Manager's title says Program Manager - [Main]");
+const pmx = win('File');
+gm = groupWin('Main');
+check(gm && pmx && gm.x === pmx.x + BORDER && gm.w === pmx.w - 2 * BORDER, '... and Main fills its client area', JSON.stringify([gm, pmx]));
+if (gm) click(gm.x + gm.w - CB - CT + 9, gm.y + CB + 9);
+settle();
+check(until(() => has('Program Manager') && !has('Program Manager - [Main]')), '... and its restore button brings it back');
+// Ctrl+F6: the next group after Main, the active one, in front
+key(117, 0, 2);
+check(until(() => groupWin('Accessories') && groupWin('Accessories').i > groupWin('Main').i && groupWin('Accessories').i > groupWin('Action Games').i),
+  'Ctrl+F6 brings the next group after Main, Accessories, in front');
+// cascaded again, every group's items in sight (a tiled group is too
+// small to show all of them, and those below its edge are clipped away)
+pmMenu('Window', 'Cascade');
+settle();
+// Accessories dragged by its title bar
+const ga = groupWin('Accessories');
+if (ga) {
+  const x0 = ga.x + 40, y0 = ga.y + CB + 9;
+  ev({ kind: 'move', x: x0, y: y0, buttons: 0 }); ev({ kind: 'down', x: x0, y: y0, button: 0 });
+  ev({ kind: 'move', x: x0 + 30, y: y0 + 20, buttons: 1 }); ev({ kind: 'up', x: x0 + 30, y: y0 + 20, button: 0 });
+  settle();
+}
+const ga2 = groupWin('Accessories');
+check(ga && ga2 && ga2.x === ga.x + 30 && ga2.y === ga.y + 20, 'Accessories dragged by its title bar moves 30 right and 20 down',
+  JSON.stringify([ga, ga2]));
+const pmw = pmWin();
+const accLine = (storeText('PROGMAN.INI') || '').match(/^\[Accessories\] (-?\d+),(-?\d+),(\d+),(\d+),0,/m);
+check(accLine && pmw && ga2 && +accLine[1] === ga2.x - pmw.x - BORDER && +accLine[2] === ga2.y - pmw.y - CLIENT_DY,
+  "... and PROGMAN.INI on B: keeps its new place", storeText('PROGMAN.INI'));
+const accPlace = ga2;
+
+// ---- the clipboard ----
+const heapC0 = vm.heap.used;
+startItem('Notepad');
+check(until(() => has('Untitled - Notepad')), 'Notepad, for the clipboard');
+for (const [code, ch, mods] of [[49, '1'], [50, '2'], [56, '*', 1], [49, '1'], [50, '2'], [187, '=']]) key(code, ch.charCodeAt(0), mods || 0);
+check(until(() => has('12*12=')), '... 12*12= typed');
+key(36, 0, 1);                        // Shift+Home: all of the line selected
+check(menu(NOTEPAD, 'Edit', 'Cut') && until(() => !has('12*12=')), 'Shift+Home selects it, and Edit > Cut takes it out');
+check(menu(NOTEPAD, 'Edit', 'Paste') && until(() => has('12*12=')), '... Edit > Paste puts it back');
+key(65, 97, 2); key(67, 99, 2);       // Ctrl+A, Ctrl+C
+endTask2(NOTEPAD);
+settle();
+check(until(() => !find(NOTEPAD).length) && aboutCount() === 0, 'Ctrl+A, Ctrl+C, and Notepad closed: no application is loaded');
+check(Math.abs(vm.heap.used - heapC0) < 512, `... its memory freed (HEAP_USED ${heapC0} -> ${vm.heap.used}), the copied text not with it`);
+startItem('Calculator');
+check(until(() => has('Hex') && has('Dec')), 'Calculator');
+key(86, 118, 2);                      // Ctrl+V
+check(until(() => has('144')), "Ctrl+V types Notepad's 12*12= into it, after Notepad has gone: 144", JSON.stringify(frame.map(t => t.s)));
+key(67, 99, 2);                       // Ctrl+C: its display
+endTask2('Calculator');
+check(until(() => !has('Hex')), '... Ctrl+C copies the display, and Calculator is closed');
+switchTo('Program Manager');
+menu('Program Manager', 'File', 'Run...');
+until(() => has('Command Line:'));
+key(45, 0, 1);                        // Shift+Ins
+check(until(() => has('144')), "the Run box's field: Shift+Ins pastes Calculator's 144 at the caret, after Calculator has gone");
+for (let i = 0; i < 3; i++) key(8);
+for (const c of 'ECHO pasted into DOS') key(c.charCodeAt(0), c.charCodeAt(0));
+key(67, 99, 2);                       // Ctrl+C: the whole field
+key(27);
+check(until(() => !has('Command Line:')), '... a line typed there, Ctrl+C copies it all; Esc');
+startItem('DOS Prompt');
+check(until(() => !!dosWin(1) && inWin(dosWin(1), /^A:\\>$/)), 'a DOS Prompt, for its Edit menu');
+check(menu('DOS Prompt 1', 'Edit', 'Paste'), 'DOS Prompt 1: Edit > Paste');
+key(13);
+check(until(() => inWin(dosWin(1), /^pasted into DOS$/)), '... types the line in, and Enter runs it: ECHO answers', JSON.stringify(frame.map(t => t.s)));
+check(menu('DOS Prompt 1', 'Edit', 'Copy'), '... Edit > Copy takes its screen');
+typeLine('EXIT');
+check(until(() => !dosWin(1)), '... and EXIT closes it');
+startItem('Notepad');
+until(() => has('Untitled - Notepad'));
+key(86, 118, 2);
+check(until(() => has('A:\\>ECHO pasted into DOS') && has('pasted into DOS')), "Ctrl+V in Notepad: the DOS Prompt's screen, as text",
+  JSON.stringify(frame.map(t => t.s)));
+endTask2(NOTEPAD);
+until(() => !find(NOTEPAD).length);
+
+// ---- the screen saver (G2's): Marquee by its Test, ended by a key ----
+startItem('Control Panel');
+dbl('Desktop');
+until(() => has('Screen Saver') && has('Marquee'));
+clickText('Marquee');
+clickText('Test');
+check(until(() => find(/^grin -- C4DOS in the manner of Windows 3\.1$/).length > 0 && !has('Program Manager'), 600),
+  "Desktop's Test: the Marquee screen saver takes the screen, saying grin's line", JSON.stringify(frame.map(t => t.s)));
+key(16);
+check(until(() => has('Program Manager') && has('Screen Saver')), '... and a key ends it: the desktop and its windows are drawn again');
+clickText('Cancel');
+until(() => !has('Screen Saver'));
+// ---- Control Panel's Sound: its Test, and No chime ----
+keyOns.length = 0;
+dbl('Sound');
+check(until(() => has('A chime when grin starts') && has('No chime')), 'Control Panel > Sound: the startup chime, or none');
+clickText('Test');
+for (let i = 0; i < 50 && keyOns.length < 4; i++) { run(); drainSnd(); }
+check(keyOns.length === 4, `... its Test plays the chime (${keyOns.length} notes)`);
+clickText('No chime'); clickText('OK');
+check(until(() => !has('No chime')) && /chime=0/.test(storeText('GRIN.INI') || ''), '... No chime, OK: chime=0 in GRIN.INI on B:', storeText('GRIN.INI'));
+endTask2('Control Panel');
+
+// ---- once more: no chime, and the groups where they were left ----
+endSession(); clickText('OK');
+until(() => !gui.stats().attached, 3000);
+bootG7();
+for (let i = 0; i < 200; i++) { run(); drainSnd(); }
+check(keyOns.length === 0, `boot again: no chime, as GRIN.INI says (${keyOns.length} notes)`);
+const ga3 = groupWin('Accessories');
+check(ga3 && accPlace && ga3.x === accPlace.x && ga3.y === accPlace.y && ga3.w === accPlace.w,
+  '... and Accessories is where it was dragged to', JSON.stringify([accPlace, ga3]));
+
+// ---- the games' groups (docs/grin.md 3.7, "The games' groups") ----
+// A line typed in a DOS Prompt naming a program Program Manager runs full
+// screen runs full screen (Doom's item is full screen again, above): grin
+// gives the display up, the game draws on it, and after F10 and Y grin has
+// it back, the DOS Prompt at its prompt.
+if (haveDoom) {
+  startItem('DOS Prompt');
+  until(() => !!dosWin(1));
+  typeRaw('CD \\GAMES\\DOOM');
+  const f0 = presents;
+  typeLine('DOOM');
+  check(until(() => presents > f0 + 40 && !has('Program Manager'), 4000),
+    'DOOM typed in a DOS Prompt: its item runs it full screen, so it runs full screen from there too', text().slice(-300));
+  frame = []; cur = []; rects = []; curRects = [];
+  slowKey(121); slowKey(89, 121);       // F10, Y
+  check(until(() => gui.stats().attached && has('Program Manager') && inWin(dosWin(1), /^A:\\GAMES\\DOOM>$/), 4000),
+    '... F10 and Y: grin has the display back, and the DOS Prompt is at A:\\GAMES\\DOOM> again', JSON.stringify(frame.map(t => t.s)));
+  check(!find(/ended with status/).length, '... with no message box: Doom ended with status 0');
+  typeLine('EXIT');
+  until(() => !dosWin(1));
+}
+// Cards & Puzzles in windows of any size (the table's version 6, fwin.c):
+// the game's own menu bar, as C4IX's desktop gives it; frames the size of
+// the window's inside; maximised, laid out to the whole of it; a pick from
+// a menu reaching the game. Net (Puzzles) lays itself out; Minesweeper (the
+// Ace of Penguins) keeps its size, and its whole board is fitted to the
+// window rather than cut off at 640 x 400.
+const lastBlit = () => blits[blits.length - 1];
+// an item from a menu of the window w's bar
+const pickIn = (w, label, item) => {
+  const m = menuOf(w, label);
+  if (!m) return false;
+  click(m.x + 5, m.y + 5); settle();
+  return until(() => has(item)) && clickText(item);
+};
+if (existsSync(join(DISK, 'GAMES/PUZZLES/net.c4r'))) {
+  const b0 = blitCount;
+  startItem('Net', 'Cards & Puzzles');
+  const netWin = () => win('Game');
+  check(until(() => !!netWin() && blitCount > b0 && framesIn(netWin(), 1), 4000) && ['Type', 'Help'].every(m => !!menuOf(netWin(), m)),
+    "Cards & Puzzles > Net plays in a window of grin's, with the game's menu bar: Game, Type, Help", JSON.stringify(frame.map(t => t.s)));
+  settle();
+  const lb = lastBlit();
+  check(lb && lb.w === lb.dw && lb.h === lb.dh, `... its frames the size of the window's inside, drawn as they are (${JSON.stringify(lb)})`);
+  const nw = netWin(), b1 = blitCount;
+  if (nw) click(...maxButton(nw));
+  settle();
+  check(until(() => { const b = lastBlit(); return blitCount > b1 && b && lb && b.w === b.dw && b.h === b.dh && b.dw > lb.dw && b.dh > lb.dh; }, 3000),
+    `... maximised, it lays itself out again to the whole of it (${JSON.stringify([lb, lastBlit()])})`);
+  const b2 = blitCount;
+  check(pickIn(netWin(), 'Type', '7x7') && until(() => blitCount > b2, 2000), "... Type > 7x7 from its menu bar: the game deals one, and draws it");
+  if (netWin()) closeBox(netWin());
+  check(until(() => !netWin(), 3000) && has('Program Manager'), '... and closing its window ends it');
+}
+if (existsSync(join(DISK, 'GAMES/ACE/minesweeper.c4r'))) {
+  const b0 = blitCount;
+  startItem('Minesweeper', 'Cards & Puzzles');
+  const mw = () => win('Game');
+  check(until(() => !!mw() && blitCount > b0 && framesIn(mw(), 1), 4000) && ['Level', 'Help'].every(m => !!menuOf(mw(), m)),
+    'Cards & Puzzles > Minesweeper in a window, with Game, Level and Help, as under C4IX', JSON.stringify(frame.map(t => t.s)));
+  settle();
+  const fb = lastBlit();
+  check(fb && fb.h >= 427 && fb.dh <= mw().h, `... its whole board (401 x 427) in each frame, fitted to the window (${JSON.stringify([fb, mw()])})`);
+  const b1 = blitCount;
+  check(pickIn(mw(), 'Level', '8x8, 6 Mines') && until(() => blitCount > b1, 2000), '... Level > 8x8 from its menu bar: a new board, drawn');
+  if (mw()) closeBox(mw());
+  check(until(() => !mw(), 3000) && has('Program Manager'), '... and closing its window ends it');
+}
+// Text Games: Quiz in a DOS Prompt of its own, started in its directory
+// (with no subject, it lists them and ends)
+if (existsSync(join(DISK, 'GAMES/BSDGAMES/quiz.c4r'))) {
+  startItem('Quiz', 'Text Games');
+  // (its list of subjects is longer than the window: the line typed has
+  // scrolled away by the time it ends)
+  check(until(() => inWin(dosWin(1), /^province capital$/)), 'Text Games > Quiz: a DOS Prompt of its own, where QUIZ lists its subjects',
+    JSON.stringify(frame.map(t => t.s)));
+  check(until(() => frame.filter(t => within(dosWin(1) || { x: 0, y: 0, w: 0, h: 0 }, t.x, t.y) && /^A:\\GAMES\\BSDGAMES>$/.test(t.s.trimEnd())).length > 0, 3000),
+    '... it runs there, and the prompt comes back when it ends', JSON.stringify(frame.map(t => t.s)));
+  typeLine('EXIT');
+  check(until(() => !dosWin(1)), '... and EXIT closes it');
+}
+
+// An old PROGMAN.INI, from before the games' groups (no Version= line):
+// the Games group renamed Action Games, its games full screen, the new
+// groups and the missing default items added; the person's own item, in
+// Games, and their own group, kept as they were
+endSession(); clickText('OK');
+until(() => !gui.stats().attached, 3000);
+const OLD_INI = ['[Main]', 'File Manager=FILEMAN,files,app', 'DOS Prompt=DOSPRMPT,dos,app', 'Control Panel=CONTROL,control,app',
+  'Notepad=NOTEPAD,notepad,app', '[Accessories]', 'Clock=CLOCK,clock,app', '[Games]',
+  'Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,window', 'Doom=\\GAMES\\DOOM\\DOOM,game,window',
+  'Doom, level 2=\\GAMES\\DOOM\\DOOM -warp 2,game,window', 'Ghost Game=\\GAMES\\GHOST\\GHOST,game,full',
+  '[Mine]', 'Hello=HELLO,app,full', ''].join('\n');
+store.set('PROGMAN.INI', new Uint8Array(Buffer.from(OLD_INI, 'latin1')));
+bootG7();
+settle();
+const upIni = storeText('PROGMAN.INI') || '';
+check(/^Version=4$/m.test(upIni) && groupLine('Action Games').test(upIni) && !groupLine('Games').test(upIni) &&
+      GAME_GROUPS.every(g => groupLine(g).test(upIni)),
+  'an old PROGMAN.INI is upgraded: Version=4, Games renamed Action Games, the new groups added', upIni);
+check(/^Doom=\\GAMES\\DOOM\\DOOM,game,full$/m.test(upIni) && /^Wolfenstein 3D=\\GAMES\\WOLF3D\\WOLF3D,game,full$/m.test(upIni) &&
+      /^Calculator=CALC,calc,app$/m.test(upIni) && /^Quake=\\GAMES\\QUAKE\\QUAKE,game,full$/m.test(upIni),
+  '... its games full screen, and the default items it lacked added (Calculator, Quake)', upIni);
+check(/^Doom, level 2=\\GAMES\\DOOM\\DOOM -warp 2,game,window$/m.test(upIni) && /^\[Mine\]\nHello=HELLO,app,full$/m.test(upIni),
+  "... the person's own item and group as they were", upIni);
+check(upIni.split('\n').filter(l => /^Doom=/.test(l)).length === 1, '... and nothing twice', upIni);
+// an item of a game the disk does not have (\GAMES\GHOST): not shown, but
+// kept in PROGMAN.INI, as the person's own
+check(/^Ghost Game=\\GAMES\\GHOST\\GHOST,game,full$/m.test(upIni) && /^Tyrian=\\GAMES\\TYRIAN\\TYRIAN --home,game,full$/m.test(upIni),
+  '... Tyrian (--home) added to Full Games (Uploads), and Ghost Game, whose game is not on the disk, kept', upIni);
+showGroup('Action Games');
+{
+  const aw = groupWin('Action Games');
+  check(!!aw && find('Doom').some(t => within(aw, t.x, t.y)) && !find('Ghost Game').length,
+    '... but not shown: Action Games has Doom and no Ghost Game', JSON.stringify(frame.map(t => t.s.trimEnd())));
+}
+
+// The Uploads under C4DOS (libjs/uploads.js HomeFiles), on B:, the home
+// drive, as worker.js lays them: B:\DUKE3D\DUKE3D.GRP, and no A:\DUKE3D.
+// Full Games (Uploads) has README.TXT, written from uploads.js's NEEDS.
+endSession(); clickText('OK');
+until(() => !gui.stats().attached, 3000);
+{
+  const base = new Map([...store].map(([n, b]) => [n, b.slice()]));
+  const over = new HomeFiles(base, [['duke3d/duke3d.grp', new Uint8Array(Buffer.from('not really a GRP'))]], (n, b) => store.set(n, b.slice()));
+  gui = new GuiDevice({ w: 640, h: 480 });
+  out = []; frame = []; cur = []; rects = []; curRects = []; partial = false; halted = false; presents = 0;
+  vm = createMachine({ arenaMb: 64, mhz: 400, gui, drives: [{ files: new LazyDisk(index), writable: false, sink: null },
+    { files: over, writable: true, sink: (n, b) => store.set(n, over.kept(n, b).slice()), remove: n => store.delete(n) }], onByte: b => out.push(b) });
+  boot(vm, image, ['c4dos32.c4r']);
+}
+check(until(() => has('Program Manager'), 3000), 'a boot with an upload, duke3d/duke3d.grp: grin comes up');
+// (PROGMAN.INI version 3: README.TXT added to the group the person has)
+check(/^Version=4$/m.test(storeText('PROGMAN.INI') || '') && /^README\.TXT=NOTEPAD \\GAMES\\README\.TXT,notepad,app$/m.test(storeText('PROGMAN.INI') || ''),
+  'PROGMAN.INI is version 4, with README.TXT in Full Games (Uploads)', storeText('PROGMAN.INI'));
+check(/^Ghost Game=\\GAMES\\GHOST\\GHOST,game,full$/m.test(storeText('PROGMAN.INI') || ''),
+  '... and Ghost Game still, through the saves since', storeText('PROGMAN.INI'));
+if (existsSync(join(DISK, 'GAMES/README.TXT'))) {
+  startItem('README.TXT', 'Full Games \\(Uploads\\)');
+  check(until(() => find(/README\.TXT - Notepad$/).length > 0 && find(/^FULL GAMES \(UPLOADS\)/).length > 0 && find(/^Duke Nukem 3D/).length > 0),
+    "Full Games (Uploads) > README.TXT opens it in Notepad: how to upload each game's files", JSON.stringify(frame.map(t => t.s.trimEnd())));
+  endTask2(/README\.TXT - Notepad$/);
+}
+// (shown here, not with Action Games above: its window open there, its
+// Ultimate Doom's "Doom" would be taken for Doom's)
+// Full Games (Uploads): Tyrian plays the person's own tyrian21.zip
+// (tyrian --home, uploads.js), so it is there wherever the game is
+showGroup('Full Games \\(Uploads\\)');
+{
+  const uw = groupRect('Full Games (Uploads)');
+  const tyr = !!uw && find('Tyrian').some(t => within(uw, t.x, t.y));
+  check(!!uw && tyr === onDisk('TYRIAN/tyrian.c4r') && /^Tyrian=\\GAMES\\TYRIAN\\TYRIAN --home,game,full$/m.test(pmIni),
+    `Full Games (Uploads): Tyrian (--home) ${onDisk('TYRIAN/tyrian.c4r') ? 'there, the game being on the disk' : 'not there: no game on the disk'}`,
+    JSON.stringify(frame.map(t => t.s.trimEnd())));
+}
+endSession(); clickText('OK');
+check(until(() => !gui.stats().attached && /A:\\>$/.test(text().trimEnd()), 3000), '... and Exit grin, to A>');
+let dirOut = typed('DIR B:\\DUKE3D');
+check(/duke3d\.grp/i.test(dirOut), 'DIR B:\\DUKE3D lists the upload', dirOut);
+dirOut = typed('DIR A:\\DUKE3D');
+check(!/duke3d\.grp/i.test(dirOut) && /invalid directory/i.test(dirOut), 'A: has no DUKE3D: it keeps only the system', dirOut);
+dirOut = typed('TYPE B:\\DUKE3D\\DUKE3D.GRP');
+check(/not really a GRP/.test(dirOut), 'TYPE B:\\DUKE3D\\DUKE3D.GRP reads it', dirOut);
+dirOut = typed('DEL B:\\DUKE3D\\DUKE3D.GRP');
+check(/cannot delete/i.test(dirOut) && /duke3d\.grp/i.test(typed('DIR B:\\DUKE3D')), 'DEL cannot take an upload off B:', dirOut);
+check(![...store.keys()].some(n => /duke3d\.grp/i.test(n)) && !/duke3d/i.test(storeText('c4dos.dir') || ''),
+  "and nothing of it is in what the page keeps of B:, its listing neither", JSON.stringify([...store.keys(), storeText('c4dos.dir')]));
+
+console.log(fail ? 'test-grin: FAILED' : 'test-grin: OK');
+process.exit(fail);

@@ -1,0 +1,1067 @@
+// shell.c -- the C4IX desktop's shell, over the window kit (src/winkit).
+// docs/c4ix-desktop.md.
+//
+// It owns the display: it takes it from the kernel, attaches the rings,
+// and runs the loop that reads events, keeps the windows' programs going
+// and draws. It draws what is the desktop's own -- its picture and icons
+// under the windows, the taskbar and the Go menu over them -- and keeps
+// Settings' choices in /etc/desktop.cfg. The windows are the kit's.
+// The taskbar's tray has the volume: the sound card's master, which
+// every program's sound goes through (libjs/guest/snd.h).
+
+#include "desktop.h"
+#define printf uprintf
+#include "wkgui.h"
+
+enum { START_W = 200, N_ICONS = 6 };
+// the sound card's master volume (libjs/guest/snd.h), written here and
+// not through snd.c: the desktop is linked whole by the host's Makefile
+// too, without the card's functions
+enum { SND_MASTER = 0x4bc, SND_MUTE = 256, C4I_SND = 0x8000 };
+static int running;
+static int vol_open, vol_drag;
+static int icon_t, icon_k;
+static int cpu_shown, cpu_n;
+static int frame_waiting;          // a program's framebuffer frame (term.c): no 25 ms wait
+
+void mark_frame() { frame_waiting = 1; }
+static char tbuf[128];
+
+// ---- Settings' choices -------------------------------------------------------
+//
+// The colour scheme (the kit's), the desktop's own colour, its picture, the
+// screen saver and its wait, the look, the screen's size, the volume, and
+// the interface's font; and the order Files lists in.
+static int swatches[8] = { 0x008080, 0x000040, 0x000000, 0x3a4a5a, 0x205030, 0x502850, 0xa09070, 0x606060 };
+enum { T_MODERN = 8 };
+static int cur_scheme, cur_bg;
+static int cur_wall;               // the picture (wall.c) under everything, or the colour
+static int cur_saver, cur_wait;    // the screen saver (savers.c, 0 none) and after how many minutes
+static int cur_sort;               // Files' order: SORT_* * 2, plus 1 for descending
+static int cur_tree = 180;         // Files' folder tree: its width (its splitter)
+// The sizes offered: the window kit lays itself out at any of them, and
+// the page scales the display to its pane. 640x480 still fits Settings,
+// the Go menu and the desktop's icons.
+enum { N_SIZES = 3 };
+static int size_w[N_SIZES] = { 640, 800, 1024 }, size_h[N_SIZES] = { 480, 600, 768 };
+static char *size_names[N_SIZES] = { "640x480", "800x600", "1024x768" };
+static int cur_size;
+static int cur_vol, cur_mute;      // the volume, 0-100 as the tray shows it, and muted
+static int cur_font, cur_fsize;    // the interface's face and size (the kit's, wk_font_use)
+
+static void theme_init() {
+    cur_scheme = T_MODERN; cur_bg = 0 - 1; cur_wall = 1; cur_saver = 1; cur_wait = 5; wk.style = S_FLAT;
+    cur_size = 1; cur_vol = 100; cur_mute = 0; cur_font = 0; cur_fsize = 1;
+}
+static void theme_apply() { wk_scheme_use(cur_scheme, cur_bg); wk_font_use(cur_font, cur_fsize); }
+int theme_count() { return wk_scheme_count(); }
+char *theme_name(int i) { return wk_scheme_name(i); }
+int theme_scheme() { return cur_scheme; }
+int theme_bg() { return cur_bg; }
+int theme_wall() { return cur_wall; }
+int theme_saver() { return cur_saver; }
+int theme_wait() { return cur_wait; }
+int theme_sort() { return cur_sort; }
+int theme_tree() { return cur_tree; }
+int theme_font() { return cur_font; }
+int theme_fsize() { return cur_fsize; }
+int theme_swatch(int i) { return i >= 0 && i < 8 ? swatches[i] : 0; }
+
+// /etc/desktop.cfg: "scheme N bg V wall W saver S wait M style L sort O
+// res W H vol V mute M font F fsize Z tree T", read
+// when the desktop starts, so a choice outlives Power Off (and, with
+// persist, a reload of the page). Read into a buffer longer than any
+// file it takes, zeroed, so looking a few bytes ahead stays inside it.
+static char cfg[160];
+static int cfg_num(char *s, int *v) {
+    int n, neg, k;
+    n = 0; neg = 0; k = 0;
+    if (s[0] == '-') { neg = 1; ++s; ++k; }
+    while (*s >= '0' && *s <= '9') { n = n * 10 + (*s - '0'); ++s; ++k; }
+    *v = neg ? 0 - n : n;
+    return k;
+}
+static void theme_load() {
+    int fd, n, i, v, h, k;
+    if ((fd = uopen("/etc/desktop.cfg", O_RD)) < 0) return;
+    memset(cfg, 0, 160);
+    n = uread(fd, cfg, 143);
+    uclose(fd);
+    if (n <= 0) return;
+    cfg[n] = 0;
+    i = 0;
+    while (i < n) {
+        if (cfg[i] == 's' && cfg[i + 1] == 'c' && cfg[i + 6] == ' ') {
+            cfg_num(cfg + i + 7, &v);
+            if (v >= 0 && v < wk_scheme_count()) cur_scheme = v;
+        }
+        if (cfg[i] == 'b' && cfg[i + 1] == 'g' && cfg[i + 2] == ' ') { cfg_num(cfg + i + 3, &v); cur_bg = v; }
+        if (cfg[i] == 'w' && cfg[i + 1] == 'a' && cfg[i + 2] == 'l' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); cur_wall = v != 0; }
+        if (cfg[i] == 's' && cfg[i + 1] == 'a' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < saver_count()) cur_saver = v; }
+        if (cfg[i] == 's' && cfg[i + 1] == 't' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < N_STYLES) wk.style = v; }
+        if (cfg[i] == 'w' && cfg[i + 1] == 'a' && cfg[i + 2] == 'i' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 1 && v <= 60) cur_wait = v; }
+        if (cfg[i] == 's' && cfg[i + 1] == 'o' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 0 && v < N_SORTS * 2) cur_sort = v; }
+        if (cfg[i] == 'r' && cfg[i + 1] == 'e' && cfg[i + 2] == 's' && cfg[i + 3] == ' ') {
+            k = cfg_num(cfg + i + 4, &v);
+            cfg_num(cfg + i + 5 + k, &h);
+            k = 0;
+            while (k < N_SIZES) { if (size_w[k] == v && size_h[k] == h) cur_size = k; ++k; }
+        }
+        if (cfg[i] == 'v' && cfg[i + 1] == 'o' && cfg[i + 2] == 'l' && cfg[i + 3] == ' ') { cfg_num(cfg + i + 4, &v); if (v >= 0 && v <= 100) cur_vol = v; }
+        if (cfg[i] == 'm' && cfg[i + 1] == 'u' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); cur_mute = v != 0; }
+        if (cfg[i] == 'f' && cfg[i + 1] == 'o' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 0 && v < WK_FACES) cur_font = v; }
+        if (cfg[i] == 'f' && cfg[i + 1] == 's' && cfg[i + 5] == ' ') { cfg_num(cfg + i + 6, &v); if (v >= 0 && v < WK_SIZES) cur_fsize = v; }
+        if (cfg[i] == 't' && cfg[i + 1] == 'r' && cfg[i + 4] == ' ') { cfg_num(cfg + i + 5, &v); if (v >= 100 && v < 2000) cur_tree = v; }
+        ++i;
+    }
+    theme_apply();
+}
+static void theme_save() {
+    int fd;
+    umkdir("/etc");
+    if ((fd = uopen("/etc/desktop.cfg", O_WR + O_CREATE + O_TRUNCATE)) < 0) return;
+    ui_cpy(cfg, "scheme ");
+    ui_num(cfg + ui_len(cfg), cur_scheme);
+    ui_cat(cfg, " bg ");
+    if (cur_bg < 0) ui_cat(cfg, "-1"); else ui_num(cfg + ui_len(cfg), cur_bg);
+    ui_cat(cfg, cur_wall ? " wall 1 saver " : " wall 0 saver ");
+    ui_num(cfg + ui_len(cfg), cur_saver);
+    ui_cat(cfg, " wait ");
+    ui_num(cfg + ui_len(cfg), cur_wait);
+    ui_cat(cfg, " style ");
+    ui_num(cfg + ui_len(cfg), wk.style);
+    ui_cat(cfg, " sort ");
+    ui_num(cfg + ui_len(cfg), cur_sort);
+    ui_cat(cfg, " res ");
+    ui_num(cfg + ui_len(cfg), size_w[cur_size]);
+    ui_cat(cfg, " ");
+    ui_num(cfg + ui_len(cfg), size_h[cur_size]);
+    ui_cat(cfg, " vol ");
+    ui_num(cfg + ui_len(cfg), cur_vol);
+    ui_cat(cfg, cur_mute ? " mute 1 font " : " mute 0 font ");
+    ui_num(cfg + ui_len(cfg), cur_font);
+    ui_cat(cfg, " fsize ");
+    ui_num(cfg + ui_len(cfg), cur_fsize);
+    ui_cat(cfg, " tree ");
+    ui_num(cfg + ui_len(cfg), cur_tree);
+    ui_cat(cfg, "\n");
+    write(fd, cfg, ui_len(cfg));
+    uclose(fd);
+}
+void theme_set(int scheme, int bg) {
+    if (scheme >= 0 && scheme < wk_scheme_count()) cur_scheme = scheme;
+    cur_bg = bg;
+    cur_wall = 0;
+    theme_apply();
+    theme_save();
+    wk_redraw_all();
+}
+// the picture on or off; the colour stays what it was
+void theme_set_wall(int on) {
+    cur_wall = on != 0;
+    theme_save();
+    wk_redraw_all();
+}
+void theme_set_style(int style) {
+    wk.style = style >= 0 && style < N_STYLES ? style : S_FLAT;
+    theme_save();
+    wk_redraw_all();
+}
+// Files' order, kept as the rest are; each Files window sorts its own list
+void theme_set_sort(int sort) {
+    if (sort >= 0 && sort < N_SORTS * 2) cur_sort = sort;
+    theme_save();
+}
+// Files' folder tree dragged to a width: the one a Files window opens with
+void theme_set_tree(int w) {
+    if (w >= 100 && w < 2000) cur_tree = w;
+    theme_save();
+}
+void theme_set_saver(int which, int wait) {
+    if (which >= 0 && which < saver_count()) cur_saver = which;
+    if (wait >= 1 && wait <= 60) cur_wait = wait;
+    theme_save();
+    wk_redraw_all();
+}
+
+// The interface's font: the face and size the kit draws F_SANS and F_BOLD in
+void theme_set_font(int face, int size) {
+    if (face >= 0 && face < WK_FACES) cur_font = face;
+    if (size >= 0 && size < WK_SIZES) cur_fsize = size;
+    theme_apply();
+    theme_save();
+    wk_redraw_all();
+}
+
+// The screen's size: asked of the display now (the page sizes its canvas,
+// the kit lays the windows out again, the picture is stretched to it)
+int display_count() { return N_SIZES; }
+char *display_name(int i) { return i >= 0 && i < N_SIZES ? size_names[i] : ""; }
+int display_cur() { return cur_size; }
+void display_set(int i) {
+    if (i < 0 || i >= N_SIZES) return;
+    cur_size = i;
+    theme_save();
+    if (wk.sw != size_w[i] || wk.sh != size_h[i]) wk_screen(size_w[i], size_h[i]);
+    wk_redraw_all();
+}
+
+// The volume, to the sound card: its master, 0-255, from the tray's
+// 0-100 squared, so the slider's middle sounds about half as loud
+static void volume_apply() {
+    int v;
+    if (!(__c4_info() & C4I_SND)) return;
+    v = cur_vol * cur_vol * 255 / 10000;
+    *(int *)SND_MASTER = cur_mute ? v | SND_MUTE : v;
+}
+
+// Settings' Preview: the saver now, past the click that asked for it
+static int saver_grace;
+void saver_preview() {
+    if (!cur_saver) return;
+    saver_start(cur_saver);
+    saver_grace = __time() + 150;
+}
+
+// ---- the desktop: its picture, and its icons ----------------------------------------
+
+static char *icon_labels[N_ICONS] = { "Filesystem", "Terminal", "Text Editor", "IDE", "Calculator", "System Monitor" };
+static int icon_kinds[N_ICONS] = { 0, K_TERM, K_NOTE, K_EDIT, K_CALC, K_TASKS };
+
+static void icon(int x, int y, char *label, int kind) {
+    int lw;
+    if (kind == 0) {                               // Filesystem
+        gui_rect(x + 10, y, 28, 20, C_FACE); d_bevel(x + 10, y, 28, 20, B_RAISED);
+        gui_rect(x + 13, y + 3, 22, 14, 0x008080);
+        gui_rect(x + 8, y + 22, 32, 8, C_FACE); d_bevel(x + 8, y + 22, 32, 8, B_RAISED);
+    } else if (kind == K_TERM) {
+        gui_rect(x + 8, y, 32, 26, C_FACE); d_bevel(x + 8, y, 32, 26, B_RAISED);
+        gui_rect(x + 11, y + 3, 26, 18, C_DARK);
+        gui_text2(x + 13, y + 5, 0xc0c0c0, 10, F_MONO, 0, ">_", 2);
+        gui_rect(x + 12, y + 28, 24, 3, C_FACE);
+    } else {
+        gui_rect(x + 14, y + 4, 20, 24, C_WHITE); gui_recto(x + 14, y + 4, 20, 24, C_SHADOW);
+        if (kind == K_NOTE) { gui_rect(x + 17, y + 10, 14, 1, 0x4060c0); gui_rect(x + 17, y + 14, 14, 1, 0x4060c0); gui_rect(x + 17, y + 18, 10, 1, 0x4060c0); }
+        else d_icon(kind, x + 16, y + 8);
+    }
+    lw = ui_len(label) * 6;
+    // over the picture, a shadow to read it by
+    if (wall_shown()) d_text(x + 25 - lw / 2, y + 37, 0x000000, F_SANS, label);
+    d_text(x + 24 - lw / 2, y + 36, C_LIGHT, F_SANS, label);
+}
+
+// under the windows: the picture (or the colour, when only the damage is
+// drawn; a whole redraw has cleared to it), then the icons that reach in
+static void desktop(int x, int y, int w, int h) {
+    int k;
+    if (!wall_draw(x, y, w, h) && wk_part) gui_rect(x, y, w, h, C_DESK);
+    k = 0;
+    while (k < N_ICONS) {
+        // an icon's label is centred under it and can be wider than it
+        if (wk_in_damage(0, 14 + k * 72, 80, 52)) icon(18, 14 + k * 72, icon_labels[k], icon_kinds[k]);
+        ++k;
+    }
+}
+
+// ---- the Go menu: a banner down the left, then the tools -----------------------------
+//
+// A row starts something, or opens another menu beside it: Games, and in
+// that a group of games. The tools are listed here. The games list
+// themselves in /etc/desktop.apps (games/README.md).
+
+enum { GO_RUN = 0 - 1, GO_OFF = 0 - 2, GO_CMD = 0 - 3 };
+enum { M_GO, M_GAMES, M_GROUPS, N_MENUS = 12, N_GAMES = 128, APPS_MAX = 8192, GO_ROW = 26, GO_DEPTH = 3 };
+struct go_item { char *label; int kind; int opens; char *cmd; int menu; };
+static struct go_item start_items[] = {
+    { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "IDE", K_EDIT },
+    { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Settings", K_SETTINGS },
+    { "About C4IX", K_ABOUT }, { "-", 0 },
+    { "Games", 0, M_GAMES }, { "Run...", GO_RUN }, { "-", 0 }, { "Power Off...", GO_OFF }
+};
+static int n_start;
+// The rows of every menu but Go, each menu's together (games_load)
+static struct go_item game_items[N_GAMES];
+static int n_games, n_menus;
+static int menu_first[N_MENUS], menu_n[N_MENUS];
+
+static struct go_item *menu_items(int m) { return m ? &game_items[menu_first[m]] : start_items; }
+static int menu_count(int m) { return m ? menu_n[m] : n_start; }
+
+// the field at s ends at the next |: the one after it, or 0 if this was the last
+static char *next_field(char *s) {
+    while (*s && *s != '|') ++s;
+    if (!*s) return 0;
+    *s = 0;
+    return s + 1;
+}
+
+// A command's program is on the disk: at the path it names, or else by name
+// in /usr/games/bin, where a game's programs are (vfs-games.py)
+static int program_there(char *cmd) {
+    char path[96], *d;
+    int k, st[8];
+    d = path;
+    k = 0;
+    while (cmd[k] && cmd[k] != ' ' && cmd[k] != '/') ++k;
+    if (cmd[k] != '/') { ui_cpy(path, "/usr/games/bin/"); d = path + ui_len(path); }
+    k = 0;
+    while (cmd[k] && cmd[k] != ' ' && k < 80) { d[k] = cmd[k]; ++k; }
+    d[k] = 0;
+    return ustat(path, st) == 0;
+}
+
+static void game_add(char *label, int kind, char *cmd, int menu, int opens) {
+    struct go_item *it;
+    it = &game_items[n_games];
+    ++n_games;
+    it->label = label; it->kind = kind; it->cmd = cmd; it->menu = menu; it->opens = opens;
+}
+
+// the menu of a group of games, new the first time it is named; 0 if there is no room
+static int game_group(char *name) {
+    int k;
+    k = 0;
+    while (k < n_games) {
+        if (game_items[k].opens && ui_eq(game_items[k].label, name)) return game_items[k].opens;
+        ++k;
+    }
+    if (n_menus == N_MENUS || n_games == N_GAMES) return 0;
+    game_add(name, 0, 0, M_GAMES, n_menus);
+    ++n_menus;
+    return n_menus - 1;
+}
+
+// the word w is one of s's, which are separated by spaces
+static int has_word(char *s, char *w) {
+    int n;
+    n = ui_len(w);
+    while (*s) {
+        while (*s == ' ') ++s;
+        if (!memcmp(s, w, n) && (s[n] == 0 || s[n] == ' ')) return 1;
+        while (*s && *s != ' ') ++s;
+    }
+    return 0;
+}
+
+// A line of /etc/desktop.apps: CATEGORY|NAME|COMMAND|FLAGS, cut up where it
+// is. CATEGORY is Games, or Games/GROUP for a menu of its own within Games.
+// Any other category is not this menu's. Nor is a line whose program is not
+// on the disk. FLAGS, which may be left out, are words: `window` says the
+// program plays in a window of its own, with no Terminal, from here and from
+// Files (tools.c, run_command). docs/c4-explorer.md's W2 would add `single`
+// to them, and its fields after them.
+static void game_line(char *s) {
+    char *name, *cmd, *group, *flags;
+    int menu;
+    if (!(name = next_field(s)) || !(cmd = next_field(name))) return;
+    if ((flags = next_field(cmd))) next_field(flags);
+    if (flags && cmd[0] && has_word(flags, "window")) desk_window_app(cmd);
+    group = s;
+    while (*group && *group != '/') ++group;
+    if (*group) { *group = 0; ++group; }
+    if (!ui_eq(s, "Games") || !name[0] || !cmd[0] || !program_there(cmd)) return;
+    menu = group[0] ? game_group(group) : M_GAMES;
+    if (menu && n_games < N_GAMES) game_add(name, GO_CMD, cmd, menu, 0);
+}
+
+// In a menu, its groups first, then by name
+static int game_before(struct go_item *a, struct go_item *b) {
+    char *p, *q;
+    if (a->menu != b->menu) return a->menu < b->menu;
+    if (!a->opens != !b->opens) return a->opens != 0;
+    p = a->label; q = b->label;
+    while (*p && *p == *q) { ++p; ++q; }
+    return (*p & 255) < (*q & 255);
+}
+
+static void games_load() {
+    struct go_item t;
+    char *buf, *s, *e;
+    int fd, n, k, j;
+    n_menus = M_GROUPS;
+    if ((fd = uopen("/etc/desktop.apps", O_RD)) < 0) return;
+    if (!(buf = wk_alloc(APPS_MAX))) { uclose(fd); return; }
+    n = uread(fd, buf, APPS_MAX - 1);
+    uclose(fd);
+    s = buf;
+    while (n > 0 && *s) {
+        e = s;
+        while (*e && *e != 10) ++e;
+        k = *e;
+        *e = 0;
+        game_line(s);
+        s = k ? e + 1 : e;
+    }
+    k = 1;
+    while (k < n_games) {
+        memcpy((char *)&t, (char *)&game_items[k], sizeof(struct go_item));
+        j = k;
+        while (j > 0 && game_before(&t, &game_items[j - 1])) {
+            memcpy((char *)&game_items[j], (char *)&game_items[j - 1], sizeof(struct go_item));
+            --j;
+        }
+        memcpy((char *)&game_items[j], (char *)&t, sizeof(struct go_item));
+        ++k;
+    }
+    k = n_games;
+    while (k > 0) { --k; menu_first[game_items[k].menu] = k; ++menu_n[game_items[k].menu]; }
+}
+
+// Games is in the menu only where there is one to list
+static void start_games() {
+    int k, n;
+    games_load();
+    k = 0;
+    n = 0;
+    while (k < n_start) {
+        if (!start_items[k].opens || menu_n[start_items[k].opens]) {
+            start_items[n].label = start_items[k].label;
+            start_items[n].kind = start_items[k].kind;
+            start_items[n].opens = start_items[k].opens;
+            ++n;
+        }
+        ++k;
+    }
+    n_start = n;
+}
+
+// What is open: Go, then what it opened, each over the last
+struct go_panel { int menu, x, y, w, h, rows, colw, hot; };
+static struct go_panel go_open[GO_DEPTH];
+static int go_depth;               // how many: 0 is the menu shut
+static int go_x;                   // where the pointer was
+
+static int start_height() {
+    int k, h;
+    h = 6; k = 0;
+    while (k < n_start) { h = h + (start_items[k].label[0] == '-' ? 8 : GO_ROW); ++k; }
+    return h;
+}
+
+static void go_start() {
+    struct go_panel *p;
+    p = &go_open[0];
+    p->menu = M_GO; p->hot = 0 - 1;
+    p->x = 2; p->w = START_W; p->h = start_height();
+    p->y = wk.sh - TASK_H - p->h;
+    p->rows = n_start; p->colw = START_W - 29;
+    go_depth = 1;
+}
+
+// where row k of a menu is: Go's right of its banner and with its rules,
+// the others in columns
+static void go_row_at(struct go_panel *p, int k, int *x, int *y) {
+    int j, t;
+    if (p->menu) {
+        *x = p->x + 3 + k / p->rows * p->colw;
+        *y = p->y + 3 + k % p->rows * GO_ROW;
+        return;
+    }
+    t = p->y + 3;
+    j = 0;
+    while (j < k) { t = t + (start_items[j].label[0] == '-' ? 8 : GO_ROW); ++j; }
+    *x = p->x + 26;
+    *y = t;
+}
+
+// Open the menu that row k of level l opens, beside that row: as many rows
+// as fit above the taskbar to a column, as many columns as that takes, and
+// over its parent if the screen has no room to the right.
+static void go_flyout(int l, int k) {
+    struct go_panel *p, *q;
+    struct go_item *items;
+    int x, y, n, wide, j, room;
+    p = &go_open[l];
+    q = &go_open[l + 1];
+    q->menu = menu_items(p->menu)[k].opens;
+    q->hot = 0 - 1;
+    n = menu_count(q->menu);
+    items = menu_items(q->menu);
+    wide = 0;
+    j = 0;
+    while (j < n) { if (ui_len(items[j].label) > wide) wide = ui_len(items[j].label); ++j; }
+    q->colw = wide * (7 + wk.fsize) + 34;
+    room = (wk.sh - TASK_H - 6) / GO_ROW;
+    q->rows = n < room ? n : room;
+    q->w = (n + q->rows - 1) / q->rows * q->colw + 6;
+    q->h = q->rows * GO_ROW + 6;
+    go_row_at(p, k, &x, &y);
+    q->x = x + p->colw - 1;
+    if (q->x + q->w > wk.sw) q->x = wk.sw - q->w;
+    if (q->x < 0) q->x = 0;
+    q->y = y - 3;
+    if (q->y + q->h > wk.sh - TASK_H) q->y = wk.sh - TASK_H - q->h;
+    if (q->y < 0) q->y = 0;
+    go_depth = l + 2;
+}
+
+static void draw_go_panel(struct go_panel *p) {
+    struct go_item *items;
+    int n, k, x, y, a, rgb;
+    char c[2], *banner;
+    gui_rect(p->x, p->y, p->w, p->h, C_FACE);
+    d_bevel(p->x, p->y, p->w, p->h, B_RAISED);
+    if (p->menu == M_GO) {
+        gui_rect(p->x + 3, p->y + 3, 22, p->h - 6, ui_style == S_FLAT ? C_TITLE : C_SHADOW);
+        c[1] = 0;
+        banner = "C4IX";
+        k = 0;
+        while (k < 4) { c[0] = banner[k]; gui_text2(p->x + 8, p->y + p->h - 30 - (3 - k) * 18, C_WHITE, 16, F_BOLD, 0, c, 1); ++k; }
+    }
+    items = menu_items(p->menu);
+    n = menu_count(p->menu);
+    k = 0;
+    while (k < n) {
+        go_row_at(p, k, &x, &y);
+        if (items[k].label[0] == '-') {
+            gui_rect(x + 2, y + 3, p->w - 32, 1, C_SHADOW); gui_rect(x + 2, y + 4, p->w - 32, 1, C_LIGHT);
+        } else {
+            rgb = k == p->hot ? C_WHITE : C_DARK;
+            if (k == p->hot) gui_rect(x, y, p->colw, GO_ROW, C_SEL);
+            if (items[k].kind > 0) d_icon(items[k].kind, x + 6, y + 5);
+            d_text(x + (p->menu == M_GO ? 30 : 10), y + 7, rgb, F_SANS, items[k].label);
+            // a row that opens a menu has an arrow at its right
+            a = 0;
+            while (items[k].opens && a < 5) { gui_rect(x + p->colw - 14 + a, y + 8 + a, 1, 9 - a - a, rgb); ++a; }
+        }
+        ++k;
+    }
+}
+
+static void draw_start() {
+    int l;
+    l = 0;
+    while (l < go_depth) { draw_go_panel(&go_open[l]); ++l; }
+}
+
+static int go_hit(struct go_panel *p, int px, int py) {
+    struct go_item *items;
+    int n, k, x, y;
+    items = menu_items(p->menu);
+    n = menu_count(p->menu);
+    k = 0;
+    while (k < n) {
+        go_row_at(p, k, &x, &y);
+        if (items[k].label[0] != '-' && ui_hit(px, py, x, y, p->colw, GO_ROW)) return k;
+        ++k;
+    }
+    return 0 - 1;
+}
+
+// the topmost menu at (x, y), or -1
+static int go_under(int x, int y) {
+    struct go_panel *p;
+    int l;
+    l = go_depth;
+    while (l > 0) {
+        --l;
+        p = &go_open[l];
+        if (ui_hit(x, y, p->x, p->y, p->w, p->h)) return l;
+    }
+    return 0 - 1;
+}
+
+// The pointer moved. Over a row, that row lights, and if it opens a menu the
+// menu opens; what any other row had open closes. Except on the way across:
+// moving right, over the rows below the one that opened a menu, nothing
+// changes, so the menu is still there when the pointer arrives.
+static void go_move(int x, int y) {
+    struct go_panel *p;
+    int l, k, depth, hot;
+    l = go_under(x, y);
+    if (l < 0) {
+        go_x = x;
+        p = &go_open[go_depth - 1];
+        if (p->hot >= 0) { p->hot = 0 - 1; wk_redraw_all(); }
+        return;
+    }
+    p = &go_open[l];
+    k = go_hit(p, x, y);
+    if (l < go_depth - 1 && k != p->hot && x > go_x) { go_x = x; return; }
+    go_x = x;
+    depth = go_depth;
+    hot = p->hot;
+    if (l < go_depth - 1 && k == hot) {
+        // back on the row that opened the next: that one stays, what it opened goes
+        go_depth = l + 2;
+        if (go_open[l + 1].hot >= 0 || depth != go_depth) { go_open[l + 1].hot = 0 - 1; wk_redraw_all(); }
+        return;
+    }
+    p->hot = k;
+    go_depth = l + 1;
+    if (k >= 0 && menu_items(p->menu)[k].opens) go_flyout(l, k);
+    if (k != hot || depth != go_depth) wk_redraw_all();
+}
+
+static void start_pick(struct go_item *it) {
+    if (it->kind > 0) launch(it->kind);
+    else if (it->kind == GO_RUN) inputbox(0, "Run", "Program to run:", "", A_RUN);
+    else if (it->kind == GO_OFF) running = 0;
+    else if (it->kind == GO_CMD) run_command(it->cmd);
+}
+
+// A press: as a move first (a touch has none before it), then a row that
+// starts something does, a row that opens a menu has done, and anywhere else
+// shuts the menu.
+static void go_press(int x, int y) {
+    struct go_item *it;
+    int l, k;
+    go_x = x;
+    go_move(x, y);
+    l = go_under(x, y);
+    k = l < 0 ? 0 - 1 : go_hit(&go_open[l], x, y);
+    it = k < 0 ? 0 : &menu_items(go_open[l].menu)[k];
+    if (it && it->opens) return;
+    go_depth = 0;
+    wk_redraw_all();
+    if (it) start_pick(it);
+}
+
+// ---- the taskbar ----------------------------------------------------------------------
+
+static int n_buttons() {
+    struct win *w;
+    int n;
+    n = 0; w = win_first();
+    while (w) { if (w->used && !w->dialog) ++n; w = w->next; }
+    return n;
+}
+static int button_w() { int n, w; n = n_buttons(); if (!n) return 150; w = (wk.sw - 64 - 178) / n - 4; return w > 150 ? 150 : w; }
+
+// The CPU meter beside the tray: System Monitor's number (tasks_cpu_usage),
+// taken every two seconds; a click opens System Monitor on Performance.
+// The tray: the volume's speaker, then the clock, in one panel.
+enum { CPU_W = 66, TRAY_W = 96 };
+static int cpu_x() { return wk.sw - 170; }
+static int tray_x() { return wk.sw - 4 - TRAY_W; }
+
+// ---- the volume: the tray's speaker, and the popup it opens ---------------------------
+//
+// A slider (loud at the top, as Windows has it) and Mute, over the tray.
+// Each change goes to the sound card at once; the choice is remembered
+// when the popup closes, or when Mute is clicked.
+enum { VOL_W = 76, VOL_H = 190, VOL_TOP = 34, VOL_LEN = 100 };
+static int vol_x() { return wk.sw - 4 - VOL_W; }
+static int vol_y() { return wk.sh - TASK_H - VOL_H; }
+
+// the speaker, 16 by 16 at x, y: its waves by the volume, a red cross muted
+static void speaker(int x, int y) {
+    gui_rect(x + 1, y + 6, 4, 5, C_DARK);
+    gui_rect(x + 5, y + 5, 2, 7, C_DARK);
+    gui_rect(x + 7, y + 3, 2, 11, C_DARK);
+    if (cur_mute) {
+        gui_line(x + 11, y + 5, x + 15, y + 11, 0xd02020); gui_line(x + 11, y + 11, x + 15, y + 5, 0xd02020);
+        gui_line(x + 12, y + 5, x + 16, y + 11, 0xd02020); gui_line(x + 12, y + 11, x + 16, y + 5, 0xd02020);
+        return;
+    }
+    if (cur_vol > 0) gui_rect(x + 11, y + 6, 1, 5, C_DARK);
+    if (cur_vol > 33) { gui_rect(x + 13, y + 4, 1, 9, C_DARK); gui_rect(x + 12, y + 3, 1, 1, C_DARK); gui_rect(x + 12, y + 13, 1, 1, C_DARK); }
+    if (cur_vol > 66) { gui_rect(x + 15, y + 3, 1, 11, C_DARK); gui_rect(x + 14, y + 2, 1, 1, C_DARK); gui_rect(x + 14, y + 14, 1, 1, C_DARK); }
+}
+
+static void draw_volume() {
+    int x, y, ty, k;
+    x = vol_x(); y = vol_y();
+    gui_rect(x, y, VOL_W, VOL_H, C_FACE);
+    if (ui_style == S_FLAT) gui_recto(x, y, VOL_W, VOL_H, C_SHADOW); else d_bevel(x, y, VOL_W, VOL_H, B_RAISED);
+    d_text(x + 16, y + 10, C_DARK, F_BOLD, "Volume");
+    // the track, its marks, and the thumb where the volume is
+    gui_rect(x + VOL_W / 2 - 2, y + VOL_TOP, 4, VOL_LEN, C_SHADOW);
+    gui_rect(x + VOL_W / 2 - 1, y + VOL_TOP + 1, 2, VOL_LEN - 2, C_DARK);
+    k = 0;
+    while (k <= 10) { gui_rect(x + VOL_W / 2 + 14, y + VOL_TOP + k * VOL_LEN / 10, k % 5 ? 3 : 6, 1, C_SHADOW); ++k; }
+    ty = y + VOL_TOP + (100 - cur_vol) * VOL_LEN / 100 - 5;
+    gui_rect(x + VOL_W / 2 - 11, ty, 22, 10, ui_style == S_FLAT ? C_TITLE : C_FACE);
+    if (ui_style != S_FLAT) d_bevel(x + VOL_W / 2 - 11, ty, 22, 10, B_RAISED);
+    ui_num(tbuf, cur_vol);
+    ui_cat(tbuf, "%");
+    d_text(x + VOL_W / 2 - ui_len(tbuf) * 3, y + VOL_TOP + VOL_LEN + 8, C_DARK, F_SANS, tbuf);
+    // Mute: a check box
+    k = y + VOL_H - 26;
+    gui_rect(x + 12, k, 13, 13, C_WHITE);
+    if (ui_style == S_FLAT) gui_recto(x + 12, k, 13, 13, C_SHADOW); else d_bevel(x + 12, k, 13, 13, B_SUNKEN);
+    if (cur_mute) {
+        gui_line(x + 15, k + 6, x + 17, k + 9, C_DARK); gui_line(x + 17, k + 9, x + 22, k + 3, C_DARK);
+        gui_line(x + 15, k + 7, x + 17, k + 10, C_DARK); gui_line(x + 17, k + 10, x + 22, k + 4, C_DARK);
+    }
+    d_text(x + 31, k, C_DARK, F_SANS, "Mute");
+}
+
+// the volume for a point on the slider
+static void vol_slide(int y) {
+    int v;
+    v = 100 - (y - vol_y() - VOL_TOP) * 100 / VOL_LEN;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    if (v != cur_vol) { cur_vol = v; volume_apply(); wk_redraw_all(); }
+}
+
+static void vol_close() {
+    vol_open = 0; vol_drag = 0;
+    theme_save();
+    wk_redraw_all();
+}
+
+static void draw_taskbar() {
+    int k, i, bx, bw, secs, h, m, f, ty;
+    char *p;
+    struct win *w;
+    ty = wk.sh - TASK_H;
+    gui_rect(0, ty, wk.sw, TASK_H, C_FACE);
+    gui_rect(0, ty + (ui_style == S_FLAT ? 0 : 1), wk.sw, 1, ui_style == S_FLAT ? C_SHADOW : C_LIGHT);
+    gui_rect(2, ty + 4, 56, 22, ui_style == S_FLAT && go_depth ? C_LIGHT : C_FACE);
+    if (ui_style != S_FLAT || go_depth) d_bevel(2, ty + 4, 56, 22, go_depth ? B_PRESSED : B_RAISED);
+    // C4IX's mark: a cake (C4IX, C4KE -- cakes), its candle lit
+    k = ty + 4;
+    gui_rect(8, k + 13, 15, 6, 0x8b5a2b);
+    gui_rect(8, k + 10, 15, 3, 0xf0a0c8); gui_rect(10, k + 13, 2, 2, 0xf0a0c8); gui_rect(17, k + 13, 2, 3, 0xf0a0c8);
+    gui_rect(15, k + 4, 2, 6, 0xf4f4f4); gui_rect(15, k + 1, 2, 3, 0xffb020);
+    d_text(28, ty + 9, C_DARK, F_BOLD, "Go");
+    f = wk_focus();
+    bw = button_w();
+    k = 0; w = win_first();
+    while (w) {
+        i = w->id;
+        if (w->used && !w->dialog) {
+            bx = 64 + k * (bw + 4);
+            if (ui_style == S_FLAT) {
+                gui_rect(bx, ty + 4, bw, 22, i == f ? C_LIGHT : C_FACE);
+                if (i == f) gui_rect(bx, ty + 24, bw, 2, C_TITLE);
+            } else {
+                gui_rect(bx, ty + 4, bw, 22, i == f ? 0xe0e0e0 : C_FACE);
+                d_bevel(bx, ty + 4, bw, 22, i == f ? B_PRESSED : B_RAISED);
+            }
+            d_icon(w->kind, bx + 4, ty + 7);
+            wk_clip_screen(bx + 22, ty + 4, bw - 26, 22);
+            d_text(bx + 24, ty + 9, C_DARK, i == f ? F_BOLD : F_SANS, w->title);
+            wk_noclip();
+            ++k;
+        }
+        w = w->next;
+    }
+    gui_rect(cpu_x(), ty + 4, CPU_W, 22, C_FACE);
+    if (ui_style != S_FLAT) d_bevel(cpu_x(), ty + 4, CPU_W, 22, B_SUNKEN);
+    gui_rect(cpu_x() + 5, ty + 8, 8, 14, 0x000000);
+    h = (cpu_shown * 14 + 50) / 100;
+    if (h > 0) gui_rect(cpu_x() + 5, ty + 22 - h, 8, h, 0x00e000);
+    ui_cpy(tbuf, "CPU ");
+    ui_num(tbuf + 4, cpu_shown);
+    ui_cat(tbuf, "%");
+    d_text(cpu_x() + 17, ty + 9, C_DARK, F_SANS, tbuf);
+    gui_rect(tray_x(), ty + 4, TRAY_W, 22, C_FACE);
+    if (ui_style != S_FLAT) d_bevel(tray_x(), ty + 4, TRAY_W, 22, B_SUNKEN);
+    if (vol_open && ui_style == S_FLAT) gui_rect(tray_x() + 1, ty + 5, 24, 20, C_LIGHT);
+    speaker(tray_x() + 5, ty + 7);
+    secs = gui_clock();
+    h = secs / 3600; m = (secs / 60) % 60;
+    p = tbuf;
+    if (h % 12 == 0) { *p = '1'; ++p; *p = '2'; ++p; }
+    else { if (h % 12 >= 10) { *p = '1'; ++p; } *p = '0' + (h % 12) % 10; ++p; }
+    *p = ':'; ++p; *p = '0' + m / 10; ++p; *p = '0' + m % 10; ++p;
+    *p = ' '; ++p; *p = h < 12 ? 'A' : 'P'; ++p; *p = 'M'; ++p; *p = 0;
+    d_text(tray_x() + 32, ty + 9, C_DARK, F_SANS, tbuf);
+}
+
+// over the windows: the taskbar, and the Go menu while it is open
+static void front() {
+    if (wk_in_damage(0, wk.sh - TASK_H, wk.sw, TASK_H)) draw_taskbar();
+    if (go_depth) draw_start();
+    if (vol_open) draw_volume();
+}
+
+static int popup() { return go_depth || vol_open; }
+
+// ---- input the shell takes before the windows, and where there are none ----
+
+static int mouse_front(int ev, int x, int y, int b) {
+    int k, bw, ty;
+    struct win *w;
+    ty = wk.sh - TASK_H;
+    if (vol_open) {
+        if (ev == E_MOVE) {
+            if (vol_drag && (b & 1)) vol_slide(y);
+            else vol_drag = 0;
+            return 1;
+        }
+        if (ev != E_DOWN) return 0;
+        if (ui_hit(x, y, vol_x() + VOL_W / 2 - 12, vol_y() + VOL_TOP - 6, 24, VOL_LEN + 12)) { vol_drag = 1; vol_slide(y); return 1; }
+        if (ui_hit(x, y, vol_x() + 8, vol_y() + VOL_H - 30, VOL_W - 12, 20)) {
+            cur_mute = !cur_mute; volume_apply(); theme_save(); wk_redraw_all();
+            return 1;
+        }
+        if (ui_hit(x, y, vol_x(), vol_y(), VOL_W, VOL_H)) return 1;
+        // elsewhere, the speaker too: the popup closes, and the click goes no further
+        vol_close();
+        return 1;
+    }
+    if (ev == E_MOVE) {
+        if (!go_depth) return 0;
+        go_move(x, y);
+        return 1;
+    }
+    if (ev != E_DOWN) return 0;
+    if (go_depth) { go_press(x, y); return 1; }
+    if (y < ty) return 0;
+    if (wk_modal()) return 1;
+    if (ui_hit(x, y, 2, ty + 4, 56, 22)) { go_start(); wk_redraw_all(); return 1; }
+    if (ui_hit(x, y, cpu_x(), ty + 4, CPU_W, 22)) { tasks_open_perf(); wk_redraw_all(); return 1; }
+    if (ui_hit(x, y, tray_x(), ty + 4, 26, 22)) { vol_open = 1; vol_drag = 0; wk_redraw_all(); return 1; }
+    bw = button_w();
+    k = 0; w = win_first();
+    while (w) {
+        if (w->used && !w->dialog) {
+            if (ui_hit(x, y, 64 + k * (bw + 4), ty + 4, bw, 22)) {
+                if (w->id == wk_focus()) w->min = 1;
+                else wk_raise(w->id);
+                wk_redraw_all();
+                return 1;
+            }
+            ++k;
+        }
+        w = w->next;
+    }
+    return 1;
+}
+
+// the desktop icons: a double click opens
+static void mouse_desk(int ev, int x, int y, int b) {
+    int k, i, t;
+    if (ev != E_DOWN) return;
+    t = now_ms();
+    k = 0 - 1;
+    i = 0;
+    while (i < N_ICONS) { if (ui_hit(x, y, 14, 12 + i * 72, 56, 64)) k = i; ++i; }
+    if (k >= 0 && k == icon_k && t - icon_t < 500) {
+        if (icon_kinds[k] == 0) files_open("/"); else launch(icon_kinds[k]);
+        icon_k = 0 - 1;
+    } else { icon_k = k; icon_t = t; }
+}
+
+static int key(int down, int code, int ch, int mods) {
+    icon_k = 0 - 1;
+    // Ctrl+Shift+Esc: System Monitor, from anywhere
+    if (code == KEY_ESC && (mods & M_CTRL) && (mods & M_SHIFT)) { tasks_open(); return 1; }
+    if (go_depth && code == KEY_ESC) { go_depth = 0; wk_redraw_all(); return 1; }
+    if (vol_open && code == KEY_ESC) { vol_close(); return 1; }
+    return 0;
+}
+
+static int pointer(int x, int y) { return go_depth || vol_open || y >= wk.sh - TASK_H ? PTR_ARROW : 0 - 1; }
+
+// a dialog no window asked: Run
+static void answer(int dialog, int yes) {
+    if (dialog == A_RUN && yes && dialog_text()[0]) run_command(dialog_text());
+}
+
+// the screen changed size: the taskbar along its new bottom, and the picture stretched again
+static void resized() {
+    go_depth = 0;
+    wk_set_area(0, 0, wk.sw, wk.sh - TASK_H);
+    wall_resize();
+}
+
+static struct wk_shell shell = {
+    .desktop = desktop, .front = front, .popup = popup, .mouse_front = mouse_front,
+    .mouse_desk = mouse_desk, .key = key, .pointer = pointer, .answer = answer, .resized = resized
+};
+
+// ---- starting and stopping ------------------------------------------------------------
+
+// What changed since boot, kept (persist save) before the machine stops:
+// the page keeps it, and the next boot lays it back. Where there is no
+// drive to keep it on, persist says so on the console and nothing waits.
+static void save_files() {
+    char *av[3];
+    int pid;
+    gui_clear(C_DARK);
+    gui_text2(wk.sw / 2 - 120, wk.sh / 2 - 20, 0xffffff, 22, F_BOLD, 0, "Saving your files...", 0 - 1);
+    gui_show();
+    av[0] = "persist"; av[1] = "save"; av[2] = 0;
+    if ((pid = spawn("/bin/persist", 2, av)) > 0) uwait(pid);
+}
+
+static void shutdown_screen() {
+    gui_clear(C_DARK);
+    gui_text2(wk.sw / 2 - 200, wk.sh / 2 - 20, 0xff8c1a, 22, F_BOLD, 0, "C4IX has stopped. You can close this page.", 0 - 1);
+    gui_show();
+}
+
+// The ring's command half takes the largest frame the desktop sends, one
+// of the picture's tiles (wall.c): 128x96 at 1024x768, 48 KB. A frame
+// longer than half of it is placed only when the ring's head happens to
+// allow (gui_frame), so the half is 128 KB.
+// GUI_M_REL: the mouse's motion while it is locked to the display, which
+// only a canvas that asked for it (window.h's L) has it be (term.c)
+enum { RING = 262144, EVENTS = GUI_M_MOVE | GUI_M_BUTTONS | GUI_M_KEYS | GUI_M_WHEEL | GUI_M_WINDOW | GUI_M_REL };
+
+// The display lets the mouse go, and the kit draws its pointer again
+void desk_unlock() { gui_cursor(GUI_PTR_ARROW); wk_repoint(); }
+
+int main(int argc, char **argv) {
+    int *region, k, busy, secs, clock_min, last_tick, last_draw, input, start_ms, second_draw;
+    int last_input, last_frame, aside, ev[4];
+
+    if (!gui_present()) { printf("desktop: not fitted\n"); return 0; }
+    // Run in the background (init --desktop has the console's shell run
+    // "desktop &"), the desktop's stdin is a pipe that has ended: sh.c
+    // gives a background job no input. The desktop never reads it, but
+    // its sleep (SYS_EVWAIT, below) wakes for every pipe it reads, and one
+    // at its end is always ready, so the desktop would never sleep. Its
+    // stdin becomes its stdout, which is no pipe it reads. Fd 0 stays
+    // open: the Terminals' spawns (term.c, start) save and put back 0.
+    if (uavail(STDIN) < 0) udup2(STDOUT, STDIN);
+    // the display, from the kernel, giving way to a game that asks for it
+    // (include/display.h, and "aside" below)
+    if (!udisplay_take(DISP_YIELDS)) { printf("desktop: a program has the display\n"); return 1; }
+    if (!(region = ualloc(RING))) { printf("desktop: no memory for the display's ring\n"); udisplay_give(); return 1; }
+    theme_init();
+    theme_apply();                     // the default scheme, unless the file names one
+    theme_load();
+    // at the size Settings chose: 800x600 unless the file names another
+    if (!gui_attach(region, RING, size_w[cur_size], size_h[cur_size])) { printf("desktop: the display refused the ring\n"); udisplay_give(); return 1; }
+    // GUI_M_WINDOW too: a resize or a focus change from the page means the
+    // canvas may have been cleared, and the scene is drawn again
+    gui_events(EVENTS);
+    volume_apply();
+    n_start = sizeof(start_items) / sizeof(start_items[0]);
+    start_games();
+    // the kit's Notepad, as this desktop has always called it
+    notepad_name = "Text Editor";
+    notepad_about = "Text Editor for C4IX: edits text in the RAM filesystem.";
+    notepad_home = "/";
+    notepad_untitled = "/tmp/untitled.txt";
+    notepad_filebox = 1;
+    notepad_filter = "All Files (*)|*|Text Documents (*.txt)|*.txt|C Source (*.c;*.h)|*.c;*.h";
+    // its Format menu's choices, kept beside the desktop's and the IDE's
+    notepad_cfg = "/etc/notepad.cfg";
+    umkdir("/etc");
+    wk_init(&shell);
+    wall_load("/usr/share/splash/c4ix.c4p.gz");
+    icon_k = 0 - 1;
+    printf("desktop: running on the display. Go > Power Off to come back here.\n");
+
+    term_open(0);
+    running = 1; wk_redraw_all();
+    clock_min = 0 - 1; last_tick = 0; last_draw = 0;
+    start_ms = now_ms(); second_draw = 0;
+    last_input = __time(); last_frame = 0;
+    aside = 0;
+    while (running) {
+        busy = 0; input = 0;
+        // A game asks for the whole display (wolf3d, include/display.h): give
+        // way, between frames, and stand aside until it has gone -- reading
+        // the terminals' pipes, so their programs run on, but drawing
+        // nothing and reading no events, which go to the game. Then the
+        // display again, at the desktop's size, and the whole scene drawn on it.
+        if (!aside && udisplay(DISP_STATE, 0) == 1 && udisplay(DISP_YIELD, 0)) aside = 1;
+        if (aside) {
+            if (udisplay(DISP_STATE, 0) == 2) {
+                wk_tick();
+                uevwait(100, 0, 1);
+                continue;
+            }
+            aside = 0;
+            gui_attach(region, RING, wk.sw, wk.sh);
+            gui_events(EVENTS);
+            gui_cursor(saver_active() ? GUI_PTR_NONE : GUI_PTR_ARROW);
+            wk_repoint();
+            wk.mods = 0;
+            last_input = __time();
+            wk_redraw_all();
+        }
+        while (gui_poll(ev)) {
+            busy = 1; input = 1;
+            last_input = __time();
+            // a screen saver running: the first key or movement ends it, and
+            // goes no further (except while a Preview's click is let go)
+            if (saver_active()) {
+                if (ev[0] == GUI_EV_RESIZE) { wk_event(ev); continue; }
+                if (__time() - saver_grace < 0) continue;
+                if (ev[0] == GUI_EV_FOCUS) continue;
+                saver_stop();
+                gui_cursor(GUI_PTR_ARROW);
+                wk_repoint();
+                wk_redraw_all();
+                continue;
+            }
+            // the mouse locked to a canvas: its motion and buttons the program's
+            if (term_lock_event(ev)) continue;
+            wk_event(ev);
+        }
+        // the first frame, once more half a second in, in case the page was
+        // not yet showing the display when it came
+        if (!second_draw && now_ms() - start_ms >= 500) { second_draw = 1; wk_redraw_all(); }
+        // the windows closed meanwhile freed; the terminals' pipes read; the timers due
+        wk_tick();
+        term_lock_tick();
+        // the CPU meter, every other MACHINE second, and a redraw only when
+        // it moved: machine time is what its numbers count (cpustat's ms)
+        // and what the desktop sleeps on. Host time runs at another rate
+        // whenever the machine is not paced to it.
+        if (__time() - last_tick >= 1000) {
+            last_tick = __time();
+            cpu_n = cpu_n + 1;
+            if (cpu_n >= 2) {
+                cpu_n = 0;
+                k = tasks_cpu_usage();
+                if (k != cpu_shown) { cpu_shown = k; wk_dirty_rect(0, wk.sh - TASK_H, wk.sw, TASK_H); }
+            }
+        }
+        secs = gui_clock() / 60;
+        if (secs != clock_min) { clock_min = secs; wk_dirty_rect(0, wk.sh - TASK_H, wk.sw, TASK_H); }
+        // The screen saver: after cur_wait minutes with no input, and then
+        // a frame every SAVER_MS in place of the desktop's own drawing
+        if (!saver_active() && cur_saver && __time() - last_input >= cur_wait * 60000) {
+            saver_start(cur_saver);
+            gui_cursor(GUI_PTR_NONE);
+        }
+        if (saver_active()) {
+            if (__time() - last_frame >= SAVER_MS) {
+                saver_frame();
+                gui_show();
+                last_frame = __time();
+            }
+            k = SAVER_MS - (__time() - last_frame);
+            if (k < 1) k = 1;
+            uevwait(k, gui_events_ring(), 0);
+            continue;
+        }
+        // A redraw: the whole scene, or what is damaged. Input gets one at
+        // once; a program pouring out text (raycast, top) gets at most one
+        // every 25 ms -- it can print far faster than a person can read.
+        // A game's frame gets one at once too: it sends the next only when
+        // told this one was drawn (wk_drawn), so it cannot flood the
+        // desktop, and held back it would be held to 40 frames a second.
+        if (wk_dirty() && (input || frame_waiting || __time() - last_draw >= 25)) {
+            frame_waiting = 0;
+            wk_redraw(0);
+            last_draw = __time();
+            wk_drawn();                // the frames just shown have been read: their programs may draw again
+            busy = 1;
+        }
+        // Nothing to do: sleep until there is. That is an event (a key, the
+        // mouse), output on a terminal's pipe, or the next thing due -- a
+        // redraw held back by the 25 ms above, a window's timer, the meter
+        // -- and the kernel watches for the first two itself (SYS_EVWAIT).
+        // While a redraw is held back the pipes are not watched: a program
+        // pouring out text would wake it at once, with nothing to do until
+        // the 25 ms are up.
+        if (!busy) {
+            if (wk_dirty()) k = 25 - (__time() - last_draw);
+            else k = 1000 - (__time() - last_tick);
+            secs = wk_next_timer();
+            if (secs >= 0 && secs < k) k = secs;
+            if (!second_draw && k > 100) k = 100;   // the half-second first-frame redraw
+            if (k < 1) k = 1;
+            uevwait(k, gui_events_ring(), !wk_dirty());
+        }
+    }
+
+    wk_close_all();
+    save_files();
+    shutdown_screen();
+    gui_detach();
+    udisplay_give();
+    printf("desktop: shut down\n");
+    return 0;
+}

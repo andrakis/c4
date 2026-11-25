@@ -1,0 +1,21 @@
+lseek: set 3 read 34 end 8 read 89 cur 10 past 14 size 15 gap 0000X
+lseek: before the start -1 EINVAL, a pipe -1 ESPIPE
+stat: size 15 mode 100644 nlink 1 same file 1, /tmp 40755 dir 1, program 100755
+stat: a write moves mtime 1, a pipe is a fifo 1, uid 0 gid 0, nothing there -1 ENOENT
+append: abcd12
+excl: existing -1 EEXIST, new 1, again -1 EEXIST
+link: 0 same 1 nlink 2 2, onto a file -1 EEXIST, a directory -1 EPERM
+link: through the other name abcd12L, first name gone -1, kept abcd12L nlink 1
+link: moved to /tmp/ud/y 1 abcd12L nlink 1, last name gone 0 -1
+truncate: 4 then 8: y123 0000, by name 2, read-only -1, a pipe -1
+waitpid: still running 0, then any child 1 exited 1 status 3
+waitpid: no children -1 ECHILD, not a child -1
+waitpid: killed 1 signalled 1 signal 15, wait 1 status 3
+child: a b GREETING=hello
+vfork: exec'd child exited 14
+vfork: the parent's pending sum survived 1, the child churned and exited 5
+vfork: exec failed ENOENT, status 111
+vfork: the parent's stdout, and the child's: pre-exec has-keep child: redirected GREETING=(unset)
+vfork: after exec, the close-on-exec fd is closed
+execve: missing -1 ENOENT, still here
+unixtest: done

@@ -61,6 +61,7 @@ enum { // Shell modes
 enum {
 	CR_FAIL,        // Generic failure
 	CR_OK,          // No error
+	CR_PASS,        // Not this builtin's: run the program of that name instead
 };
 
 // structure: shell command dictionary
@@ -672,10 +673,10 @@ static void act_on_user_input() {
 		if (!strcmp("\\q", argv[0])) {
 			argv[0] = "exit";
 		}
-		// Lookup builtins
-		if ((b = builtin_lookup(argv[0]))) {
-			builtin_run(b, argc, argv);
-		} else {
+		// Lookup builtins; a builtin can pass the command on (CR_PASS) to
+		// the program of the same name, as reboot does with a drive
+		b = builtin_lookup(argv[0]);
+		if (!b || builtin_run(b, argc, argv) == CR_PASS) {
 			// Attempt to start a .c4r file
 			// printf("c4sh: Arguments: %d\n", argc);
 			// i = 0; while (i < argc) {

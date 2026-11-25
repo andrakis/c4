@@ -473,7 +473,7 @@ C4KE_KIT_SRCS := $(foreach p,$(C4KE_KIT),$(firstword $(subst :, ,$(p))))
 # src/c4ix spelled out rather than $(C4IX_SRC): both it and C4IX_MODS
 # are defined further down, and := expands now. The Makefile already
 # carries one bug of exactly this shape (see c4rlink.c's note on $(U0)).
-C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader mmu blk ext2 init,\
+C4IX_KIT := $(foreach m,boot console va host sl4b task sched vfs sys c4ke loader mmu blk ext2 net init,\
               src/c4ix/$(m).c:src/c4ix/$(m).c) \
             src/c4ix/c4ix.h:src/c4ix/c4ix.h \
             $(foreach h,$(wildcard include/*.h),$(h):$(h)) \
@@ -3193,7 +3193,7 @@ test-c4mp: c4m c4mp c4mp.c4r c4mp-smp0.c4r c4mp-smp1.c4r c4mp-deadlock.c4r $(TES
 # flags, so that it can be held against libjs; c4pc.elf is a multiboot
 # kernel for QEMU, Bochs, GRUB, or the DOS loader (C4PC.COM, for DOSBox).
 C4PC_SRC  := src/c4pc
-C4PC_MODS := engine mmu smp par accel dev cdrom gui font heap fmt fpu drive util inflate snd opl \
+C4PC_MODS := engine mmu smp par accel dev cdrom gui font heap fmt fpu drive util inflate snd opl net \
 	games/doom games/duke3d games/quake games/rott games/sbk games/tyrian games/wolf3d
 C4PC_HDRS := $(C4PC_SRC)/c4pc.h $(C4PC_SRC)/clib.h $(C4PC_SRC)/font.h $(C4PC_SRC)/accel.h $(C4PC_SRC)/snd.h
 # The display's faces (font.c), as tables mkfont.py makes from the system's
@@ -3269,7 +3269,7 @@ C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com
 # C4IX's programs this tree has that a C4PC_IMAGES built from another may
 # not (mount, umount, df, cp: the CD's), built as build-images.sh builds
 # them, and laid on the boot disk over its own, named in its manifest's BIN_ALL
-C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin hostcp top vm detach eject
+C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin hostcp top vm detach eject ping ifconfig nc
 # vmd is vm under another name (its argv[0]: autostart)
 .c4pc/bin/c4ix-vmd.c4r: .c4pc/bin/c4ix-vm.c4r
 	cp $< $@
@@ -3299,7 +3299,7 @@ C4PC_DESK_MODS := shell tools host term files taskmgr apps edit hl explore wall 
 # C4IX's kernel as this tree has it (its disks: blk.c, ext2.c), built as
 # build-images.sh builds it, for the ISO (test-c4pc holds C4PC_IMAGES's
 # against libjs)
-C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk ext2 init
+C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk ext2 net init
 .c4pc/kernel/c4ix32.c4r: $(patsubst %,$(SRCS)/c4ix/%.c,$(C4PC_IX_MODS)) $(SRCS)/c4ix/c4ix.h
 	mkdir -p .c4pc/kernel
 	for m in $(C4PC_IX_MODS); do ./c4sc-host32 -c 400000 compile -O -c -I $(SRCS)/c4ix $(SRCS)/c4ix/$$m.c .c4pc/kernel/$$m.c4o > /dev/null || exit 1; done
@@ -3394,12 +3394,17 @@ PHONY += c4pc-dos
 test-c4pc: c4pc-host c4pc.elf .c4pc/disk.tar .c4pc/kernel/c4ix32.c4r $(C4PC_IMAGES_DEP) $(if $(NO_W64),,c4pc64-test-deps)
 	IMAGES=$(C4PC_IMAGES) C4IX_PROGS="$(C4IX_PROGS)" bash $(C4PC_SRC)/test-c4pc.sh
 PHONY += test-c4pc
+# the network between the hypervisor's machines (docs/c4pc-network.md):
+# VM 0 and two guests in QEMU with KVM, ping and UDP between them
+test-c4pc-net: c4pc.elf c4pc.iso
+	bash $(C4PC_SRC)/test-c4pc-net.sh
+PHONY += test-c4pc-net
 
 # C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is
 # preprocessed, compiled to a .c4o object with full optimization, and
 # the kernel image is linked by c4rlink.
 C4IX_SRC  := src/c4ix
-C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk ext2 init
+C4IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk ext2 net init
 c4ix.c4r: $(LC64_BIN) $(C4RLINK) $(C4LC_LISP) $(C4IX_SRC)/c4ix.h $(patsubst %,$(C4IX_SRC)/%.c,$(C4IX_MODS))
 	@# No gcc here: c4lc preprocesses the modules itself (L9). Each
 	@# object is byte-identical to the gcc -E path, pinned by test-c4lc.

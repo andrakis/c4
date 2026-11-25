@@ -670,6 +670,9 @@ static int sys_args_ok(int num, int *args) {
     case SYS_STATFS:   return ustrlen((char *)args[0]) >= 0 && uaccess(args[1], 7 * sizeof(int), 1);
     case SYS_LSEEK64:  return uaccess(args[1], 2 * sizeof(int), 1);
     case SYS_FMAP:     return uaccess(args[2], 3 * sizeof(int), 1);
+    case SYS_SENDTO:   return uaccess(args[1], 4 * sizeof(int), 0) && uaccess(((int *)args[1])[0], ((int *)args[1])[1], 0);
+    case SYS_RECVFROM: return uaccess(args[1], 5 * sizeof(int), 1) && uaccess(((int *)args[1])[0], ((int *)args[1])[1], 1);
+    case SYS_NETCTL:   return args[0] == 0 ? uaccess(args[1], args[2] * sizeof(int), 1) : (args[0] != 2 || ustrlen((char *)args[1]) >= 0);
     }
     return 1;
 }
@@ -680,6 +683,8 @@ int sys_dispatch(int num, int *args) {
     c4off off;
     int *w;
     int fm_spb, fm_b, fm_dev, fm_d;     // SYS_FMAP's
+    int ns, nr;                         // the network's
+    struct vnode *nv;
 
     if ((t = sched_current())) ++t->nsyscalls;
     if (!sys_args_ok(num, args)) return -1;
@@ -765,6 +770,25 @@ int sys_dispatch(int num, int *args) {
         if (off < 0 || (sizeof(int) == 4 && off > 0x7FFFFFFF)) return -1;
         f->pos = off;
         return (int)off;
+    // the network (net.c): sockets as fds
+    case SYS_SOCKET:
+        if (!t || (ns = net_socket(args[0])) < 0) return -1;
+        if (!(nv = vfs_socket(ns))) { net_close(ns); return -1; }
+        if ((nr = fd_open_vnode(t, nv, C4IX_O_RDWR)) < 0) net_close(ns);
+        return nr;
+    case SYS_BIND: case SYS_SENDTO: case SYS_RECVFROM:
+        if (!t || !(f = fd_get(t, args[0])) || f->vn->type != VN_SOCK) return -1;
+        if (num == SYS_BIND) return net_bind(f->vn->host, args[1]);
+        if (num == SYS_SENDTO) return net_sendto(f->vn->host, (int *)args[1]);
+        // a datagram, or a wait for one (as a pipe's reader waits) until the deadline
+        w = (int *)args[1];
+        while ((nr = net_recvfrom(f->vn->host, w)) == NET_AGAIN) {
+            if (w[4] < 0 || (w[4] && __time() - w[4] >= 0)) return -2;
+            if (sys_block(f->vn, w[4])) return 0;      // trap path: restarting
+            if (!(f = fd_get(t, args[0])) || f->vn->type != VN_SOCK) return -1;
+        }
+        return nr;
+    case SYS_NETCTL:   return net_ctl(args[0], args[1], args[2]);
     // where a disk's file keeps a block (c4ix.h SYS_FMAP)
     case SYS_FMAP:
         if (!t || !(f = fd_get(t, args[0])) || !f->vn->e2) return -1;

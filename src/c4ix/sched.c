@@ -1055,6 +1055,11 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     if (mmu_swapok && d - mmu_lwin >= MMU_LOAD_MS) mmu_balance();
     // the kernel's own memory, tidied now and then once a task has gone
     if (mmu_tidying && d - mmu_tidywhen >= MMU_TIDY_MS) mmu_tidy();
+    // the network card's frames, each ms (net.c): before the queues are
+    // looked at, so that a task waiting for the datagram one brought is
+    // woken now -- after, it waited for the next look, and the idle task's
+    // nap came first (pings of 100 to 300 ms)
+    if (net_up && d != net_ms) net_tick(d);
     // the queues: what nothing says has happened (sched_tick)
     if (d != sched_tickms) sched_tick(d);
 

@@ -148,7 +148,14 @@ enum {
     // a block -- 1, 0 for a hole, -1 if not a disk's file (the hypervisor's
     // `vm`: a guest's disk image read and written where it lies)
     SYS_FMAP = 257,
-    SYS_TOP = 258          // one past the last: sched_trap's range check
+    // the network (net.c, docs/c4pc-network.md): a socket's fd (args[0] 1
+    // UDP, 2 ICMP echo); its port or ident (0: one chosen); a datagram out
+    // ({buf, len, ip, port} at args[1]); the next in ({buf, len, ip, port,
+    // deadline} at args[1]: the deadline the machine's ms, 0 none, -1 do
+    // not wait; -2 when it passed); the card's counts (op 0), its address
+    // (1), a machine's address by its name (2)
+    SYS_SOCKET = 258, SYS_BIND = 259, SYS_SENDTO = 260, SYS_RECVFROM = 261, SYS_NETCTL = 262,
+    SYS_TOP = 263          // one past the last: sched_trap's range check
 };
 // Shutdown (sched.c): what the kernel task's end does once every task has
 // gone, 0 the machine off, 1 restarted -- the kernel's exit code is then
@@ -233,7 +240,8 @@ extern int sys_restart;
 // read: /proc/uptime (vfs.c, vfs_proc).
 enum {
     VN_CONSOLE = 1, VN_RAMFILE = 2, VN_HOSTFILE = 3, VN_PIPE = 4,
-    VN_DIR = 5, VN_LINK = 6, VN_PROC = 7
+    VN_DIR = 5, VN_LINK = 6, VN_PROC = 7,
+    VN_SOCK = 8                // a socket (net.c): host is its slot there
 };
 // 64: the root archive carries the repo's own tree, whose longest file
 // name is 26 characters (24 truncated them). Userland buffers that
@@ -417,6 +425,21 @@ int   host_has(int bit);
 // ---- disks (docs/c4ix-ext2.md) ----
 // The block devices: libjs/blk.js and c4pc's, the window at 0x540 (blk.c)
 enum { C4IX_I_BLK = 0x200000 };
+// ---- the network (net.c, docs/c4pc-network.md): c4pc's c4net card ----
+enum { C4IX_I_NET = 0x1000000, NET_AGAIN = -3 };
+extern int net_up;
+extern int net_ms;
+void net_init();
+void net_tick(int now);                // each ms, from the scheduler's trap
+int  net_socket(int kind);             // a slot, or -1
+void net_close(int s);
+int  net_readable(int s);
+int  net_bind(int s, int port);
+int  net_sendto(int s, int *w);
+int  net_recvfrom(int s, int *w);      // NET_AGAIN: none yet
+int  net_read(int s, char *buf, int len);
+int  net_ctl(int op, int a, int b);
+struct vnode *vfs_socket(int s);
 // A device: a disk (0 to 7: hd0 ... hd7) or a partition of one (8 + 4 * D
 // + P - 1: hdDpP, its MBR's primary P), numbered from its own first sector
 int  blk_count();                     // the disks

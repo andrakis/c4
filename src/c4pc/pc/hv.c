@@ -184,6 +184,7 @@ static int xmap_cd_rd(void *ctx, u32 lba, u32 n, u8 *buf) { return xmap_rw(ctx, 
 static void release(vm *v) {
   machine *m = v->m;
   if (!m || !m->u8) return;
+  net_detach(m);
   xfree(m->u8); m->u8 = 0;
   if (m->gui) { extern void gui_release(gui *g); gui_release(m->gui); m->gui = 0; }
   if (m->snd) { snd_free(m->snd); m->snd = 0; }
@@ -257,6 +258,7 @@ static int start(int id) {
   m->gui = gui_new(m, hv_w, hv_h);
   vt_init(&v->vt, 0);
   m->dv->hv_rd = hv_rd; m->dv->hv_wr = hv_wr; m->dv->hv_id = id;
+  net_attach(m, id, v->name);           /* its network card, on the switch (net.c) */
   m->wall = 1; m->wall_base = plat_now_ms();
   /* its arguments: the image's name, then the words of ARGS */
   static char abuf[256]; static char *argv[24];
@@ -638,10 +640,19 @@ static void hv_wr(machine *m, u32 a, i32 val) {
   }
 }
 
+/* a frame for machine ID (net.c): a guest napping wakes, as `vm send` wakes
+ * it (VM 0's nap loop, pc.c, looks at its card itself) */
+static void hv_net_kick(int id) {
+  if (id <= 0 || id >= HV_MAX || vms[id].state != S_RUN) return;
+  vms[id].nap_until = 0;
+  wake(vms[id].cpu);
+}
 /* --hv: M is VM 0, the control machine */
 void hv_init(machine *m, double mhz, int mmu_on, int w, int h) {
   ctl = m; hv_mhz = mhz; hv_mmu = mmu_on; hv_w = w; hv_h = h;
   m->dv->hv_rd = hv_rd; m->dv->hv_wr = hv_wr; m->dv->hv_id = 0;
+  net_kick_fn = hv_net_kick;
+  net_attach(m, 0, "control");          /* VM 0's network card: 10.4.0.1 on the machines' switch */
   vms[0].state = S_RUN;
   hv_out("c4pc: hv: the hypervisor: this machine is VM 0, the control; `vm` makes others\n");
 }
@@ -678,6 +689,7 @@ static void guest_ap(int k) {
       if (m->gui) gui_tick(m->gui);
       if (r == STOP_HALT || m->halted) v->fin = 1;           /* hv_run finishes it */
       else if (again) v->nap_until = 0;
+      else if (r == STOP_SLEEP && net_waiting(m)) v->nap_until = 0;   /* a frame came meanwhile (net.c) */
       else if (r == STOP_SLEEP) { v->nap_until = m->wall_base + m->nap_until; v->slept_at = plat_now_ms(); }
       else if (r == STOP_INPUT) { v->nap_until = now + 10; v->slept_at = plat_now_ms(); }
       lk(-1);
@@ -804,7 +816,8 @@ static int hv_run_(void) {
       }
       continue;
     }
-    if (r == STOP_SLEEP) { v->nap_until = m->wall_base + m->nap_until; v->slept_at = plat_now_ms(); }
+    if (r == STOP_SLEEP && net_waiting(m)) v->nap_until = 0;
+    else if (r == STOP_SLEEP) { v->nap_until = m->wall_base + m->nap_until; v->slept_at = plat_now_ms(); }
     else if (r == STOP_INPUT) { v->nap_until = now + 10; v->slept_at = plat_now_ms(); }
   }
   return busy;

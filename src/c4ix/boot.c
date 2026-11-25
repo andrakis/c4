@@ -109,6 +109,7 @@ void boot_report() {
         *(int *)C4IX_DISK_DRIVE = cur;
     }
     if (info & C4IX_I_BLK) blk_banner();
+    net_init();                            // the network card, if c4pc fitted one (net.c)
     if (info & C4IX_I_MBOX)
         klog("mailbox: %d KB at 0x%08x\n", *(int *)C4IX_MBOX_LEN / 1024, *(int *)C4IX_MBOX_BASE);
     if (info & C4IX_I_GUI)

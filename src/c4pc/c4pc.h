@@ -124,6 +124,19 @@ enum { TRAP_ILLOP, TRAP_HARD_IRQ, TRAP_SOFT_IRQ, TRAP_SIGNAL, TRAP_SEGV, TRAP_OP
 #define C4I_BLK  0x200000
 #define C4I_HV   0x400000                /* the hypervisor's control machine, VM 0 (pc/hv.c, --hv) */
 #define C4I_HVG  0x800000                /* a guest of the hypervisor's (its window, to detach) */
+/* ---- the network card (net.c, docs/c4pc-network.md): a window the
+ * kernel's alone, where the machine is plugged into the hypervisor's switch ---- */
+#define NET_BASE 0x580
+#define NET_END  0x5a0
+#define C4I_NET  0x1000000
+struct netport; struct machine;
+void net_attach(struct machine *m, int id, const char *name);
+void net_detach(struct machine *m);
+int net_waiting(struct machine *m);
+void net_counts(struct machine *m, unsigned long long *c);
+i32 net_rd(struct machine *m, u32 a);
+void net_wr(struct machine *m, u32 a, i32 v);
+extern void (*net_kick_fn)(int id);
 typedef struct blkdev {
   u32 sectors; int flags;              /* 512-byte sectors; 1 read-only, 2 removable */
   /* n sectors at lba to or from buf: 0, or -1 */
@@ -310,6 +323,7 @@ struct machine {
   /* the hypervisor's window (pc/hv.c, HV_BASE), where c4pc runs --hv:
    * its registers' reader and writer, and this machine's id (0 VM 0) */
   i32 (*hv_rd)(machine *, u32); void (*hv_wr)(machine *, u32, i32); int hv_id;
+  struct netport *net;                 /* its network card's port on the switch (net.c), or 0 */
   /* the MMU when one is fitted (mmu_new); vm while the user loop runs,
    * which makes the loads and stores translate. The user window (c4m.js
    * kpa): where user addresses start, 0 for none, and udir the kernel's

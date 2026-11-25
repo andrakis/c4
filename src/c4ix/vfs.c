@@ -629,6 +629,7 @@ static void vn_release(struct vnode *vn) {
     --vn->refs;
     if (vn->refs > 0) return;
     if (vn->type == VN_HOSTFILE) { close(vn->host); }
+    if (vn->type == VN_SOCK) net_close(vn->host);
     // RAM files and directories outlive their descriptors: they ARE
     // the filesystem.
     if (vn->type == VN_RAMFILE) return;
@@ -1621,6 +1622,13 @@ struct vnode *vfs_pipe() {
     return vn_alloc(VN_PIPE);
 }
 
+// a socket's vnode (net.c's slot S)
+struct vnode *vfs_socket(int s) {
+    struct vnode *vn;
+    if ((vn = vn_alloc(VN_SOCK))) vn->host = s;
+    return vn;
+}
+
 // Wrap an already-open host descriptor. Read-only by nature: the VM
 // has no write() syscall to offer.
 struct vnode *vn_hostfile(int host) {
@@ -1642,6 +1650,8 @@ struct vnode *vn_hostfile(int host) {
 // reader instead of stopping the machine inside a host read.
 int vfs_readable(struct vnode *vn, int pos) {
     if (vn->type == VN_CONSOLE) return con_poll();
+    // a socket: a datagram waiting, or the deadline POS (net.c, SYS_RECVFROM) passed
+    if (vn->type == VN_SOCK) return net_readable(vn->host) || (pos && __time() - pos >= 0);
     if (vn->type != VN_PIPE) return 1;
     if (vn->size > vn->rpos) return 1;
     return vn->writers == 0;
@@ -1655,6 +1665,7 @@ int vfs_read(struct file *f, char *buf, int len) {
     vn = f->vn;
     if (vn->type == VN_CONSOLE) { sched_unlock(); return con_read(buf, len); }
     if (vn->type == VN_HOSTFILE) { sched_unlock(); return read(vn->host, buf, len); }
+    if (vn->type == VN_SOCK) { sched_unlock(); return net_read(vn->host, buf, len); }
 
     if (vn->type == VN_PIPE) {
         n = vn->size - vn->rpos;
@@ -1750,6 +1761,7 @@ int vfs_write(struct file *f, char *buf, int len) {
         return len;
     }
     if (vn->type == VN_HOSTFILE) { sched_unlock(); return -1; }  // no write()
+    if (vn->type == VN_SOCK) { sched_unlock(); return -1; }      // SENDTO, not write (no TCP yet)
     if (vn->type == VN_DIR || vn->type == VN_PROC) { sched_unlock(); return -1; }
 
     if (vn->type == VN_PIPE) {

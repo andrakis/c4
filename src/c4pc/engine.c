@@ -111,7 +111,15 @@ static void rom_store(machine *m, word x, word v);
  * and a compile) */
 #define SWAP_ADDR_REG 0x11c
 #define SWAP_CMD_REG 0x158
-#define AP_DEV(m, a) ((m)->par_ap && !(m)->serving && (((a) >= DEV_BASE && (a) < DEV_END) || ((a) >= 0x400 && (a) < 0x500) || \
+/* The display's registers with the device lock (the hypervisor's: pc/hv.c)
+ * are any CPU's to reach itself, under the lock: their state is the
+ * display's alone, and it reaches into the asker's space as CPU 0 would on
+ * its behalf (gui.c dm). A guest's game on its CPU 1 asked its CPU 0 for
+ * each BELL, PRESENT and BLIT8, and drew 12% fewer frames than on CPU 0
+ * (Quake in QEMU, 29-34 fps against 34-38, 2026-11-26); its frame drawn
+ * on its own processor now. The sound card's stay CPU 0's: its posted
+ * writes are applied there, in order */
+#define AP_DEV(m, a) ((m)->par_ap && !(m)->serving && (((a) >= DEV_BASE && (a) < DEV_END) || ((a) >= 0x400 && (a) < 0x480 && !eng_lock_fn) || ((a) >= 0x480 && (a) < 0x500) || \
                       ((a) >= BLK_BASE && (a) < BLK_END && (m)->dv->nblk) || ((a) >= HV_BASE && (a) < HV_END && (m)->dv->hv_rd)) && \
                       ((a) & ~3u) != SWAP_ADDR_REG && ((a) & ~3u) != SWAP_CMD_REG && ((a) & ~3u) != TIME_MS_REG)
 /* TIME read on another CPU: its own (machine_sim_ms: the real clock, or as

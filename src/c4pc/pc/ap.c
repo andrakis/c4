@@ -104,6 +104,15 @@ static inline u32 lr(u32 off) { return lapic[off >> 2]; }
 static inline void lw(u32 off, u32 v) { lapic[off >> 2] = v; }
 static inline void cpuid(u32 l, u32 *a, u32 *b, u32 *c, u32 *d) { __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(l), "c"(0)); }
 static inline uint64_t rdmsr(u32 r) { u32 lo, hi; __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(r)); return (uint64_t)hi << 32 | lo; }
+static inline void wrmsr(u32 r, uint64_t v) { __asm__ volatile("wrmsr" : : "c"(r), "a"((u32)v), "d"((u32)(v >> 32))); }
+/* The boot processor's PAT, which screen.c set to write-combine the
+ * framebuffer (its entry 1) before the others start: each takes it as it
+ * starts. The page tables are shared, the PAT is a processor's own, and
+ * without it the others wrote the framebuffer through (the reset PAT's
+ * entry 1, WT): a guest's frame put on the screen from its own processor
+ * took 90 ms, and two processors saw one page as two memory types (Intel
+ * SDM vol. 3, 11.12.4) */
+static int has_pat; static uint64_t bsp_pat;
 
 void lapic_eoi(void) { if (lapic) lw(0xB0, 0); }
 
@@ -136,6 +145,7 @@ static void ap_idle(int k) {
 }
 void ap_entry(int n) {
   cpu_init_ap();                       /* the kernel's GDT and IDT, the x87 (pc.c) */
+  if (has_pat) { __asm__ volatile("wbinvd" : : : "memory"); wrmsr(0x277, bsp_pat); __asm__ volatile("wbinvd" : : : "memory"); }
   lw(0xF0, 0x100 | SPURIOUS_VEC);      /* the local APIC on */
   int k = n + 1;
   if (k >= MAXCPU) for (;;) __asm__ volatile("cli; hlt");
@@ -157,6 +167,7 @@ int ap_start(int want, const char **why) {
   lw(0xF0, 0x100 | SPURIOUS_VEC);
   apic_id[0] = (int)(lr(0x20) >> 24);
   if (want <= 1) { *why = "one asked for"; return 1; }
+  if (d & (1u << 16)) { has_pat = 1; bsp_pat = rdmsr(0x277); }
   /* the trampoline, and its words */
   u32 len = (u32)(ap_tramp_end - ap_tramp_start);
   memcpy((void *)(uintptr_t)TRAMP, ap_tramp_start, len);

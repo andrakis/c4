@@ -425,6 +425,21 @@ static void key_event(gui *g, u8 sc) {
  * to the screen -- or, while no program has it (no ring, no frame flipped
  * this last second), the console's text screen */
 static i64 display_ms;                  /* the time this takes, for -s */
+u32 pc_screen_frames;                   /* the frames it showed: a present or flip new since the last (hv.c's report) */
+static u32 counted; static gui *counted_g;
+static void count_frame(gui *g) { u32 c, pr, ev, fl; gui_stats(g, &c, &pr, &ev, &fl); if (pr + fl != counted || g != counted_g) { counted = pr + fl; counted_g = g; pc_screen_frames++; } }
+/* An attached guest's frame, put on the screen by the processor that drew
+ * it, as it presents (gui.c's hook, under the device lock): the guest's
+ * frames reach the screen whatever CPU 0 is doing, and display_tick finds
+ * them there. A text console shown (F1), or VM 0's own display: as before */
+gui *hv_attached_gui(void);
+static void guest_frame(gui *g) {
+  if (!hv || vt_text || vt_back || !gui_ring(g) || g != hv_attached_gui()) return;
+  i64 t = plat_now_ms();
+  count_frame(g);
+  screen_show(g);
+  display_ms += plat_now_ms() - t;
+}
 static void display_tick_(machine *m);
 /* under the device lock, when there is one: an attached guest's screen,
  * keys and mouse are its processor's too */
@@ -443,6 +458,7 @@ static void display_tick_(machine *m) {
   static u32 flips; static i64 flip_at = -100000;
   if (gui_flips(g) != flips) { flips = gui_flips(g); flip_at = t; }
   if (gui_ring(g) || t - flip_at < 1000) {
+    count_frame(g);
     screen_show(g);
     /* the display's frames a second (its presents and flips: a game's,
      * or the desktop's, which draws the windowed ones'), a second at a time */
@@ -873,7 +889,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     con_puts(vmouse ? ", and VMware's absolute mouse (the pointer leaves at the edge)\n" : mouse ? ", and a mouse\n" : ", and no mouse\n");
     pcv.mirror = 0;                     /* graphics: the VGA's text is not shown */
     screen_console(pcv.cells, vt_cursor(&pcv));
-    if (hv) hv_init(m, (double)m->cycles_per_ms / 1000, mmu_on, w, h);
+    if (hv) { hv_init(m, (double)m->cycles_per_ms / 1000, mmu_on, w, h); extern void (*gui_frame_hook)(gui *); gui_frame_hook = guest_frame; }
   }
   /* the sound card (snd.c), at the keyboard, on a Sound Blaster 16 (sb16.c):
    * scripted or --fast, the machine's clock is not the one it would play to */

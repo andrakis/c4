@@ -58,6 +58,7 @@ typedef struct vm {
   volatile int fin;                    /* halted on its processor: hv_run, on 0, finishes it */
   int par, procs[8];                   /* several CPUs, each on a processor of its own (par.c): procs[k] CPU k's */
   u64 rep_cyc;                         /* its instructions at the last report */
+  u32 rep_frames;                      /* its display's presents and flips then */
   i64 slept_at, idle_ms;               /* napping since (0: not), and its naps' time all told (INFO's idleN) */
                                        /* (its window's arguments: wins, by its CPU) */
 } vm;
@@ -279,7 +280,7 @@ static int start(int id) {
     for (int k = 0; k < v->cpus && k < 8; k++) v->procs[k] = procs[k];
     for (int k = 1; k < v->cpus && k < 8; k++) wake(procs[k]);   /* each takes its CPU (par_ap_take) */
   }
-  v->m = m; v->nap_until = 0; v->ll = 0; v->fin = 0; v->slept_at = 0; v->idle_ms = 0; v->rep_cyc = 0;
+  v->m = m; v->nap_until = 0; v->ll = 0; v->fin = 0; v->slept_at = 0; v->idle_ms = 0; v->rep_cyc = 0; v->rep_frames = 0;
   __atomic_thread_fence(__ATOMIC_SEQ_CST);
   __atomic_store_n(&v->state, S_RUN, __ATOMIC_RELEASE);     /* its processor's worker may take it now */
   glog(v, "c4pc: started\n");
@@ -330,6 +331,8 @@ void hv_snd_fill(snd *s0, int16_t *out, u32 n, u32 ahead) {
   }
   snd_fill_ahead(heard, out, n, ahead);
 }
+/* an attached guest's display, or 0 */
+gui *hv_attached_gui(void) { return attached && vms[attached].state == S_RUN && vms[attached].m ? vms[attached].m->gui : 0; }
 /* the machine the screen, keyboard and mouse are: VM 0's or an attached guest's */
 machine *hv_shown(machine *m0) {
   if (attached && vms[attached].state == S_RUN && vms[attached].m && vms[attached].m->gui) return vms[attached].m;
@@ -727,6 +730,26 @@ static void report(void) {
   static char b[600];
   if (pc_lock_report(b, sizeof b)) { hv_out("c4pc: hv: the device lock, the last 30 s: "); hv_out(b); hv_out("\n"); }
   /* (VM 0's sound: the card's own line, aring.h) */
+  /* the frames a second each display drew (its presents and flips), and
+   * the screen showed (pc.c: display_tick's that found a new one) */
+  { extern u32 pc_screen_frames; static u32 shown0; static int primed;
+    u32 pr, fl, c, ev, f0 = 0;
+    if (ctl->gui) { gui_stats(ctl->gui, &c, &pr, &ev, &fl); f0 = pr + fl; }
+    if (primed) {
+      hv_out("c4pc: hv: frames a second: the screen showed "); outn((i64)(pc_screen_frames - shown0) * 1000 / dt);
+      hv_out(" (vm"); outn(attached); hv_out("'s); vm0 drew "); outn((i64)(f0 - vms[0].rep_frames) * 1000 / dt);
+      for (int id = 1; id < HV_MAX; id++) {
+        vm *v = &vms[id];
+        if (v->state != S_RUN || !v->m || !v->m->gui) continue;
+        gui_stats(v->m->gui, &c, &pr, &ev, &fl);
+        hv_out(", vm"); outn(id); hv_out(" "); outn((i64)(pr + fl - v->rep_frames) * 1000 / dt);
+        v->rep_frames = pr + fl;
+      }
+      hv_out("\n");
+    } else
+      for (int id = 1; id < HV_MAX; id++) if (vms[id].state == S_RUN && vms[id].m && vms[id].m->gui) { gui_stats(vms[id].m->gui, &c, &pr, &ev, &fl); vms[id].rep_frames = pr + fl; }
+    primed = 1; shown0 = pc_screen_frames; vms[0].rep_frames = f0;
+  }
   for (int id = 1; id < HV_MAX; id++) {
     vm *v = &vms[id];
     if (v->state != S_RUN || !v->m) continue;

@@ -75,6 +75,24 @@ are the plan.
   past the unlock, gives it back at the catch it lands in (mmu.c's,
   par.c's). A guest that halts on its processor is finished on processor
   0 (hv_run: the screen given back, its memory freed, a restart).
+- **A guest's frames** are drawn and shown by its own processors, not
+  processor 0's: a CPU of several reaches the display's registers itself,
+  under the lock (engine.c AP_DEV; without the lock, as with VM 0 alone,
+  they are still asked of CPU 0), and an attached guest's frame goes onto
+  the screen from the processor that presented it (gui.c's
+  gui_frame_hook, pc.c guest_frame); processor 0's display_tick finds it
+  there. Every processor takes the boot processor's PAT as it starts
+  (pc/ap.c), so the framebuffer is write-combined on each. BLIT8 and
+  FBFLIP scale by a column table, a repeated row copied, not two
+  divisions a pixel. In QEMU on 4 processors (2026-11-26), frames a
+  second before and after: Quake's attract loop in a 1-CPU guest 30-34
+  to 34-38, on a 2-CPU guest's CPU 1 29-34 to 34-38, in VM 0 27-31 to
+  31-35; Doom's in a 1-CPU guest 38-39 to 44, in VM 0 36-37 to 41-42.
+  What is left of a frame is the game's own instructions.
+- **The 30 s report** (with a pool, on c4pc's log): the device lock's
+  share held and waited for, each processor's; frames a second the screen
+  showed (and whose) and each machine's display drew; each guest's
+  instructions a second and how its sound kept up.
 - **VM 0's commands** read and write its memory through the machine of
   the CPU that asked (with VM 0 on several processors, CPU 0's machine
   had another task's space: a guest started with another's arguments).

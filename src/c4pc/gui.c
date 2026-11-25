@@ -341,11 +341,24 @@ static void blit8(gui *g, const i32 *p) {
   if (dh <= 0) dh = h;
   int x0 = x < g->cx0 ? g->cx0 : x, y0 = y < g->cy0 ? g->cy0 : y;
   int x1 = x + dw > g->cx1 ? g->cx1 : x + dw, y1 = y + dh > g->cy1 ? g->cy1 : y + dh;
-  for (int yy = y0; yy < y1; yy++) {
-    int sy = (int)(((i64)(yy - y) * 2 + 1) * h / (2 * (i64)dh));
-    u32 *d = g->back + (size_t)yy * g->cw;
-    const u8 *row = px + (size_t)sy * w;
-    for (int xx = x0; xx < x1; xx++) d[xx] = lut[row[(int)(((i64)(xx - x) * 2 + 1) * w / (2 * (i64)dw))]] & 0xffffff;
+  /* each column's source column once, and a row whose source row is the
+   * last one's copied: a 320 x 200 frame on 1024 x 768 is 200 rows looked
+   * up, not 786432 pixels with two divisions each (a third of a guest's
+   * frame time in Quake, 2026-11-26) */
+  if (x1 > x0) {
+    for (int c = 0; c < 256; c++) lut[c] &= 0xffffff;
+    int *xs = xmalloc((size_t)(x1 - x0) * sizeof(int));
+    for (int xx = x0; xx < x1; xx++) xs[xx - x0] = (int)(((i64)(xx - x) * 2 + 1) * w / (2 * (i64)dw));
+    int last = -1; u32 *prev = 0; size_t n = (size_t)(x1 - x0);
+    for (int yy = y0; yy < y1; yy++) {
+      int sy = (int)(((i64)(yy - y) * 2 + 1) * h / (2 * (i64)dh));
+      u32 *d = g->back + (size_t)yy * g->cw + x0;
+      if (sy == last) { memcpy(d, prev, n * 4); continue; }
+      const u8 *row = px + (size_t)sy * w;
+      for (size_t i = 0; i < n; i++) d[i] = lut[row[xs[i]]];
+      last = sy; prev = d;
+    }
+    xfree(xs);
   }
   if (x1 > x0 && y1 > y0) dirty(g, x0, y0, x1, y1);
   xfree(px);
@@ -371,14 +384,19 @@ static void flip(gui *g, int w, int h) {
   }
   xfree(raw);
 #endif
+  /* as blit8: each column's source once, a repeated row copied */
+  int *xs = xmalloc((size_t)g->cw * sizeof(int));
+  for (int xx = 0; xx < g->cw; xx++) xs[xx] = (int)(((i64)xx * 2 + 1) * w / (2 * (i64)g->cw));
+  int last = -1; u32 *prev = 0;
   for (int yy = 0; yy < g->ch; yy++) {
     int sy = (int)(((i64)yy * 2 + 1) * h / (2 * (i64)g->ch));
     u32 *d = g->back + (size_t)yy * g->cw;
-    for (int xx = 0; xx < g->cw; xx++) {
-      int sx = (int)(((i64)xx * 2 + 1) * w / (2 * (i64)g->cw));
-      d[xx] = (mode ? buf[(size_t)sx * h + sy] : buf[(size_t)sy * w + sx]) & 0xffffff;
-    }
+    if (sy == last) { memcpy(d, prev, (size_t)g->cw * 4); continue; }
+    if (mode) for (int xx = 0; xx < g->cw; xx++) d[xx] = buf[(size_t)xs[xx] * h + sy] & 0xffffff;
+    else { const u32 *row = buf + (size_t)sy * w; for (int xx = 0; xx < g->cw; xx++) d[xx] = row[xs[xx]] & 0xffffff; }
+    last = sy; prev = d;
   }
+  xfree(xs);
   xfree(buf);
   dirty(g, 0, 0, g->cw, g->ch);
   g->flips++;
@@ -387,6 +405,11 @@ static void flip(gui *g, int w, int h) {
 }
 
 static void send(gui *g, i32 type, const i32 *pl, int n);
+
+/* a frame drawn by a register write (BELL, FBFLIP): the platform told, on
+ * the processor that drew it (pc.c: an attached guest's, to the screen) */
+void (*gui_frame_hook)(gui *g);
+static void framed(gui *g, u32 before) { if (gui_frame_hook && g->presents + g->flips != before) gui_frame_hook(g); }
 
 static void resize(gui *g, int w, int h) {
   { if (w < 1) w = 1; }
@@ -617,12 +640,12 @@ void gui_write32(gui *g, u32 a, i32 v) {
       mb_layout(g);
       return;
     }
-    case BELL: pull(g); return;
+    case BELL: { u32 b = g->presents + g->flips; pull(g); framed(g, b); return; }
     case EVMASK: g->evmask = v; return;
     case FB: g->fb_base = v; return;
     case FBPITCH: g->fb_pitch = v; return;
     case FBMODE: g->fb_mode = v & 1; return;
-    case FBFLIP: pull(g); flip(g, (int)(((u32)v >> 16) & 0xffff), (int)(v & 0xffff)); return;
+    case FBFLIP: { u32 b = g->presents + g->flips; pull(g); flip(g, (int)(((u32)v >> 16) & 0xffff), (int)(v & 0xffff)); framed(g, b); return; }
     case IRQ: g->irq_on = v ? 1 : 0; return;
     case SCREEN: screen_to(g, v); return;
     case SCRDROP: if (v >= 0 && v < NSCREENS && v != g->screen && g->saved[v]) { screen_free(g->saved[v]); g->saved[v] = 0; } return;

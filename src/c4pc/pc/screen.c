@@ -136,10 +136,11 @@ enum { CAP_CURSOR = 0x20, CAP_CURSOR_BYPASS_2 = 0x80, CAP_EXTENDED_FIFO = 0x8000
 /* the extended FIFO's registers past the front 4 (svga_reg.h), there when
  * MIN leaves room for all of them: VMware's own pointer (cursor bypass 3)
  * among them, taken when CURSOR_COUNT moves */
-enum { F_CAPS = 4, F_CURON = 9, F_CURX = 10, F_CURY = 11, F_CURCOUNT = 12 };
+enum { F_CAPS = 4, F_CURON = 9, F_CURX = 10, F_CURY = 11, F_CURCOUNT = 12, F_BUSY = 290 };
 enum { FCAP_CURSOR_BYPASS_3 = 1 << 1 };
 static u32 sv_io, sv_fb, sv_caps;
 static int sv_bypass3;                         /* the pointer through the FIFO's registers */
+static int sv_vbox;                            /* VirtualBox's VBoxSVGA (80EE:BEEF) */
 static volatile u32 *fifo;
 static int sv_hwcur;                           /* the adapter draws the pointer */
 static u32 sv_updates, sv_syncs;               /* for -s */
@@ -165,6 +166,19 @@ static void fifo_cmd(const u32 *w, int n) {
 #endif
   fifo[F_NEXT] = next;
 }
+/* The doorbell, once a frame's commands are in: SYNC written, not
+ * waited for, unless FIFO BUSY says the host is at them already
+ * (svga_reg.h's "Ringing the Doorbell"). VirtualBox's FIFO thread
+ * sleeps when the FIFO is empty, 16 ms after work and longer while
+ * idle, and is otherwise woken only by the display's refresh timer:
+ * without the doorbell each frame waited for that (a 30-minute run in
+ * VirtualBox 7.2: 0 SYNC writes, 90,754 watchdog wake-ups, 44,719
+ * timeouts that found work). Only with the extended FIFO, where BUSY
+ * is a register (MIN past it): QEMU's legacy one runs its FIFO on its
+ * own refresh, as before */
+static void sv_doorbell(void) {
+  if (fifo[F_MIN] > F_BUSY * 4 && !fifo[F_BUSY]) sv_wr(SV_SYNC, 1);
+}
 static void sv_update(int x, int y, int w, int h) {
   u32 c[5] = { CMD_UPDATE, (u32)x, (u32)y, (u32)w, (u32)h };
   fifo_cmd(c, 5);
@@ -172,11 +186,18 @@ static void sv_update(int x, int y, int w, int h) {
 }
 static int sv_probe(void) {
   for (u32 d = 0; d < 32; d++) {
-    if (pci_rd(0, d, 0, 0) != 0x040515ADu) continue;
-    u32 bar0 = pci_rd(0, d, 0, 0x10);
-    if (!(bar0 & 1)) return 0;
+    /* VMware's SVGA II, and VirtualBox's VMSVGA, are 15AD:0405, their
+     * ports BAR 0; VirtualBox's VBoxSVGA is the same device as 80EE:BEEF,
+     * VMware's ids its subsystem's, and BAR 0 its VRAM, the ports BAR 1
+     * (DevVGA.cpp: fVMSVGAPciId, fVMSVGAPciBarLayout). VBoxVGA is
+     * 80EE:BEEF too, without the subsystem: the BGA's */
+    u32 id = pci_rd(0, d, 0, 0), bar;
+    int vbox = id == 0xBEEF80EEu && pci_rd(0, d, 0, 0x2c) == 0x040515ADu;
+    if (id != 0x040515ADu && !vbox) continue;
+    bar = pci_rd(0, d, 0, vbox ? 0x14 : 0x10);
+    if (!(bar & 1)) return 0;
     pci_wr(0, d, 0, 4, pci_rd(0, d, 0, 4) | 3);       /* its ports and memory answer */
-    sv_io = bar0 & ~3u;
+    sv_io = bar & ~3u;
     sv_wr(SV_ID, SVGA_ID_2);
     if (sv_rd(SV_ID) != SVGA_ID_2) return 0;
     sv_fb = sv_rd(SV_FBSTART);
@@ -190,6 +211,7 @@ static int sv_probe(void) {
     fifo[F_MIN] = fmin; fifo[F_MAX] = fsize; fifo[F_NEXT] = fmin; fifo[F_STOP] = fmin;
     sv_wr(SV_CONFIGDONE, 1);
     sv_bypass3 = (sv_caps & CAP_EXTENDED_FIFO) && (fifo[F_CAPS] & FCAP_CURSOR_BYPASS_3);
+    sv_vbox = vbox;
     return 1;
   }
   return 0;
@@ -246,6 +268,7 @@ static void touched(int x0, int y0, int x1, int y1) {
 /* ... told to the adapter */
 static void flush(void) {
   for (int i = 0; i < nrect; i++) sv_update(rx0[i], ry0[i], rx1[i] - rx0[i], ry1[i] - ry0[i]);
+  if (nrect) sv_doorbell();
   nrect = 0;
 }
 
@@ -253,7 +276,7 @@ void screen_size(int *w, int *h) { *w = sw; *h = sh; }
 void pc_log(const char *s);
 void pc_logn(i64 v);
 static const char *drv_name(void) {
-  return drv == DRV_SVGA ? "VMware SVGA II" : drv == DRV_BGA ? "the Bochs display adapter" : "GRUB's framebuffer";
+  return drv == DRV_SVGA ? (sv_vbox ? "VirtualBox's VBoxSVGA (an SVGA II)" : "VMware SVGA II") : drv == DRV_BGA ? "the Bochs display adapter" : "GRUB's framebuffer";
 }
 void screen_describe(void) {
   pc_log("c4pc: screen at "); pc_logn((i64)(uintptr_t)fb); pc_log(", "); pc_logn(sw); pc_log(" x "); pc_logn(sh); pc_log(" x "); pc_logn(bpp);
@@ -660,6 +683,7 @@ static void sv_cursor_define(void) {
     if (k == '2') xor_[j * 4 + i / 8] |= (u8)(0x80 >> (i % 8));
   }
   fifo_cmd(c, 8 + 64);
+  sv_doorbell();
 }
 extern int mouse_debug;
 /* Moved, shown or hidden. VMware's through the FIFO (bypass 3): its
@@ -674,6 +698,7 @@ static void sv_pointer(int x, int y, int on) {
     if (on) { fifo[F_CURX] = (u32)x; fifo[F_CURY] = (u32)y; }
     fifo[F_CURON] = on ? 1 : 0;
     fifo[F_CURCOUNT] = fifo[F_CURCOUNT] + 1;      /* volatile: after the others */
+    sv_doorbell();
   } else {
     sv_wr(SV_CURID, 1);
     if (on) { sv_wr(SV_CURX, (u32)x); sv_wr(SV_CURY, (u32)y); }

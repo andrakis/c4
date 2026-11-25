@@ -12,7 +12,7 @@ run there unchanged. It is in `src/c4pc/`.
 | *measured* | with the MMU: the same session byte for byte libjs `--mmu`'s, in its 1,500,630,450 cycles, on c4pc-host and on c4pc.elf in QEMU; test-c4ix-mmu.mjs's cases but the display's (test-c4pc-mmu.sh) are killed by the page faults that test names, byte for byte and cycle for cycle as libjs, on c4pc-host and in QEMU |
 | done | C4IX's own accelerators (accel.c, src/c4ix/accel.mjs in C): libarc's inflater and CRC-32, behind libjs's loader numbers (INFO's C4I_ACCEL, ACC_FIND, ACC_OS); `--no-accel`, `--no-osaccel` as cli.js |
 | *measured* | with them and the MMU: the session byte for byte libjs's (its build listing os/c4ix), in its 111,571,007 cycles, on c4pc-host and in QEMU: 13 times fewer than C4IX's own C |
-| done (M4) | the display (gui.c): libjs's device at 0x400, its rings and IRQ, the page's drawing done in C with c4pc's own faces (font.c); on a PC VMware's SVGA II (updates through its FIFO, its own pointer), the BGA or GRUB's framebuffer, the screen's modes, the PS/2 mouse, the keyboard to the display; Alt+Tab between a fullscreen game and the desktop |
+| done (M4) | the display (gui.c): libjs's device at 0x400, its rings and IRQ, the page's drawing done in C with c4pc's own faces (font.c); on a PC VMware's SVGA II and VirtualBox's VMSVGA and VBoxSVGA (updates through its FIFO, its doorbell, its own pointer), the BGA or GRUB's framebuffer, the screen's modes, the PS/2 mouse, the keyboard to the display; Alt+Tab between a fullscreen game and the desktop |
 | *measured* | C4IX's desktop from the ISO under KVM, mouse and keyboard; on c4pc-host, scripted, in `make test-c4pc`; in DOSBox-X through C4PC.COM's VESA mode; Doom from the desktop at the clock's whole rate under KVM, 1% of the time drawing |
 | done | at the keyboard, the real clock: games drop frames on a slow PC rather than play in slow motion or at uneven speed; the screen written a row at a time, write-combined through the PAT; the console drawn on a framebuffer while no program has the display |
 | done | the games' accelerators (games/NAME.c, each game's c4/accel.mjs in C): Doom, Duke Nukem 3D, Quake, Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, behind libjs's loader numbers as its full build lists them |
@@ -618,7 +618,38 @@ its pointer to bypass 2 and back at every move, a round trip and a
 vmware.log line ("Restoring cursor bypass 3 ... 3->2->3 roundtrip")
 about every 10 ms while the mouse moved. The registers are for
 adapters without (QEMU's), ON written at every move, which is what
-moves QEMU's. Whether it is on is kept apart from
+moves QEMU's.
+
+*The doorbell, and VirtualBox's VBoxSVGA* (2026-11-26). After a
+frame's updates (and the pointer's), where the FIFO is extended, c4pc
+rings the doorbell: SVGA_REG_SYNC written, not waited for, unless FIFO
+BUSY says the host is at the FIFO already (svga_reg.h's "Ringing the
+Doorbell"). VirtualBox's FIFO thread sleeps while the FIFO is empty and
+is otherwise woken by the display's refresh timer or a timeout
+(DevVGA-SVGA.cpp: 16 ms after work, 2 ms longer each idle wait, up to
+250 ms), so every frame waited for one: the user's 30-minute VirtualBox
+run logged 0 SYNC writes, 90,754 watchdog wake-ups and 44,719 timeouts
+that found work. QEMU's legacy FIFO, without BUSY, is left as it was.
+VBoxSVGA is the same device as VMSVGA under VirtualBox's PCI id,
+80EE:BEEF, with VMware's 15AD:0405 as its subsystem, its VRAM BAR 0 and
+its ports BAR 1 (DevVGA.cpp: VMSVGAPciId, VMSVGAPciBarLayout); c4pc
+drove it as the BGA before (VBoxVGA is 80EE:BEEF too, without that
+subsystem, and still is the BGA). Measured in VirtualBox 7.2.22 on
+Windows (AMD-V, Hyper-V off), one CPU, 1 GB, a display at 1024 x 768,
+Doom's `-timedemo demo1 -show` (5065 frames, checksum 2be7597c in all):
+
+| controller | before | with VBoxSVGA and the doorbell |
+|---|---|---|
+| VMSVGA | 77.6 s, 65.2 fps (again: 73.6 s, 68.7 fps); 2% drawing; FIFO run on 3,719 timeouts, 908 wakes | 71.7 s, 70.6 fps (again: 71.6 s, 70.7 fps); 2%; 5,049 SYNCs, 5,048 wakes, 1 timeout |
+| VBoxSVGA | 77.3 s, 65.5 fps as the BGA; 6% drawing | 71.3 s, 71.0 fps; 2%; 5,045 SYNCs, 5,043 wakes |
+
+VMSVGA and VBoxSVGA are the same once driven alike: the controller was
+not what made c4pc slow there. The frames waiting for VirtualBox's
+FIFO thread cost 3 to 8% of a timedemo (the runs before varied, the
+ones after did not), and on the screen each frame showed up to a
+refresh or a timeout late.
+
+Whether it is on is kept apart from
 the drawn arrow's state, which a display of another size clears: shared,
 the adapter's arrow was never turned off when a game that wants no
 pointer took the screen, and stayed over Doom in VMware (--debug-mouse

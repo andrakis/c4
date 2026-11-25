@@ -54,7 +54,12 @@ int  echo_run   (int argc, char **argv) {
 // as starting the machine again); init passes it on (services/init.c)
 void shutdown_usage (char *argv0) { }
 int  shutdown_run   (int argc, char **argv) { shell_mode = SH_EXIT; exit_code = 0; printf("c4sh: shutting down\n"); return CR_OK; }
-int  reboot_run     (int argc, char **argv) { shell_mode = SH_EXIT; exit_code = 82; printf("c4sh: restarting\n"); return CR_OK; }
+// `reboot DRIVE` is the breadboard's reboot.c4r (eject, then restart:
+// the ladder's step, docs/climbing-the-ladder.md), so it is passed on
+int  reboot_run     (int argc, char **argv) {
+	if (argc > 1) return CR_PASS;
+	shell_mode = SH_EXIT; exit_code = 82; printf("c4sh: restarting\n"); return CR_OK;
+}
 void exit_usage (char *argv0) { }
 int  exit_run   (int argc, char **argv) {
 	int code;

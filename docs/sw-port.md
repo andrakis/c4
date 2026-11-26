@@ -107,3 +107,7 @@ accelerators run JFBuild's ten loops and five 64-bit helpers in the page
 (docs/accel.md); c4pc runs the same in C (`src/c4pc/games/sw.c`, branch
 `c4pc-sw`), where test-sw's script takes 8.5 s against 17.2 s without them
 on helios, the frames the same.
+
+In the page (framebench --page on the CDP 9224 Chrome, C4IX at 400 MHz with the
+MMU, the script shown with -show, 2026-11-26): 31.7 frames a second on average
+with the accelerators (1% low 12.3), 16.0 without them (8.2).

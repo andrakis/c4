@@ -319,7 +319,7 @@ static int prec (Node *n)
 	case ND_ASSIGN: return 2;
 	case ND_COND: return 3;
 	case ND_BINARY: return binprec (n->op);
-	case ND_CAST: case ND_PREFIX: case ND_SIZEOF_TYPE: case ND_SIZEOF_EXPR: return 14;
+	case ND_CAST: case ND_TCAST: case ND_PREFIX: case ND_SIZEOF_TYPE: case ND_SIZEOF_EXPR: return 14;
 	case ND_POSTFIX: case ND_CALL: case ND_INDEX: case ND_MEMBER: case ND_COMPLIT: case ND_TMPREF: return 15;
 	default: return 16;
 	}
@@ -416,6 +416,14 @@ static void expr (Node *n, int minprec)
 		put (") ");
 		expr (n->lhs, 14);
 		break;
+	case ND_TCAST: {
+		char *t = ty_str (n->ty, "");
+		if (!t)
+			error_at (n->tok, "emit: a cast to a type without a name");
+		buf_fmt (&out, "(%s) ", t);
+		expr (n->lhs, 14);
+		break;
+	}
 	case ND_SIZEOF_TYPE:
 		put ("sizeof (");
 		put (type_name_str (n->decl));
@@ -427,7 +435,8 @@ static void expr (Node *n, int minprec)
 		break;
 	case ND_COMPLIT:
 		put ("(");
-		put (type_name_str (n->decl));
+		// C++ lowering: one of sema's types, a global's list as an assignment
+		put (n->decl ? type_name_str (n->decl) : ty_str (n->ty, ""));
 		put (") ");
 		initz (n->initz);
 		break;
@@ -818,6 +827,10 @@ static void top (Node *n)
 			nl ();
 		puttok (n->tok);
 		stmt (n->body);
+	} else if (n->kind == ND_RAW) {
+		if (out.n && out.p[out.n - 1] != '\n')
+			nl ();
+		puttok (n->tok);
 	} else {
 		mark (n->tok);
 		decl_stmt (n->decl);

@@ -119,7 +119,10 @@ enum {
 	// lowering: &(type){ expr }, a const reference to an rvalue
 	ND_TMPREF,
 	// lowering: a function written as text (tok) with a body
-	ND_RAWFUNC
+	ND_RAWFUNC,
+	// lowering (M5): (ty) lhs, a cast to a type sema has; and a top-level
+	// declaration written as text (tok)
+	ND_TCAST, ND_RAW
 };
 
 struct Node {

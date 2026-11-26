@@ -48,6 +48,20 @@ struct Method {
 	struct Class *owner;
 	Token *cname;		// its name in C
 	Ty *fty;		// its type in C: `this` first unless static
+	// M5
+	int is_virtual, pure;
+	struct Slot *slot;	// its vtable slot, when virtual
+};
+
+// a vtable slot (plan section 3.2): a field of struct X__vt, typed as the
+// class that introduced it declared it (`this` of that class)
+typedef struct Slot Slot;
+struct Slot {
+	Slot *next;
+	Token *name;		// Paint__iic, or _dtor
+	Method *m;		// the class's final overrider
+	Ty *fty;		// the introducer's type
+	int index, is_dtor;
 };
 
 struct Class {
@@ -58,6 +72,13 @@ struct Class {
 	Method *ctor, *dtor;	// the user's, or made when members need them
 	int needs_ctor, needs_dtor;
 	int anon;		// anonymous members named so far (_u0, _u1, ...)
+	// M5
+	Class *base;		// its one base class, the member _b
+	int poly;		// has a vtable (its _vp is its own, or in _b)
+	Class *root;		// the polymorphic class whose first member is _vp
+	Slot *slots;		// the vtable's, the base's first
+	Ty *vt;			// struct X__vt
+	Method *key;		// the key function, whose unit defines X__vtbl; or 0
 };
 
 // an object to destroy when its scope ends: a local, or a member (in a
@@ -171,6 +192,21 @@ static Class *class_named (Token *name)
 static Class *class_of (Ty *t)
 {
 	return t && (t->kind == T_STRUCT || t->kind == T_UNION) && t->def ? t->def->cls : 0;
+}
+
+// is D the class B, or derived from it?
+static int derives (Class *d, Class *b)
+{
+	for (; d; d = d->base)
+		if (d == b)
+			return 1;
+	return 0;
+}
+
+// is D derived from B (and not B)?
+static int strictly_derives (Class *d, Class *b)
+{
+	return d && b && d != b && derives (d, b);
 }
 
 // ---- #pragma pack ----
@@ -445,6 +481,37 @@ static void take_address (Node *n)
 	n->next = next;
 }
 
+// N as (TO) N
+static void tcast (Node *n, Ty *to)
+{
+	Node *m = xalloc (sizeof *m), *next = n->next;
+	Token *at = n->tok;
+	*m = *n;
+	m->next = 0;
+	memset (n, 0, sizeof *n);
+	n->kind = ND_TCAST;
+	n->tok = at;
+	n->lhs = m;
+	n->ty = to;
+	n->next = next;
+}
+
+// the class a pointer of type T points to
+static Class *ptr_class (Ty *t)
+{
+	t = t ? decay (t) : 0;
+	return t && is_ptr (t) ? class_of (t->base) : 0;
+}
+
+// C++'s conversion that C lacks (M5): a pointer to a derived class as a
+// pointer to its base, a cast at offset 0 (plan section 3.2)
+static void conv (Node *n, Ty *to)
+{
+	if (!n->ty || !to || !is_ptr (to) || !strictly_derives (ptr_class (n->ty), class_of (to->base)))
+		return;
+	tcast (n, unqualified (to));
+}
+
 // N bound to a reference of type REF: its address, or a const reference's
 // copy of an rvalue
 static void bind_ref (Node *n, Ty *ref)
@@ -452,6 +519,12 @@ static void bind_ref (Node *n, Ty *ref)
 	Node *m, *next = n->next;
 	if (n->lvalue && !n->bitfield && (!n->ty || same_type (unqualified (n->ty), unqualified (ref->base)))) {
 		take_address (n);
+		return;
+	}
+	if (n->lvalue && !n->bitfield && strictly_derives (class_of (n->ty), class_of (ref->base))) {
+		// a derived object as its base
+		take_address (n);
+		tcast (n, pointer_to (ref->base));
 		return;
 	}
 	if (!(ref->base->qual & Q_CONST))
@@ -494,6 +567,8 @@ static void finish_call (Node *n, Ty *f)
 	for (a = n->args, i = 0; a && i < f->nparams; a = a->next, i++)
 		if (f->params[i]->kind == T_REF)
 			bind_ref (a, f->params[i]);
+		else
+			conv (a, f->params[i]);
 	n->ty = unqualified (f->base);
 	if (n->ty->kind == T_REF)
 		deref_ref (n);
@@ -726,6 +801,8 @@ static int rank_val (Node *a, Ty *to)
 			return lost ? -1 : added ? R_QUAL : R_EXACT;
 		if (to->base->kind == T_VOID && from->base->kind != T_FUNC)
 			return lost ? -1 : R_CONVERT;
+		if (strictly_derives (class_of (from->base), class_of (to->base)))
+			return lost ? -1 : R_CONVERT;	// derived to base
 		return -1;
 	}
 	if (to->kind == T_BOOL && is_ptr (from))
@@ -752,6 +829,9 @@ static int rank_arg (Node *a, Ty *to)
 		if (a->lvalue && !a->bitfield && same_type (unqualified (a->ty), unqualified (b)) &&
 		    !(a->ty->qual & ~b->qual & (Q_CONST | Q_VOLATILE)))
 			return (b->qual & ~a->ty->qual & (Q_CONST | Q_VOLATILE)) ? R_QUAL : R_EXACT;
+		if (a->lvalue && !a->bitfield && strictly_derives (class_of (a->ty), class_of (b)) &&
+		    !(a->ty->qual & ~b->qual & (Q_CONST | Q_VOLATILE)))
+			return R_CONVERT;	// a derived object to a base's reference
 		if (!(b->qual & Q_CONST))
 			return -1;
 		{
@@ -990,8 +1070,116 @@ static int cxx_ident (Node *n)
 	return 0;
 }
 
+static Spec *class_spec (struct Class *c, Token *at);
+static void append (Node **list, Node *n);
+static Type *ptr_type (Type *base);
+
+// a hidden local of the function, of class K (or a pointer to one):
+// __c4x_tN, its name
+static Token *hidden_local (Class *k, int ptr, Token *at)
+{
+	Decl *x;
+	Node *d;
+	Ty *t = ptr ? pointer_to (k->rec) : k->rec;
+	if (!fn_scope)
+		error_at (at, ptr ? "a virtual call on this object outside a function is not supported" :
+		                    "a temporary outside a function is not supported");
+	x = xalloc (sizeof *x);
+	x->spec = class_spec (k, at);
+	x->spec->rty = k->rec;
+	x->type = ptr ? ptr_type (&sema_base) : &sema_base;
+	x->name = make_ident (at, xformat ("__c4x_t%d", n_temps++));
+	x->tok = at;
+	x->first_of_spec = 1;
+	x->rty = t;
+	add_sym (fn_scope, x->name, S_VAR, t);
+	d = mk (ND_DECL, at);
+	d->decl = x;
+	append (&fn_temps, d);
+	return x->name;
+}
+
+// can N be evaluated twice? (no calls, assignments, ++ or --)
+static int simple (Node *n)
+{
+	switch (n->kind) {
+	case ND_IDENT: case ND_NUM:
+		return 1;
+	case ND_MEMBER: case ND_CAST: case ND_TCAST:
+		return simple (n->lhs);
+	case ND_PREFIX:
+		return (equal (n->op, "*") || equal (n->op, "&")) && simple (n->lhs);
+	case ND_INDEX:
+		return simple (n->lhs) && simple (n->rhs);
+	}
+	return 0;
+}
+
+// a copy of a simple N (typed)
+static Node *clone (Node *n)
+{
+	Node *c;
+	if (!n)
+		return 0;
+	c = copy_node (n);
+	c->lhs = clone (n->lhs);
+	c->rhs = clone (n->rhs);
+	return c;
+}
+
+// a call of a virtual M on OBJ (a pointer, typed) with N's arguments:
+// through its vtable, ((X__vt *) obj->_vp)->slot (obj, args); OBJ is kept
+// in a hidden local first unless it is simple
+static void virtual_call (Node *n, Method *m, Node *obj)
+{
+	Class *c = ptr_class (obj->ty);
+	Slot *s = m->slot;
+	Token *at = n->tok;
+	Node *vp, *fn, *pre = 0;
+	if (!c || !c->poly)
+		error_at (at, "a virtual call on what is not a pointer to a polymorphic class");
+	if (!simple (obj)) {
+		Token *t = hidden_local (c, 1, at);
+		Node *lhs = mk_ident (at, xstrndup (t->loc, t->len));
+		expr (lhs);
+		pre = mk (ND_ASSIGN, at);
+		pre->op = make_ident (at, "=");
+		pre->lhs = lhs;
+		pre->rhs = obj;
+		pre->ty = lhs->ty;
+		obj = clone (lhs);
+	}
+	vp = mk (ND_MEMBER, at);
+	vp->lhs = clone (obj);
+	vp->op = make_ident (at, "->");
+	vp->name = make_ident (at, "_vp");
+	expr (vp);
+	if (c != c->root)
+		tcast (vp, pointer_to (qualified (c->vt, Q_CONST)));
+	fn = mk (ND_MEMBER, at);
+	fn->lhs = vp;
+	fn->op = make_ident (at, "->");
+	fn->name = s->name;
+	expr (fn);
+	n->lhs = fn;
+	obj->next = n->args;
+	n->args = obj;
+	finish_call (n, s->fty);
+	if (pre) {
+		Node *call = copy_node (n), *next = n->next;
+		memset (n, 0, sizeof *n);
+		n->kind = ND_COMMA;
+		n->tok = at;
+		n->lhs = pre;
+		n->rhs = call;
+		n->ty = call->ty;
+		n->next = next;
+	}
+}
+
 // a member function call, obj.f(...), p->f(...), f(...) in a member
-// function, or X::f(...): to Class__f (this, ...). 0 if N is not one.
+// function, or X::f(...): to Class__f (this, ...), or through the vtable
+// when f is virtual (and not called as X::f). 0 if N is not one.
 static int method_call (Node *n)
 {
 	Node *f = n->lhs, *obj = 0, *a;
@@ -1046,6 +1234,10 @@ static int method_call (Node *n)
 	}
 	if (m->is_static)
 		obj = 0;
+	if (m->slot && obj && !(f->kind == ND_IDENT && f->qual)) {
+		virtual_call (n, m, obj);
+		return 1;
+	}
 	n->lhs = mk (ND_IDENT, make_ident (f->tok, xstrndup (m->cname->loc, m->cname->len)));
 	n->lhs->ty = m->fty;
 	if (obj) {
@@ -1130,6 +1322,12 @@ static void binary (Node *n)
 static Ty *cond_type (Node *n)
 {
 	Ty *a = decay (n->then->ty), *b = decay (n->els->ty);
+	if (opt_cplusplus && a->kind == T_ENUM && same_type (a, b)) {
+		// C++: the enum (evPost (..., c ? COMMAND_ID_1 : COMMAND_ID_0));
+		// C's int, for enumerators, is what gcc would say
+		n->unsure = 1;
+		return unqualified (a);
+	}
 	if (is_arith (a) && is_arith (b))
 		return usual_arith (a, b);
 	if (a->kind == T_VOID || b->kind == T_VOID)
@@ -1206,8 +1404,6 @@ static void call (Node *n)
 }
 
 static int anon_path (Node *n, Ty *o);
-static Spec *class_spec (struct Class *c, Token *at);
-static void append (Node **list, Node *n);
 
 // C++: a member operator, OBJ.operator OP (ARG), if OBJ is of a class that
 // has one; N becomes the call. 0 if not (C's meaning stands).
@@ -1243,28 +1439,14 @@ static int op_call (Node *n, Token *op, Node *obj, Node *arg)
 // of the function, *X__C__... (&__c4x_tN, args)
 static void class_temp (Node *n, Class *k)
 {
-	Node *next = n->next, *d, *call;
-	Token *at = n->tok;
-	Decl *x;
+	Node *next = n->next, *call;
+	Token *at = n->tok, *t;
 	if (k->needs_dtor)
 		error_at (at, "a temporary of a class with a destructor is not supported");
 	if (!k->ctor)
 		error_at (at, "a temporary of a class without a constructor is not supported");
-	if (!fn_scope)
-		error_at (at, "a temporary outside a function is not supported");
-	x = xalloc (sizeof *x);
-	x->spec = class_spec (k, at);
-	x->spec->rty = k->rec;
-	x->type = &sema_base;
-	x->name = make_ident (at, xformat ("__c4x_t%d", n_temps++));
-	x->tok = at;
-	x->first_of_spec = 1;
-	x->rty = k->rec;
-	add_sym (fn_scope, x->name, S_VAR, k->rec);
-	d = mk (ND_DECL, at);
-	d->decl = x;
-	append (&fn_temps, d);
-	call = ctor_call (k, var_addr (x->name, at), n->args, at, 0)->lhs;
+	t = hidden_local (k, 0, at);
+	call = ctor_call (k, var_addr (t, at), n->args, at, 0)->lhs;
 	memset (n, 0, sizeof *n);
 	n->kind = ND_PREFIX;
 	n->tok = at;
@@ -1336,6 +1518,9 @@ static void member (Node *n)
 static int anon_path (Node *n, Ty *o)
 {
 	Field *f;
+	for (f = o->def->fields; f; f = f->next)
+		if (f->name && same_tok (f->name, n->name))
+			return 0;	// its own, which hides a base's (M5: _b is looked through too)
 	for (f = o->def->fields; f; f = f->next) {
 		if (f->anon && find_field (f->ty, n->name, 0)) {
 			Node *in = mk (ND_MEMBER, n->tok);
@@ -1356,6 +1541,186 @@ static int anon_path (Node *n, Ty *o)
 static Ty *type_name_type (Decl *d)
 {
 	return decl_type (d->spec, d->type);
+}
+
+// ---- C++: new, delete and the runtime, libc4cxx (M5, plan section 3.7) ----
+
+static int rt_declared;		// the runtime's prototypes printed in this unit
+
+static Node *raw (Token *at, char *text)
+{
+	Node *n = mk (ND_RAW, at);
+	n->tok = make_ident (at, text);
+	return n;
+}
+
+// the runtime's prototypes, once, before the top-level node being typed
+static void rt_decls (Token *at)
+{
+	if (rt_declared)
+		return;
+	if (!cur_top)
+		error_at (at, "new, delete or a vtable here is not supported");
+	rt_declared = 1;
+	append (&cur_top->pre, raw (at, "void *__c4x_new (unsigned int); "
+	                                "void *__c4x_new_vec (unsigned int, unsigned int, void *(*) (void *), int); "
+	                                "void __c4x_delete (void *); void __c4x_delete_d (void *, void (*) (void *)); "
+	                                "void __c4x_delete_v (void *, int); "
+	                                "void __c4x_delete_vec (void *, unsigned int, void (*) (void *)); "
+	                                "void __c4x_pure (void);"));
+}
+
+// a function type RET (P0, P1, ...), N parameters
+static Ty *fn_ty (Ty *ret, int n, Ty *p0, Ty *p1, Ty *p2, Ty *p3)
+{
+	Ty *f = func_type (ret);
+	f->params = xalloc (4 * sizeof (Ty *));
+	f->params[0] = p0;
+	f->params[1] = p1;
+	f->params[2] = p2;
+	f->params[3] = p3;
+	f->nparams = n;
+	return f;
+}
+
+static Ty *void_ptr (void)
+{
+	return pointer_to (ty_void);
+}
+
+// a call of the runtime's NAME, of type FTY, with ARGS (typed, in a list)
+static Node *rt_call (const char *name, Ty *fty, Node *args, Token *at)
+{
+	Node *call = mk (ND_CALL, at), *fn = mk_ident (at, name);
+	rt_decls (at);
+	fn->ty = fty;
+	call->lhs = fn;
+	call->args = args;
+	finish_call (call, fty);
+	return call;
+}
+
+static Node *list2 (Node *a, Node *b)
+{
+	a->next = b;
+	return a;
+}
+
+static Node *num_node (Token *at, long long v)
+{
+	Node *n = mk (ND_NUM, make_ident (at, xformat ("%lld", v)));
+	expr (n);
+	return n;
+}
+
+// sizeof (struct K)
+static Node *class_size (Class *k, Token *at)
+{
+	Node *n = mk (ND_SIZEOF_TYPE, at);
+	Decl *d = xalloc (sizeof *d);
+	d->spec = class_spec (k, at);
+	d->spec->rty = k->rec;
+	d->type = &sema_base;
+	d->tok = at;
+	d->first_of_spec = 1;
+	n->decl = d;
+	expr (n);
+	return n;
+}
+
+// a constructor or destructor M of K as (void *(*) (void *)), or
+// (void (*) (void *)), for the runtime's loops
+static Node *special_ptr (Method *m, Token *at)
+{
+	Node *n = mk (ND_IDENT, cname_tok (at, m->cname));
+	n->ty = m->fty;
+	tcast (n, pointer_to (fn_ty (m->is_ctor ? void_ptr () : ty_void, 1, void_ptr (), 0, 0, 0)));
+	return n;
+}
+
+// new T, new T (args), new T[n]: the storage from __c4x_new, and a class
+// built by its constructor, K__C__codes ((struct K *) __c4x_new (sizeof
+// (struct K)), args), which returns it
+static void new_expr (Node *n)
+{
+	Ty *t = type_name_type (n->decl), *pt;
+	Class *k = class_of (t);
+	Token *at = n->tok;
+	Node *next = n->next, *size, *r;
+	if (t->kind == T_VOID || t->kind == T_FUNC || t->kind == T_REF || t->size < 0)
+		error_at (at, "new of an incomplete type, void, a function or a reference");
+	pt = pointer_to (t);
+	size = mk (ND_SIZEOF_TYPE, at);
+	size->decl = n->decl;
+	expr (size);
+	if (n->is_array) {
+		Node *cnt = n->rhs;
+		expr (cnt);
+		if (n->functional)
+			error_at (at, "new T[n] (...) is not supported");
+		if (k && (k->needs_ctor || k->needs_dtor)) {
+			// each element by the default constructor; a count before them
+			// for delete[] when they have a destructor
+			Node *ctor;
+			if (k->needs_ctor) {
+				Cand c[64];
+				int nc = method_set (k, 0, 1, c, 64), i;
+				i = choose (c, nc, 0, at, xformat ("%.*s::%.*s", k->name->len, k->name->loc, k->name->len, k->name->loc), 0);
+				ctor = special_ptr (c[i].m, at);
+			} else {
+				ctor = num_node (at, 0);
+				tcast (ctor, pointer_to (fn_ty (void_ptr (), 1, void_ptr (), 0, 0, 0)));
+			}
+			r = rt_call ("__c4x_new_vec", fn_ty (void_ptr (), 4, ty_uint, ty_uint,
+			             pointer_to (fn_ty (void_ptr (), 1, void_ptr (), 0, 0, 0)), ty_int),
+			             list2 (cnt, list2 (size, list2 (ctor, num_node (at, k->needs_dtor)))), at);
+		} else {
+			Node *mul = mk (ND_BINARY, at);
+			mul->op = make_ident (at, "*");
+			mul->lhs = cnt;
+			mul->rhs = size;
+			expr (mul);
+			r = rt_call ("__c4x_new", fn_ty (void_ptr (), 1, ty_uint, 0, 0, 0), mul, at);
+		}
+		tcast (r, pt);
+	} else {
+		r = rt_call ("__c4x_new", fn_ty (void_ptr (), 1, ty_uint, 0, 0, 0), size, at);
+		tcast (r, pt);
+		if (k && k->ctor)
+			r = ctor_call (k, r, n->args, at, 0)->lhs;
+		else if (n->functional)
+			error_at (at, "new T (...) of a type without a constructor is not supported");
+	}
+	r->next = next;
+	*n = *r;
+}
+
+// delete p, delete[] p: the destructor, through the vtable when it is
+// virtual (__c4x_delete_v reads the slot), then the storage
+static void delete_expr (Node *n)
+{
+	Token *at = n->tok;
+	Node *next = n->next, *p = n->lhs, *r;
+	Ty *t;
+	Class *k;
+	expr (p);
+	t = decay (p->ty);
+	if (!is_ptr (t))
+		error_at (at, "delete of what is not a pointer");
+	k = class_of (t->base);
+	if (n->is_array && k && k->needs_dtor)
+		r = rt_call ("__c4x_delete_vec", fn_ty (ty_void, 3, void_ptr (), ty_uint, pointer_to (fn_ty (ty_void, 1, void_ptr (), 0, 0, 0)), 0),
+		             list2 (p, list2 (class_size (k, at), special_ptr (k->dtor, at))), at);
+	else if (!n->is_array && k && k->dtor && k->dtor->slot)
+		r = rt_call ("__c4x_delete_v", fn_ty (ty_void, 2, void_ptr (), ty_int, 0, 0),
+		             list2 (p, num_node (at, k->dtor->slot->index)), at);
+	else if (!n->is_array && k && k->needs_dtor)
+		r = rt_call ("__c4x_delete_d", fn_ty (ty_void, 2, void_ptr (), pointer_to (fn_ty (ty_void, 1, void_ptr (), 0, 0, 0)), 0, 0),
+		             list2 (p, special_ptr (k->dtor, at)), at);
+	else
+		r = rt_call ("__c4x_delete", fn_ty (ty_void, 1, void_ptr (), 0, 0, 0), p, at);
+	r->next = next;
+	*n = *r;
 }
 
 static void expr (Node *n)
@@ -1429,6 +1794,8 @@ static void expr (Node *n)
 		expr (n->lhs);
 		expr (n->rhs);
 		n->ty = unqualified (n->lhs->ty);
+		if (opt_cplusplus && equal (n->op, "="))
+			conv (n->rhs, n->ty);
 		return;
 	case ND_COND:
 		expr (n->cond);
@@ -1541,8 +1908,12 @@ static void expr (Node *n)
 	case ND_MEMBER:
 		member (n);
 		return;
-	case ND_NEW: case ND_DELETE:
-		error_at (n->tok, "new and delete are not supported yet (M5)");
+	case ND_NEW:
+		new_expr (n);
+		return;
+	case ND_DELETE:
+		delete_expr (n);
+		return;
 	}
 	(void)ok;
 	error_at (n->tok, "sema: not an expression (%d)", n->kind);
@@ -1772,9 +2143,10 @@ static void add_fields (Class *c, Ty *rec)
 	for (f = rec->def->fields; f; f = f->next) {
 		if (!f->name)
 			continue;
-		if (f->anon)
-			add_fields (c, f->ty);
-		else
+		if (f->anon) {
+			if (f->ty->kind == T_STRUCT || f->ty->kind == T_UNION)
+				add_fields (c, f->ty);
+		} else
 			add_sym (c->scope, f->name, S_FIELD, f->ty);
 	}
 }
@@ -1848,19 +2220,226 @@ static int needs (Ty *t, int dtor)
 static int has_attr (Attr *a, const char *name);
 static int attr_aligned (Attr *a);
 
+// ---- C++: inheritance and virtual functions (M5, plan section 3.2) ----
+
+// the base clause, `: public Base {`: one base, not virtual. Its members
+// are the class's until the class's own hide them.
+static void base_class (Class *c, Token *t)
+{
+	Sym *y;
+	while (equal (t, "public") || equal (t, "protected") || equal (t, "private"))
+		t = t->next;
+	if (equal (t, "virtual"))
+		error_at (t, "virtual base classes are not supported");
+	if (t->kind != TK_IDENT)
+		error_at (t, "expected a base class");
+	c->base = class_named (t);
+	if (!c->base->rec->def->complete)
+		error_at (t, "'%.*s' is incomplete as a base class", t->len, t->loc);
+	t = t->next;
+	if (equal (t, ","))
+		error_at (t, "multiple inheritance is not supported");
+	if (!equal (t, "{"))
+		error_at (t, "expected '{' after the base class");
+	for (y = c->base->scope->syms; y; y = y->next) {
+		Sym *x = add_sym (c->scope, y->name, y->kind, y->ty);
+		x->val = y->val;
+		x->has_val = y->has_val;
+		x->is_tagname = y->is_tagname;
+		x->m = y->m;
+		x->cname = y->cname;
+		x->c_link = y->c_link;
+	}
+}
+
+// a member the class has in C only: _b (the base) or _vp (the vtable)
+static Decl *hidden_member (Spec *s, Type *t, const char *name, Token *at, Ty *ty, Field **cur)
+{
+	Decl *d = xalloc (sizeof *d);
+	Field *f = xalloc (sizeof *f);
+	d->spec = s;
+	d->type = t;
+	d->name = make_ident (at, name);
+	d->tok = at;
+	d->first_of_spec = 1;
+	d->rty = ty;
+	f->name = d->name;
+	f->ty = ty;
+	f->anon = 1;		// looked through, as an anonymous member is
+	f->bit_width = -1;
+	*cur = (*cur)->next = f;
+	return d;
+}
+
+static Field *field_named (Class *c, const char *name)
+{
+	Field *f;
+	for (f = c->rec->def->fields; f; f = f->next)
+		if (f->name && equal (f->name, name))
+			return f;
+	return 0;
+}
+
+// the slots: the base's, each overridden where the class declares a
+// function of its name and parameters, then the class's new virtuals
+static void vtable_slots (Class *c)
+{
+	Slot head = {0}, *cur = &head, *s, *b;
+	Method *me;
+	int n = 0;
+	if (c->base && c->base->poly)
+		for (b = c->base->slots; b; b = b->next) {
+			s = xalloc (sizeof *s);
+			*s = *b;
+			s->next = 0;
+			cur = cur->next = s;
+			n++;
+		}
+	for (me = c->methods; me; me = me->next) {
+		int declared = (me->decl->spec->storage & ST_VIRTUAL) || me->decl->pure;
+		if (me->is_ctor || me->is_static) {
+			if (declared)
+				error_at (me->decl->tok, "a constructor or static member function declared virtual");
+			continue;
+		}
+		for (s = head.next; s; s = s->next)
+			if (me->is_dtor ? s->is_dtor : !s->is_dtor && same_tok (s->m->name, me->name) && same_params (s->fty, me->fty, 1, 1))
+				break;
+		if (!s && declared) {
+			s = xalloc (sizeof *s);
+			s->name = me->is_dtor ? make_ident (me->decl->tok, "_dtor") :
+			          make_ident (me->decl->tok, xstrndup (me->cname->loc + c->name->len + 2, me->cname->len - c->name->len - 2));
+			s->fty = me->fty;
+			s->is_dtor = me->is_dtor;
+			s->index = n++;
+			cur = cur->next = s;
+		}
+		if (s) {
+			s->m = me;
+			me->slot = s;
+			me->is_virtual = 1;
+			me->pure = me->decl->pure;
+			// Itanium's key function: the first virtual neither pure nor inline
+			if (!c->key && !me->pure && !me->inline_body && !(me->decl->spec->storage & ST_INLINE))
+				c->key = me;
+		}
+	}
+	c->slots = head.next;
+	// struct X__vt's fields
+	{
+		Field fh = {0}, *fc = &fh;
+		for (s = c->slots; s; s = s->next) {
+			Field *f = xalloc (sizeof *f);
+			f->name = s->name;
+			f->ty = pointer_to (s->fty);
+			f->bit_width = -1;
+			fc = fc->next = f;
+		}
+		c->vt->fields = fh.next;
+		layout (c->vt, 0);
+		c->vt->complete = 1;
+	}
+}
+
+static char *slot_type (Slot *s, const char *inner)
+{
+	char *t = ty_str (pointer_to (s->fty), inner);
+	if (!t)
+		error_at (s->name, "a virtual function of a type that cannot be named in C");
+	return t;
+}
+
+// struct X__vt { void (*Paint__iic) (struct Widget *, int, int, char); ... };
+static char *vt_struct_text (Class *c)
+{
+	Buf b = {0};
+	Slot *s;
+	buf_fmt (&b, "struct %.*s__vt {", c->name->len, c->name->loc);
+	for (s = c->slots; s; s = s->next)
+		buf_fmt (&b, " %s;", slot_type (s, xstrndup (s->name->loc, s->name->len)));
+	buf_str (&b, " };");
+	return b.p;
+}
+
+// [static] const struct X__vt X__vtbl = { (type) Label__Paint__iic, ... };
+static char *vtbl_text (Class *c, const char *storage)
+{
+	Buf b = {0};
+	Slot *s;
+	buf_fmt (&b, "%sconst struct %.*s__vt %.*s__vtbl = {", storage, c->name->len, c->name->loc, c->name->len, c->name->loc);
+	for (s = c->slots; s; s = s->next)
+		buf_fmt (&b, " (%s) %.*s,", slot_type (s, ""), s->m->pure ? 10 : s->m->cname->len,
+		         s->m->pure ? "__c4x_pure" : s->m->cname->loc);
+	buf_str (&b, " };");
+	return b.p;
+}
+
+// this->_vp = (const struct Root__vt *) &X__vtbl
+static Node *set_vp (Class *c, Token *at)
+{
+	Node *lhs = mk (ND_MEMBER, at), *v = mk_ident (at, xformat ("%.*s__vtbl", c->name->len, c->name->loc)), *asg;
+	lhs->lhs = mk_this (at);
+	lhs->op = make_ident (at, "->");
+	lhs->name = make_ident (at, "_vp");
+	expr (lhs);
+	v->ty = qualified (c->vt, Q_CONST);
+	v->lvalue = 1;
+	take_address (v);
+	if (c != c->root)
+		tcast (v, unqualified (lhs->ty));
+	asg = mk (ND_ASSIGN, at);
+	asg->op = make_ident (at, "=");
+	asg->lhs = lhs;
+	asg->rhs = v;
+	asg->ty = unqualified (lhs->ty);
+	return mk_stmt (asg);
+}
+
 static void cxx_record (Spec *sp, Ty *rec, int pack)
 {
 	Class *c = xalloc (sizeof *c);
 	Field head = {0}, *cur = &head, *f;
 	Decl kh = {0}, *kc = &kh, *m, *next;
 	Method *me;
+	int has_virtual = 0;
 	c->name = sp->tag;
 	c->rec = rec;
 	rec->cls = c;
 	c->scope = xalloc (sizeof (Scope));
 	c->scope->up = sc;
 	if (sp->bases)
-		error_at (sp->bases, "base classes are not supported yet (M5)");
+		base_class (c, sp->bases);
+	for (m = sp->members; m; m = m->next)
+		if (!m->is_pragma && m->spec && m->type && m->type->kind == TY_FUNC && ((m->spec->storage & ST_VIRTUAL) || m->pure))
+			has_virtual = 1;
+	c->poly = has_virtual || (c->base && c->base->poly);
+	if (c->poly) {
+		if (c->base && !c->base->poly)
+			error_at (sp->tok, "a class with virtual functions whose base has none is not supported");
+		if (!c->name || in_function || !cur_top)
+			error_at (sp->tok, "a local or unnamed class with virtual functions is not supported");
+		c->root = c->base ? c->base->root : c;
+		c->vt = new_ty (T_STRUCT, -1, 1);
+		c->vt->def = c->vt;
+		c->vt->tag = make_ident (sp->tok, xformat ("%.*s__vt", c->name->len, c->name->loc));
+		append (&cur_top->pre, raw (sp->tok, xformat ("struct %.*s__vt;", c->name->len, c->name->loc)));
+	}
+	if (c->root == c) {
+		// const struct X__vt *_vp, first
+		Spec *s = xalloc (sizeof *s);
+		s->kind = SP_STRUCT;
+		s->tag = c->vt->tag;
+		s->qual = Q_CONST;
+		s->tok = sp->tok;
+		s->rty = c->vt;
+		kc = kc->next = hidden_member (s, ptr_type (&sema_base), "_vp", sp->tok, pointer_to (qualified (c->vt, Q_CONST)), &cur);
+	}
+	if (c->base) {
+		// struct Base _b, first
+		Spec *s = class_spec (c->base, sp->tok);
+		s->rty = c->base->rec;
+		kc = kc->next = hidden_member (s, &sema_base, "_b", sp->tok, c->base->rec, &cur);
+	}
 	for (m = sp->members; m; m = next) {
 		Spec *ms = m->spec;
 		next = m->next;
@@ -1897,8 +2476,6 @@ static void cxx_record (Spec *sp, Ty *rec, int pack)
 			continue;
 		}
 		if (m->type && m->type->kind == TY_FUNC) {
-			if ((ms->storage & ST_VIRTUAL) || m->pure)
-				error_at (m->tok, "virtual functions are not supported yet (M5)");
 			if (!c->name)
 				error_at (m->tok, "member functions in a class without a name");
 			new_method (c, m, m->is_ctor, m->is_dtor, (ms->storage & ST_STATIC) != 0);
@@ -1973,8 +2550,8 @@ static void cxx_record (Spec *sp, Ty *rec, int pack)
 		if (needs (f->ty, 1))
 			c->needs_dtor = 1;
 	}
-	if (c->ctor)
-		c->needs_ctor = 1;
+	if (c->ctor || c->poly)
+		c->needs_ctor = 1;	// a polymorphic class's sets _vp
 	if (c->dtor)
 		c->needs_dtor = 1;
 	if (c->needs_ctor && !c->ctor)
@@ -1999,10 +2576,28 @@ static void cxx_record (Spec *sp, Ty *rec, int pack)
 			me->cname = mangled (me->decl->tok, xstrndup (me->cname->loc, me->cname->len), me->fty, !me->is_static);
 		x->name = cname_tok (x->name, me->cname);
 		declaration (x, 1);
-		y = add_sym (c->scope, me->name, S_METHOD, me->fty);
-		y->m = me;
+		// constructors and destructors are found as the class's (method_set,
+		// c->dtor); under the class's name they would hide the class
+		if (!me->is_ctor && !me->is_dtor) {
+			y = add_sym (c->scope, me->name, S_METHOD, me->fty);
+			y->m = me;
+		}
 		n->decl = x;
 		append (&cur_top->post, n);
+	}
+	if (c->poly) {
+		// the vtable's type; the vtable here, static, when no function is
+		// its key, or else declared, and defined with the key function
+		// (funcdef)
+		Slot *s;
+		vtable_slots (c);
+		append (&cur_top->post, raw (sp->tok, vt_struct_text (c)));
+		for (s = c->slots; s; s = s->next)
+			if (s->m->pure)
+				rt_decls (sp->tok);
+		append (&cur_top->post, raw (sp->tok, c->key ? xformat ("extern const struct %.*s__vt %.*s__vtbl;", c->name->len,
+		                                                        c->name->loc, c->name->len, c->name->loc) :
+		                                               vtbl_text (c, "static ")));
 	}
 	for (me = c->methods; me; me = me->next) {
 		Node *n;
@@ -2190,6 +2785,16 @@ static void cxx_function (Decl *d, Ty *t)
 				error_at (d->name, "two extern \"C\" functions of one name");
 		}
 	if (same) {
+		// default arguments add up over the declarations (Blood's header
+		// has them, its definition not)
+		Ty *o = same->ty;
+		int i;
+		if (o->defaults && !t->defaults)
+			t->defaults = o->defaults;
+		else if (o->defaults)
+			for (i = 0; i < t->nparams && i < o->nparams; i++)
+				if (!t->defaults[i])
+					t->defaults[i] = o->defaults[i];
 		same->ty = t;
 		y = same;
 	} else {
@@ -2276,8 +2881,8 @@ static void dynamic_init (Decl *d, Ty *t, int top)
 		return;
 	if (!top)
 		error_at (d->name, "a static local initialized at run time is not supported");
-	if (d->init->is_list || t->kind == T_REF)
-		error_at (d->name, "a global initialized at run time by a list, or a reference, is not supported");
+	if (t->kind == T_REF || (d->init->is_list && ((t->kind != T_STRUCT && t->kind != T_UNION) || !ty_str (t, ""))))
+		error_at (d->name, "a global initialized at run time by a list (of other than a struct), or a reference, is not supported");
 	if (d->spec->qual & Q_CONST)
 		d->spec->qual &= ~Q_CONST;	// C would refuse the assignment
 	lhs = mk (ND_IDENT, make_ident (d->name, xstrndup (d->name->loc, d->name->len)));
@@ -2286,12 +2891,31 @@ static void dynamic_init (Decl *d, Ty *t, int top)
 	asg = mk (ND_ASSIGN, d->name);
 	asg->op = make_ident (d->name, "=");
 	asg->lhs = lhs;
-	asg->rhs = d->init->expr;
+	if (d->init->is_list) {
+		// AISTATE batBite = { 7, nBiteClient, ... }: batBite = (AISTATE) { ... }
+		Node *c = mk (ND_COMPLIT, d->name);
+		c->initz = d->init;
+		c->ty = lhs->ty;
+		c->lvalue = 1;
+		asg->rhs = c;
+	} else
+		asg->rhs = d->init->expr;
 	asg->ty = lhs->ty;
 	asg = mk_stmt (asg);
 	*init_tail = asg;
 	init_tail = &asg->next;
 	d->init = 0;
+}
+
+// &VAR[I]
+static Node *elem_addr (Token *var, int i, Token *at)
+{
+	Node *n = mk (ND_INDEX, at);
+	n->lhs = mk_ident (at, xstrndup (var->loc, var->len));
+	n->rhs = num_node (at, i);
+	expr (n);
+	take_address (n);
+	return n;
 }
 
 // C++: an object of a class with a constructor or destructor: the call to
@@ -2301,8 +2925,27 @@ static void class_object (Decl *d, Ty *t, int top)
 {
 	Class *c = class_of (t);
 	int global = top || (d->spec->storage & ST_STATIC);
-	if (t->kind == T_ARRAY && (needs (t, 0) || needs (t, 1)))
-		error_at (d->name, "arrays of objects with constructors or destructors are not supported yet");
+	if (t->kind == T_ARRAY && (needs (t, 0) || needs (t, 1))) {
+		// a global array of objects: each built by its default constructor
+		// in the unit's initializer, and destroyed, last first, after main
+		Class *k = class_of (t->base);
+		int i;
+		if (!top || !k || t->len < 0 || t->len > 4096 || d->init || d->has_args)
+			error_at (d->name, "arrays of objects with constructors or destructors are supported only as globals, of one dimension, without initializers");
+		for (i = 0; i < t->len; i++) {
+			if (k->needs_ctor) {
+				Node *call = ctor_call (k, elem_addr (d->name, i, d->tok), 0, d->tok, 0);
+				*init_tail = call;
+				init_tail = &call->next;
+			}
+			if (k->needs_dtor) {
+				Node *call = special_call (k->dtor, elem_addr (d->name, i, d->tok), 0, d->tok);
+				call->next = fini_stmts;
+				fini_stmts = call;
+			}
+		}
+		return;
+	}
 	if (!c)
 		return;
 	if (c->ctor && (!d->init || !d->init->is_list)) {
@@ -2353,6 +2996,7 @@ static void declaration (Decl *d, int top)
 {
 	for (; d; d = d->next) {
 		Ty *t;
+		int member_def = 0;	// T X::s = v (external, const or not)
 		if (!d->name) {
 			// struct x { ... }; and enum { ... };
 			spec_type (d->spec);
@@ -2366,6 +3010,10 @@ static void declaration (Decl *d, int top)
 				          d->qual->len, d->qual->loc);
 			d->name = make_ident (d->name, xstrndup (y->cname->loc, y->cname->len));
 			d->qual = 0;
+			member_def = 1;
+			// `static char *X::s = "On"` (gamemenu.cpp): Watcom took the
+			// static; the member's linkage is the class's
+			d->spec->storage &= ~ST_STATIC;
 		}
 		t = decl_type (d->spec, d->type);
 		if (d->spec->storage & ST_TYPEDEF) {
@@ -2397,6 +3045,8 @@ static void declaration (Decl *d, int top)
 				t = array_of (t->base, init_length (d->init, t->base));
 			if (opt_cplusplus && t->kind == T_REF && !d->init->is_list)
 				bind_ref (d->init->expr, t);
+			else if (opt_cplusplus && !d->init->is_list)
+				conv (d->init->expr, t);
 		}
 		{
 			Sym *old = 0;
@@ -2408,7 +3058,7 @@ static void declaration (Decl *d, int top)
 			}
 			// C++: a const object at file scope is internal (static), unless
 			// declared extern before
-			if (opt_cplusplus && top && t->kind != T_FUNC && const_object (t) &&
+			if (opt_cplusplus && top && !member_def && t->kind != T_FUNC && const_object (t) &&
 			    !(d->spec->storage & (ST_EXTERN | ST_STATIC)) && !(old && old->kind == S_VAR))
 				d->spec->storage |= ST_STATIC;
 			// a declaration again in the same scope: the later one, with
@@ -2539,6 +3189,8 @@ static void stmt (Node *n)
 		if (opt_cplusplus) {
 			if (n->lhs && cur_ret && cur_ret->kind == T_REF)
 				bind_ref (n->lhs, cur_ret);
+			else if (n->lhs && cur_ret)
+				conv (n->lhs, cur_ret);
 			n->cleanup = cleanups (CS_FUNC, n->tok);
 			n->ty = cur_ret;
 		}
@@ -2552,16 +3204,28 @@ static void stmt (Node *n)
 static Node *ctor_inits (Class *c, MemInit *inits, Token *at)
 {
 	Node head = {0}, *cur = &head;
-	MemInit *mi;
+	MemInit *mi, *bi = 0;
 	Field *f;
 	for (mi = inits; mi; mi = mi->next) {
+		if (c->base && same_tok (mi->name, c->base->name)) {
+			bi = mi;
+			continue;
+		}
 		for (f = c->rec->def->fields; f; f = f->next)
 			if (f->name && !f->anon && same_tok (f->name, mi->name))
 				break;
 		if (!f)
-			error_at (mi->name, "'%.*s' is not a member of '%.*s' (base classes are not supported yet)",
+			error_at (mi->name, "'%.*s' is neither a member nor the base of '%.*s'",
 			          mi->name->len, mi->name->loc, c->name->len, c->name->loc);
 	}
+	// the base first, by the init list's constructor or its default one;
+	// then _vp, so that virtual calls from here on are the class's own
+	if (c->base && c->base->ctor)
+		cur = cur->next = ctor_call (c->base, member_addr (field_named (c, "_b"), at), bi ? bi->args : 0, bi ? bi->name : at, 0);
+	else if (bi && bi->args)
+		error_at (bi->name, "'%.*s' has no constructor", bi->name->len, bi->name->loc);
+	if (c->poly)
+		cur = cur->next = set_vp (c, at);
 	for (f = c->rec->def->fields; f; f = f->next) {
 		Class *fc = class_of (f->ty);
 		if (!f->name || f->anon)
@@ -2646,8 +3310,21 @@ static void function_body (Node *n, Class *c, Method *m)
 	cs = 0;
 	push_cs (CS_FUNC);
 	if (m && m->is_dtor) {
-		// the members' destructors, last first, after the body
+		// the members' destructors, last first, after the body, and the
+		// base's after them
 		Field *f;
+		if (c->base && c->base->needs_dtor) {
+			Obj *o = xalloc (sizeof *o);
+			o->cls = c->base;
+			o->member = field_named (c, "_b");
+			cs->objs = o;
+		}
+		if (c->poly) {
+			// _vp the class's own again: virtual calls in the body are its
+			Node *v = set_vp (c, n->body->tok);
+			v->next = n->body->body;
+			n->body->body = v;
+		}
 		for (f = c->rec->def->fields; f; f = f->next) {
 			Class *fc = class_of (f->ty);
 			if (f->name && !f->anon && fc && fc->needs_dtor) {
@@ -2706,6 +3383,9 @@ static void funcdef (Node *n)
 			error_at (d->name, "a member function defined twice");
 		n->decl = lowered (c, m, d, d->spec->storage & ~(ST_STATIC | ST_VIRTUAL | ST_INLINE | ST_EXPLICIT));
 		function_body (n, c, m);
+		if (m == c->key)
+			// the class's vtable, in the unit of its key function
+			append (&n->post, raw (d->tok, vtbl_text (c, "")));
 		return;
 	}
 	function_body (n, 0, 0);
@@ -2740,6 +3420,7 @@ void sema (Node *unit)
 	init_stmts = 0;
 	init_tail = &init_stmts;
 	fini_stmts = 0;
+	rt_declared = 0;
 	for (n = unit; n; n = n->next) {
 		cur_top = n;
 		if (n->kind == ND_FUNCDEF)

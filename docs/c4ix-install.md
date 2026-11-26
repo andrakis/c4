@@ -47,6 +47,38 @@ smaller size, or none, where the system would not fit beside it.
 The disk must hold the system's files (230 MB now) and an eighth more for
 ext2's own blocks, and 16 MB more: a VM's default disk is far bigger.
 
+## Upgrading
+
+A disk install brought up to a newer CD's system, keeping what is yours:
+boot the new ISO and pick "Upgrade C4IX on the IDE disk (keeps your
+files: asks first)", or at a C4IX prompt booted from it:
+
+    install -u       # hd0; install -u hd1; -y asks nothing
+
+Nothing is erased: no partitioning, no mkfs, the swap partition as it
+was. Every file of the running system is written over the disk's of the
+same path, but those in `/home`: a file there is kept as it is, and only
+the ones the disk does not have are added. Nothing on the disk is
+deleted, so whatever the system does not ship stays as it was -- the
+games' settings and saved games (in `/home`: `/home/duke3d/duke3d.cfg`),
+the desktop's settings (`/etc/desktop.cfg`, `notepad.cfg`, `ide.cfg`,
+`machines.cfg`), the hypervisor's machines in `/vm`, and files of your
+own anywhere, a game's directory under `/usr/games` too. A file
+the system ships and you edited is the new system's afterwards; a file
+an older system shipped and this one does not is left on the disk.
+
+GRUB's two images are written again (core.img before partition 1, and
+boot.img's code into sector 0 with the disk's signature and partition
+table as they are), and `/boot` -- c4pc, the kernel, the menu -- is the
+new system's. A disk whose menu started the hypervisor first still does,
+and its `/vm/images` are updated (`vm images`).
+
+install -u checks first that partition 1 is ext2 with an installed
+C4IX's `/bin` and `/etc` on it, that its system is of the running one's
+word (a 64-bit install upgrades from the CD's "C4IX 64-bit, text" entry),
+and that it has room: the new files' size less the ones they replace,
+and 4 MB more. Otherwise it says why and leaves the disk as it was.
+
 ## What is on the disk
 
 | sectors | what |

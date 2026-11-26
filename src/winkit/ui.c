@@ -109,6 +109,9 @@ void ui_button(int x, int y, int w, int h, char *label, int pressed, int deflt) 
     d_text(x + (w - lw) / 2 + (pressed ? 1 : 0), y + (h - 12) / 2 + (pressed ? 1 : 0), C_DARK, F_SANS, label);
 }
 
+// The flat look's thumb: the shadow colour on the light grey track; on a
+// dark scheme's track, which is the shadow colour itself, a mid grey
+static int thumb_rgb() { return C_WHITE == 0xffffff ? C_SHADOW : 0x6e7178; }
 // A vertical scroll bar: arrows at both ends, a thumb sized to what is
 // visible. Nothing to scroll draws it disabled.
 void ui_scrollbar(int x, int y, int h, int total, int visible, int top) {
@@ -127,7 +130,7 @@ void ui_scrollbar(int x, int y, int h, int total, int visible, int top) {
     th = (track * visible) / total;
     if (th < 10) th = 10;
     ty = y + 16 + ((track - th) * top) / (total - visible);
-    if (ui_style == S_FLAT) { d_rect(x + 4, ty + 1, 8, th - 2, C_SHADOW); return; }
+    if (ui_style == S_FLAT) { d_rect(x + 4, ty + 1, 8, th - 2, thumb_rgb()); return; }
     d_rect(x, ty, 16, th, C_FACE);
     d_bevel(x, ty, 16, th, B_RAISED);
 }
@@ -177,7 +180,7 @@ void ui_hscrollbar(int x, int y, int w, int total, int visible, int left) {
     tw = (track * visible) / total;
     if (tw < 10) tw = 10;
     tx = x + 16 + ((track - tw) * left) / (total - visible);
-    if (ui_style == S_FLAT) { d_rect(tx + 1, y + 4, tw - 2, 8, C_SHADOW); return; }
+    if (ui_style == S_FLAT) { d_rect(tx + 1, y + 4, tw - 2, 8, thumb_rgb()); return; }
     d_rect(tx, y, tw, 16, C_FACE);
     d_bevel(tx, y, tw, 16, B_RAISED);
 }

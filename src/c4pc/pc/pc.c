@@ -585,14 +585,23 @@ struct mb_mod { u32 start, end, string, reserved; };
 
 static void on_byte(machine *m, int b) { (void)m; if (eng_lock_fn) eng_lock_fn(1); from_vm0 = 1; con_put(b); from_vm0 = 0; if (eng_lock_fn) eng_lock_fn(-1); }
 
+/* the command line's words; one in double quotes may have spaces, and
+ * \" \' \\ are " ' \ (GRUB's multiboot writes an argument with a space
+ * so, and escapes those three: grub.cfg's -e "install -u") */
 static int split_args(char *s, char **argv, int max) {
   int n = 0;
   while (*s && n < max) {
     while (*s == ' ') s++;
     if (!*s) break;
-    argv[n++] = s;
-    while (*s && *s != ' ') s++;
-    if (*s) *s++ = 0;
+    char *d = s; int q = 0;
+    argv[n++] = d;
+    while (*s && (q || *s != ' ')) {
+      if (*s == '"') { q = !q; s++; continue; }
+      if (*s == '\\' && (s[1] == '"' || s[1] == '\\' || s[1] == '\'')) s++;
+      *d++ = *s++;
+    }
+    if (*s) s++;
+    *d = 0;
   }
   return n;
 }

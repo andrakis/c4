@@ -351,15 +351,51 @@ static void vmw_clip_init() {
     wk_clip_host.pull = vmw_pull;
 }
 
-// Booted from c4pc's disc (a CD drive whose label is C4PC: N:.c4pc-drive),
-// and / not on a disk already: install (src/c4ix/user/install.c) can be run
-static int installable() {
-    char name[16], buf[512];
+// / on a disk (booted from an install): nothing to install or upgrade
+static int root_on_disk() {
+    char buf[512];
     int k, n;
     if ((n = uslurp("/proc/mounts", buf, 512)) > 0) {
         k = 0;
-        while (k + 7 < n) { if (!memcmp(buf + k, " / ext2", 7)) return 0; ++k; }
+        while (k + 7 < n) { if (!memcmp(buf + k, " / ext2", 7)) return 1; ++k; }
     }
+    return 0;
+}
+// booted from c4pc's disc: a CD drive whose label is C4PC (N:.c4pc-drive)
+static int on_disc() {
+    char name[16], buf[512];
+    int k, n;
+    k = 2;
+    while (k < 10) {
+        name[0] = '0' + k; name[1] = ':'; ustrcpy(name + 2, ".c4pc-drive");
+        if ((n = uslurp(name, buf, 512)) > 0 && has_line(buf, "label C4PC")) return 1;
+        ++k;
+    }
+    return 0;
+}
+// the first disk has a partition 1 (/proc/disks: "hd0p1 SECTORS rw ...")
+static int has_hd0p1() {
+    char buf[512];
+    int k, n;
+    if ((n = uslurp("/proc/disks", buf, 511)) <= 0) return 0;
+    buf[n] = 0;
+    k = 0;
+    while (k + 6 < n) { if (!memcmp(buf + k, "hd0p1 ", 6)) return 1; ++k; }
+    return 0;
+}
+// an installed C4IX on hd0 to bring up to the system running (install -u,
+// which checks it is one): booted from c4pc's disc, or a guest of the
+// hypervisor (no CD needed there), and / not on a disk
+static int upgradable() {
+    if (root_on_disk() || !has_hd0p1()) return 0;
+    return (__c4_info() & 0x800000) || on_disc();
+}
+// Booted from c4pc's disc (a CD drive whose label is C4PC: N:.c4pc-drive),
+// and / not on a disk already: install (src/c4ix/user/install.c) can be run
+static int installable() {
+    char buf[512];
+    int k, n;
+    if (root_on_disk()) return 0;
     // a guest of c4pc's hypervisor with a disk: install needs no CD there
     // (the hypervisor's window is a device's: uioperm first, under the MMU)
     if ((__c4_info() & 0x800000) && (n = uslurp("/proc/disks", buf, 511)) > 0) {
@@ -369,15 +405,17 @@ static int installable() {
         while (k + 6 < n) { if (!memcmp(buf + k, "hd0p1 ", 6)) return 0; ++k; }
         if (!memcmp(buf, "hd0 ", 4)) return 1;
     }
-    k = 2;
-    while (k < 10) {
-        name[0] = '0' + k; name[1] = ':'; ustrcpy(name + 2, ".c4pc-drive");
-        if ((n = uslurp(name, buf, 512)) > 0 && has_line(buf, "label C4PC")) return 1;
-        ++k;
-    }
-    return 0;
+    return on_disc();
 }
 
+// the icons' labels: the scheme's light colour, or white where that is
+// dark (the Hypervisor scheme's is its bevels' 0x45474d, unreadable there)
+static int label_rgb() {
+    int c;
+    c = C_LIGHT;
+    if (((c >> 16) & 255) + ((c >> 8) & 255) + (c & 255) < 384) return 0xffffff;
+    return c;
+}
 static void icon(int x, int y, char *label, int kind) {
     int lw;
     if (kind == 0) {                               // Filesystem
@@ -402,7 +440,7 @@ static void icon(int x, int y, char *label, int kind) {
     lw = ui_len(label) * 6;
     // over the picture, a shadow to read it by
     if (wall_shown()) d_text(x + 25 - lw / 2, y + 37, 0x000000, F_SANS, label);
-    d_text(x + 24 - lw / 2, y + 36, C_LIGHT, F_SANS, label);
+    d_text(x + 24 - lw / 2, y + 36, label_rgb(), F_SANS, label);
 }
 
 // under the windows: the picture (or the colour, when only the damage is
@@ -431,7 +469,8 @@ static struct go_item start_items[] = {
     { "Terminal", K_TERM }, { "Files", K_FILES }, { "Text Editor", K_NOTE }, { "IDE", K_EDIT },
     { "Calculator", K_CALC }, { "System Monitor", K_TASKS }, { "Machines", K_VMS }, { "Settings", K_SETTINGS },
     { "About C4IX", K_ABOUT }, { "-", 0 },
-    { "Games", 0, M_GAMES }, { "Install C4IX...", GO_CMD, 0, "install" }, { "Run...", GO_RUN }, { "-", 0 },
+    { "Games", 0, M_GAMES }, { "Install C4IX...", GO_CMD, 0, "install" }, { "Upgrade C4IX...", GO_CMD, 0, "install -u" },
+    { "Run...", GO_RUN }, { "-", 0 },
     { "Restart", GO_CMD, 0, "reboot" }, { "Shut Down", GO_CMD, 0, "shutdown" }, { "Exit Desktop", GO_OFF }
 };
 static int n_start;
@@ -440,6 +479,15 @@ static struct go_item game_items[N_GAMES];
 static int n_games, n_menus;
 static int menu_first[N_MENUS], menu_n[N_MENUS];
 
+// Go's row that runs CMD taken out (one that cannot be used here)
+static void go_drop(char *cmd) {
+    int k;
+    k = 0;
+    while (k < n_start && !(start_items[k].kind == GO_CMD && ui_eq(start_items[k].cmd, cmd))) ++k;
+    if (k >= n_start) return;
+    while (k + 1 < n_start) { memcpy((char *)&start_items[k], (char *)&start_items[k + 1], sizeof(struct go_item)); ++k; }
+    --n_start;
+}
 static struct go_item *menu_items(int m) { return m ? &game_items[menu_first[m]] : start_items; }
 static int menu_count(int m) { return m ? menu_n[m] : n_start; }
 
@@ -1224,17 +1272,14 @@ int main(int argc, char **argv) {
     volume_apply();
     n_start = sizeof(start_items) / sizeof(start_items[0]);
     // Machines on the desktop where the hypervisor is; Install C4IX, on the
-    // desktop and in Go, only booted from c4pc's disc
+    // desktop and in Go, only booted from c4pc's disc; Upgrade C4IX, in Go,
+    // only where hd0 has a partition 1 to upgrade too
     n_icons = N_ICONS - 2;
     if (__c4_info() & C4I_HV_BIT) ++n_icons;
     else { icon_labels[N_ICONS - 2] = icon_labels[N_ICONS - 1]; icon_kinds[N_ICONS - 2] = icon_kinds[N_ICONS - 1]; }
     if (installable()) ++n_icons;
-    else {
-        k = 0;
-        while (k < n_start && !(start_items[k].kind == GO_CMD && ui_eq(start_items[k].cmd, "install"))) ++k;
-        while (k + 1 < n_start) { memcpy((char *)&start_items[k], (char *)&start_items[k + 1], sizeof(struct go_item)); ++k; }
-        if (k < n_start) --n_start;
-    }
+    else go_drop("install");
+    if (!upgradable()) go_drop("install -u");
     start_games();
     // the kit's Notepad, as this desktop has always called it
     notepad_name = "Text Editor";

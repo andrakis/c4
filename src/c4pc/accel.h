@@ -148,6 +148,6 @@ i32 *acc_scratch_k(int cpu, int which, u32 n);
 
 #define ACC_MODULE(name) extern const acc_fn acc_##name[]; extern const int acc_##name##_n
 ACC_MODULE(doom); ACC_MODULE(duke3d); ACC_MODULE(quake); ACC_MODULE(rott);
-ACC_MODULE(sbk); ACC_MODULE(tyrian); ACC_MODULE(wolf3d);
+ACC_MODULE(sbk); ACC_MODULE(sw); ACC_MODULE(tyrian); ACC_MODULE(wolf3d);
 #endif /* WB == 4 */
 #endif

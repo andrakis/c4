@@ -281,6 +281,7 @@ static const module MODS[] = {
   {"quake", 0, acc_quake, &acc_quake_n},
   {"rott", 0, acc_rott, &acc_rott_n},
   {"sbk", 0, acc_sbk, &acc_sbk_n},
+  {"sw", 0, acc_sw, &acc_sw_n},
   {"tyrian", 0, acc_tyrian, &acc_tyrian_n},
   {"wolf3d", 0, acc_wolf3d, &acc_wolf3d_n},
 #endif

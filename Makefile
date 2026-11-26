@@ -2143,6 +2143,20 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	 done
 	@echo "  opassign: L op= R evaluates L once, as c4lc's and gcc's do"
 	@rm -f .c4fc_opa .c4fc_opa.txt
+	# bit-fields: c4lc's images, plain and -O, by gcc's layout and by
+	# -mms-bitfields's (NODBL: c4fc has no double)
+	@for f in c4lc_bf c4lc_bfl; do for ms in "" ms; do for m in "" "1 OPTIMIZE !"; do \
+	   lf="-P"; ff="C4FC-INIT -P"; \
+	   if [ -n "$$m" ]; then lf="$$lf -O"; ff="$$ff $$m"; fi; \
+	   if [ -n "$$ms" ]; then lf="$$lf -mms-bitfields -D MS -D NODBL"; \
+	      ff="$$ff -mms-bitfields S\" MS=1\" -D S\" NODBL=1\" -D"; fi; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$lf $(TESTS)/$$f.c .c4fc_lc.c4r > /dev/null 2>&1 \
+	     || { echo "test-c4fc: c4lc could not compile $$f.c"; exit 1; }; \
+	   ./c4th $(C4FC_ALL) -e ": GO $$ff S\" $(TESTS)/$$f.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
+	     || { echo "test-c4fc: $$f.c ($$ms $$m) differs from c4lc"; exit 1; }; \
+	 done; done; done
+	@echo "  bit-fields: c4lc's images, by gcc's layout and by -mms-bitfields's"
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
@@ -3542,7 +3556,8 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# L1: every c4cc-compilable test source parses. genfloat.c and
 	# test_illins.c are excluded because c4cc itself rejects them (c4lc
 	# fails at the same constructs); c4lc_pp.c, srcmap_probe.c and
-	# srcmap_link.c (test-srcmap's, which include a header) are excluded
+	# srcmap_link.c (test-srcmap's, which include a header) are excluded,
+	# and so is c4lc_bfl.c, whose -mms-bitfields structs are under #ifdef,
 	# because they are only
 	# meaningful with -P, c4lc_pp.c being the L9 preprocessor test (this
 	# sweep deliberately runs without it); the vararg tests go through
@@ -3550,7 +3565,7 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	for f in src/tests/*.c; do \
 		case $$f in \
 		*/genfloat.c|*/test_illins.c) continue;; \
-		*/c4lc_pp.c|*/srcmap_probe.c|*/srcmap_link.c) continue;; \
+		*/c4lc_pp.c|*/srcmap_probe.c|*/srcmap_link.c|*/c4lc_bfl.c) continue;; \
 		*/oldtest_vararg*.c|*/oldvararg3.c|*/test_vprintf.c|*/vararg*.c) \
 			$(PREPROC) $$f > .c4lc_pp.c 2>/dev/null; \
 			./c4sp src/c4sp/lisp/c4lc-ast.lisp -check .c4lc_pp.c | grep -q "^parse ok" || exit 1;; \
@@ -3851,6 +3866,21 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   $(call lc32,) $$fl $(TESTS)/c4lc_float.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-float.txt || exit 1; \
 	   echo "  float ok, gcc's answers at 32 and 64 bits: c4lc $$fl"; \
+	 done
+	# bit-fields (docs/c4cxx-plan.md 3.9): what they hold and give back, the
+	# golden being gcc -m32's, at both sizes, plain, -O and -minline; and
+	# their layouts at 32 bits, each field's bits set alone and the bytes
+	# printed: gcc's rule, and -mms-bitfields's (gcc -m32 -mms-bitfields)
+	@for fl in "" "-O" "-minline"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_bf.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-bf.txt || exit 1; \
+	   $(call lc32,) $$fl $(TESTS)/c4lc_bf.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-bf.txt || exit 1; \
+	   $(call lc32,) $$fl -P $(TESTS)/c4lc_bfl.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-bfl.txt || exit 1; \
+	   $(call lc32,) $$fl -mms-bitfields -P -D MS $(TESTS)/c4lc_bfl.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-bfl-ms.txt || exit 1; \
+	   echo "  bit-fields ok, gcc's answers and layouts: c4lc $$fl"; \
 	 done
 	# what the Puzzles needed (games/puzzles): _Bool, a function pointer that
 	# returns a float or a double, a variable named like a typedef, a tag

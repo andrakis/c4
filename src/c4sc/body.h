@@ -149,7 +149,8 @@ int sc_ast (int argc, char **argv) {
 // test uses.
 //
 //   c4sc-host compile [-O] [-c] [-P] [-mcisc] [-mfuse] [-mfpu] [-minline] [-minline-why]
-//                     [-conforming] [-fno-builtin] [-fpic] [-g] [-g0] [-I dir] [-D name]
+//                     [-conforming] [-fno-builtin] [-fpic] [-g] [-g0] [-mms-bitfields]
+//                     [-I dir] [-D name]
 //                     in.c out.c4r
 //
 // The flags are c4lc.lisp's, one for one, and mean what they mean there;
@@ -163,10 +164,10 @@ int sc_ast (int argc, char **argv) {
 // either way. -g0, no map, is the default.
 int sc_compile (int argc, char **argv) {
 	int *paths, *predefs, *ptail, *dtail, *e, *ast, *m, *out, *r;
-	int  opt, obj, usepp, cisc, fuse, fpu, inl, inlrep, conf, nobuiltin, pic, lines;
+	int  opt, obj, usepp, cisc, fuse, fpu, inl, inlrep, conf, nobuiltin, pic, lines, msbf;
 	char *in, *outname;
 
-	opt = obj = usepp = cisc = fuse = fpu = inl = inlrep = conf = nobuiltin = pic = lines = 0;
+	opt = obj = usepp = cisc = fuse = fpu = inl = inlrep = conf = nobuiltin = pic = lines = msbf = 0;
 	paths = predefs = ptail = dtail = 0;
 	while (argc > 0 && **argv == '-') {
 		if      (!memcmp(*argv, "-O", 3)) opt = 1;
@@ -184,6 +185,7 @@ int sc_compile (int argc, char **argv) {
 		else if (!memcmp(*argv, "-fpic", 6)) pic = 1;
 		else if (!memcmp(*argv, "-g", 3)) lines = 1;
 		else if (!memcmp(*argv, "-g0", 4)) lines = 0;
+		else if (!memcmp(*argv, "-mms-bitfields", 15)) msbf = 1;
 		else if (!memcmp(*argv, "-I", 3) && argc > 1) {
 			usepp = 1;   // -I implies -P, exactly as c4lc.lisp does
 			e = cons(mk_string(argv[1]), 0);
@@ -220,6 +222,7 @@ int sc_compile (int argc, char **argv) {
 	L_gen_58opt = opt ? cell_true : cell_false;
 	L_lex_58locs = lines ? cell_true : cell_false;
 	L_p_58lines = lines ? cell_true : cell_false;
+	L_p_58msbf = msbf ? cell_true : cell_false;
 
 	if (usepp) {
 		L_pp_58paths = paths;

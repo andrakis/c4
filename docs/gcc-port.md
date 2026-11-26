@@ -221,7 +221,7 @@ some program the ports might meet. Probes were run on helios against the
 
 | construct | where gcc needs it | c4lc today | size |
 |---|---|---|---|
-| **bit-fields** | `rtl.h`'s `rtx_def` (code : 16, mode : 8, and a dozen 1-bit flags); `tree.h`'s `tree_common` (some thirty flags). Every unit includes both | **rejected**: "expected semicolon after struct member" (probe; busybox-port.md §3.1 `bitfield`) | M: parse, layout as gcc's, read-modify-write |
+| **bit-fields** | `rtl.h`'s `rtx_def` (code : 16, mode : 8, and a dozen 1-bit flags); `tree.h`'s `tree_common` (some thirty flags). Every unit includes both | **done** (2026-11-27, c4lc-design §14.15): gcc's layout, and MSVC's under `-mms-bitfields` | — |
 | enum bit-fields (`ENUM_BITFIELD`) | the same structs | `system.h` makes them `unsigned int` unless `__GNUC__`, so they reduce to the row above | — |
 | **`offsetof` in a static initializer** | `rtl.c`'s `rtx_size[]`: `RTX_HDR_SIZE + (sizeof FORMAT - 1) * sizeof (rtunion)`, with `RTX_HDR_SIZE` = `offsetof (struct rtx_def, u)` | **rejected**: `(int)&((struct hdr *)0)->u` is "not a constant" (probe). `sizeof (struct …)`, `sizeof "str"` and `?:` in the same initializer fold (probe) | S–M |
 | X-macro `.def` files included many times | `rtl.def`, `tree.def`, `machmode.def`, `insn-*` | works (probe: an enum, a name table and a `sizeof FORMAT - 1` table from one `.def`) | — |

@@ -66,6 +66,8 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 \ needs no opcode the target lacks, so a -minline image runs wherever
 \ its -O build would. Implies -O.
 : -minline ( -- )  1 INLINING !  1 OPTIMIZE ! ;
+\ -mms-bitfields: bit-fields laid out as MSVC lays them out (c4lc's flag)
+: -mms-bitfields ( -- )  1 MSBF ! ;
 
 \ Everything a compile of one unit starts from. -O runs it twice: the
 \ first pass exists only to learn which functions are reachable, and

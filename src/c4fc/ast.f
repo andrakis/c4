@@ -60,7 +60,13 @@ NODE: n_postdec NFIELD: >opnd                  ;NODE
 \ came from.
 NODE: n_index  NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_member NFIELD: >lhs  NFIELD: >moff NFIELD: >mtype NFIELD: >magg
-               NFIELD: >mq   NFIELD: >masz                 ;NODE
+               NFIELD: >mq   NFIELD: >masz
+               NFIELD: >mbit                               ;NODE
+\ >mbit: a bit-field's member number plus one, 0 for any other member.
+\ n_bftemp is gen.f's: a bit-field whose unit's address is in the
+\ temporary at >off (c4lc-gen's bftemp), >nty its value's type and
+\ >bmix its member number. >off and >nty sit where n_ltempv has them.
+NODE: n_bftemp NFIELD: >off  NFIELD: >nty  NFIELD: >bmix   ;NODE
 
 NODE: n_lor    NFIELD: >lhs  NFIELD: >rhs      ;NODE
 NODE: n_land   NFIELD: >lhs  NFIELD: >rhs      ;NODE

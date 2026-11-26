@@ -45,8 +45,9 @@ and Simon Tatham's Puzzles (§14.13); `-fpic` and `-fno-builtin` for
 C4IX's shared libc (2026-10-19); source maps with `-g` (§15,
 2026-10-24); `-mfpu` (docs/c4-float.md, 2026-11-05); initialised locals
 from a template (§14.14, 2026-11-11); globals defined more than once
-(§13.1, 2026-11-13); and `LH LHU SH LSR LCU` in place of the 16-bit
-helpers (docs/c4-16bit.md, 2026-11-13). Since 2026-11-17 the host's
+(§13.1, 2026-11-13); `LH LHU SH LSR LCU` in place of the 16-bit
+helpers (docs/c4-16bit.md, 2026-11-13); and bit-fields, by gcc's layout
+and by `-mms-bitfields` (§14.15, 2026-11-27). Since 2026-11-17 the host's
 builds run c4lc compiled by c4sc (`c4sc-host`, `c4sc-host32`;
 docs/c4sc-design.md), and an error ends that compiler with exit 1
 (2026-11-18). `test-c4lc` still runs the Lisp.
@@ -1496,6 +1497,54 @@ Tests: c4lc_linit.c (c4lc and c4fc, in test-c4fc's sweep and
 test-c4sc-back) and c4lc_linitlc.c (c4lc's alone: long longs, floats,
 struct values and compound literals beside a template, typedefs, `_Bool`),
 each against gcc's golden at 32 and 64 bits, plain, `-O` and `-minline`.
+
+### 14.15 Bit-fields (2026-11-27)
+
+For Blood's C++, through c4cxx (docs/c4cxx-plan.md §3.9): Blood-RE's
+`XSPRITE`, `XSECTOR` and `XWALL` are about 240 bit-fields, read straight
+from the map files. c4fc has them too, with the same images.
+
+- **Layout.** A member `T name : W` is W bits of a *unit* of `T`'s size.
+  Its record has a sixth element, `(USIZE BITOFF WIDTH SIGNED BOOL)`
+  (c4lc-parse's `p:bfrec`). `OFF` is the unit's offset, and `TYPE` is the
+  type of the field's value: `int`, unless the field is unsigned and as
+  wide as the word. The types are the integer ones (`_Bool` included,
+  `long long` not). There are two layouts, as gcc has two:
+  - **gcc's (i386 System V)**, by default. A field starts at the next bit,
+    unless it would cross a boundary of its type's alignment; then it starts
+    at that boundary. `T : 0` moves to the next boundary, and an unnamed field
+    adds nothing to the struct's alignment. A `#pragma pack` that lowers a
+    field type's alignment is refused: gcc packs the bits across the units
+    then, and Blood's packed structs are laid out by the other rule.
+  - **MSVC's, under `-mms-bitfields`** (gcc's `-mms-bitfields`, which
+    Blood's host build uses). A unit holds the fields that follow while
+    they are of a type of its size and fit. Any other member, or `T : 0`,
+    closes it. A `long long` or `double` in a struct is then aligned to 8.
+- **Reads.** The unit is loaded unsigned (`LCU`, `LHU`, `LI`), shifted
+  left until the field's top bit is the word's, then right by the word
+  less the width, with `SHR` or `LSR`. That extends a signed field's sign
+  and zeroes an unsigned one's, with no mask.
+- **Stores.** The unit is loaded, the field's bits cleared, the new bits
+  (converted, cut to the width, moved up) ORed in, and the unit stored.
+  The value, when anyone wants it, is the field read back from that unit:
+  `(f.a = 15)` is what `f.a` holds. When the right-hand side may store
+  (an assignment, `++`, a call: `g:bfstores?`), the unit's address and the
+  new bits go into a two-word temporary first, and the unit is read after
+  them. Otherwise `f.a = f.b = 7` would write back a stale `b`.
+- **`op=`, `++` and `--`** put the unit's address in a temporary,
+  `(bftemp OFF BF TYPE)`, and are a store of the value worked out. `x++`'s
+  value is the new one, stepped back and cut to the field again.
+- **Initializers.** A global's bit-field initializer is an integer
+  constant, merged into its unit's bytes. A local's is refused: a local's
+  list is built from a template (§14.14), which has no bit-fields yet.
+- **Refused:** `&` and `sizeof` of a bit-field, a named field of width 0,
+  a field wider than its type, `++` or `--` of a `_Bool` field.
+
+Tests: `c4lc_bf.c` checks what fields hold and give back against gcc's
+golden at both sizes, plain, `-O` and `-minline`. `c4lc_bfl.c` checks the
+layouts at 32 bits: each field's bits are set alone and the bytes printed,
+once by gcc's rule and once with `-mms-bitfields`, against gcc `-m32
+-mms-bitfields`. test-c4fc holds c4fc's images of both to c4lc's.
 
 ## 15. Source maps: `-g` (track S, S0-S2, 2026-10-24)
 

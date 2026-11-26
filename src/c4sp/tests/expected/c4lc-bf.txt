@@ -1,0 +1,30 @@
+a=5 b=17 s=-3 t=50 big=999999 c=-2 uc=30 h=-200 uh=2000
+gp 1 -1 31 -32 -5 7
+gm q 9 6 -12345 1
+a=5 b=8 s=-7 t=58 big=1 c=-3 uc=1 h=-212 uh=904
+assign 7 -8 -1 1
+chain -64 -64
+a=b 7 7
++= 1
++= -8
+*= 1
+-= 63
+<<= 1600
+|= 2047
+>>= -64
+++ 0 0
+post++ 31 0
+-- 7 7
+post-- -8 7
+c -3
+a 7
+neighbours 1 0
+pair -1 21
+expr 1 14 -2 0
+cond 2
+pick 4 9 2 -1 calls 30
+index 9 6 calls 2
+loop 2 5 -3
+mixed z 15 10 77 1
+union 78 123456ab
+copy -3 6

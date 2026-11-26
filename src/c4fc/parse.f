@@ -348,15 +348,75 @@ VARIABLE LB-ELEM   0 LB-ELEM !          \ the element type LOCAL-BRACES fills
 \ from the preprocessor's Pack tokens), and with it the struct's.
 VARIABLE PACK-NOW   0 PACK-NOW !
 : PACKED ( a -- a' )  PACK-NOW @ ?DUP IF MIN THEN ;
-: PARSE-MEMBERS ( k isu -- ) {: k isu | t a u off n ag mt et bq q fn mx sz al ma -- :}
+\ Bit-fields (c4lc-parse's p:bflay, docs/c4cxx-plan.md 3.9): `T name : W`
+\ is W bits of a unit of T's size, at MB-OFF, from bit MB-BO up. gcc's
+\ layout by default: a field starts at the next bit unless it would cross
+\ a boundary of its type's alignment, `T : 0` goes to the next boundary,
+\ an unnamed field adds nothing to the struct's alignment, and a #pragma
+\ pack that lowers a field type's alignment is refused. -mms-bitfields is
+\ MSVC's (and gcc -mms-bitfields's): a unit holds the fields that follow
+\ while they are of a type of its size and fit, and any other member or
+\ `T : 0` closes it.
+VARIABLE MSBF      0 MSBF !     \ -mms-bitfields
+VARIABLE BF-END   -1 BF-END !   \ gcc's: the bit after the last member, while they are bit-fields
+VARIABLE BF-UO                  \ MSVC's open unit: its offset, its size (0: none), its bits used
+VARIABLE BF-US     0 BF-US !
+VARIABLE BF-UB     0 BF-UB !
+: BF-TYPE? ( t -- f )
+   DUP t_char = OVER t_int = OR OVER t_uchar = OR OVER t_schar = OR
+   OVER t_short = OR OVER t_ushort = OR OVER t_uint = OR SWAP t_ulong = OR ;
+: BF-UNS? ( t -- f )  DUP t_uchar = OVER t_ushort = OR OVER t_uint = OR SWAP t_ulong = OR ;
+\ the widest a field may be: its type's bits (uint's value is 32 bits on a
+\ 64-bit target too)
+: BF-MAX ( t -- n )  DUP t_uint = W64? AND IF DROP 32 ELSE T-SIZE 8 * THEN ;
+\ a named field's record: its value an int, unless it is unsigned and as
+\ wide as the word
+: BF-MEM, ( k a u t w q uo bo -- ) {: k a u t w q uo bo | vt -- :}
+   t BF-UNS? w WBITS = AND IF t ELSE t_int THEN TO vt
+   k a u vt uo 0 MEM,  q MEM-Q!  bo w t T-SIZE t BF-UNS? 0= MEM-BF! ;
+: BF-MEMBER ( k a u t w q isu off mx al -- off' mx' al' )
+   {: k a u t w q isu off mx al | s na ma ub sb0 sb eb uo bo fits -- off mx al :}
+   t BF-TYPE? 0= IF ." c4fc: a bit-field of a type other than an integer type" CR ABORT THEN
+   w 0< IF ." c4fc: a bit-field of negative width" CR ABORT THEN
+   w t BF-MAX > IF ." c4fc: a bit-field wider than its type" CR ABORT THEN
+   w 0= a 0<> AND IF ." c4fc: a named bit-field of width 0" CR ABORT THEN
+   t T-SIZE TO s   t T-ALIGN TO na   na PACKED TO ma
+   MSBF @ IF
+      w 0= IF 0 BF-US !  off mx al EXIT THEN
+      isu 0= BF-US @ s = AND  BF-UB @ w + s 8 * > 0= AND TO fits
+      isu IF 0 ELSE fits IF BF-UO @ ELSE off ma ALIGN-UP THEN THEN TO uo
+      fits IF BF-UB @ ELSE 0 THEN TO bo
+      isu IF 0 BF-US ! ELSE uo BF-UO !  s BF-US !  bo w + BF-UB ! THEN
+      a IF k a u t w q uo bo BF-MEM, THEN
+      isu fits OR IF off ELSE uo s + THEN   s mx MAX   ma al MAX  EXIT
+   THEN
+   ma na < IF ." c4fc: a bit-field in a packed struct takes -mms-bitfields" CR ABORT THEN
+   ma 8 * TO ub
+   isu IF 0 ELSE BF-END @ 0< IF off 8 * ELSE BF-END @ THEN THEN TO sb0
+   w 0= IF sb0 ub ALIGN-UP ELSE
+      sb0 ub /  sb0 w 1- + ub /  = IF sb0 ELSE sb0 ub ALIGN-UP THEN THEN TO sb
+   sb w + TO eb
+   sb ub / ma * TO uo
+   isu IF -1 ELSE eb THEN BF-END !
+   a IF k a u t w q uo sb uo 8 * - BF-MEM, THEN
+   isu IF off ELSE eb 7 + 8 / THEN
+   w 7 + 8 / mx MAX
+   a IF ma al MAX ELSE al THEN ;
+: PARSE-MEMBERS ( k isu -- )
+   {: k isu | t a u off n ag mt et bq q fn mx sz al ma bw bf s1 s2 s3 s4 -- :}
    Lbrace WANT
    0 TO off   0 TO mx   1 TO al
+   \ a struct defined in a member's type lays itself out in between
+   BF-END @ TO s1  BF-US @ TO s2  BF-UO @ TO s3  BF-UB @ TO s4
+   -1 BF-END !  0 BF-US !
    BEGIN TK Rbrace <> WHILE
       BASE-TYPE TO t   BQ @ TO bq
       BEGIN
          bq DQ !  t STARS TO mt   DQ @ TO q
-         1 TO n   0 TO ag
-         FNPTR? IF
+         1 TO n   0 TO ag   0 TO bf   0 TO a  0 TO u
+         TK Colon = IF
+            TNEXT CONST-EXPR TO bw  1 TO bf  0 TO q    \ an unnamed bit-field
+         ELSE FNPTR? IF
             FNPTR-DECL TO fn TO u TO a   t_int TO mt   0 TO q
             a 0= IF ." c4fc: bad struct member name" CR ABORT THEN
             fn 0< 0= IF fn TO n  1 TO ag  mt DUP TO et 2 + TO mt THEN
@@ -366,22 +426,29 @@ VARIABLE PACK-NOW   0 PACK-NOW !
                TNEXT CONST-EXPR TO n Rbrak WANT   mt MORE-DIMS TO mt
                1 TO ag   mt DUP TO et 2 + TO mt   q 2 LSHIFT TO q
             THEN
+            TK Colon = ag 0= AND IF TNEXT CONST-EXPR TO bw  1 TO bf THEN
+         THEN THEN
+         bf IF
+            k a u mt bw q isu off mx al BF-MEMBER TO al TO mx TO off
+         ELSE
+            -1 BF-END !  0 BF-US !
+            ag IF et ELSE mt THEN T-ALIGN PACKED TO ma
+            ma al MAX TO al
+            isu IF 0 ELSE off ma ALIGN-UP THEN TO off
+            k a u mt off ag MEM,   q MEM-Q!   ag IF n et T-SIZE * MEM-ASZ! THEN
+            n ag IF et ELSE mt THEN T-SIZE * TO sz
+            isu IF
+               sz mx MAX TO mx
+            ELSE off sz + TO off THEN
          THEN
-         ag IF et ELSE mt THEN T-ALIGN PACKED TO ma
-         ma al MAX TO al
-         isu IF 0 ELSE off ma ALIGN-UP THEN TO off
-         k a u mt off ag MEM,   q MEM-Q!   ag IF n et T-SIZE * MEM-ASZ! THEN
-         n ag IF et ELSE mt THEN T-SIZE * TO sz
-         isu IF
-            sz mx MAX TO mx
-         ELSE off sz + TO off THEN
          TK Comma = WHILE TNEXT
       REPEAT
       Semi WANT
    REPEAT
    Rbrace WANT
    isu IF mx ELSE off THEN al ALIGN-UP  k CELLS ST-SIZE + !
-   al k CELLS ST-ALIGN + ! ;
+   al k CELLS ST-ALIGN + !
+   s1 BF-END !  s2 BF-US !  s3 BF-UO !  s4 BF-UB ! ;
 
 \ Any run of the specifiers C allows -- const, volatile, signed,
 \ unsigned, short, long, int, char, a struct or union -- in any order.
@@ -503,6 +570,7 @@ CREATE SLBUF 8192 ALLOT
       s y.agg @ IF s y.sz @ ELSE s y.ct @ T-SIZE THEN EXIT
    THEN
    k n_member = IF
+      nd >mbit @ IF ." c4fc: sizeof of a bit-field" CR ABORT THEN
       nd >magg @ IF nd >masz @ ELSE nd >mtype @ T-SIZE THEN EXIT
    THEN
    k n_index = IF nd >lhs @ CT T-DEREF T-SIZE EXIT THEN
@@ -596,13 +664,14 @@ CREATE SLBUF 8192 ALLOT
    TV TO a  TL TO u  Id WANT
    k a u MEM-FIND TO i
    i 0< IF ." c4fc: no such member: " a u TYPE CR ABORT THEN
-   n_member 7 CELLS NEW TO nd
+   n_member 8 CELLS NEW TO nd
    b nd >lhs !
    i CELLS MB-OFF  + @ nd >moff !
    i CELLS MB-TYPE + @ nd >mtype !
    i CELLS MB-AGG  + @ nd >magg !
    i CELLS MB-QUAL + @ nd >mq !
    i CELLS MB-ASZ  + @ nd >masz !
+   i CELLS MB-BW   + @ IF i 1+ ELSE 0 THEN nd >mbit !
    nd ;
 
 : POSTFIX ( -- node ) {: | n k v nd -- n :}
@@ -1406,6 +1475,21 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
       sv IF sv j v V! THEN
       idx 1+ TO idx
    REPEAT i ;
+\ a bit-field's item of an initializer list, its unit at OFF (c4lc-gen's
+\ g:ibits): an integer constant, merged into the unit's bytes
+: AGG-BITS ( off m node -- ) {: o m nd | lo w b u -- :}
+   AMODE @ 2 = IF ." c4fc: an initializer of a bit-field in a local: "
+      m CELLS MB-NAME + @ m CELLS MB-NLEN + @ TYPE CR ABORT THEN
+   nd AGG-UNWRAP TO nd
+   nd @ 0 <> IF ." c4fc: an initializer of a bit-field that is not an integer constant: "
+      m CELLS MB-NAME + @ m CELLS MB-NLEN + @ TYPE CR ABORT THEN
+   AMODE @ 0= IF EXIT THEN
+   m CELLS MB-BW + @ TO w   m CELLS MB-BO + @ TO b
+   w WBITS = IF -1 ELSE 1 w LSHIFT 1- THEN b LSHIFT TO lo     \ the field's mask
+   0 TO u
+   m CELLS MB-BZ + @ 0 ?DO  IDATA @ o + I + C@ 255 AND  I 8 * LSHIFT  u OR TO u  LOOP
+   u lo INVERT AND  nd CELL+ @ b LSHIFT lo AND  OR TO u
+   m CELLS MB-BZ + @ 0 ?DO  u I 8 * RSHIFT 255 AND  o I + ID-C!  LOOP ;
 \ the member after J of struct K, or -1
 : NEXT-MEM ( k j -- j' ) {: k j -- j :}
    #MEMS @ j 1+ ?DO I CELLS MB-OWNER + @ k = IF I UNLOOP EXIT THEN LOOP -1 ;
@@ -1414,6 +1498,8 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
    0 TO n   k -1 NEXT-MEM TO m
    BEGIN m 0< 0= WHILE
       m CELLS MB-OFF + @ IF 0 EXIT THEN
+      \ a bit-field at 0 is at its unit's bit 0 too, in a union
+      m CELLS MB-BW + @ IF m CELLS MB-BO + @ IF 0 EXIT THEN THEN
       n 1+ TO n   k m NEXT-MEM TO m
    REPEAT n 1 > ;
 : AGG-STRUCT ( sty off v i br -- i' ) {: st o v i br | k m nd sv uni mt j -- i :}
@@ -1432,10 +1518,14 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
          br IF ." c4fc: too many initializers for a struct" CR ABORT THEN
          i EXIT THEN
       m CELLS MB-TYPE + @ TO mt   i TO j
+      m CELLS MB-BW + @ IF
+         o m CELLS MB-OFF + @ +  m  i v V@  AGG-BITS  i 1+ TO i
+      ELSE
       m CELLS MB-AGG + @ IF
          mt T-DEREF  m CELLS MB-ASZ + @ mt T-DEREF T-SIZE /
       ELSE mt -1 THEN
       o m CELLS MB-OFF + @ +  v i AGG-FILL TO i
+      THEN
       sv IF sv j v V! THEN
       uni IF -1 ELSE k m NEXT-MEM THEN TO m
    REPEAT i ;

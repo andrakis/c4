@@ -63,3 +63,8 @@
 	url = git@github.com:andrakis/c4-Duke3D.git
 	branch = c4
 	update = none
+[submodule "sw"]
+	path = games/sw
+	url = git@github.com:andrakis/c4-SW.git
+	branch = c4
+	update = none

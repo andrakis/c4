@@ -1657,6 +1657,23 @@ int vfs_readable(struct vnode *vn, int pos) {
     return vn->writers == 0;
 }
 
+// What SYS_POLL asks of an open file: POLL_IN when a read would not wait,
+// POLL_OUT when a write would not (a pipe grows as it is written), POLL_HUP
+// a pipe with no writers left or a connection over. A file, or a device
+// but the console, is always both.
+int vfs_pollev(struct file *f) {
+    struct vnode *vn;
+    int r;
+    vn = f->vn;
+    if (vn->type == VN_SOCK) return net_pollev(vn->host);
+    if (vn->type == VN_CONSOLE) return (con_poll() ? POLL_IN : 0) | POLL_OUT;
+    if (vn->type != VN_PIPE) return POLL_IN | POLL_OUT;
+    if ((f->flags & 3) != C4IX_O_RDONLY) return POLL_OUT;
+    r = vn->size > vn->rpos ? POLL_IN : 0;
+    if (!vn->writers) r = r | POLL_HUP;
+    return r;
+}
+
 int vfs_read(struct file *f, char *buf, int len) {
     struct vnode *vn;
     int n, i, p;

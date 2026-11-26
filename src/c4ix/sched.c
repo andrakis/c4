@@ -344,6 +344,11 @@ void sched_netgen() {
     ++sched_pipegen;
 }
 
+// SYS_POLL is about to look at T's fds: what changes after, its sleep sees
+void sched_evmark(struct task *t) {
+    t->evgen = sched_pipegen;
+}
+
 void sched_pipewake(struct vnode *vn) {
     sched_lock();
     ++sched_pipegen;
@@ -741,7 +746,14 @@ int sched_events(struct task *t) {
 // ... asked each ms of a task asleep in SYS_EVWAIT: its ring, which the host
 // writes with no event the kernel sees, and its pipes only if one has changed
 static int sched_evpoll(struct task *t) {
-    int *ring;
+    int *ring, ch;
+    // SYS_POLL's (sys.c): its fds looked at when some pipe or socket has
+    // changed since it last looked, or it polls the console
+    if (t->ev_wait & 4) {
+        ch = t->evgen != sched_pipegen;
+        t->evgen = sched_pipegen;
+        return sys_pollready(t, ch);
+    }
     if (t->ev_wait & 1) {
         ring = (int *)t->ev_ring;
         if (ring && ring[1] != ring[2]) return 1;

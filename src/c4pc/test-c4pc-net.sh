@@ -13,7 +13,11 @@
 #     nc -l -e cat echoes VM 0's /bin/sh into its /got: the CRCs the same);
 #     b's shell given to VM 0 (nc -l -e sh: ifconfig run there, its output
 #     here); a connection round inside VM 0 (localhost), then netstat; a
-#     and b talking (lines typed at each, nc -w 4 ending them)
+#     and b talking (lines typed at each, nc -w 4 ending them; nc's waits
+#     are upoll's: the console, a pipe, the connection)
+#   - httpd on b (-d: in the background): its / listed, a directory's /
+#     added, a 404, /bin/sh to VM 0 twice at once (one task, its connections
+#     polled: the same bytes), a HEAD typed at a's nc
 #   - UDP: b listening (nc -u -l 7000), VM 0 sends it a line through a
 #     pipe, a talks to it (nc -u b 7000, lines typed at a), b answers a
 # Needs c4pc.elf, c4pc.iso, .c4pc/kernel/c4ix32.c4r and .c4pc/disk.tar
@@ -67,6 +71,15 @@ QSER_T=60 python3 src/c4pc/qser.py $W/ser.sock $W/s.txt "expect:c4ix-sh" "sleep:
   "send:vm send a tcp typed at a\\n" "expect:vm2 b: tcp typed at a" \
   "send:vm send b tcp typed at b\\n" "expect:vm1 a: tcp typed at b" "sleep:6" \
   "send:vm send a echo a-free\\n" "expect:vm1 a: a-free" "send:vm send b echo b-free\\n" "expect:vm2 b: b-free" \
+  "send:vm send b httpd -d /\\n" "expect:vm2 b: httpd: serving / on TCP port 80" "sleep:1" \
+  "send:echo GET / HTTP/1.0 | nc b 80\\n" "expect:</ul>" "sleep:1" \
+  "send:echo GET /bin HTTP/1.0 | nc b 80\\n" "expect:Location: /bin/" "sleep:1" \
+  "send:echo GET /bin/ HTTP/1.0 | nc b 80\\n" "expect:</ul>" "sleep:1" \
+  "send:echo GET /nope HTTP/1.0 | nc b 80\\n" "expect:404 Not Found</h1>" "sleep:1" \
+  "send:echo GET /bin/sh HTTP/1.0 | nc b 80 > /web1 &\\n" "send:echo GET /bin/sh HTTP/1.0 | nc b 80 > /web2\\n" "sleep:2" \
+  "send:wait\\n" "send:crc32 /web1 /web2\\n" "sleep:1" \
+  "send:vm send a nc b 80\\n" "sleep:1" "send:vm send a HEAD /bin/sh HTTP/1.0\\n" "send:vm send a\\n" \
+  "expect:vm1 a: Content-Length: " "sleep:1" "send:vm send a echo a-done\\n" "expect:vm1 a: a-done" \
   "send:vm send b nc -u -l 7000\\n" "expect:vm2 b: nc: listening" \
   "send:echo hello from control | nc -u b 7000\\n" "expect:vm2 b: hello from control" \
   "send:vm send a nc -u b 7000\\n" "sleep:2" "send:vm send a hello from a\\n" "expect:vm2 b: hello from a" \
@@ -106,6 +119,19 @@ has "TCP: a to b, typed at a" "vm2 b: tcp typed at a"
 has "TCP: b answers a" "vm1 a: tcp typed at b"
 has "TCP: nc -w ended the talk" "vm1 a: a-free"
 grep -aE "^tcp: [0-9]+ segments" $L | tail -1 | sed 's/^/        VM 0 /'
+own "httpd: the answer's head" "HTTP/1.0 200 OK"
+own "httpd: b's / listed" '<li><a href="bin/">bin/</a></li>'
+has "httpd: b says what it served" "vm2 b: 10.4.0.1 GET / 200"
+own "httpd: a directory without its /, sent there" "Location: /bin/"
+own "httpd: /bin/ listed" '<li><a href="sh">sh</a></li>'
+own "httpd: a file nobody has" "<html><body><h1>404 Not Found</h1></body></html>"
+# /bin/sh to VM 0 twice at once (two connections, polled by the one httpd): the same bytes
+c3=$(grep -aE "^[0-9a-f]{8} [0-9]+ /web1$" $L | tail -1 | cut -d' ' -f1,2)
+c4=$(grep -aE "^[0-9a-f]{8} [0-9]+ /web2$" $L | tail -1 | cut -d' ' -f1,2)
+[ -n "$c3" ] && [ "$c3" = "$c4" ] && ok "httpd: /bin/sh twice at once, the same (crc32 and size $c4)" || bad "httpd: the two copies differ ('$c3' and '$c4')"
+[ "$(grep -ac "^vm2 b: 10.4.0.1 GET /bin/sh 200" $L)" -ge 2 ] && ok "httpd: both served" || bad "httpd: not both served"
+has "httpd: a's HEAD, typed at its nc" "vm2 b: 10.4.0.2 HEAD /bin/sh 200"
+has "httpd: its length, at a" "vm1 a: Content-Length: "
 has "UDP: VM 0 to b through a pipe" "vm2 b: hello from control"
 has "UDP: a to b, typed at a" "vm2 b: hello from a"
 has "UDP: b answers a" "vm1 a: hi from b"

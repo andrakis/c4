@@ -945,6 +945,25 @@ int net_avail(int s) {
     if (c->rxn > 0) return c->rxn;
     return tcp_eof(c) ? 0 - 1 : 0;
 }
+// SYS_POLL's bits (vfs_pollev): POLL_IN as net_readable says, POLL_OUT when
+// a write would not wait (TCP: some room in the send ring; a write that
+// waits wants room for all it writes, one with O_NONBLOCK takes what there
+// is), POLL_HUP a connection over both ways, POLL_ERR one reset or timed out
+int net_pollev(int s) {
+    struct tcb *c;
+    int r;
+    if (s < 0 || s >= NSOCK || !s_kind[s]) return POLL_HUP;
+    if (s_kind[s] != K_TCP) return (s_head[s] != s_tail[s] ? POLL_IN : 0) | POLL_OUT;
+    c = tcb[s];
+    if (c->state == T_LISTEN) return tcp_pending(s) >= 0 ? POLL_IN : 0;
+    if (c->state == T_SYNSENT || c->state == T_SYNRCVD) return 0;
+    r = (c->rxn > 0 || tcp_eof(c)) ? POLL_IN : 0;
+    if ((c->state == T_EST || c->state == T_CLOSEWAIT) && !c->finq && c->txn < TB) r = r | POLL_OUT;
+    if (c->state == T_CLOSED || (c->finrcvd && c->finq)) r = r | POLL_HUP;
+    if (c->err) r = r | POLL_ERR;
+    return r;
+}
+int net_room(int s) { return is_tcp(s) ? TB - tcb[s]->txn : 0; }
 
 // PORT taken among KIND's sockets: by any of them (ALL, choosing one), or
 // (binding) for TCP by a listener or a socket not a listener's

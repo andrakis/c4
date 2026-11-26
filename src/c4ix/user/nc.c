@@ -31,6 +31,7 @@ static void usage() {
 // a connection's bytes both ways until it ends: stdin to FD (then a FIN at
 // stdin's end), FD to stdout; or until IDLE ms (0: no limit) with nothing either way
 static int tcp_pump(int fd, int idle) {
+    int p[6];
     int n, a, moved, eof, last;
     eof = 0;
     last = __time();
@@ -55,9 +56,14 @@ static int tcp_pump(int fd, int idle) {
                 moved = 1;
             }
         }
-        // nothing either way: until a pipe or the socket has something, 10 ms at most
+        // nothing either way: until the connection or stdin has something (or -w's time is up)
         if (moved) last = __time();
-        else uevwait(10, 0, 1);
+        else {
+            p[0] = fd; p[1] = POLL_IN; p[3] = STDIN; p[4] = POLL_IN;
+            a = 0 - 1;
+            if (idle > 0 && (a = idle - (__time() - last)) < 0) a = 0;
+            upoll(p, eof ? 1 : 2, a);
+        }
     }
     return 0;
 }

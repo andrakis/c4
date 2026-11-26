@@ -159,8 +159,14 @@ enum {
     // fd ({ip, port} its peer at args[1], if not 0); no more to send (the FIN)
     SYS_SOCKET = 258, SYS_BIND = 259, SYS_SENDTO = 260, SYS_RECVFROM = 261, SYS_NETCTL = 262,
     SYS_CONNECT = 263, SYS_LISTEN = 264, SYS_ACCEPT = 265, SYS_SHUTSOCK = 266,
-    SYS_TOP = 267          // one past the last: sched_trap's range check
+    // poll (sys.c): args[1] {fd, events, revents} at args[0], each's
+    // revents filled in: how many have some, 0 when args[2] ms passed
+    // first (-1: no limit, 0: do not wait); -1 a bad list
+    SYS_POLL = 267,
+    SYS_TOP = 268          // one past the last: sched_trap's range check
 };
+// SYS_POLL's events, Linux's numbers; POLL_MAX entries at most
+enum { POLL_IN = 1, POLL_OUT = 4, POLL_ERR = 8, POLL_HUP = 16, POLL_NVAL = 32, POLL_MAX = 64 };
 // Shutdown (sched.c): what the kernel task's end does once every task has
 // gone, 0 the machine off, 1 restarted -- the kernel's exit code is then
 // C4IX_EXIT_REBOOT, which c4pc restarts the PC for (docs/c4pc.md) -- and
@@ -406,6 +412,7 @@ struct vnode *vn_hostfile(int host);
 int          vfs_read(struct file *f, char *buf, int len);
 int          vfs_write(struct file *f, char *buf, int len);
 int          vfs_readable(struct vnode *vn, int pos);  // 1 = read won't block
+int          vfs_pollev(struct file *f);   // POLL_* true of it (SYS_POLL)
 void         vfs_dump(char *name);       // kernel-side: print a RAM file
 int          vfs_size(char *name);       // bytes stored, -1 if absent
 
@@ -445,6 +452,8 @@ int  net_recvfrom(int s, int *w);      // NET_AGAIN: none yet
 int  net_read(int s, char *buf, int len);
 int  net_write(int s, char *buf, int len);   // TCP: NET_AGAIN while the send ring is full
 int  net_avail(int s);
+int  net_pollev(int s);                // POLL_* true of it: SYS_POLL
+int  net_room(int s);                  // TCP: bytes its send ring has room for
 int  net_connect(int s, int ip, int port);   // NET_AGAIN while the handshake goes on
 int  net_listen(int s, int backlog);
 int  net_accept(int s, int *w);              // a slot; NET_AGAIN none yet
@@ -698,7 +707,8 @@ struct task {
     int  ntraps;               // traps taken on its behalf
     // SYS_EVWAIT: what besides the clock ends this task's sleep -- 1, an
     // event in the GUI ring at ev_ring; 2, data or end of file on a pipe
-    // it reads (sched_events)
+    // it reads (sched_events); 4, what it polls for (SYS_POLL: sys.c's
+    // table, sys_pollready)
     int  ev_wait;
     int  ev_ring;
     // The queue it is on (sched.c), which says where its state says it should be
@@ -1048,6 +1058,9 @@ extern struct task *task_reaplist;  // released while running, to be freed (task
 void         task_exit(int code);
 void         task_zombify(struct task *t, int code);  // every death: wakes its waiter
 int          sched_events(struct task *t);  // SYS_EVWAIT: has what it waits for come?
+void         sched_evmark(struct task *t);  // SYS_POLL: T has looked at its fds
+int          sys_pollready(struct task *t, int changed); // SYS_POLL: has what T polls for come? (kernel memory only)
+void         sys_pollgone(struct task *t);  // T's poll ended with it (task.c)
 extern int   sched_nlive;      // tasks still to finish (sched.c)
 extern int   sched_nzombies;
 int          task_wait(struct task *t);

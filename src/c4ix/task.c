@@ -414,6 +414,7 @@ void task_release(struct task *t) {
     task_last_syscalls = t->nsyscalls;
     task_remember(t);
     fd_closeall(t);
+    sys_pollgone(t);
     task_unlink(t);
     sched_retire(t);
     if (task_busy(t)) {

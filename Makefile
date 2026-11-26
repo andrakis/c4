@@ -3279,7 +3279,7 @@ C4PC.COM: $(C4PC_SRC)/dos/start.S $(C4PC_SRC)/dos/c4pcload.c $(C4PC_SRC)/dos/com
 # C4IX's programs this tree has that a C4PC_IMAGES built from another may
 # not (mount, umount, df, cp: the CD's), built as build-images.sh builds
 # them, and laid on the boot disk over its own, named in its manifest's BIN_ALL
-C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin hostcp top vm detach eject ping ifconfig nc netstat
+C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin hostcp top vm detach eject ping ifconfig nc netstat httpd
 # vmd is vm under another name (its argv[0]: autostart)
 .c4pc/bin/c4ix-vmd.c4r: .c4pc/bin/c4ix-vm.c4r
 	cp $< $@

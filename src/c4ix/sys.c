@@ -60,6 +60,143 @@ static int sys_nap(int ms) {
     return 0;
 }
 
+// ---- poll (SYS_POLL) ----
+// What each task in poll waits for, kept in the kernel's memory for the
+// scheduler's look each ms (sys_pollready): the task's own list is in its
+// address space under the MMU, which another task's trap cannot read. A
+// slot is a task's from its first look until its poll returns, or it ends
+// (sys_pollgone); a restarted poll finds its slot, and with it its deadline.
+// For each, the bits of its fds (FD_MAX, two words of 32) to read
+// (POLL_IN), to write (POLL_OUT), and all it polls (for POLL_HUP and
+// POLL_ERR, which nobody need ask for); when its time is up; and whether
+// the console is among them, whose input nothing announces.
+enum { NPOLLER = 64 };
+static struct task *poll_who[NPOLLER];
+static int poll_rd[NPOLLER * 2];
+static int poll_wr[NPOLLER * 2];
+static int poll_any[NPOLLER * 2];
+static int poll_until[NPOLLER];
+static int poll_ever[NPOLLER];         // no time limit
+static int poll_con[NPOLLER];
+
+// T's slot (0: a free one), or -1. Under the scheduler's lock
+static int poll_slot(struct task *t) {
+    int k;
+    k = 0;
+    while (k < NPOLLER) {
+        if (poll_who[k] == t) return k;
+        ++k;
+    }
+    return 0 - 1;
+}
+
+void sys_pollgone(struct task *t) {
+    int k;
+    sched_lock();
+    if ((k = poll_slot(t)) >= 0) poll_who[k] = 0;
+    sched_unlock();
+}
+
+// P's N entries {fd, events, revents}: each's revents, how many have some;
+// with slot K (not -1), what they ask noted in it
+static int poll_scan(struct task *t, int *p, int n, int k) {
+    struct file *f;
+    int i, fd, ev, r, got, w, b;
+    if (k >= 0) {
+        poll_rd[k * 2] = 0; poll_rd[k * 2 + 1] = 0;
+        poll_wr[k * 2] = 0; poll_wr[k * 2 + 1] = 0;
+        poll_any[k * 2] = 0; poll_any[k * 2 + 1] = 0;
+        poll_con[k] = 0;
+    }
+    got = 0;
+    i = 0;
+    while (i < n) {
+        fd = p[i * 3];
+        ev = p[i * 3 + 1];
+        r = 0;
+        if (fd >= 0) {
+            if (!(f = fd_get(t, fd))) r = POLL_NVAL;
+            else {
+                r = vfs_pollev(f) & (ev | POLL_ERR | POLL_HUP);
+                if (k >= 0) {
+                    w = k * 2 + (fd >> 5);
+                    b = 1 << (fd & 31);
+                    poll_any[w] = poll_any[w] | b;
+                    if (ev & POLL_IN) poll_rd[w] = poll_rd[w] | b;
+                    if (ev & POLL_OUT) poll_wr[w] = poll_wr[w] | b;
+                    if (f->vn->type == VN_CONSOLE) poll_con[k] = 1;
+                }
+            }
+        }
+        p[i * 3 + 2] = r;
+        if (r) ++got;
+        ++i;
+    }
+    return got;
+}
+
+// Asked each ms of a task asleep in SYS_POLL, under the scheduler's lock:
+// has something it polls for come? CHANGED, some pipe or socket has
+// changed since it last looked; if none has, only the console can have.
+// 1 also when there is nothing to look at: it runs, and its poll looks.
+int sys_pollready(struct task *t, int changed) {
+    struct file *f;
+    int k, fd, w, b, ev;
+    if ((k = poll_slot(t)) < 0) return 1;
+    if (!changed && !poll_con[k]) return 0;
+    fd = 0;
+    while (fd < t->fdtop && fd < FD_MAX) {
+        w = k * 2 + (fd >> 5);
+        b = 1 << (fd & 31);
+        if (poll_any[w] & b) {
+            if (!(f = (struct file *)t->fds[fd])) return 1;
+            ev = POLL_ERR | POLL_HUP;
+            if (poll_rd[w] & b) ev = ev | POLL_IN;
+            if (poll_wr[w] & b) ev = ev | POLL_OUT;
+            if (vfs_pollev(f) & ev) return 1;
+        }
+        ++fd;
+    }
+    return 0;
+}
+
+// poll: P's N entries looked at; if none has what it asks, a sleep until one
+// does or MS have passed (-1: no limit), and the call again (sys_restart)
+static int sys_poll(struct task *t, int *p, int n, int ms) {
+    int k, r, now;
+    now = __time();
+    if (!sched_in_trap()) {
+        // a kernel task's, looked at between yields
+        while (!(r = poll_scan(t, p, n, 0 - 1)) && ms) {
+            if (ms > 0 && __time() - now >= ms) return 0;
+            sched_yield();
+        }
+        return r;
+    }
+    sched_lock();
+    k = poll_slot(t);
+    if (k < 0 && ms) {
+        if ((k = poll_slot(0)) < 0) { sched_unlock(); return 0 - 1; }    // NPOLLER polling already
+        poll_who[k] = t;
+        poll_ever[k] = ms < 0;
+        poll_until[k] = now + ms;
+    }
+    sched_evmark(t);
+    r = poll_scan(t, p, n, k);
+    if (r || !ms || (!poll_ever[k] && now - poll_until[k] >= 0)) {
+        if (k >= 0) poll_who[k] = 0;
+        sched_unlock();
+        return r;
+    }
+    // with no limit, a look a minute anyway: a wake missed costs that
+    t->ev_wait = 4;
+    t->ck_wake = poll_ever[k] ? now + 60000 : poll_until[k];
+    sched_unlock();
+    task_state(t, TS_SLEEPING);
+    sys_restart = 1;
+    return 0;
+}
+
 int sys_write(int fd, char *buf, int len) {
     struct file *f;
     struct task *t;
@@ -69,7 +206,11 @@ int sys_write(int fd, char *buf, int len) {
     if (f->vn->type != VN_SOCK) return vfs_write(f, buf, len);
     // a TCP connection's send ring full: the writer waits for room, a ms at a time
     while ((r = net_write(f->vn->host, buf, len)) == NET_AGAIN) {
-        if (f->flags & C4IX_O_NONBLOCK) return -1;
+        // O_NONBLOCK: as much as there is room for (POLL_OUT says some)
+        if (f->flags & C4IX_O_NONBLOCK) {
+            if ((r = net_room(f->vn->host)) <= 0) return -1;
+            return net_write(f->vn->host, buf, r);
+        }
         if (sys_nap(1)) return 0;                 // trap path: restarting
         if (!(f = fd_get(t, fd)) || f->vn->type != VN_SOCK) return -1;
     }
@@ -702,6 +843,7 @@ static int sys_args_ok(int num, int *args) {
     case SYS_RECVFROM: return uaccess(args[1], 5 * sizeof(int), 1) && uaccess(((int *)args[1])[0], ((int *)args[1])[1], 1);
     case SYS_NETCTL:   return args[0] == 0 || args[0] == 3 ? uaccess(args[1], args[2] * sizeof(int), 1) : (args[0] != 2 || ustrlen((char *)args[1]) >= 0);
     case SYS_ACCEPT:   return !args[1] || uaccess(args[1], 2 * sizeof(int), 1);
+    case SYS_POLL:     return args[1] <= 0 || args[1] > POLL_MAX || uaccess(args[0], args[1] * 3 * sizeof(int), 1);
     }
     return 1;
 }
@@ -840,8 +982,12 @@ int sys_dispatch(int num, int *args) {
         }
         if (ns < 0) return -1;
         if (!(nv = vfs_socket(ns))) { net_close(ns); return -1; }
-        if ((nr = fd_open_vnode(t, nv, C4IX_O_RDWR)) < 0) net_close(ns);
+        // args[2] C4IX_O_NONBLOCK: its reads and writes do not wait (accept4's SOCK_NONBLOCK)
+        if ((nr = fd_open_vnode(t, nv, C4IX_O_RDWR | (args[2] & C4IX_O_NONBLOCK))) < 0) net_close(ns);
         return nr;
+    case SYS_POLL:
+        if (!t || args[1] < 0 || args[1] > POLL_MAX) return -1;
+        return sys_poll(t, (int *)args[0], args[1], args[2]);
     // where a disk's file keeps a block (c4ix.h SYS_FMAP)
     case SYS_FMAP:
         if (!t || !(f = fd_get(t, args[0])) || !f->vn->e2) return -1;

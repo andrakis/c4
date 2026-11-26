@@ -338,9 +338,12 @@ traffic, all of it.
 
 `make test-c4pc-hostnet` (`src/c4pc/test-c4pc-hostnet.sh`, no QEMU): two
 c4pc-hosts, then cli.js and a c4pc-host, a ping each way's replies, b's
-`/bin/` over HTTP, a line over TCP. `make test-c4pc-net` has httpd: b's
-lists, the 301 and the 404, `/bin/sh` fetched twice at once (the same
-bytes), a HEAD typed at a's nc.
+`/bin/` over HTTP, a line over TCP; round trips of 1 to 20 ms. `make
+test-c4pc-net` has httpd: b's lists, the 301 and the 404, `/bin/sh`
+fetched twice at once (the same bytes), a HEAD typed at a's nc. In a
+browser, by hand over CDP, `libjs/tests/web-net.mjs`: two tabs, `?net=1`
+and `?net=2`, C4IX's desktop in each, a ping (2-3 ms) and b's `/bin/`
+fetched by a; `libjs/tests/test-net.mjs` (in test-libjs) the card itself.
 
 | file | |
 |---|---|

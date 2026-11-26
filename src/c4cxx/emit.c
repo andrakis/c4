@@ -4,7 +4,9 @@
 // with the parentheses precedence needs and no more; each statement and
 // declaration after the line it came from, with a `# N "file"` marker when
 // the file changes or the line jumps, which c4lc honours under -g.
-#include "ast.h"
+#include "types.h"
+
+int emit_check;
 
 static Buf out;
 static File *cur_file;
@@ -430,6 +432,106 @@ static void expr (Node *n, int minprec)
 		put (")");
 }
 
+// ---- -check-types: assertions for gcc -m32 ----
+
+static void check_expr (Node *n);
+
+static void check_children (Node *n)
+{
+	Node *a;
+	// a function declared by its call is not to be named before it
+	if (n->lhs && !(n->kind == ND_CALL && (n->implicit || n->lhs->kind == ND_IDENT && n->lhs->ty && n->lhs->ty->oldstyle)))
+		check_expr (n->lhs);
+	if (n->rhs) check_expr (n->rhs);
+	if (n->cond) check_expr (n->cond);
+	if (n->then) check_expr (n->then);
+	if (n->els) check_expr (n->els);
+	if (n->kind == ND_CALL)
+		for (a = n->args; a; a = a->next)
+			check_expr (a);
+}
+
+static void check_expr (Node *n)
+{
+	char *t;
+	if (!emit_check || !n)
+		return;
+	check_children (n);
+	if (!n->ty || n->bitfield || n->unsure)
+		return;
+	t = ty_str (n->ty, "");
+	if (!t)
+		return;
+	put (" _Static_assert (__builtin_types_compatible_p (__typeof__ (");
+	expr (n, 1);
+	buf_fmt (&out, "), %s), \"c4cxx: the type at %s:%d\");", t, n->tok->file ? n->tok->file->name : "", n->tok->line);
+	if (n->is_const && !n->cvar && is_integer (n->ty) && n->kind != ND_NUM && n->kind != ND_CHAR) {
+		put (" _Static_assert ((");
+		expr (n, 1);
+		buf_fmt (&out, ") == (%lldLL), \"c4cxx: the value at %s:%d\");", n->val,
+		         n->tok->file ? n->tok->file->name : "", n->tok->line);
+	}
+}
+
+static void check_init (Init *in)
+{
+	InitItem *it;
+	if (!in)
+		return;
+	if (!in->is_list) {
+		check_expr (in->expr);
+		return;
+	}
+	for (it = in->items; it; it = it->next)
+		check_init (it->init);
+}
+
+static void check_record (Spec *sp)
+{
+	Ty *r = sp->rty;
+	char *t;
+	Decl *m;
+	Field *f;
+	if (!emit_check || !r || !sp->has_body)
+		return;
+	for (m = sp->members; m; m = m->next)
+		if (!m->is_pragma && m->first_of_spec && m->spec && m->spec->has_body)
+			check_record (m->spec);
+	if (sp->kind == SP_ENUM) {
+		Enumer *e;
+		for (e = sp->enumers; e; e = e->next)
+			buf_fmt (&out, " _Static_assert ((%.*s) == (%lldLL), \"c4cxx: the value of %.*s\");", e->name->len,
+			         e->name->loc, e->val, e->name->len, e->name->loc);
+		return;
+	}
+	if (r->kind != T_STRUCT && r->kind != T_UNION)
+		return;
+	t = ty_str (r, "");
+	if (!t || !r->def->complete)
+		return;
+	buf_fmt (&out, " _Static_assert (sizeof (%s) == %d, \"c4cxx: sizeof %s\");", t, r->def->size, t);
+	for (f = r->def->fields; f; f = f->next)
+		if (f->name && f->bit_width < 0)
+			buf_fmt (&out, " _Static_assert (__builtin_offsetof (%s, %.*s) == %d, \"c4cxx: offset of %.*s\");",
+			         t, f->name->len, f->name->loc, f->offset, f->name->len, f->name->loc);
+}
+
+static void check_decls (Decl *d, int top)
+{
+	if (!emit_check)
+		return;
+	for (; d; d = d->next) {
+		Ty *t = d->rty;
+		if (d->first_of_spec && d->spec)
+			check_record (d->spec);
+		check_init (d->init);
+		if (top && d->name && t && t->kind != T_FUNC && !(d->spec->storage & ST_TYPEDEF) && t->size > 0 &&
+		    ty_str (t, ""))
+			buf_fmt (&out, " _Static_assert (sizeof (%.*s) == %d, \"c4cxx: sizeof %.*s\");", d->name->len,
+			         d->name->loc, t->size, d->name->len, d->name->loc);
+	}
+}
+
 // ---- statements ----
 
 static void decl_stmt (Decl *d)
@@ -444,6 +546,20 @@ static void decl_stmt (Decl *d)
 		if (g)
 			put (" ");
 	}
+}
+
+static void stmt (Node *n);
+
+// a statement under if, while, for, do, case or a label: in braces under
+// -check-types, where assertions (declarations) may come before it
+static void sub (Node *n)
+{
+	if (emit_check && n->kind != ND_BLOCK) {
+		put (" {");
+		stmt (n);
+		put (" }");
+	} else
+		stmt (n);
 }
 
 static void stmt (Node *n)
@@ -468,36 +584,46 @@ static void stmt (Node *n)
 		put (";");
 		break;
 	case ND_EXPR_STMT:
+		check_expr (n->lhs);
 		expr (n->lhs, 1);
 		put (";");
 		break;
 	case ND_DECL:
 		decl_stmt (n->decl);
+		check_decls (n->decl, 0);
 		break;
 	case ND_IF:
+		check_expr (n->cond);
 		put ("if (");
 		expr (n->cond, 1);
 		put (")");
-		stmt (n->then);
+		sub (n->then);
 		if (n->els) {
 			put (" else");
-			stmt (n->els);
+			sub (n->els);
 		}
 		break;
 	case ND_WHILE:
+		check_expr (n->cond);
 		put ("while (");
 		expr (n->cond, 1);
 		put (")");
-		stmt (n->body);
+		sub (n->body);
 		break;
 	case ND_DO:
 		put ("do");
-		stmt (n->body);
+		sub (n->body);
 		put (" while (");
 		expr (n->cond, 1);
 		put (");");
+		check_expr (n->cond);
 		break;
 	case ND_FOR:
+		if (!n->decl) {
+			check_expr (n->init_expr);
+			check_expr (n->cond);
+			check_expr (n->inc);
+		}
 		put ("for (");
 		if (n->decl)
 			decl_stmt (n->decl);
@@ -513,23 +639,32 @@ static void stmt (Node *n)
 		if (n->inc)
 			expr (n->inc, 1);
 		put (")");
-		stmt (n->body);
+		if (n->decl && emit_check) {
+			put (" {");
+			check_decls (n->decl, 0);
+			check_expr (n->cond);
+			check_expr (n->inc);
+			sub (n->body);
+			put (" }");
+		} else
+			sub (n->body);
 		break;
 	case ND_SWITCH:
+		check_expr (n->cond);
 		put ("switch (");
 		expr (n->cond, 1);
 		put (")");
-		stmt (n->body);
+		sub (n->body);
 		break;
 	case ND_CASE:
 		put ("case ");
 		expr (n->cond, 3);
 		put (":");
-		stmt (n->body);
+		sub (n->body);
 		break;
 	case ND_DEFAULT:
 		put ("default:");
-		stmt (n->body);
+		sub (n->body);
 		break;
 	case ND_BREAK:
 		put ("break;");
@@ -538,6 +673,7 @@ static void stmt (Node *n)
 		put ("continue;");
 		break;
 	case ND_RETURN:
+		check_expr (n->lhs);
 		put ("return");
 		if (n->lhs) {
 			put (" ");
@@ -553,7 +689,7 @@ static void stmt (Node *n)
 	case ND_LABEL:
 		puttok (n->name);
 		put (":");
-		stmt (n->body);
+		sub (n->body);
 		break;
 	default:
 		error_at (n->tok, "emit: not a statement (%d)", n->kind);
@@ -593,6 +729,7 @@ void emit_unit (FILE *f, Node *unit)
 		else {
 			mark (n->tok);
 			decl_stmt (n->decl);
+			check_decls (n->decl, 1);
 		}
 	}
 	buf_char (&out, '\n');

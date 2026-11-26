@@ -17,6 +17,7 @@ typedef struct InitItem InitItem;
 typedef struct Desig Desig;
 typedef struct Attr Attr;
 typedef struct Enumer Enumer;
+struct Ty;
 
 // a GNU __attribute__((...)) (or __declspec, asm label), kept as its tokens
 struct Attr { Attr *next; Token *start; Token *end; };
@@ -25,7 +26,7 @@ enum { ST_TYPEDEF = 1, ST_EXTERN = 2, ST_STATIC = 4, ST_AUTO = 8, ST_REGISTER = 
 enum { Q_CONST = 1, Q_VOLATILE = 2, Q_RESTRICT = 4 };
 enum { SP_WORDS, SP_STRUCT, SP_UNION, SP_ENUM };
 
-struct Enumer { Enumer *next; Token *name; Node *value; };
+struct Enumer { Enumer *next; Token *name; Node *value; long long val; };
 
 struct Spec {
 	int storage;		// ST_ bits
@@ -41,6 +42,7 @@ struct Spec {
 	Attr *attrs;		// attributes among the specifiers
 	Attr *tag_attrs;	// struct __attribute__((packed)) tag
 	Token *tok;
+	struct Ty *rty;		// sema: the type the specifiers name
 };
 
 enum { TY_BASE, TY_PTR, TY_ARRAY, TY_FUNC };
@@ -70,6 +72,7 @@ struct Decl {
 	Token *tok;
 	int is_pragma;		// a #pragma inside a struct body (tok)
 	int first_of_spec;	// the first declarator of its Spec (prints the Spec)
+	struct Ty *rty;		// sema: its type
 };
 
 struct Desig { Desig *next; Token *field; Node *index; };
@@ -102,11 +105,23 @@ struct Node {
 	Node *next;		// in a list (arguments, statements)
 	Init *initz;		// ND_COMPLIT
 	Token *name;		// ND_MEMBER, ND_GOTO, ND_LABEL
+	// sema
+	struct Ty *ty;		// the expression's type, before arrays decay
+	int lvalue;
+	int bitfield;		// a bit-field member
+	int is_const;		// an integer constant expression, of value val
+	long long val;
+	int implicit;		// ND_CALL: of a function declared by the call
+	int cvar;		// is_const through a const variable (C++'s rule, not C's)
+	int unsure;		// typed by a fallback (a c4lc-ism gcc would refuse)
 };
 
 // parse.c
 Node *parse (Token *t);		// the unit: ND_DECL, ND_FUNCDEF, ND_PRAGMA in a list
+// sema.c
+void sema (Node *unit);
 // emit.c
+extern int emit_check;		// -check-types: add assertions of the types for gcc
 void emit_unit (FILE *out, Node *unit);
 
 #endif

@@ -1,11 +1,13 @@
 #!/bin/bash
-# run-corpora.sh [-E|-C]: test-same.sh over the corpora c4cxx is held to:
+# run-corpora.sh [-E|-C|-T]: test-same.sh (-E, -C), or test-types.sh (-T),
+# over the corpora c4cxx is held to:
 # c4's src/tests, chocolate-blood's C units (helios ~/gate/c4cxx), and Duke
 # Nukem 3D's units (~/git/c4/games/duke3d). From the c4 tree's root.
 mode=${1:--C}
 R=$(cd "$(dirname "$0")/../.." && pwd)
 cd $R
 T=src/c4cxx/test-same.sh
+if [ "$mode" = -T ]; then T=src/c4cxx/test-types.sh; mode=; fi
 st=0
 # c4lc_lex_sample.c: c4lc turns a backslash-newline inside a string into a
 # newline character (a c4cc quirk); C removes it, as c4cxx does

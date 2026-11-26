@@ -1,9 +1,11 @@
 // main.c -- c4cxx's driver
 //
-//   c4cxx [-E] [-x c|c++] [-I dir] [-D name[=value]] [-U name] [-o out] file
+//   c4cxx [-E | -check-types] [-x c|c++] [-I dir] [-D name[=value]] [-U name] [-o out] file
 //
 // -E writes the preprocessed tokens. Without it (M1b on), the unit is
-// parsed and written out as C. A .cpp, .cc or .cxx file is C++ (defines
+// parsed, typed (sema.c) and written out as C. -check-types adds
+// _Static_asserts of every expression's type, every struct's layout and every
+// global's size, for gcc -m32 to confirm (test-types.sh). A .cpp, .cc or .cxx file is C++ (defines
 // __cplusplus); -x says which.
 #include "ast.h"
 
@@ -25,6 +27,8 @@ int main (int argc, char **argv)
 		char *a = argv[i];
 		if (!strcmp (a, "-E"))
 			opt_E = 1;
+		else if (!strcmp (a, "-check-types"))
+			emit_check = 1;
 		else if (!strcmp (a, "-o") && i + 1 < argc)
 			out = argv[++i];
 		else if (!strcmp (a, "-x") && i + 1 < argc) {
@@ -59,8 +63,11 @@ int main (int argc, char **argv)
 		fatal ("cannot write %s", out);
 	if (opt_E)
 		print_tokens (o, t);
-	else
-		emit_unit (o, parse (t));
+	else {
+		Node *unit = parse (t);
+		sema (unit);
+		emit_unit (o, unit);
+	}
 	if (out)
 		fclose (o);
 	return 0;

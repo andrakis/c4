@@ -593,6 +593,37 @@ Found on the way and fixed: an argument that was used and then stringized
 came out expanded. Expansion relinked the argument's own tokens; c4cxx now
 expands a copy.
 
+### 4.5 M2, done (2026-11-26)
+
+C's types and a semantic pass: `src/c4cxx/types.c` and `sema.c`, about
+1,600 lines.
+
+- Declarations resolve to types.
+- Structs are laid out as gcc `-m32` lays them out, including
+  `#pragma pack`, `packed`, `aligned` and bit-fields.
+- Every expression is typed.
+- Integer constants are folded.
+
+The test was meant to be golden type dumps. A stronger one took its place:
+gcc `-m32`, which types and lays out C exactly as c4lc's 32-bit target
+does. `c4cxx -check-types` writes `_Static_assert`s of every expression's
+type and constant value, every struct's size and member offsets, and every
+global's size, and gcc must find them all true.
+
+All three corpora pass: src/tests 83 of 83, chocolate-blood 33 of 33,
+Duke 34 of 34. That is over 150,000 assertions in four of Duke's units
+alone.
+
+Where c4lc accepts what gcc would not, sema uses a fallback type and
+asserts nothing:
+
+- a pointer divided;
+- a word called as a function;
+- a `const int` used as a constant (as C++ does).
+
+M2's other test, Blood's headers parsing as C++ declarations, moves to M3,
+since it needs class bodies.
+
 ## 5. What is left for Blood after the compiler
 
 The Duke port (`~/git/c4/games/duke3d`, `c4/` is 3,250 lines) shows what a

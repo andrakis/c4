@@ -5,9 +5,12 @@
 // -E writes the preprocessed tokens. Without it (M1b on), the unit is
 // parsed, typed (sema.c) and written out as C. -check-types adds
 // _Static_asserts of every expression's type, every struct's layout and every
-// global's size, for gcc -m32 to confirm (test-types.sh). A .cpp, .cc or .cxx file is C++ (defines
+// global's size, for gcc -m32 to confirm (test-types.sh). -parse stops after
+// parsing (to see that a unit parses). A .cpp, .cc or .cxx file is C++ (defines
 // __cplusplus); -x says which.
 #include "ast.h"
+
+char *opt_unit;
 
 static void usage (void)
 {
@@ -17,7 +20,7 @@ static void usage (void)
 
 int main (int argc, char **argv)
 {
-	int i, opt_E = 0, lang = -1;
+	int i, opt_E = 0, opt_parse = 0, lang = -1;
 	char *out = 0, *in = 0;
 	char **undefs = xalloc (sizeof (char *) * argc), **defs = xalloc (sizeof (char *) * argc);
 	int nundef = 0, ndef = 0;
@@ -27,6 +30,8 @@ int main (int argc, char **argv)
 		char *a = argv[i];
 		if (!strcmp (a, "-E"))
 			opt_E = 1;
+		else if (!strcmp (a, "-parse"))
+			opt_parse = 1;
 		else if (!strcmp (a, "-check-types"))
 			emit_check = 1;
 		else if (!strcmp (a, "-o") && i + 1 < argc)
@@ -54,6 +59,7 @@ int main (int argc, char **argv)
 		lang = dot && (!strcmp (dot, ".cpp") || !strcmp (dot, ".cc") || !strcmp (dot, ".cxx"));
 	}
 	opt_cplusplus = lang;
+	opt_unit = in;
 	// -D and -U after the predefined names, as a compiler does: preprocess()
 	// sets those up, so they are given to it through these
 	pp_set_command_line (defs, ndef, undefs, nundef);
@@ -65,6 +71,8 @@ int main (int argc, char **argv)
 		print_tokens (o, t);
 	else {
 		Node *unit = parse (t);
+		if (opt_parse)
+			return 0;
 		sema (unit);
 		emit_unit (o, unit);
 	}

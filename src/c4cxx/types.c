@@ -41,6 +41,13 @@ Ty *pointer_to (Ty *t)
 	return p;
 }
 
+Ty *ref_to (Ty *t)
+{
+	Ty *p = new_ty (T_REF, 4, 4);
+	p->base = t;
+	return p;
+}
+
 Ty *array_of (Ty *t, int len)
 {
 	Ty *a = new_ty (T_ARRAY, len < 0 || t->size < 0 ? -1 : t->size * len, t->align);
@@ -122,7 +129,7 @@ int same_type (Ty *a, Ty *b)
 	if (a->kind != b->kind)
 		return 0;
 	switch (a->kind) {
-	case T_PTR:
+	case T_PTR: case T_REF:
 		return (a->base->qual == b->base->qual) && same_type (a->base, b->base);
 	case T_ARRAY:
 		return (a->len == b->len || a->len < 0 || b->len < 0) && same_type (a->base, b->base);
@@ -277,7 +284,7 @@ Field *find_field (Ty *rec, Token *name, int *offset)
 			if (offset) *offset += f->offset;
 			return f;
 		}
-		if (!f->name && (f->ty->kind == T_STRUCT || f->ty->kind == T_UNION)) {
+		if ((!f->name || f->anon) && (f->ty->kind == T_STRUCT || f->ty->kind == T_UNION)) {
 			int o = f->offset;
 			Field *g = find_field (f->ty, name, &o);
 			if (g) {
@@ -344,7 +351,7 @@ char *ty_str (Ty *t, const char *inner)
 			return 0;
 		return xformat ("%s%s%s", quals (t, n), sp, inner);
 	}
-	case T_PTR: {
+	case T_PTR: case T_REF: {
 		char *s = xformat ("*%s%s%s", t->qual & Q_CONST ? " const" : "", t->qual & Q_VOLATILE ? " volatile" : "",
 		                   *inner ? xformat (" %s", inner) : "");
 		if (t->base->kind == T_ARRAY || t->base->kind == T_FUNC)

@@ -12,8 +12,11 @@ typedef struct Field Field;
 enum {
 	T_VOID, T_BOOL, T_CHAR, T_SCHAR, T_UCHAR, T_SHORT, T_USHORT, T_INT, T_UINT,
 	T_LONG, T_ULONG, T_LLONG, T_ULLONG, T_FLOAT, T_DOUBLE, T_LDOUBLE,
-	T_ENUM, T_PTR, T_ARRAY, T_FUNC, T_STRUCT, T_UNION
+	T_ENUM, T_PTR, T_ARRAY, T_FUNC, T_STRUCT, T_UNION,
+	T_REF		// C++: a reference, which is a pointer underneath
 };
+
+struct Class;
 
 struct Field {
 	Field *next;
@@ -22,6 +25,7 @@ struct Field {
 	int offset;		// bytes
 	int bit_offset;		// within the storage unit at offset, for a bit-field
 	int bit_width;		// -1 if not a bit-field
+	int anon;		// C++: an anonymous struct or union, given a name (_u0)
 };
 
 struct Ty {
@@ -35,6 +39,7 @@ struct Ty {
 	int nparams;
 	int variadic;
 	int oldstyle;		// T_FUNC: no prototype
+	Node **defaults;	// T_FUNC (C++): each parameter's default argument, or 0
 	Ty *def;		// T_STRUCT, T_UNION, T_ENUM: the one record of the tag
 	// on the record (def == self):
 	Token *tag;
@@ -42,6 +47,7 @@ struct Ty {
 	Field *fields;
 	int complete;
 	int is_unsigned_enum;	// T_ENUM: all values >= 0 (gcc then makes it unsigned int)
+	struct Class *cls;	// C++: a class's members, constructors and the rest
 };
 
 extern Ty *ty_void, *ty_bool, *ty_char, *ty_schar, *ty_uchar, *ty_short, *ty_ushort,
@@ -51,6 +57,7 @@ extern Ty *ty_void, *ty_bool, *ty_char, *ty_schar, *ty_uchar, *ty_short, *ty_ush
 void types_init (void);
 Ty *new_ty (int kind, int size, int align);
 Ty *pointer_to (Ty *t);
+Ty *ref_to (Ty *t);
 Ty *array_of (Ty *t, int len);
 Ty *func_type (Ty *ret);
 Ty *qualified (Ty *t, int qual);	// a copy with these qualifiers added

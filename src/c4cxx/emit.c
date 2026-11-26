@@ -58,6 +58,7 @@ static Buf begin (void)
 }
 
 static void expr (Node *n, int minprec);
+static void const_expr (Node *n, int minprec);
 static void initz (Init *in);
 static void spec (Spec *sp);
 static char *declarator_str (Type *t, char *inner);
@@ -120,7 +121,8 @@ static char *declarator_str (Type *t, char *inner)
 {
 	if (!t || t->kind == TY_BASE)
 		return inner;
-	if (t->kind == TY_PTR) {
+	if (t->kind == TY_PTR || t->kind == TY_REF) {
+		// a reference is a pointer underneath
 		Buf saved = begin ();
 		put ("*");
 		if (t->qual & Q_CONST) put (" const");
@@ -138,7 +140,12 @@ static char *declarator_str (Type *t, char *inner)
 		return declarator_str (t->base, inner);
 	}
 	if (t->kind == TY_ARRAY) {
-		char *len = t->len ? expr_str (t->len, 3) : "";
+		char *len = "";
+		if (t->len) {
+			Buf saved = begin ();
+			const_expr (t->len, 3);
+			len = take (&saved);
+		}
 		return declarator_str (t->base, xformat ("%s[%s]", inner, len));
 	}
 	return declarator_str (t->base, xformat ("%s(%s)", inner, params_str (t)));
@@ -163,10 +170,15 @@ static void spec (Spec *sp)
 	if (sp->qual & Q_VOLATILE) W ("volatile");
 	if (sp->qual & Q_RESTRICT) W ("restrict");
 	if (sp->kind == SP_WORDS) {
+		if (sp->kw)
+			W (sp->kw);	// C++: a class named by its tag
 		for (i = 0; i < sp->nwords; i++) {
 			if (!first)
 				put (" ");
-			puttok (sp->words[i]);
+			if (opt_cplusplus && equal (sp->words[i], "bool"))
+				put ("_Bool");
+			else
+				puttok (sp->words[i]);
 			first = 0;
 		}
 	} else {
@@ -185,7 +197,7 @@ static void spec (Spec *sp)
 					puttok (e->name);
 					if (e->value) {
 						put (" = ");
-						expr (e->value, 3);
+						const_expr (e->value, 3);
 					}
 					if (e->next)
 						put (",");
@@ -228,7 +240,7 @@ static void one (Decl *d)
 	}
 	if (d->width) {
 		put (" : ");
-		expr (d->width, 3);
+		const_expr (d->width, 3);
 	}
 	attrs (d->attrs);
 	if (d->init) {
@@ -260,7 +272,7 @@ static void initz (Init *in)
 {
 	InitItem *it;
 	if (!in->is_list) {
-		expr (in->expr, 2);
+		const_expr (in->expr, 2);	// C++: a const variable as its value
 		return;
 	}
 	put ("{");
@@ -308,7 +320,7 @@ static int prec (Node *n)
 	case ND_COND: return 3;
 	case ND_BINARY: return binprec (n->op);
 	case ND_CAST: case ND_PREFIX: case ND_SIZEOF_TYPE: case ND_SIZEOF_EXPR: return 14;
-	case ND_POSTFIX: case ND_CALL: case ND_INDEX: case ND_MEMBER: case ND_COMPLIT: return 15;
+	case ND_POSTFIX: case ND_CALL: case ND_INDEX: case ND_MEMBER: case ND_COMPLIT: case ND_TMPREF: return 15;
 	default: return 16;
 	}
 }
@@ -324,6 +336,23 @@ static char *type_name_str (Decl *d)
 		put (s);
 	}
 	return take (&saved);
+}
+
+// C++: where C wants a constant (array sizes, case labels, enumerators,
+// bit-field widths), an expression through a const variable is its value
+static void const_expr (Node *n, int minprec)
+{
+	if (opt_cplusplus && n->is_const && n->cvar && n->ty && is_integer (n->ty)) {
+		long long v = n->val;
+		if (is_unsigned (n->ty))
+			buf_fmt (&out, "%lluU", (unsigned long long)v);
+		else if (v < 0)
+			buf_fmt (&out, minprec > 3 ? "(%lld)" : "%lld", v);
+		else
+			buf_fmt (&out, "%lld", v);
+		return;
+	}
+	expr (n, minprec);
 }
 
 static void expr (Node *n, int minprec)
@@ -425,6 +454,17 @@ static void expr (Node *n, int minprec)
 		put (" ");
 		puttok (n->name);
 		break;
+	case ND_TMPREF: {
+		// a const reference to an rvalue: a compound literal, an array of one
+		// so that it is the pointer (c4lc takes no scalar compound literal)
+		char *t = ty_str (unqualified (n->ty->base), "[1]");
+		if (!t)
+			error_at (n->tok, "emit: a temporary of a type without a name");
+		buf_fmt (&out, "(%s) { ", t);
+		expr (n->lhs, 2);
+		put (" }");
+		break;
+	}
 	default:
 		error_at (n->tok, "emit: not an expression (%d)", n->kind);
 	}
@@ -536,15 +576,32 @@ static void check_decls (Decl *d, int top)
 
 static void decl_stmt (Decl *d)
 {
-	Decl *g = d;
+	Decl *g = d, *k;
 	while (g) {
 		group (g, 0);
 		put (";");
+		// C++: constructor calls, in order, after the declaration
+		for (k = g; k && (k == g || !k->first_of_spec); k = k->next)
+			if (k->ctor) {
+				put (" ");
+				expr (k->ctor->lhs, 1);
+				put (";");
+			}
 		g = g->next;
 		while (g && !g->first_of_spec)
 			g = g->next;
 		if (g)
 			put (" ");
+	}
+}
+
+// C++: destructor calls before a jump or a block's end
+static void cleanup (Node *s)
+{
+	for (; s; s = s->next) {
+		put (" ");
+		expr (s->lhs, 1);
+		put (";");
 	}
 }
 
@@ -578,6 +635,7 @@ static void stmt (Node *n)
 		put ("{");
 		for (s = n->body; s; s = s->next)
 			stmt (s);
+		cleanup (n->cleanup);
 		put (" }");
 		break;
 	case ND_NULL:
@@ -658,7 +716,7 @@ static void stmt (Node *n)
 		break;
 	case ND_CASE:
 		put ("case ");
-		expr (n->cond, 3);
+		const_expr (n->cond, 3);
 		put (":");
 		sub (n->body);
 		break;
@@ -667,13 +725,38 @@ static void stmt (Node *n)
 		sub (n->body);
 		break;
 	case ND_BREAK:
-		put ("break;");
+		if (n->cleanup) {
+			put ("{");
+			cleanup (n->cleanup);
+			put (" break; }");
+		} else
+			put ("break;");
 		break;
 	case ND_CONTINUE:
-		put ("continue;");
+		if (n->cleanup) {
+			put ("{");
+			cleanup (n->cleanup);
+			put (" continue; }");
+		} else
+			put ("continue;");
 		break;
 	case ND_RETURN:
 		check_expr (n->lhs);
+		if (n->cleanup) {
+			// the value first, then the destructors
+			put ("{");
+			if (n->lhs) {
+				char *t = ty_str (n->ty, "__c4x_r");
+				if (!t)
+					error_at (n->tok, "emit: a return value of a type without a name");
+				buf_fmt (&out, " %s = ", t);
+				expr (n->lhs, 2);
+				put (";");
+			}
+			cleanup (n->cleanup);
+			put (n->lhs ? " return __c4x_r; }" : " return; }");
+			break;
+		}
 		put ("return");
 		if (n->lhs) {
 			put (" ");
@@ -714,6 +797,30 @@ static void funcdef (Node *n)
 	stmt (n->body);
 }
 
+// a top-level node, with what lowering put before and after it
+static void top (Node *n)
+{
+	Node *p;
+	for (p = n->pre; p; p = p->next)
+		top (p);
+	if (n->kind == ND_FUNCDEF)
+		funcdef (n);
+	else if (n->kind == ND_PRAGMA)
+		stmt (n);
+	else if (n->kind == ND_RAWFUNC) {
+		if (out.n && out.p[out.n - 1] != '\n')
+			nl ();
+		puttok (n->tok);
+		stmt (n->body);
+	} else {
+		mark (n->tok);
+		decl_stmt (n->decl);
+		check_decls (n->decl, 1);
+	}
+	for (p = n->post; p; p = p->next)
+		top (p);
+}
+
 void emit_unit (FILE *f, Node *unit)
 {
 	Node *n;
@@ -721,17 +828,8 @@ void emit_unit (FILE *f, Node *unit)
 	buf_add (&out, "", 0);
 	cur_file = 0;
 	cur_line = 0;
-	for (n = unit; n; n = n->next) {
-		if (n->kind == ND_FUNCDEF)
-			funcdef (n);
-		else if (n->kind == ND_PRAGMA)
-			stmt (n);
-		else {
-			mark (n->tok);
-			decl_stmt (n->decl);
-			check_decls (n->decl, 1);
-		}
-	}
+	for (n = unit; n; n = n->next)
+		top (n);
 	buf_char (&out, '\n');
 	fwrite (out.p, 1, out.n, f);
 }

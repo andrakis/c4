@@ -22,7 +22,9 @@ struct Ty;
 // a GNU __attribute__((...)) (or __declspec, asm label), kept as its tokens
 struct Attr { Attr *next; Token *start; Token *end; };
 
-enum { ST_TYPEDEF = 1, ST_EXTERN = 2, ST_STATIC = 4, ST_AUTO = 8, ST_REGISTER = 16, ST_INLINE = 32 };
+enum { ST_TYPEDEF = 1, ST_EXTERN = 2, ST_STATIC = 4, ST_AUTO = 8, ST_REGISTER = 16, ST_INLINE = 32,
+	// C++
+	ST_VIRTUAL = 64, ST_EXPLICIT = 128, ST_MUTABLE = 256 };
 enum { Q_CONST = 1, Q_VOLATILE = 2, Q_RESTRICT = 4 };
 enum { SP_WORDS, SP_STRUCT, SP_UNION, SP_ENUM };
 
@@ -43,9 +45,15 @@ struct Spec {
 	Attr *tag_attrs;	// struct __attribute__((packed)) tag
 	Token *tok;
 	struct Ty *rty;		// sema: the type the specifiers name
+	// C++
+	int is_class;		// written `class`
+	Token *bases;		// after ':' in a class head (M5), to the '{'
+	int extern_c;		// inside extern "C"
+	const char *kw;		// sema: a class or enum named by its tag alone, printed
+				// with this keyword ("struct") before it
 };
 
-enum { TY_BASE, TY_PTR, TY_ARRAY, TY_FUNC };
+enum { TY_BASE, TY_PTR, TY_ARRAY, TY_FUNC, TY_REF };
 
 struct Type {
 	int kind;
@@ -57,7 +65,12 @@ struct Type {
 	int variadic;		// TY_FUNC: ...
 	int oldstyle;		// TY_FUNC: () or an identifier list
 	int paren;		// written inside its own parentheses
+	int const_method;	// TY_FUNC: `) const` (C++)
 };
+
+// a constructor's init list entry: name(args)
+typedef struct MemInit MemInit;
+struct MemInit { MemInit *next; Token *name; Node *args; };
 
 struct Decl {
 	Decl *next;
@@ -73,6 +86,15 @@ struct Decl {
 	int is_pragma;		// a #pragma inside a struct body (tok)
 	int first_of_spec;	// the first declarator of its Spec (prints the Spec)
 	struct Ty *rty;		// sema: its type
+	// C++
+	Token *qual;		// X in X::name
+	int is_ctor, is_dtor;	// X(...), ~X()
+	int pure;		// = 0
+	int has_args;		// X x(args): a constructor's arguments
+	Node *args;
+	MemInit *inits;		// X::X(...) : a(1), b(2)
+	Node *ctor;		// sema: the constructor call to print after it
+	int no_body;		// sema: a method's inline body moved out of the class
 };
 
 struct Desig { Desig *next; Token *field; Node *index; };
@@ -90,7 +112,13 @@ enum {
 	ND_SWITCH, ND_CASE, ND_DEFAULT, ND_BREAK, ND_CONTINUE, ND_RETURN,
 	ND_GOTO, ND_LABEL, ND_NULL, ND_PRAGMA,
 	// top level
-	ND_FUNCDEF
+	ND_FUNCDEF,
+	// C++ (parsed; new and delete are lowered in M5)
+	ND_NEW, ND_DELETE,
+	// lowering: &(type){ expr }, a const reference to an rvalue
+	ND_TMPREF,
+	// lowering: a function written as text (tok) with a body
+	ND_RAWFUNC
 };
 
 struct Node {
@@ -114,10 +142,19 @@ struct Node {
 	int implicit;		// ND_CALL: of a function declared by the call
 	int cvar;		// is_const through a const variable (C++'s rule, not C's)
 	int unsure;		// typed by a fallback (a c4lc-ism gcc would refuse)
+	// C++
+	Token *qual;		// ND_IDENT: X in X::name
+	int functional;		// ND_CAST: T(args)
+	int is_array;		// ND_NEW: new T[n]; ND_DELETE: delete[]
+	Node *pre, *post;	// lowering: top-level nodes printed before and after
+	Node *cleanup;		// lowering: destructor calls before a return, break,
+				// continue or the end of a block
 };
 
 // parse.c
 Node *parse (Token *t);		// the unit: ND_DECL, ND_FUNCDEF, ND_PRAGMA in a list
+Token *make_ident (Token *like, const char *name);	// a made identifier where LIKE is
+extern char *opt_unit;		// the unit's file name (its initializer's name)
 // sema.c
 void sema (Node *unit);
 // emit.c

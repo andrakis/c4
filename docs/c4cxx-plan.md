@@ -624,6 +624,94 @@ asserts nothing:
 M2's other test, Blood's headers parsing as C++ declarations, moves to M3,
 since it needs class bodies.
 
+### 4.6 M3, done (2026-11-27)
+
+Classes without inheritance or `virtual`, lowered to C: about 1,800 lines
+added to `parse.c`, `sema.c` and `emit.c`.
+
+- **Classes** become C structs of their data members. A class or enum tag
+  is a type name, printed as `struct X`.
+- **Member functions** become `X__name (struct X *this, ...)`, declared
+  after the struct. Inside them, a member's name is `this->name`. A call
+  `obj.f (a)` is `X__f (&obj, a)`, and `p->f (a)` is `X__f (p, a)`. Those
+  defined in the class body are `static` in each unit that sees the class.
+- **Constructors** are `X__C`, which return `this`. A constructor builds the
+  members in declaration order, from its init list or by their own
+  constructors, then runs its body. **Destructors** are `X__D`: the body,
+  then the members' destructors, last first. A class whose members need
+  either gets one made.
+- **Objects:** a constructor is called after the declaration (`X x (1)`,
+  `X x = 5`). The destructors run at the end of the block, and before a
+  `return`, `break` or `continue` that leaves it. A returned value is kept
+  in `__c4x_r` first.
+- **Globals** with constructors, and globals initialized by what C cannot
+  initialize them with (`int Mouse::X = Mouse::rangeX >> 1`), are built in
+  the unit's `static void __attribute__ ((constructor)) __c4x_init_<unit>`.
+  Their destructors run in `__c4x_fini_<unit>`. These use c4's `.c4r`
+  constructor and destructor lists (plan section 3.6).
+- **Static members** are globals named `X__name`.
+- **References** are pointers. Binding takes the address, and each use
+  dereferences. A `const T&` bound to an rvalue gets `(T [1]) { v }`, an
+  array of one that decays to the pointer. c4lc takes no scalar compound
+  literal.
+- **Default arguments** are filled in at each call.
+- **`bool`** is `_Bool`, and `true`/`false` are 1 and 0.
+- **A `const` at file scope** is `static`, as C++ makes it. Where C wants a
+  constant (array sizes, case labels, enumerators, bit-field widths,
+  initializers), its uses print as its value.
+- **Anonymous unions and structs** in a class get names (`_u0`), and member
+  access goes through them. c4lc has none.
+- **Nested types and typedefs** go before the class, at file scope, under
+  their own names. `X::Inner` reads as `Inner`.
+- **`extern "C"`** is read in both forms, block and single declaration.
+
+Names carry no parameter codes yet. M4 adds them (plan section 3.4).
+
+Refused with a message, for M4 and M5:
+
+- overloaded functions and members, member operators, and a class's
+  temporaries `X (...)` (M4);
+- base classes, `virtual`, `new` and `delete` (M5).
+
+Refused with a message, as the plan's subset says:
+
+- a `goto` where objects with destructors are in scope;
+- a reference (not const) to an rvalue, and a const reference to a class
+  rvalue;
+- static locals with constructors or run-time initializers;
+- arrays of objects with constructors or destructors, and objects with
+  destructors declared in a `for`;
+- local classes with member functions;
+- templates, namespaces, `using`, exceptions, and the `*_cast`s.
+
+The tests are the plan's, made a little stronger. Each
+`src/c4cxx/tests/t_class*.cpp` (a `Rect`, a stack class, constructors
+writing to a log, destructors at `return`/`break`/`continue`, references
+swapping, `const Error&`, and more) is built three ways:
+
+1. g++ `-m32` without exceptions, RTTI or its library;
+2. c4cxx, then gcc `-m32`;
+3. c4cxx, then c4lc, run on `c4m32`.
+
+All three print the same for all 4 programs. gcc also confirms the types c4cxx gave the
+C it wrote (`-check-types`). Five `e_*.cpp` are refused with the messages
+they expect. `src/c4cxx/test-cxx.sh` runs them, in `make test-c4cxx`.
+
+M2's deferred test passes: all 80 of Blood's C++ units parse (Blood-RE's
+game units and qtools, as `host.sh` builds them). Translated in full, 7 of
+them are qtools units, and each compiles with both gcc and c4lc. Nearly
+all the rest stop at qtools' `resource.h`, whose `DICTNODE` derives from
+`CACHENODE` (M5). Overloads (M4) stop seven more. So M4 and M5 are what
+stand between M3 and Blood, as planned.
+
+Found on the way:
+
+- **c4lc rejects a scalar compound literal**, `(int) { x + 1 }`, with
+  "struct used before its definition". Struct ones work
+  (`src/tests/bbport/compound_lit.c`). c4cxx uses an array of one instead.
+- **g++ `-m32` links with gcc here.** helios has no 32-bit libstdc++, and
+  these programs need none, as `host.sh` found.
+
 ## 5. What is left for Blood after the compiler
 
 The Duke port (`~/git/c4/games/duke3d`, `c4/` is 3,250 lines) shows what a

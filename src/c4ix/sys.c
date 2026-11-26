@@ -232,6 +232,59 @@ int sys_read(int fd, char *buf, int len) {
     return vfs_read(f, buf, len);
 }
 
+// A read or write of a disk's file, a step of SYS_STEP bytes a trap. The
+// kernel serves a trap start to finish, holding the kernel lock, and
+// nothing else runs on its CPU meanwhile -- nor anything that needs the
+// lock, on any: vm mkdisk's writes of a MB were 2.6M cycles of ext2 and the
+// disk's time each, against a slice of 50K, so it had nearly all of the
+// machine while it wrote 1.5 GB, and the desktop and the shells froze. So
+// a call for more is the same syscall again for what is left (sys_restart,
+// its buffer and length moved on in the task's own arguments), and the
+// turns go round between its steps. The program sees one call for the
+// whole: the steps' bytes are counted (t->stepdone) and given at the last,
+// or where a step falls short (a read at the end of its file). A write's
+// metadata is committed once, at the last (vfs_nocommit: write-through
+// files). Writes step on an ext2 file (vfs_on_disk); reads on one still on
+// a disk or a drive (vfs_from_device), whose bytes the device brings.
+enum { SYS_STEP = 131072 };
+static int sys_steps(struct task *t, int *args, int wr) {
+    struct file *f;
+    int n, r, d;
+    n = args[2];
+    // a step left over from a call that did not come back for the rest
+    // (killed, or a signal's handler in between): not this one's
+    if (t && t->stepdone && t->stepnext != args[1]) t->stepdone = 0;
+    if (n > SYS_STEP && t && sched_in_trap() && (f = fd_get(t, args[0])) && (wr ? vfs_on_disk(f) : vfs_from_device(f))) {
+        if (wr) {
+            vfs_nocommit = 1;
+            r = vfs_write(f, (char *)args[1], SYS_STEP);
+            vfs_nocommit = 0;
+        } else r = vfs_read(f, (char *)args[1], SYS_STEP);
+        if (r == SYS_STEP) {
+            t->stepdone = t->stepdone + r;
+            args[1] = args[1] + r;
+            args[2] = n - r;
+            t->stepnext = args[1];
+            sys_restart = 1;
+            return 0;
+        }
+        if (wr) vfs_commit_file(f);
+        d = t->stepdone;
+        t->stepdone = 0;
+        if (r < 0) return d ? d : 0 - 1;
+        return d + r;
+    }
+    // served whole: the rest of the buffer checked too (sys_args_ok checked a step's)
+    if (n > SYS_STEP && !uaccess(args[1] + SYS_STEP, n - SYS_STEP, !wr)) r = 0 - 1;
+    else r = wr ? sys_write(args[0], (char *)args[1], n) : sys_read(args[0], (char *)args[1], n);
+    if (t && t->stepdone) {
+        d = t->stepdone;
+        t->stepdone = 0;
+        r = r < 0 ? d : d + r;
+    }
+    return r;
+}
+
 static int sys_same(char *a, char *b) {
     while (*a && *a == *b) { ++a; ++b; }
     return *a == *b;
@@ -809,8 +862,11 @@ static int sys_args_ok(int num, int *args) {
     k = (int)args;
     if (!UARGS_OK(k)) return 0;
     switch (num) {
-    case SYS_WRITE:    return uaccess(args[1], args[2], 0);
-    case SYS_READ:     return uaccess(args[1], args[2], 1);
+    // a read or write's first step only: each step is checked as it comes
+    // (sys_steps), and one served whole has the rest checked there. Checked
+    // whole at each step, a read of 53 MB walked its 13,000 pages 416 times
+    case SYS_WRITE:    return uaccess(args[1], args[2] > SYS_STEP ? SYS_STEP : args[2], 0);
+    case SYS_READ:     return uaccess(args[1], args[2] > SYS_STEP ? SYS_STEP : args[2], 1);
     case SYS_OPEN:     return ustrlen((char *)args[0]) >= 0;
     case SYS_PIPE:     return uaccess(args[0], 2 * sizeof(int), 1);
     case SYS_TASKINFO: return uaccess(args[1], TASKINFO_WORDS * sizeof(int), 1);
@@ -861,8 +917,8 @@ int sys_dispatch(int num, int *args) {
     if (!sys_args_ok(num, args)) return -1;
 
     switch (num) {
-    case SYS_WRITE:    return sys_write(args[0], (char *)args[1], args[2]);
-    case SYS_READ:     return sys_read(args[0], (char *)args[1], args[2]);
+    case SYS_WRITE:    return sys_steps(t, args, 1);
+    case SYS_READ:     return sys_steps(t, args, 0);
     // disks (docs/c4ix-ext2.md): block device args[0]'s ext2 at a path,
     // read-only where args[2]; unmounted; made (block size, label); the
     // counts of the disk a path is on; every change written; a mode

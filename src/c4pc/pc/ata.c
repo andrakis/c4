@@ -70,15 +70,17 @@ const char *ide_pci_init(void) {
 
 /* a microsecond without touching a port: the emulator's to use */
 static void io_pause(void) { for (int i = 0; i < 64; i++) __asm__ volatile("pause"); }
+/* The clock is looked at every 64th poll, not each: it is the TSC, and
+ * VirtualBox emulates rdtsc, a trip out to it each, as the port read is */
 static int wait(ata *d, int drq) {
   i64 t0 = plat_now_ms();
-  for (;;) {
+  for (u32 k = 1;; k++) {
     u8 s = inb(d->io + 7);
     if (!(s & 0x80)) {
       if (s & 0x21) return -1;                           /* an error, a fault */
       if (!drq || (s & 0x08)) return 0;
     }
-    if (plat_now_ms() - t0 > 10000) return -1;
+    if (!(k & 63) && plat_now_ms() - t0 > 10000) return -1;
     io_pause();
   }
 }

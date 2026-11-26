@@ -1733,6 +1733,15 @@ int vfs_read(struct file *f, char *buf, int len) {
 // a time (e2_write_through, ext2_pwrite). Reading it is as reading any
 // disk's file not in RAM: from the disk, a range at a time.
 enum { E2_SPILL = 1048576 };
+int vfs_nocommit;
+
+int vfs_on_disk(struct file *f) { return f->vn->type == VN_RAMFILE && f->vn->e2 != 0; }
+int vfs_from_device(struct file *f) { return f->vn->type == VN_RAMFILE && f->vn->lazy; }
+void vfs_commit_file(struct file *f) {
+    sched_lock();
+    if (f->vn->e2) ext2_commit(f->vn->e2);
+    sched_unlock();
+}
 
 // VN's LEN bytes at F's position, on the disk: the count, or -1
 static int e2_write_through(struct vnode *vn, struct file *f, char *buf, int len) {
@@ -1750,7 +1759,7 @@ static int e2_write_through(struct vnode *vn, struct file *f, char *buf, int len
     vfs_clock = vfs_clock + 1;
     vn->mtime = vfs_clock;
     vn->sig = 0;
-    ext2_commit(vn->e2);
+    if (!vfs_nocommit) ext2_commit(vn->e2);
     return n;
 }
 // VN, a disk's file in RAM, written to the disk and its RAM let go of:

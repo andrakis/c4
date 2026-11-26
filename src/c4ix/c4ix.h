@@ -411,6 +411,14 @@ struct vnode *vfs_pipe();
 struct vnode *vn_hostfile(int host);
 int          vfs_read(struct file *f, char *buf, int len);
 int          vfs_write(struct file *f, char *buf, int len);
+// A file on a disk (an ext2 one): its writes may go to the disk; and
+// those writes' metadata not committed while this is set (sys.c's steps
+// of one write but the last), then committed
+int          vfs_on_disk(struct file *f);
+// A file whose reads go to a device: a lazy one, still on a disk or a drive
+int          vfs_from_device(struct file *f);
+extern int   vfs_nocommit;
+void         vfs_commit_file(struct file *f);
 int          vfs_readable(struct vnode *vn, int pos);  // 1 = read won't block
 int          vfs_pollev(struct file *f);   // POLL_* true of it (SYS_POLL)
 void         vfs_dump(char *name);       // kernel-side: print a RAM file
@@ -768,6 +776,11 @@ struct task {
     int  tflags;               // TF_*: what is true of it, kept as it changes
     int  fdtop;                // one past the highest fd it has had: what a walk of fds needs see
     int  evgen;                // SYS_EVWAIT: sched_pipegen when its pipes were last looked at
+    // A read or write of a disk's file served a step a trap (sys.c,
+    // sys_steps): the bytes its steps have moved so far, and where the next
+    // step's buffer starts (a call that is not that one's next step starts afresh)
+    int  stepdone;
+    int  stepnext;
 };
 
 // What the hot paths ask of a task, answered from one word, kept where the

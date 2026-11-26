@@ -67,6 +67,18 @@ static char *c_data[E2_CACHE];
 static int c_size[E2_CACHE];   // the bytes c_data holds: a block of the biggest size it was used for
 static int c_dirty[E2_CACHE];  // changed since the disk had it: written at the commit
 static int c_clock;
+// the two slots last found, looked at before the rest: a file being
+// written goes between its indirect block and the bitmap, block after
+// block, and a walk of all 48 slots for each (bget, then bput) was most
+// of what ext2_pwrite cost the machine, some 10K cycles a 4 KB block
+static int c_hit0, c_hit1;
+static int c_find(struct e2fs *fs, int b) {
+    int i;
+    if (c_fs[c_hit0] == fs && c_blk[c_hit0] == b) return c_hit0;
+    if (c_fs[c_hit1] == fs && c_blk[c_hit1] == b) { i = c_hit1; c_hit1 = c_hit0; c_hit0 = i; return i; }
+    return 0 - 1;
+}
+static void c_saw(int i) { if (i != c_hit0) { c_hit1 = c_hit0; c_hit0 = i; } }
 
 static int rd16(char *p) { return (p[0] & 255) | (p[1] & 255) << 8; }
 static int rd32(char *p) { return (p[0] & 255) | (p[1] & 255) << 8 | (p[2] & 255) << 16 | (p[3] & 255) << 24; }
@@ -101,10 +113,11 @@ static int evict(int i) {
 static char *bget(struct e2fs *fs, int b) {
     int i, old;
     ++c_clock;
+    if ((i = c_find(fs, b)) >= 0) { c_age[i] = c_clock; return c_data[i]; }
     old = 0;
     i = 0;
     while (i < E2_CACHE) {
-        if (c_fs[i] == fs && c_blk[i] == b) { c_age[i] = c_clock; return c_data[i]; }
+        if (c_fs[i] == fs && c_blk[i] == b) { c_age[i] = c_clock; c_saw(i); return c_data[i]; }
         if (c_age[i] < c_age[old]) old = i;
         ++i;
     }
@@ -116,12 +129,14 @@ static char *bget(struct e2fs *fs, int b) {
     c_fs[old] = 0;
     if (bread_to(fs, b, 1, c_data[old]) < 0) return 0;
     c_fs[old] = fs; c_blk[old] = b; c_age[old] = c_clock;
+    c_saw(old);
     return c_data[old];
 }
 // a cached block changed: written back at the commit
 static int bput(struct e2fs *fs, int b) {
     int i;
     if (fs->ro) return 0 - 1;
+    if ((i = c_find(fs, b)) >= 0) { c_dirty[i] = 1; return 0; }
     i = 0;
     while (i < E2_CACHE) {
         if (c_fs[i] == fs && c_blk[i] == b) { c_dirty[i] = 1; return 0; }

@@ -244,7 +244,8 @@ seven tabs:
     /proc/meminfo) and swap; for c4pc, what the machines were given of
     the PC's and each one's heap in use.
   - **Network**: its layout, received and sent for each machine, empty
-    until the machines have a network card (stage 4).
+    still: the machines have their cards (stage 4, docs/c4pc-network.md),
+    and net.c's net_counts has the counts for INFO, not yet asked.
 - **Overview**, after btop, in the GUI: the processors across the top
   (all of them busy, the last minute; a bar and share for each, c4pc's
   uptime), then memory and disks side by side, the network under them,
@@ -312,10 +313,12 @@ minute at most, on the screen, before the PC powers off.
    machine after it was made (edit Hardware's row), a pause kept on the
    disk (suspend), and freeing a big image faster (a 1.5 GB image's
    delete takes about 10 s: ext2 frees its blocks one at a time).
-4. **Host-only networking between guests (Q9)**: a virtual NIC in each
-   machine (a ring of frames in its page 0 window, as the display's
-   ring), and a switch in c4pc that passes frames between them; then a
-   TCP/IP stack in C4IX. Networking to outside machines after that.
+4. **Host-only networking between guests (Q9)**: **its first milestone
+   built (2026-11-26, docs/c4pc-network.md)**: a card in each machine (the
+   NET window at 0x580, a frame a command), a switch in c4pc (net.c) with
+   VM 0 at 10.4.0.1 and guest N at 10.4.0.N+1, and in C4IX Ethernet, ARP,
+   IPv4, ICMP echo and UDP, sockets as fds; `ping`, `ifconfig`, `nc -u`;
+   `make test-c4pc-net`. TCP next, then networking to outside machines.
 5. Guests on their own processors (a second smp per machine in par.c),
    sound for the attached guest, pause/save, raw partitions.
 6. 32-bit and 64-bit machines side by side: the engine built twice into

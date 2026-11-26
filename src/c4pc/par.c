@@ -640,7 +640,11 @@ int par_after(smp *s, int r, i32 *status) {
   if (m0->halted) return 0;
   if (r == STOP_SLEEP && (others_running(p) || ipi_for0(p))) {
     i64 nap = m0->nap_ms, slept = 0;
-    while (slept < nap && !ipi_for0(p) && !m0->halted) slept += sleep_sync(p, nap - slept);
+    /* a machine with a network card looks at it every 2 ms of the nap, and
+     * a frame ends it (net.c): VM 0 asleep here answered its first ping
+     * from a guest 95 ms late */
+    while (slept < nap && !ipi_for0(p) && !m0->halted && !net_waiting(m0))
+      slept += sleep_sync(p, m0->dv->net && nap - slept > 2 ? 2 : nap - slept);
     if (slept < nap) m0->sleep_ms -= nap - slept;
     return 1;
   }

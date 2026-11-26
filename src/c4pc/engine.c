@@ -136,6 +136,7 @@ static int dev_rd(machine *m, u32 r, word *v) {
   if (r >= 0x480 && r < 0x500 && m->snd) { *v = snd_read32(m->snd, r & ~3u); return 1; }     /* ... and the sound card */
   if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) { *v = blk_read32(m, r & ~3u); return 1; } /* ... and the disks */
   if (r >= HV_BASE && r < HV_END && m->dv->hv_rd) { *v = m->dv->hv_rd(m, r & ~3u); return 1; }   /* ... and the hypervisor */
+  if (r >= NET_BASE && r < NET_END && m->dv->net) { *v = net_rd(m, r & ~3u); return 1; }        /* ... and the network card */
   return 0;
 }
 static int dev_wr(machine *m, u32 r, word v) {
@@ -144,6 +145,7 @@ static int dev_wr(machine *m, u32 r, word v) {
   if (r >= 0x480 && r < 0x500 && m->snd) { snd_write32(m->snd, r & ~3u, (i32)v); return 1; }
   if (r >= BLK_BASE && r < BLK_END && m->dv->nblk) { blk_write32(m, r & ~3u, (i32)v); return 1; }
   if (r >= HV_BASE && r < HV_END && m->dv->hv_wr) { m->dv->hv_wr(m, r & ~3u, (i32)v); return 1; }
+  if (r >= NET_BASE && r < NET_END && m->dv->net) { net_wr(m, r & ~3u, (i32)v); return 1; }
   return 0;
 }
 static int dev_wr8(machine *m, uword a, i32 v) {
@@ -543,7 +545,7 @@ i32 machine_info(machine *m) {
   if (m->c4m_info) return C4I_C4M | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | (m->no_fpu ? 0 : C4I_FPU) | (m->trap_handler ? C4I_TRAPH : 0);
   return C4I_C4M | C4I_C4MJS | C4I_HRT | C4I_SIG | C4I_FLT | C4I_PROT | C4I_PIT | C4I_DRV |
          (m->no_fpu ? 0 : C4I_FPU) | (m->mmu ? C4I_MMU : 0) | (m->accel ? C4I_ACCEL : 0) | (m->gui ? C4I_GUI : 0) | (m->snd ? C4I_SND : 0) |
-         (m->dv->nblk ? C4I_BLK : 0) | (m->dv->hv_rd ? (m->dv->hv_id ? C4I_HVG : C4I_HV) : 0) |
+         (m->dv->nblk ? C4I_BLK : 0) | (m->dv->hv_rd ? (m->dv->hv_id ? C4I_HVG : C4I_HV) : 0) | (m->dv->net ? C4I_NET : 0) |
          (m->trap_handler ? C4I_TRAPH : 0) | (m->smp ? C4I_SMP : 0) | (m->smp && m->smp->par ? C4I_PAR : 0);
 }
 

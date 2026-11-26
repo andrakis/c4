@@ -1080,7 +1080,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
         i64 now = plat_now_ms(), until = t0 + m->nap_until;
         if (m->pit_ms && m->pit_next < until) until = m->pit_next;
         if (until > now + 100) until = now + 100;
-        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
+        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending() && !net_waiting(m)) {
           if (m->snd) audio();
           /* the hypervisor's guests run while VM 0 naps; their screen is kept */
           if (hv) { int ran = hv_run(); if (m->gui) display_tick(hv_shown(m)); if (hv_detach) { hv_detach = 0; hv_attach(0); } if (ran) continue; }
@@ -1094,7 +1094,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
       if (ahead > 2) {
         con_flush();
         i64 until = plat_now_ms() + (ahead < 100 ? ahead : 100);
-        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending()) {
+        while (plat_now_ms() < until && inq_head == inq_tail && scq_head == scq_tail && !mouse_pending() && !net_waiting(m)) {
           if (m->snd) audio();
           idle0(m);
         }

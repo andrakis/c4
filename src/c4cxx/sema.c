@@ -3066,6 +3066,7 @@ static void declaration (Decl *d, int top)
 	for (; d; d = d->next) {
 		Ty *t;
 		int member_def = 0;	// T X::s = v (external, const or not)
+		Sym *pre;		// declared before its initializer
 		if (!d->name) {
 			// struct x { ... }; and enum { ... };
 			spec_type (d->spec);
@@ -3108,6 +3109,11 @@ static void declaration (Decl *d, int top)
 			d->has_args = 0;
 			d->args = 0;
 		}
+		// C: a declarator's scope starts at its end, before its initializer
+		// (Shadow Warrior's static STATE s_BonusGrab[] = { ..., &s_BonusGrab[1] })
+		pre = 0;
+		if (d->init && t->kind != T_FUNC && !find_in (sc, d->name))
+			pre = add_sym (sc, d->name, S_VAR, t);
 		if (d->init) {
 			initializer (d->init, t);
 			if (t->kind == T_ARRAY && t->len < 0)
@@ -3128,13 +3134,20 @@ static void declaration (Decl *d, int top)
 			// C++: a const object at file scope is internal (static), unless
 			// declared extern before
 			if (opt_cplusplus && top && !member_def && t->kind != T_FUNC && const_object (t) &&
-			    !(d->spec->storage & (ST_EXTERN | ST_STATIC)) && !(old && old->kind == S_VAR))
+			    !(d->spec->storage & (ST_EXTERN | ST_STATIC)) && !(old && old != pre && old->kind == S_VAR))
 				d->spec->storage |= ST_STATIC;
 			// a declaration again in the same scope: the later one, with
 			// any length it learned, stands
 			if (opt_cplusplus && old && old->kind == S_FUNC && t->kind == T_FUNC && !same_type (old->ty, t))
 				error_at (d->name, "overloaded functions are not supported yet (M4)");
-			if (old && old->kind != S_TYPEDEF && old->kind != S_ENUMC) {
+			if (old && old == pre) {
+				// declared before its initializer: its type now, a length learned
+				pre->ty = t;
+				if ((t->qual & Q_CONST) && is_integer (t) && !d->init->is_list && d->init->expr->is_const) {
+					pre->has_val = 1;
+					pre->val = truncate (d->init->expr->val, t);
+				}
+			} else if (old && old->kind != S_TYPEDEF && old->kind != S_ENUMC) {
 				if (!(t->kind == T_ARRAY && t->len < 0 && old->ty->kind == T_ARRAY))
 					old->ty = t;
 				else

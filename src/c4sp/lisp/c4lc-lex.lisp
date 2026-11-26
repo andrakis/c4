@@ -40,6 +40,28 @@
 (define lex:val 0)      ;; mailbox: value from the number scanners
 (define lex:oplen 1)    ;; mailbox: bytes consumed by lex:op
 
+;; In preprocessor mode a token keeps two things its value loses, both
+;; for # and ## (c4lc-pp.lisp's pp:spell), and found by c4cxx's oracle:
+;; whether white space came before it, and a literal's spelling. Without
+;; them `#e` of `stricmp(kind, "*.MAP")` lost the quotes and the source's
+;; spacing, and `c##ULL` of 0xfffffffff (stdint.h's UINT64_C) pasted
+;; garbage: at 32 bits that is a wide number, whose value has no spelling.
+;; A pp token is (KIND VALUE LINE FLAGS [SPELLING]). FLAGS: 1 = '('
+;; touches the identifier, or the Str is a <header>; 2 = white space (or a
+;; comment, or a newline) before it. SPELLING is on literals only: numbers
+;; of every kind, strings and character constants, quotes and all.
+(define lex:white false)
+(define lex:emit (lambda (t raw acc)
+	(if lex:pp
+		(begin
+			(define f (+ (if (> (length t) 3) (index t 3) 0) (if lex:white 2 0)))
+			(set! lex:white false)
+			(lex:cons (+ (list (head t) (head (tail t)) (index t 2) f)
+				(if raw (list raw) (list))) acc))
+	(lex:cons t acc))))
+;; the source from I up to (not including) E
+(define lex:text (lambda (i e) (string:substr lex:src i (- e i))))
+
 ;; Conforming escapes (L10). Off by default, so a source lexes exactly
 ;; as it always did and the c4cc differential battery keeps its
 ;; premise. On (-conforming), escape sequences mean what C says they
@@ -665,16 +687,17 @@
 				(set! lex:want-header false)
 				(define sp lex:splice)
 				(set! lex:splice 0)
+				(set! lex:white true)
 				(next lex:go j (+ line (+ 1 sp)) acc))
-		(if (<= c 32) (next lex:go j line acc)
+		(if (<= c 32) (begin (set! lex:white true) (next lex:go j line acc))
 		(if (= c 35)
 			(if lex:pp
 				;; '##' is one token: the paste operator. A lone '#'
 				;; is either a directive introducer or stringize --
 				;; the preprocessor tells them apart by position.
 				(if (lex:hash2? j)
-					(next lex:go (+ j 1) line (lex:cons (list 'HashHash 0 line) acc))
-				(next lex:go j line (lex:cons (list 'Hash 0 line) acc)))
+					(next lex:go (+ j 1) line (lex:emit (list 'HashHash 0 line) false acc))
+				(next lex:go j line (lex:emit (list 'Hash 0 line) false acc)))
 			(begin
 				(define pk (lex:pragmapack j))
 				(if pk (next lex:go pk line (lex:cons (list 'PragmaPack 0 line) acc))
@@ -686,8 +709,8 @@
 			(begin
 				(define e (lex:hdrend j))
 				(set! lex:want-header false)
-				(next lex:go (+ e 1) line (lex:cons
-					(list 'Str (string:substr lex:src j (- e j)) line 1) acc)))
+				(next lex:go (+ e 1) line (lex:emit
+					(list 'Str (string:substr lex:src j (- e j)) line 1) false acc)))
 		(if (lex:identstart? c)
 			(begin
 				(define e (lex:identend j))
@@ -706,56 +729,57 @@
 				;; happens to start with a paren) -- the standard
 				;; draws the line at the space, so the lexer must be
 				;; the one to notice it.
-				(next lex:go e line (lex:cons
+				(next lex:go e line (lex:emit
 					(if kw (list kw 0 line)
 						(if lex:pp
 							(list 'Id name line (if (lex:lparen? e) 1 0))
-						(list 'Id name line))) acc)))
+						(list 'Id name line))) false acc)))
 		(if (lex:fpstart? i c)
 			(begin
 				(define fend (lex:fpscan i))
-				(next lex:go fend line (lex:cons (lex:fptoken line) acc)))
+				(next lex:go fend line (lex:emit (lex:fptoken line) (lex:text i fend) acc)))
 		(if (lex:digit? c)
 			(begin
 				(define e0 (lex:number i c))
 				(define e (lex:suffix e0 0 0))
 				(next lex:go e line
-					(lex:cons
+					(lex:emit
 						(if (lex:wide? i c e0)
 							(list (if (= lex:sfx 0) 'NumLL 'NumULL) (list lex:wlo lex:whi) line)
 						(list (if (= lex:sfx 0) 'Num (if (= lex:sfx 1) 'NumU 'NumUL))
-							lex:val line)) acc)))
+							lex:val line)) (lex:text i e) acc)))
 		(if (= c 47)
 			(if (= (lex:peek j) 47)
-				(next lex:go (lex:skipline (+ j 1)) line acc)
+				(begin (set! lex:white true) (next lex:go (lex:skipline (+ j 1)) line acc))
 			(if (= (lex:peek j) 42)
 				(begin
 					(define r (lex:skipblock (+ j 1) line))
+					(set! lex:white true)
 					(next lex:go (head r) (index r 1) acc))
 			(if (= (lex:peek j) 61)
-				(next lex:go (+ j 1) line (lex:cons (list 'DivA 0 line) acc))
-			(next lex:go j line (lex:cons (list 'Div 0 line) acc)))))
+				(next lex:go (+ j 1) line (lex:emit (list 'DivA 0 line) false acc))
+			(next lex:go j line (lex:emit (list 'Div 0 line) false acc)))))
 		(if (= c 34)
 			(begin
 				(define e (lex:strend j 34))
 				(define buf (string:alloc (- e j)))
 				(define n (lex:strdecode j e buf 0))
-				(next lex:go (+ e 1) line (lex:cons
-					(list 'Str (string:substr buf 0 n) line) acc)))
+				(next lex:go (+ e 1) line (lex:emit
+					(list 'Str (string:substr buf 0 n) line) (lex:text i (+ e 1)) acc)))
 		(if (= c 39)
 			(begin
 				(define e (lex:strend j 39))
 				(define buf (string:alloc (- e j)))
 				(define n (lex:strdecode j e buf 0))
-				(next lex:go (+ e 1) line (lex:cons
+				(next lex:go (+ e 1) line (lex:emit
 					(list 'Num
 						(if (> n 0) (string:byte buf (- n 1)) 0)
-						line) acc)))
+						line) (lex:text i (+ e 1)) acc)))
 		(begin
 			(define k (lex:op i c))
 			(if k
 				(next lex:go (+ i lex:oplen) line
-					(lex:cons (list k 0 line) acc))
+					(lex:emit (list k 0 line) false acc))
 			(next lex:go j line acc))))))))))))))))))  ;; unknown byte: skip, as c4cc
 
 ;; ---- entry points ----
@@ -767,6 +791,7 @@
 		(set! lex:src src)
 		(set! lex:len (length src))
 		(set! lex:splice 0)
+		(set! lex:white false)
 		(lex:go 0 (+ base 1) (list)))))
 
 ;; under -g a file's locations carry its number

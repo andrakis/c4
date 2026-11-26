@@ -22,3 +22,11 @@ line 1 1 src/tests/c4lc_pp.c
 kw 70000 0 42
 str-kw int while
 and-right 1
+str-lit stricmp(kind, "*.MAP") == 0
+str-space x +y -z
+str-quote '"' "a\"b\\c" '\n'
+str-num 0x1F 10u 017
+str-str "q \"r\""
+str-ops a[i] += b->c %= d <<= (e ^= f)
+paste-hex 16
+paste-wide 15

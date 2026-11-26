@@ -198,20 +198,36 @@ VARIABLE WANT-HDR  0 WANT-HDR !
 \ buffer the token was lexed from: a directive runs to the end of its
 \ LINE, and after an #include two different files' line numbers sit
 \ next to each other on the stream.
+\
+\ Two things a token's value loses ride along for # and ## (pp.f's
+\ PP-SPELL), as in c4lc-lex.lisp's lex:emit: ADJ-WHITE in t.adj when
+\ white space (a comment, a newline) came before the token, and in
+\ t.sa/t.su a literal's spelling as the source wrote it -- quotes,
+\ base and suffix. #e of `stricmp(kind, "*.MAP")` keeps its quotes and
+\ spacing that way, and `c##ULL` of 0x10 pastes 0x10ULL, not 16ULL.
+1 CONSTANT ADJ-PAREN                      \ t.adj: '(' touches / <header>
+2 CONSTANT ADJ-WHITE                      \ t.adj: white space before
 BEGIN-STRUCTURE TOK
    FIELD: t.kind   FIELD: t.val   FIELD: t.len   FIELD: t.line
-   FIELD: t.adj    FIELD: t.file
+   FIELD: t.adj    FIELD: t.file  FIELD: t.sa    FIELD: t.su
 END-STRUCTURE
 
 CREATE TOKS VEC ALLOT
 VARIABLE LEXV   TOKS LEXV !               \ where TOK, appends
 VARIABLE LEXF   0 LEXF !                  \ serial of the buffer in hand
 VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
+VARIABLE T-WS   0 T-WS !                  \ so are these three
+VARIABLE T-SA   0 T-SA !
+VARIABLE T-SU   0 T-SU !
 : TOK, ( kind val len -- ) {: k v n | t -- :}
    TOK ALLOT: TO t
    k t t.kind !  v t t.val !  n t t.len !  LINE @ t t.line !
-   T-ADJ @ t t.adj !  0 T-ADJ !  LEXF @ t t.file !
+   T-ADJ @ T-WS @ IF ADJ-WHITE OR THEN t t.adj !  0 T-ADJ !  0 T-WS !
+   LEXF @ t t.file !
+   T-SA @ t t.sa !  T-SU @ t t.su !  0 T-SU !
    t LEXV @ V, ;
+\ the next token's spelling: the source from S up to POS
+: SPELLED ( s -- )  DUP SRC @ + T-SA !  POS @ SWAP - T-SU ! ;
 
 \ -- scanners -----------------------------------------------------------
 
@@ -307,30 +323,30 @@ VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
    WHILE REPEAT
    u 0= IF Num EXIT THEN
    l 0= IF NumU ELSE NumUL THEN ;
-: T-NUM   SCAN-NUMBER SCAN-SUFFIX SWAP 0 TOK, ;
+: T-NUM {: | s -- :}  POS @ TO s  SCAN-NUMBER SCAN-SUFFIX  s SPELLED  SWAP 0 TOK, ;
 \ every kind that carries a number in t.val
 : NUMK? ( k -- f )  DUP Num = OVER NumU = OR SWAP NumUL = OR ;
 
-: T-STR {: | end dst n -- :}
-   1 POS +!
+: T-STR {: | s end dst n -- :}
+   POS @ TO s  1 POS +!
    34 STR-END TO end
    end POS @ - 1+ ALLOT: TO dst
    end dst DECODE TO n
-   end 1+ POS !
+   end 1+ POS !  s SPELLED
    Str dst n TOK, ;
 
-: T-CHAR {: | end dst n -- :}
-   1 POS +!
+: T-CHAR {: | s end dst n -- :}
+   POS @ TO s  1 POS +!
    39 STR-END TO end
    end POS @ - 1+ ALLOT: TO dst
    end dst DECODE TO n
-   end 1+ POS !
+   end 1+ POS !  s SPELLED
    Num  n 0> IF dst n 1- + C@ ELSE 0 THEN  0 TOK, ;
 
 : T-SLASH {: | d -- :}
    POS @ 1+ PEEK TO d
-   d 47 = IF SKIP-LINE EXIT THEN
-   d 42 = IF SKIP-BLOCK EXIT THEN
+   d 47 = IF SKIP-LINE  1 T-WS ! EXIT THEN
+   d 42 = IF SKIP-BLOCK 1 T-WS ! EXIT THEN
    d 61 = IF DivA 0 0 TOK, 2 POS +! EXIT THEN
    Div 0 0 TOK, 1 POS +! ;
 
@@ -368,8 +384,8 @@ VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
    c 92 = POS @ 1+ PEEK 10 = AND IF 2 POS +! 1 SPLICES +! EXIT THEN   \ splice
    c 92 = POS @ 1+ PEEK 13 = AND POS @ 2 + PEEK 10 = AND
    IF 3 POS +! 1 SPLICES +! EXIT THEN     \ and before a CR LF, as c4lc
-   c 10 = IF 1 POS +! SPLICES @ 1+ LINE +! 0 SPLICES ! 0 WANT-HDR ! EXIT THEN
-   c 33 < IF 1 POS +! EXIT THEN
+   c 10 = IF 1 POS +! SPLICES @ 1+ LINE +! 0 SPLICES ! 0 WANT-HDR ! 1 T-WS ! EXIT THEN
+   c 33 < IF 1 POS +! 1 T-WS ! EXIT THEN
    c 35 = IF T-HASH EXIT THEN
    WANT-HDR @ c 60 = AND IF T-HEADER EXIT THEN
    c ID1? IF T-IDENT EXIT THEN
@@ -413,6 +429,7 @@ VARIABLE #FILES  0 #FILES !
 
 : LEX-BUF ( addr len v -- ) {: addr len v -- :}
    addr SRC !  len SLEN !  0 POS !  1 LINE !  0 SPLICES !  0 WANT-HDR !  0 T-ADJ !
+   0 T-WS !  0 T-SU !
    v LEXV !  1 #FILES +!  #FILES @ LEXF !
    BEGIN AT-END? 0= WHILE LEX-STEP REPEAT
    Eof 0 0 TOK, ;

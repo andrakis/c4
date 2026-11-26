@@ -3937,6 +3937,11 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# /#if/#elif/#else/#endif with constant expressions, #undef).
 	./c4sp src/c4sp/lisp/c4lc.lisp -P $(TESTS)/c4lc_pp.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-pp.txt
+	# and at 32 bits, where 0xfffffffff is a wide number: its paste in
+	# paste-wide (stdint.h's UINT64_C, c##ULL) is what spelling a literal
+	# from its value got wrong, and only there
+	$(call lc32,) -P $(TESTS)/c4lc_pp.c .c4lc_b.c4r > /dev/null
+	./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-pp.txt
 	# The same battery with CR LF line ends, as a source written on DOS
 	# or Windows has them (jfaudiolib's, under games/sw): a backslash
 	# before a CR LF continues the line too. By the Lisp and by lc32;

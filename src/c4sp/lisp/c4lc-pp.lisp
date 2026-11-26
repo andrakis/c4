@@ -67,6 +67,11 @@
 (define pp:kind (lambda (t) (head t)))
 (define pp:val (lambda (t) (head (tail t))))
 (define pp:line (lambda (t) (head (tail (tail t)))))
+;; The lexer's FLAGS (c4lc-lex.lisp, lex:emit): 1 = '(' touches the
+;; identifier, or the Str is a <header>; 2 = white space before it. A
+;; token the preprocessor makes itself has none.
+(define pp:flag? (lambda (t b)
+	(if (> (length t) 3) (= (bit:and (index t 3) b) b) false)))
 
 ;; ---- the macro table ----
 
@@ -160,7 +165,7 @@
 		(define rest (tail d))
 		;; function-like only when the paren touched the name (the
 		;; lexer's fourth field), never merely followed it
-		(if (if (= (length nt) 4) (= (index nt 3) 1) false)
+		(if (pp:flag? nt 1)
 			(begin
 				(define pr (pp:params (tail rest) nil))
 				(pp:define! n (head pr) (head (tail pr)) (head (tail (tail pr)))))
@@ -484,15 +489,20 @@
 ;; Needed by stringize and paste, and by nothing else. Identifiers
 ;; and numbers are what those operators are actually used on; the
 ;; punctuation table covers the rest of what can plausibly appear
-;; inside a macro argument.
+;; inside a macro argument. Every kind lex:op makes, by the lexer's names
+;; (c4fc's SPELL rows): `[` is Brak, and was Lbrak here, so #x of a[i]
+;; spelled "ai]" -- in 38 of the games' units' assert messages -- and the compound
+;; assignments, # and ## spelled nothing.
 (define pp:optext '(
 	(Lparen "(") (Rparen ")") (Lbrace "{") (Rbrace "}")
-	(Lbrak "[") (Rbrak "]") (Semi ";") (Comma ",") (Dot ".")
+	(Brak "[") (Rbrak "]") (Semi ";") (Comma ",") (Dot ".")
 	(Arrow "->") (Assign "=") (Eq "==") (Ne "!=") (Lt "<") (Gt ">")
 	(Le "<=") (Ge ">=") (Add "+") (Sub "-") (Mul "*") (Div "/")
 	(Mod "%") (And "&") (Or "|") (Xor "^") (Not "!") (Tilde "~")
 	(Lan "&&") (Lor "||") (Shl "<<") (Shr ">>") (Inc "++")
-	(Dec "--") (Cond "?") (Colon ":")
+	(Dec "--") (Cond "?") (Colon ":") (Hash "#") (HashHash "##")
+	(AddA "+=") (SubA "-=") (MulA "*=") (DivA "/=") (ModA "%=")
+	(ShlA "<<=") (ShrA ">>=") (AndA "&=") (OrA "|=") (XorA "^=")
 	(Int "int") (Char "char") (Void "void") (If "if") (Else "else")
 	(While "while") (For "for") (Return "return") (Sizeof "sizeof")
 	(Struct "struct") (Union "union") (Enum "enum") (Static "static")
@@ -505,25 +515,56 @@
 	(if (= (head (head l)) k) (head (tail (head l)))
 	(next pp:oplook k (tail l))))))
 
+;; A literal is spelled as the source spelled it (the lexer's fifth
+;; field): a string or character constant with its quotes, a number in
+;; its own base with its suffix -- `c##ULL` of 0xfffffffff must lex as
+;; 0xfffffffffULL, and at 32 bits that number's value is a pair of words.
+;; Only a literal the preprocessor made itself (# and __LINE__,
+;; __FILE__) is spelled from its value.
 (define pp:spell (lambda (t)
+	(if (> (length t) 4) (index t 4)
 	(begin
 		(define k (pp:kind t))
 		(if (= k 'Id) (pp:val t)
 		(if (if (= k 'Num) true (if (= k 'NumU) true (= k 'NumUL))) (+ "" (pp:val t))
-		(if (= k 'Str) (pp:val t)
+		(if (= k 'Str) (pp:quote (pp:val t))
 		(begin
 			(define o (pp:oplook k pp:optext))
-			(if o o "")))))))) 
+			(if o o "")))))))))
 
-;; Spell a whole token list, space-separated where two words would
-;; otherwise run together. cpp's exact whitespace rules are subtler;
-;; this matches on the shapes that occur in practice.
+;; a string's value as a literal: in quotes, its " and \ escaped
+(define pp:quote (lambda (s)
+	(begin
+		(define buf (string:alloc (+ 2 (* 2 (length s)))))
+		(string:byte! buf 0 34)
+		(define n (pp:quote/2 s 0 buf 1))
+		(string:byte! buf n 34)
+		(string:substr buf 0 (+ n 1)))))
+(define pp:quote/2 (lambda (s i buf n)
+	(if (>= i (length s)) n
+	(begin
+		(define c (string:byte s i))
+		(if (if (= c 34) true (= c 92))
+			(begin
+				(string:byte! buf n 92)
+				(string:byte! buf (+ n 1) c)
+				(next pp:quote/2 s (+ i 1) buf (+ n 2)))
+		(begin
+			(string:byte! buf n c)
+			(next pp:quote/2 s (+ i 1) buf (+ n 1))))))))
+
+;; #x: the argument's spellings, with one space wherever the source had
+;; white space between two of its tokens and none elsewhere (C 6.10.3.2,
+;; and gcc). A literal's spelling goes in as it is, quotes and
+;; backslashes too: the string's VALUE is that text, so the escaping a
+;; written-out "...\"...\"..." would need is undone before it gets here.
 (define pp:spelllist (lambda (toks acc first)
 	(if (empty? toks) acc
 	(begin
-		(define txt (pp:spell (head toks)))
+		(define t (head toks))
+		(define txt (pp:spell t))
 		(next pp:spelllist (tail toks)
-			(if first txt (+ (+ acc " ") txt))
+			(if first txt (if (pp:flag? t 2) (+ (+ acc " ") txt) (+ acc txt)))
 			false)))))
 
 ;; token ## token: splice the spellings and lex the result, which is
@@ -604,7 +645,8 @@
 	(if (empty? l) acc (next pp:revonto (tail l) (pp:cons (head l) acc)))))
 
 ;; Expanded tokens carry the invocation's line so later directive
-;; splitting (and any diagnostics) stay sane.
+;; splitting (and any diagnostics) stay sane. They keep their flags and
+;; spelling: an expansion can be an argument that # or ## spells again.
 (define pp:reline (lambda (toks ln)
 	(pp:reline/2 toks ln nil)))
 (define pp:reline/2 (lambda (toks ln acc)
@@ -612,7 +654,7 @@
 	(begin
 		(define t (head toks))
 		(next pp:reline/2 (tail toks) ln
-			(pp:cons (list (pp:kind t) (pp:val t) ln) acc))))))
+			(pp:cons (+ (list (pp:kind t) (pp:val t) ln) (tail (tail (tail t)))) acc))))))
 
 ;; ---- the main walk ----
 ;;
@@ -697,7 +739,7 @@
 					(if (= (pp:kind (head ex)) 'Str) nil
 						(pp:die "#include needs \"file\" or <file>"))
 					(define hn (head ex))
-					(define angle (if (= (length hn) 4) (= (index hn 3) 1) false))
+					(define angle (pp:flag? hn 1))
 					(list (pp:include (pp:val hn) angle rest) skip))
 			;; gcc's `# 12 "f"` markers, and #line: honoured under -g, where
 			;; locations are what the source map is made of
@@ -806,7 +848,13 @@
 			;; without the lexer's Eof, which would otherwise sit inside
 			;; every expansion: `#if N == 1` read as `3 <Eof>` and stopped
 			;; (c4fc's PP-DEFINE always dropped it)
-			(pp:define! n false (pp:dropeof (lex:string v) nil) false))))))
+			;; lexed as the preprocessor lexes, so a value keeps its
+			;; spelling for # and ## (c4fc's PP-DEFINE does the same)
+			(define was lex:pp)
+			(set! lex:pp true)
+			(define vt (lex:string v))
+			(set! lex:pp was)
+			(pp:define! n false (pp:dropeof vt nil) false))))))
 (define pp:predefines (lambda (l)
 	(if (empty? l) nil
 	(begin

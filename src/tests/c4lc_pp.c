@@ -48,6 +48,15 @@ int nested() { return LONG_MACRO(ADD(1, 2)); }
 #define VERSION 7
 #define PREFIXED(n) c4lc_ ## n
 
+// # spells its argument as the source did, and ## pastes spellings
+// (found by c4cxx's oracle, 2026-11-26). A string or character constant
+// keeps its quotes, with " and \ escaped in the literal #x makes; a
+// number keeps its base and suffix; white space between two tokens is
+// one space, and none where there was none. Duke's menues.c asserts
+// stricmp(kind, "*.MAP") == 0, which came out as "stricmp ( kind , *.MAP
+// ) == 0". And stdint.h's UINT64_C is c##ULL: 0xfffffffff, a pair of
+// words at 32 bits, had no spelling of its value and pasted garbage.
+
 int CAT(fo, ur)() { return 4; }
 int PREFIXED(probe)() { return 11; }
 
@@ -150,5 +159,13 @@ int main() {
     printf("kw %d %d %d\n", kw_wide, kw_undef(), kw_ret());
     printf("str-kw %s\n", STR(int while));
     printf("and-right %d\n", and_right());
+    printf("str-lit %s\n", STR(stricmp(kind, "*.MAP") == 0));
+    printf("str-space %s\n", STR(  x   +y/* c */-z  ));
+    printf("str-quote %s\n", STR('"' "a\"b\\c" '\n'));
+    printf("str-num %s\n", STR(0x1F 10u 017));
+    printf("str-str %s\n", XSTR(STR(q "r")));
+    printf("str-ops %s\n", STR(a[i] += b->c %= d <<= (e ^= f)));
+    printf("paste-hex %d\n", CAT(0x, 10));
+    printf("paste-wide %d\n", (int)(CAT(0xfffffffff, ULL) >> 32));
     return 0;
 }

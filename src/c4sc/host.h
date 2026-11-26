@@ -67,6 +67,7 @@ int *L_pp_58file (int *a0);
 int *L_pp_58predefine (int *a0);
 int *L_pp_58predefines (int *a0);
 extern int *L_p_58lines;                // -g: the parser puts the lines in
+extern int *L_p_58msbf;                 // -mms-bitfields: MS bit-field layout
 int *L_parse_58program (int *a0);
 extern int *L_c4r_58v3;
 extern int *L_c4r_58bss_45extra;

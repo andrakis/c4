@@ -85,6 +85,7 @@ enum {
     C4IX_OP_OPEN = 30, C4IX_OP_READ = 31, C4IX_OP_CLOS = 32,
     C4IX_OP_PRTF = 33, C4IX_OP_MALC = 34, C4IX_OP_FREE = 35,
     C4IX_OP_EXIT = 38, C4IX_OP_PUTC = 39, C4IX_OP_PUTS = 40,
+    C4IX_OP_RALC = 41,
     // ITH would take the machine's trap handler, the kernel's: refused
     C4IX_OP_ITH = 44,
     // USLP sleeps the whole machine, so a task gets a sleep of its own
@@ -881,6 +882,7 @@ void         task_shutdown();
 // or plainly frees a pointer that is not such a block.
 int          task_ualloc(struct task *t, int bytes);
 void         task_ufree(int p);
+int          task_urealloc(struct task *t, int p, int bytes);
 int          task_umem(struct task *t);   // the bytes of its blocks, headers too
 
 // ---- C4KE compatibility (c4ke.c) ----
@@ -1195,6 +1197,7 @@ void umem_share(int p);                // a cached library's code: in every spac
 void mmu_adopt(struct task *t);        // what was made for T is T's
 int  umem_alloc(struct task *t, int n);
 void umem_free(struct task *t, int p);
+int  umem_size(struct task *t, int p);   // what T's block at P holds, or -1
 void umem_free_all(struct task *t, int all);
 int  umem_bytes(struct task *t);
 int  mmu_user_entry(struct task *t);   // a page that runs T's constructors, main and exit

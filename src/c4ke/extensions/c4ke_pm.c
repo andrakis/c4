@@ -99,9 +99,11 @@ static int pm_dispatch_run (int *t, int ins, int *sp, int *a, int *returnpc) {
 		*a = close(*sp);
 	} else if (ins == pm_PUTC) {
 		*a = putchar(*((char *)sp));
-	//} else if (ins == PUTS) {
-	//	// TODO: write *sp string to stream
-	//	*a = puts((char *)*sp);
+	} else if (ins == pm_PUTS) {
+		// puts(*sp), as c4m runs it unprotected. Commented out until
+		// 2026-11-27 (it named the bare PUTS, which load-c4r.c owns), so
+		// a protected task's first puts fell to SCR_FAIL and killed it.
+		*a = puts((char *)*sp);
 	} else if (ins == pm_PRTF) {
 		// TODO: deprecate PRTF, implement it as calls to puts and putc in user library.
 		r = returnpc[1]; // grab the number of arguments from the ADJ x following the printf

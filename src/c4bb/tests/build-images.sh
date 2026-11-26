@@ -1076,6 +1076,14 @@ $CC -o $ROOTDISK/save.c4r $U0 include/c4bb.h $BIN/save.c > /dev/null
 cp c4ix-src.tar $ROOTDISK/ 2>/dev/null || true
 [ -f c4sc32-fused.c4r ] && cp c4sc32-fused.c4r $ROOTDISK/c4sc.c4r
 cp $BIN/c4ix.b4k $ROOTDISK/
+# Every module c4ix.b4k links, or C4KE cannot see what it builds from:
+# mmu.c was missing from the developer manifest from the MMU's arrival
+# until 2026-11-27.
+for o in $(sed -n 's/^LIST c4ix\.objs //p' $BIN/c4ix.b4k); do
+    f=src/c4ix/${o%.c4o}.c
+    grep -q "^[[:space:]]*${f##*/}: $f\$" src/c4bb/fs/c4ke-dev.vfs.txt ||
+        { echo "c4bb: $f (c4ix.b4k's) is not in src/c4bb/fs/c4ke-dev.vfs.txt" >&2; exit 1; }
+done
 cat src/c4bb/fs/c4ke.vfs.txt src/c4bb/fs/c4ke-dev.vfs.txt > $ROOTDISK/c4ke.vfs.txt
 (cd $ROOTDISK && find . -type f -not -name manifest.json | sed 's|^\./||') | \
     awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}' > $ROOTDISK/manifest.json

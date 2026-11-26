@@ -40,8 +40,10 @@ export function setOpcodeNames (names) { setOpnames(names); rebuildOpcodeTables(
 // unknown one did before. What changes is that the board can EXECUTE
 // LDL/STL/POPA and NAME the rest (docs/fused-opcodes.md).
 // 95: and the 16-bit loads and store, LSR and LCU, 90-94 (docs/c4-16bit.md),
-// microcode with no new circuitry. FPU (89) stays a jsop the decoder
-// does not dispatch: it traps here as it did when it was past the end.
+// microcode with no new circuitry. FPU (89) is a jsop, as FLT is: the
+// system controller runs it (fpu.js), which is what INFO's C4I_FPU
+// announces. It had no `op FPU` line in hw/microcode.uc until 2026-11-27,
+// so the decoder did not dispatch it and softfp's FPU path trapped.
 export const INS_SIZE = 95;
 
 // The single place that decides which opcodes carry an operand word,

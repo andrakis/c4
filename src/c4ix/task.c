@@ -337,6 +337,27 @@ void task_ufree(int p) {
     free(h);
 }
 
+// realloc behind protected mode (sys.c's C4IX_OP_RALC): a new block, what
+// fits of the old one copied in, the old one freed -- by hand, as vfs.c's
+// vn_grow grows a file, since a listed block's header has to go with it.
+// P that is not one of the task's blocks gives 0 and is left alone, as a
+// realloc that fails leaves its block.
+int task_urealloc(struct task *t, int p, int bytes) {
+    int *h;
+    int n, q;
+    if (!p) return task_ualloc(t, bytes);
+    if (bytes < 0) return 0;
+    if (mmu_on) n = umem_size(t, p);
+    else {
+        h = (int *)p - UBLOCK_WORDS;
+        n = h[3] == UBLOCK_MAGIC ? h[2] : -1;
+    }
+    if (n < 0 || !(q = task_ualloc(t, bytes))) return 0;
+    memcpy((char *)q, (char *)p, n < bytes ? n : bytes);
+    task_ufree(p);
+    return q;
+}
+
 static void task_ufree_all(struct task *t) {
     int *h, *n;
     int ring;

@@ -1449,6 +1449,9 @@ void sys_pmviolation(int op, int *sp, int *returnpc, int *a) {
     // free(), and what they do not free goes with the task (task.c).
     case C4IX_OP_MALC: *a = task_ualloc(t, sp[0]); return;
     case C4IX_OP_FREE: task_ufree(sp[0]); *a = 0; return;
+    // realloc(sp[1], sp[0]), as c4m runs it unprotected: on the same
+    // blocks, so the moved block stays the task's (task.c)
+    case C4IX_OP_RALC: *a = task_urealloc(t, sp[1], sp[0]); return;
     // install_trap_handler: every trap of every task would go to this
     // one. Only a kernel does that -- C4KE's c4ke.c4r started as a
     // program, say, which then took the machine and wrote through its

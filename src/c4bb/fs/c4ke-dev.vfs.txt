@@ -36,6 +36,7 @@
 				sys.c: src/c4ix/sys.c
 				c4ke.c: src/c4ix/c4ke.c
 				loader.c: src/c4ix/loader.c
+				mmu.c: src/c4ix/mmu.c
 				init.c: src/c4ix/init.c
 				c4ix.h: src/c4ix/c4ix.h
 				libc4ix.c: src/c4ix/lib/libc4ix.c

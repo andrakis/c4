@@ -116,7 +116,7 @@ int scan_extended (int *code, int codelen) {
 int main (int argc, char **argv) {
   char *buf, *p, *data;
   int fd, n, total, wordbytes;
-  int entry, codelen, datalen, patchlen, conslen, deslen;
+  int entry, codelen, datalen, memsz, patchlen, conslen, deslen;
   int *code, *cons, *des;
   int i, ptype, paddr, pvalu, r;
 
@@ -160,7 +160,12 @@ int main (int argc, char **argv) {
   if (!(p[0] == 'C' && p[1] == '4' && p[2] == 'R')) { printf("c4l: bad signature\n"); return 1; }
   wordbytes = p[4] / 8;
   if (wordbytes != sizeof(int)) { printf("c4l: %d-bit image, host is %d-bit\n", p[4], sizeof(int) * 8); return 1; }
-  p = p + 13;  // signature, version, wordbits, 8 padding bytes
+  // From version 3 the 8 "padding" bytes at offset 5 are MEMSZ: the
+  // data segment's size in memory, DATALEN's stored bytes and then the
+  // BSS, which takes no room in the image (load-c4r.c's C4R_HDR_MEMSZ).
+  // v2 wrote filler there, and its data is just what is stored.
+  memsz = p[3] >= 3 ? wordat(p + 5) : 0;
+  p = p + 13;  // signature, version, wordbits, MEMSZ (v3) or padding (v2)
 
   entry    = wordat(p); p = p + 8;
   codelen  = wordat(p); p = p + 8;
@@ -177,10 +182,13 @@ int main (int argc, char **argv) {
   p = p + codelen * 8;
 
   // data segment: copy to a fresh zero-padded allocation so it is
-  // word-aligned regardless of code length
+  // word-aligned regardless of code length. MEMSZ of it, so the BSS
+  // past the stored bytes is there and zero; never less than DATALEN,
+  // as load-c4r.c has it, whatever a malformed header says.
   p = p + 8;  // 'D' marker
-  if (!(data = malloc(datalen + 8))) { printf("c4l: out of memory\n"); return 1; }
-  memset(data, 0, datalen + 8);
+  if (memsz < datalen) memsz = datalen;
+  if (!(data = malloc(memsz + 8))) { printf("c4l: out of memory\n"); return 1; }
+  memset(data, 0, memsz + 8);
   i = 0;
   while (i < datalen) { data[i] = p[i]; ++i; }
   p = p + datalen;

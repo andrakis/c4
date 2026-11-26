@@ -302,8 +302,12 @@ test-massive-c4-alt: pre
 # c4l says which instruction stopped it rather than letting c4 abort
 # with a bare "unknown instruction". Anything it refuses runs one
 # interpreter deeper, under c4m, which is the last line here.
-test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
+test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r $(LC64_BIN) $(TESTS)/test_c4l_bss.c
 	$(C4) c4l.c $(TESTS)/hello.c4r | grep -q yello
+	@# c4lc's v3 image: its uninitialized globals are MEMSZ's, not DATALEN's
+	$(call lc64,) $(TESTS)/test_c4l_bss.c .c4l_bss.c4r > /dev/null
+	$(C4) c4l.c .c4l_bss.c4r | grep -q "^c4l_bss: ok$$"
+	rm -f .c4l_bss.c4r
 	$(C4CC) -o .c4l_sw.c4r $(TESTS)/test_switch.c
 	$(C4) c4l.c .c4l_sw.c4r 2>&1 | grep -q "needs JMPA"
 	$(C4M) load-c4r.c -- .c4l_sw.c4r | grep -q "classify(5) = 500"
@@ -2272,7 +2276,7 @@ test-c4tui: $(C4M) c4tui-demo.c4r c4tui-demo32.c4r
 # c4lc builds it, at both word sizes, plain and -O, and it must get every
 # one of fpgen's vectors -- the host's own answers.
 test-c4fp: c4sp $(LC32_BIN) $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfpsrc.py \
-           src/c4ix/libc/fp.c src/c4ix/libc/math.c
+           src/c4ix/libc/fp.c src/c4ix/libc/math.c src/c4bb/fw/fw.c4r
 	python3 src/c4fp/mkfpsrc.py --check
 	gcc -O2 -w -I src/c4fp -o .c4fp_host src/c4fp/tests/fphost.c -lm
 	./.c4fp_host 2000000
@@ -2291,6 +2295,7 @@ test-c4fp: c4sp $(LC32_BIN) $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp
 	   for fpu in "" --no-fpu; do \
 	     node libjs/cli.js --fast $$fpu -d . .c4fp_vm.c4r .c4fp_vec.txt < /dev/null | grep -q "cases, 0 wrong" || { echo "test-c4fp: libjs $$fl $$fpu wrong"; exit 1; }; \
 	   done; \
+	   node src/c4bb/sim/cli.js --fast -d . .c4fp_vm.c4r .c4fp_vec.txt < /dev/null | grep -q "cases, 0 wrong" || { echo "test-c4fp: c4bb $$fl wrong"; exit 1; }; \
 	done
 	rm -f .c4fp_host .c4fp_gen .c4fp_vec.txt .c4fp_vm.c4r
 	# C4IX libc's conversions (fp.c: printf's digits, strtod, strtof), which
@@ -3607,8 +3612,12 @@ C4IX_MASK := sed -E -e 's/[0-9]+ cycles/N cycles/g' -e 's/info 0x[0-9a-f]+/info 
 # "C4IX under plain c4" means c4 -> c4m -> C4IX, which is what
 # test-c4ix-c4 below runs. In that chain C4IX sees a c4m host and
 # behaves identically, so it compares against the same pin.
-test-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
+test-c4ix: c4m c4ix.c4r $(C4IX_PROGS) $(C4CC) $(TESTS)/test_ralc.c
 	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
+	@# a C4KE program's realloc, which traps to the kernel (sys.c)
+	$(C4CC) -o .c4ix_ralc.c4r $(U0) $(TESTS)/test_ralc.c
+	$(C4M) load-c4r.c -- c4ix.c4r .c4ix_ralc.c4r | grep -q "^test_ralc: ok$$"
+	@rm -f .c4ix_ralc.c4r
 	@echo "test-c4ix: OK"
 # There are two printf implementations a C4IX program can reach --
 # libc4ix formats in userland, while a raw printf traps and the KERNEL
@@ -4240,7 +4249,8 @@ c4ke32-nopm.c4r: c4cc32 $(C4KE_SRCS)
 # each task's memory back when the task ends -- so the control run with
 # the same test on a kernel WITHOUT protected mode is part of the test:
 # it must fail, or the passing run proves nothing.
-test-task-mem: c4ke-pm.c4r c4ke32-pm.c4r c4ke32-nopm.c4r $(C4M) $(C4CC) c4cc32 $(TESTS)/test_leak.c
+test-task-mem: c4ke-pm.c4r c4ke32-pm.c4r c4ke32-nopm.c4r $(C4M) $(C4CC) c4cc32 $(TESTS)/test_leak.c \
+               $(TESTS)/test_pmputs.c
 	$(C4CC) -o .tm_leak.c4r $(U0) $(TESTS)/test_leak.c
 	$(C4M) load-c4r.c -- c4ke-pm.c4r .tm_leak.c4r | grep -q "test_leak: 12 rounds done"
 	@mkdir -p .tm_disk
@@ -4250,7 +4260,15 @@ test-task-mem: c4ke-pm.c4r c4ke32-pm.c4r c4ke32-nopm.c4r $(C4M) $(C4CC) c4cc32 $
 	# The control. Without the tracking, the machine runs out partway.
 	! node src/c4bb/sim/cli.js -m 32 -d .tm_disk c4ke32-nopm.c4r test_leak.c4r \
 	  | grep -q "test_leak: 12 rounds done"
-	@rm -rf .tm_disk .tm_leak.c4r
+	@# A protected task's puts: C4KE's PM dispatcher runs PUTS for it
+	$(C4CC) -o .tm_puts.c4r $(U0) $(TESTS)/test_pmputs.c
+	$(C4M) load-c4r.c -- c4ke-pm.c4r .tm_puts.c4r > .tm_puts.txt
+	grep -q "^test_pmputs: the child's puts$$" .tm_puts.txt
+	grep -q "^test_pmputs: ok$$" .tm_puts.txt
+	./c4cc32 -o .tm_disk/test_pmputs.c4r $(U0) $(TESTS)/test_pmputs.c
+	node src/c4bb/sim/cli.js -m 32 -d .tm_disk c4ke32-pm.c4r test_pmputs.c4r \
+	  | grep -q "^test_pmputs: ok$$"
+	@rm -rf .tm_disk .tm_leak.c4r .tm_puts.c4r .tm_puts.txt
 	@echo "test-task-mem: OK -- 72 MB of leak in a 32 MB machine, and the"
 	@echo "                     same test failing without the tracking"
 

@@ -302,8 +302,12 @@ test-massive-c4-alt: pre
 # c4l says which instruction stopped it rather than letting c4 abort
 # with a bare "unknown instruction". Anything it refuses runs one
 # interpreter deeper, under c4m, which is the last line here.
-test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r
+test-c4l: $(C4) $(C4M) $(C4CC) $(TESTS)/hello.c4r $(LC64_BIN) $(TESTS)/test_c4l_bss.c
 	$(C4) c4l.c $(TESTS)/hello.c4r | grep -q yello
+	@# c4lc's v3 image: its uninitialized globals are MEMSZ's, not DATALEN's
+	$(call lc64,) $(TESTS)/test_c4l_bss.c .c4l_bss.c4r > /dev/null
+	$(C4) c4l.c .c4l_bss.c4r | grep -q "^c4l_bss: ok$$"
+	rm -f .c4l_bss.c4r
 	$(C4CC) -o .c4l_sw.c4r $(TESTS)/test_switch.c
 	$(C4) c4l.c .c4l_sw.c4r 2>&1 | grep -q "needs JMPA"
 	$(C4M) load-c4r.c -- .c4l_sw.c4r | grep -q "classify(5) = 500"

@@ -47,6 +47,15 @@ import { hasOperand } from '../sim/machine.js';
 // can quietly permit something nothing could execute.
 const ABSENT = [OP._BLT, ...Array.from({ length: 13 }, (_, k) => OP.CPUI + k)];
 
+// Opcodes an image may CARRY although this machine has none of them,
+// because the image runs them only where INFO announces a machine that
+// does. C4IX's SMP (sched.c, docs/c4ix-smp.md S3, 2026-10-22) is c4mp's
+// CPUI..IPI, taken only under C4IX_I_C4MJS and C4IX_I_SMP -- libjs's
+// bits, which this board never sets -- so on the board they are dead
+// code. A rung that lists them here lets an image hold them; the
+// -machine check never counts them, since the microcode needs none.
+const SMP_GUARDED = ['CPUI', 'CPUN', 'CPUS', 'CPUH', 'CAS', 'XCHG', 'FADD', 'CWAI', 'CWAK', 'IPI'];
+
 // The rungs, and this table is the whole definition of them.
 //
 // Written from what the images MEASURABLY use, not from what the design
@@ -70,6 +79,7 @@ const RUNGS = {
     // and the 16-bit loads and store and LSR (90-93), c4lc's short and
     // unsigned >>, which c4m runs as its own (docs/c4-16bit.md)
     max: 'DBG', extra: ['FPU', 'LH', 'LHU', 'SH', 'LSR', 'LCU'],
+    guarded: SMP_GUARDED,
     what: "c4m's own opcodes: JSRS, traps, signals, INFO, the FPU, 16-bit loads and the rest",
     who: 'c4cc and c4rlink, C4KE and C4IX, and both userlands',
   },
@@ -77,17 +87,22 @@ const RUNGS = {
     max: 'DBG',
     extra: ['LDL', 'LDG', 'PSHL', 'PSHG', 'LEAP', 'IMMP', 'LIP', 'ADDL',
             'STL', 'POPA', 'FPU', 'LH', 'LHU', 'SH', 'LSR', 'LCU'],
+    guarded: SMP_GUARDED,
     what: 'c4m plus the ten fused opcodes (docs/fused-opcodes.md)',
     who: 'images built through the fused backend',
   },
 };
 
-function permitted (rung) {
+// What an image at RUNG may use. The machine itself (-machine, -rungs)
+// is asked without the guarded opcodes: those are the image's, not the
+// board's.
+function permitted (rung, guarded = false) {
   const r = RUNGS[rung];
   const set = new Set();
   for (let i = 0; i <= OP[r.max]; ++i) set.add(i);
   for (const n of r.extra) set.add(OP[n]);
   for (const o of ABSENT) set.delete(o);
+  if (guarded) for (const n of r.guarded || []) set.add(OP[n]);
   return set;
 }
 
@@ -192,7 +207,7 @@ for (const path of argv) {
       console.log(`${path}: ok, nothing above ${opname(arg)}`);
     }
   } else {
-    const ok = permitted(arg);
+    const ok = permitted(arg, true);
     // Sorted, so the opcode named is the same one on every run and on
     // every machine. A test that names a different instruction each
     // time is a test nobody trusts.

@@ -547,6 +547,7 @@ op _TRP: jsop
 op DBG: jsop
 op C4IV: jsop
 op FLT: jsop
+op FPU: jsop
 
 # ---- fused (79-88): docs/fused-opcodes.md -----------------------------
 #

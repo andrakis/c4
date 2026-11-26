@@ -2265,7 +2265,7 @@ test-c4tui: $(C4M) c4tui-demo.c4r c4tui-demo32.c4r
 # c4lc builds it, at both word sizes, plain and -O, and it must get every
 # one of fpgen's vectors -- the host's own answers.
 test-c4fp: c4sp $(LC32_BIN) $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp/mkfpsrc.py \
-           src/c4ix/libc/fp.c src/c4ix/libc/math.c
+           src/c4ix/libc/fp.c src/c4ix/libc/math.c src/c4bb/fw/fw.c4r
 	python3 src/c4fp/mkfpsrc.py --check
 	gcc -O2 -w -I src/c4fp -o .c4fp_host src/c4fp/tests/fphost.c -lm
 	./.c4fp_host 2000000
@@ -2284,6 +2284,7 @@ test-c4fp: c4sp $(LC32_BIN) $(C4M) c4m32 $(C4LC_LISP) src/c4fp/softfp.c src/c4fp
 	   for fpu in "" --no-fpu; do \
 	     node libjs/cli.js --fast $$fpu -d . .c4fp_vm.c4r .c4fp_vec.txt < /dev/null | grep -q "cases, 0 wrong" || { echo "test-c4fp: libjs $$fl $$fpu wrong"; exit 1; }; \
 	   done; \
+	   node src/c4bb/sim/cli.js --fast -d . .c4fp_vm.c4r .c4fp_vec.txt < /dev/null | grep -q "cases, 0 wrong" || { echo "test-c4fp: c4bb $$fl wrong"; exit 1; }; \
 	done
 	rm -f .c4fp_host .c4fp_gen .c4fp_vec.txt .c4fp_vm.c4r
 	# C4IX libc's conversions (fp.c: printf's digits, strtod, strtof), which

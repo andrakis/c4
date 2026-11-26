@@ -1033,15 +1033,42 @@
 		(g:dput at (head bf) 0
 			(bit:or (bit:and (g:dget at (head bf) 0 0) (bit:xor m -1))
 				(bit:and (bit:shl v2 (g:second bf)) m))))))
-;; a field's item of an initializer list; returns the rest of the items
+;; a field's item of an initializer list; returns the rest of the items. A
+;; global's is a constant, merged into the data; a local's is recorded,
+;; (bf TYPE UNITOFF ITEM BF), and stored as the declaration runs
 (define g:ibits (lambda (m off items)
 	(begin
 		(define it (g:unwrap (head items)))
-		(if (= g:imode 'local) (g:die (+ "an initializer of a bit-field in a local: " (head m))) nil)
+		(if (= g:imode 'local)
+			(begin
+				(if (if (= (head it) 'num) true (= (head it) 'expr)) nil
+					(g:die (+ "an initializer of a bit-field that is not an integer: " (head m))))
+				(define r (list 'bf (g:third m) (+ off (g:second m)) it (g:bfof m)))
+				(if g:lrecording (set! g:lrecs (g:cons r g:lrecs)) (g:lbits/e r)))
 		(if (= (head it) 'num)
 			(if (= g:imode 'put) (g:dbits (+ off (g:second m)) (g:bfof m) (g:second it)) nil)
-		(g:die (+ "an initializer of a bit-field that is not an integer constant: " (head m))))
+		(g:die (+ "an initializer of a bit-field that is not an integer constant: " (head m)))))
 		(tail items))))
+;; a local's field from its record: the bit-field store, the unit at the
+;; local's offset (c4fc's n_lagg)
+(define g:lbits/e (lambda (r)
+	(begin
+		(define bf (index r 4))
+		(define it (index r 3))
+		(g:laddr (g:third r))
+		(g:emit '(PSH))
+		(g:bfclear! bf)
+		(g:emit '(PSH))
+		(if (= (head it) 'num)
+			(begin
+				(g:emit (list 'IMM (g:second it)))
+				(set! g:ty g:INT))
+			(g:expr (g:second it)))
+		(g:bfbits! bf (g:second r))
+		(g:emit '(OR))
+		(g:bfstore! bf))))
+(define g:hasbf? (lambda (rs)
+	(if (empty? rs) false (if (= (head (head rs)) 'bf) true (next g:hasbf? (tail rs))))))
 
 ;; ---- long long on a 32-bit target (M8) ----
 ;;
@@ -3175,8 +3202,12 @@
 			(begin
 				(define ty (g:second d))
 				(define size (index d 3))
+				;; a struct this unit never defines (Blood's `extern AISTATE
+				;; handIdle;`, whose address is all a unit can take): no
+				;; bytes, as c4fc gives it none
 				(define arrbytes
-					(if (if (= size nil) (g:svalue? ty) false) (g:tysize ty)
+					(if (if (= size nil) (g:svalue? ty) false)
+						(if (g:sfind (g:sid ty) g:structs) (g:tysize ty) nil)
 					(if (= size nil) nil
 						(* size (g:estride (- ty g:PTR))))))
 				(set! g:syms (g:cons
@@ -3604,7 +3635,8 @@
 		(define rs (g:reverse g:lrecs))
 		(set! g:lrecs (list))
 		(set! g:lbase base)
-		(if (not (g:ltmpl? (g:lscan rs 0 0) rs))
+		;; bit-fields share their units' offsets: no template for them
+		(if (if (g:hasbf? rs) true (not (g:ltmpl? (g:lscan rs 0 0) rs)))
 			(begin
 				(g:lmset 0 (g:lbytes d))
 				(g:lreplay rs base false))
@@ -3641,8 +3673,9 @@
 		(begin
 			(set! g:lbase base)
 			(set! g:imode 'local)
+			(if (= (head r) 'bf) (g:lbits/e r)
 			(if (= (head r) 'sv) (g:lstruct/e (g:second r) (g:third r) (index r 3))
-			(g:lstore/e (g:second r) (g:third r) (index r 3)))))
+			(g:lstore/e (g:second r) (g:third r) (index r 3))))))
 		(next g:lreplay (tail rs) base varonly)))))
 
 ;; ---- a local's constants as a template (c4lc-array-init) ----

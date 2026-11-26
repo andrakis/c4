@@ -300,19 +300,11 @@ CREATE SLI SAL-MAX CELLS ALLOT   VARIABLE SLN   0 SLN !   \ their STN indices
       d 0=
    UNTIL ;
 \ ( * [qualifiers] [NAME] [[N]] ) ( ... ): the name (0 0 when there is
-\ none) and the array size (-1 when it is no array, 0 for [])
-: FNPTR-DECL ( -- a u n ) {: | a u n -- a u n :}
-   TNEXT TNEXT
-   BEGIN TK Const = TK Volatile = OR WHILE TNEXT REPEAT
-   0 TO a  0 TO u  -1 TO n
-   TK Id = IF TV TO a  TL TO u  TNEXT THEN
-   TK Brak = IF
-      TNEXT  TK Rbrak = IF 0 TO n ELSE CONST-EXPR TO n THEN  Rbrak WANT
-   THEN
-   Rparen WANT
-   TK Lparen <> IF ." c4fc: the parameter list of a function pointer was expected" CR ABORT THEN
-   SKIP-PARENS
-   a u n ;
+\ none) and the array size (-1 when it is no array, 0 for []); FN-TY the
+\ declarator's type, an int, or a pointer to rows. LAST-TY is what STARS
+\ made last (c4lc-parse's p:lastty). FNPTR-DECL is after MORE-DIMS.
+VARIABLE FN-TY   1 FN-TY !
+VARIABLE LAST-TY   1 LAST-TY !
 
 \ -- nodes --------------------------------------------------------------
 
@@ -342,6 +334,22 @@ VARIABLE LB-ELEM   0 LB-ELEM !          \ the element type LOCAL-BRACES fills
    REPEAT
    BEGIN n 0> WHILE  n 1- TO n  t DIMBUF n CELLS + @ ROW-TYPE TO t  REPEAT
    t ;
+: FNPTR-DECL ( -- a u n ) {: | a u n -- a u n :}
+   t_int FN-TY !
+   TNEXT TNEXT
+   BEGIN TK Const = TK Volatile = OR WHILE TNEXT REPEAT
+   0 TO a  0 TO u  -1 TO n
+   TK Id = IF TV TO a  TL TO u  TNEXT THEN
+   TK Brak = IF
+      TNEXT  TK Rbrak = IF 0 TO n ELSE CONST-EXPR TO n THEN  Rbrak WANT
+   THEN
+   Rparen WANT
+   \ `T (*p)[N]`, `(T (*)[N])`: a pointer to an array, a row of the type
+   \ the stars made (c4lc-parse's p:arrptrdecl)
+   TK Brak = IF  LAST-TY @ MORE-DIMS 2 + FN-TY !  a u n EXIT THEN
+   TK Lparen <> IF ." c4fc: the parameter list of a function pointer was expected" CR ABORT THEN
+   SKIP-PARENS
+   a u n ;
 \ C's layout (M9, c4lc-parse's p:slayout): each member at a multiple of its
 \ own alignment, the struct as aligned as its most aligned member.
 \ #pragma pack(n) caps a member's alignment at n (PACK-NOW, 0 for none,
@@ -417,7 +425,7 @@ VARIABLE BF-UB     0 BF-UB !
          TK Colon = IF
             TNEXT CONST-EXPR TO bw  1 TO bf  0 TO q    \ an unnamed bit-field
          ELSE FNPTR? IF
-            FNPTR-DECL TO fn TO u TO a   t_int TO mt   0 TO q
+            FNPTR-DECL TO fn TO u TO a   FN-TY @ TO mt   0 TO q
             a 0= IF ." c4fc: bad struct member name" CR ABORT THEN
             fn 0< 0= IF fn TO n  1 TO ag  mt DUP TO et 2 + TO mt THEN
          ELSE
@@ -520,7 +528,8 @@ VARIABLE BF-UB     0 BF-UB !
       TK Mul = IF 2 + DQ @ 2 LSHIFT DQ ! TNEXT 1 ELSE
       TK Const = IF DQ @ 1 OR DQ ! TNEXT 1 ELSE
       TK Volatile = IF DQ @ 2 OR DQ ! TNEXT 1 ELSE 0 THEN THEN THEN
-   WHILE REPEAT ;
+   WHILE REPEAT
+   DUP LAST-TY ! ;
 ' (STARS) IS STARS
 : (PARSE-TYPE) ( -- t )  BASE-TYPE  BQ @ DQ !  STARS ;
 ' (PARSE-TYPE) IS PARSE-TYPE
@@ -605,7 +614,7 @@ CREATE SLBUF 8192 ALLOT
       TNEXT
       TYPE? IF
          PARSE-TYPE TO ct   DQ @ TO k
-         FNPTR? IF FNPTR-DECL DROP 2DROP  t_int TO ct  0 TO k THEN
+         FNPTR? IF FNPTR-DECL DROP 2DROP  FN-TY @ TO ct  0 TO k THEN
          Rparen WANT   13 EXPR TO nd
          n_cast 4 CELLS NEW TO v
          nd v >expr !  ct v >ctype !  k v >cq !  v EXIT THEN
@@ -792,7 +801,7 @@ DEFER LOCAL-RECS ( ety cnt ai -- v )
       BEGIN
          bq DQ !  ct STARS TO dt   DQ @ TO q
          FNPTR? IF
-            FNPTR-DECL TO fn TO u TO a   t_int TO dt   0 TO q
+            FNPTR-DECL TO fn TO u TO a   FN-TY @ TO dt   0 TO q
             a 0= IF ." c4fc: bad local declaration" CR ABORT THEN
          ELSE
             TV TO a  TL TO u  Id WANT   -2 TO fn
@@ -1013,7 +1022,7 @@ VARIABLE PWORDS   0 PWORDS !            \ what PARAMS's fixed parameters take
          ELSE
             PARSE-TYPE TO ct
             FNPTR? IF
-               FNPTR-DECL DROP TO u TO a   t_int TO ct
+               FNPTR-DECL DROP TO u TO a   FN-TY @ TO ct
                a u c_loc 0 ct 0 0 ST,   0 ST-LAST y.q !   n 1+ TO n
             ELSE
             TK Id = IF TV TL ELSE S" " THEN
@@ -1478,9 +1487,14 @@ DEFER AGG-FILL ( ety cnt off v i -- i' )
 \ a bit-field's item of an initializer list, its unit at OFF (c4lc-gen's
 \ g:ibits): an integer constant, merged into the unit's bytes
 : AGG-BITS ( off m node -- ) {: o m nd | lo w b u -- :}
-   AMODE @ 2 = IF ." c4fc: an initializer of a bit-field in a local: "
-      m CELLS MB-NAME + @ m CELLS MB-NLEN + @ TYPE CR ABORT THEN
    nd AGG-UNWRAP TO nd
+   AMODE @ 2 = IF
+      \ a local's: recorded as its unit's offset, -(m+1) for a type (the
+      \ mark of a bit-field, m its member) and the value, for n_lagg
+      nd @ 0 = IF  o m 1+ NEGATE 0 nd CELL+ @ LREC,  EXIT THEN
+      nd @ 6 = IF  o m 1+ NEGATE nd CELL+ @ 0 LREC,  EXIT THEN
+      ." c4fc: an initializer of a bit-field that is not an integer: "
+      m CELLS MB-NAME + @ m CELLS MB-NLEN + @ TYPE CR ABORT THEN
    nd @ 0 <> IF ." c4fc: an initializer of a bit-field that is not an integer constant: "
       m CELLS MB-NAME + @ m CELLS MB-NLEN + @ TYPE CR ABORT THEN
    AMODE @ 0= IF EXIT THEN
@@ -1682,7 +1696,7 @@ VARIABLE DYN-Z
    BEGIN
       bq DQ !  ct STARS TO dt   DQ @ TO q   0 TO pm
       FNPTR? IF
-         FNPTR-DECL TO fn TO u TO a   t_int TO dt   0 TO q
+         FNPTR-DECL TO fn TO u TO a   FN-TY @ TO dt   0 TO q
          a 0= IF ." c4fc: bad global declaration" CR ABORT THEN
       ELSE
          TV TO a  TL TO u  Id WANT   -2 TO fn

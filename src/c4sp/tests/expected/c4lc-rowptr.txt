@@ -1,0 +1,4 @@
+gamma 12 23 356
+next 10 11 4
+grid 121 10
+rows 7 x

@@ -28,3 +28,5 @@ loop 2 5 -3
 mixed z 15 10 77 1
 union 78 123456ab
 copy -3 6
+event 1001 5 0 255 41961
+mixed k 1 12 7 1 8

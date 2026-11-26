@@ -1501,6 +1501,18 @@
 		(set! p:inner nil)
 		(if wrap (p:expect 'Rparen ") in a function pointer declarator") nil)
 		(p:expect 'Rparen ") in a function pointer declarator")
+		(if (= (p:kind) 'Brak) (p:arrptrdecl n size stars)
+			(p:fnptrdecl/2 n size stars rt)))))
+;; `T (*p)[N][M]`, `(T (*)[N])`: a pointer to an array, which is a row of
+;; T's (M9) -- Blood's `static byte (*gammaTable)[256]` -- the innermost
+;; dimension wrapped first, as p:elemty wraps them; c4fc's FNPTR-DECL too
+(define p:arrptrdecl (lambda (n size stars)
+	(begin
+		(define dims (p:innerdims (list)))
+		(set! p:fnty (+ stars (+ (p:rowwrap p:lastty (p:reverse dims)) p:PTR)))
+		(list n size))))
+(define p:fnptrdecl/2 (lambda (n size stars rt)
+	(begin
 		(if (= (p:kind) 'Lparen) nil (p:die "parameter list of a function pointer expected"))
 		(define hasfp (p:fpparams? p:toks 0))
 		;; only then parsed: a struct first named in a list is not given an

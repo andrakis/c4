@@ -52,6 +52,8 @@ struct pair *pick(struct pair *p, int i)
 	return p + i;
 }
 
+void locals(int a, int b);
+
 void show(struct flags *f)
 {
 	printf("a=%d b=%d s=%d t=%d ", f->a, f->b, f->s, f->t);
@@ -142,5 +144,28 @@ int main(void)
 	// whole structs copy their bits
 	p = gp[2];
 	printf("copy %d %d\n", p.x, p.y);
+
+	// a local's initializer list: run-time values and constants
+	// (Blood's EventQueue::Kill, EVENT evn = { a1, a2, 0, 0 })
+	calls = 0;
+	locals(next(), -3);
 	return 0;
+}
+
+struct event {
+	unsigned int index : 13;
+	unsigned int type : 3;
+	unsigned int cmd : 8;
+	unsigned int func : 8;
+};
+
+void locals(int a, int b)
+{
+	struct event e = { a + 1000, b, 0, 255 };
+	struct mixed m = { 'k', a, 12, a * 7, 1 };
+	int v[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	printf("event %d %d %d %d ", e.index, e.type, e.cmd, e.func);
+	printf("%d\n", *(unsigned short *)&e);
+	printf("mixed %c %d %d %d ", m.tag, m.lo, m.hi, m.n);
+	printf("%d %d\n", m.z, v[7]);
 }

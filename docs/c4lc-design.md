@@ -1535,8 +1535,11 @@ from the map files. c4fc has them too, with the same images.
   `(bftemp OFF BF TYPE)`, and are a store of the value worked out. `x++`'s
   value is the new one, stepped back and cut to the field again.
 - **Initializers.** A global's bit-field initializer is an integer
-  constant, merged into its unit's bytes. A local's is refused: a local's
-  list is built from a template (§14.14), which has no bit-fields yet.
+  constant, merged into its unit's bytes. A local's (Blood's `EVENT evn =
+  { a1, a2, 0, 0 }`) is any integer expression, recorded as `(bf TYPE
+  UNITOFF ITEM BF)` and stored like an assignment once the local is zeroed.
+  A list that holds one is never made a template (§14.14), since its
+  fields share their units' offsets.
 - **Refused:** `&` and `sizeof` of a bit-field, a named field of width 0,
   a field wider than its type, `++` or `--` of a `_Bool` field.
 
@@ -1545,6 +1548,27 @@ golden at both sizes, plain, `-O` and `-minline`. `c4lc_bfl.c` checks the
 layouts at 32 bits: each field's bits are set alone and the bytes printed,
 once by gcc's rule and once with `-mms-bitfields`, against gcc `-m32
 -mms-bitfields`. test-c4fc holds c4fc's images of both to c4lc's.
+
+### 14.16 Pointers to arrays, and an extern struct never defined (2026-11-27)
+
+Two more things Blood's C++ (through c4cxx) needed of c4lc, and c4fc has
+them too:
+
+- **`T (*p)[N]`** and the cast `(T (*)[N])`: a pointer to an array. That is
+  a pointer to a row (M9), the type the stars made, wrapped innermost
+  dimension first, as `p:elemty` does (`p:arrptrdecl`; c4fc's
+  `FNPTR-DECL` reads `LAST-TY`, which `STARS` leaves, and its callers
+  `FN-TY`). Blood's `screen.cpp` has `static byte (*gammaTable)[256]`, set
+  by `(unsigned char (*)[256]) gSysRes.Lock (pGamma)`.
+- **`extern struct S x;` with S never defined** (view.cpp's `extern AISTATE
+  handIdle;`): under `-c` its symbol was made with S's size, which made
+  the generator stop. It now has no bytes, as c4fc gives it none. Its
+  address is all a unit can take. A whole program still differs: c4fc
+  gives such an object storage, and c4lc none.
+
+Tests: `c4lc_rowptr.c`, against gcc's golden at both sizes, plain, `-O`
+and `-minline`, and compiled with `-c`. test-c4fc holds c4fc's `-c`
+objects of it to c4lc's.
 
 ## 15. Source maps: `-g` (track S, S0-S2, 2026-10-24)
 

@@ -803,14 +803,27 @@ VARIABLE UFN   0 UFN !
 \ c4lc-gen's g:localaggr: MSET zeroes the object, then each value goes to
 \ its offset (LADDR,) -- or, with LTMPL constants or more, they come from
 \ a template and only the rest are stored
-:M STMT n_lagg {: n | b v r e t -- :}
+\ does a local's list hold a bit-field (a record of type -(m+1))?
+: LR-BF? ( v -- f ) {: v -- f :}
+   v V# 0 ?DO  I v V@ CELL+ @ 0< IF -1 UNLOOP EXIT THEN  LOOP 0 ;
+:M STMT n_lagg {: n | b v r e t i -- :}
    TCUR @
    n >lsym @ y.val @ TO b
    n >lrecs @ TO v
-   v LR-SCAN v LTMPL? TO t
+   \ bit-fields share their units' offsets: no template for them
+   v LR-BF? IF 0 ELSE v LR-SCAN v LTMPL? THEN TO t
    t IF b n >lbytes @ v LTEMPLATE ELSE b 0 n >lbytes @ LMSET, THEN
    v V# 0 ?DO
       I v V@ TO r
+      r CELL+ @ 0< IF
+         \ a bit-field: its store, as c4lc-gen's g:lbits/e
+         r CELL+ @ NEGATE 1- TO i
+         b r @ LADDR,  oPSH OP,  i BF-CLEAR,  oPSH OP,
+         r 2 CELLS + @ TO e
+         e IF e GEN  i e CT ELSE r 3 CELLS + @ oIMM OP2,  i t_int THEN
+         i CELLS MB-TYPE + @ BF-BITS,
+         oOR OP,  i BF-STORE,
+      ELSE
       t r LR-CONST? AND 0= IF
       b r @ LADDR,  oPSH OP,
       r 2 CELLS + @ TO e
@@ -819,6 +832,7 @@ VARIABLE UFN   0 UFN !
          e CT T-STRUCT? IF ." c4fc: a struct value in an initializer is not supported" CR ABORT THEN
       ELSE r 3 CELLS + @ oIMM OP2, THEN
       r CELL+ @ STORE,
+      THEN
       THEN
    LOOP
    TCUR ! ;M

@@ -1,7 +1,7 @@
 # games
 
 The games c4 runs -- Wolfenstein 3D, Doom, OpenTyrian, Rise of the
-Triad, Quake, Duke Nukem 3D, Frotz with Zork I-III, Open Adventure, Simon Tatham's
+Triad, Quake, Duke Nukem 3D, Shadow Warrior, Frotz with Zork I-III, Open Adventure, Simon Tatham's
 Puzzles, The Ace of Penguins, Super Blit Kart and the BSD games -- are
 not part of c4's repository. Each lives in one of its own, on GitHub,
 on upstream's history with c4's port on top as commits, and is an
@@ -15,6 +15,7 @@ optional submodule here:
 | `games/rott` | [andrakis/c4-ROTT](https://github.com/andrakis/c4-ROTT) | icculus.org's Rise of the Triad 1.1.2 |
 | `games/quake` | [andrakis/c4-Quake](https://github.com/andrakis/c4-Quake) | quakegeneric (GPL WinQuake) |
 | `games/duke3d` | [andrakis/c4-Duke3D](https://github.com/andrakis/c4-Duke3D) | Chocolate Duke3D (the GPL Atomic Edition source, with Ken Silverman's Build engine under his own licence) |
+| `games/sw` | [andrakis/c4-SW](https://github.com/andrakis/c4-SW) | JFShadowWarrior (3D Realms' GPL release, on JFBuild, Ken Silverman's Build engine under his own licence) |
 | `games/frotz` | [andrakis/c4-Frotz](https://github.com/andrakis/c4-Frotz) | Frotz's dumb interface, with Zork I, II and III |
 | `games/advent` | [andrakis/c4-Advent](https://github.com/andrakis/c4-Advent) | Open Adventure |
 | `games/puzzles` | [andrakis/c4-Puzzles](https://github.com/andrakis/c4-Puzzles) | Simon Tatham's Portable Puzzle Collection |
@@ -46,7 +47,7 @@ Its repository's branch `c4` carries, beside the game:
   data on the disk; the second, for the bare machine and C4DOS, on the
   games disk.
 - `c4/accel.mjs`, if it has one (Doom, Duke Nukem 3D, Quake, Rise of the
-  Triad, Super Blit Kart, Tyrian and Wolfenstein 3D have): its accelerators,
+  Triad, Shadow Warrior, Super Blit Kart, Tyrian and Wolfenstein 3D have): its accelerators,
   its heaviest loops run by the page in JavaScript. `build-images.sh` lists
   the games that have one in `accel.json`, and libjs loads them
   (docs/accel.md).
@@ -74,7 +75,7 @@ Its repository's branch `c4` carries, beside the game:
   and Tyrian (your files), `tyrian --home`, wherever the game is.
 
   The menu has Cards and Puzzles in windows of their own; Doom, Duke Nukem 3D,
-  Quake, Rise of the Triad, Super Blit Kart, Tyrian and Wolfenstein 3D, which take
+  Quake, Rise of the Triad, Shadow Warrior, Super Blit Kart, Tyrian and Wolfenstein 3D, which take
   the whole display from a Terminal; and Text Adventures and BSD Games in a
   Terminal. Phantasia and hack are left out, since they need a current
   directory they can write.
@@ -184,6 +185,7 @@ not the one the game's `c4.mk` gives:
 | Super Blit Kart | its PNGs, maps and font, from a fixed commit of upstream's; the licence on them is not settled (`games/sbk/data/README.md`) | none |
 | OpenTyrian | `tyrian21.zip`, Tyrian 2.1, the user's own copy: it may not be passed on (the site's visitors add theirs with the page's Uploads: `tyrian --home`) | `TYRIAN_ZIP` |
 | Duke Nukem 3D | `3dduke13.zip`, 3D Realms' shareware package (1.3D) | `DUKE3D_ZIP` |
+| Shadow Warrior | `3dsw12.zip`, 3D Realms' shareware package (1.2) | `SW_ZIP` |
 | Quake | `quake106.zip`, id's shareware package (`pak0.pak` is taken out of it; with `QUAKE_AS_ZIP=1`, as the site is built, the disks carry the zip itself and libjs makes `pak0.pak` from it: `games/quake/data/README.md`) | `QUAKE_ZIP` |
 | Frotz | `zork1.z3`, `zork2.z3`, `zork3.z3`, Microsoft's MIT release of Zork, fetched from a fixed commit | `ZORK1_Z3`, `ZORK2_Z3`, `ZORK3_Z3` |
 

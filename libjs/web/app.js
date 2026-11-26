@@ -4,7 +4,7 @@
 //   ?system=NAME                 which machine to boot (default c4ix): c4ix, c4ke,
 //                                c4dos, c4dos-ladder, wolf3d, wolf3d6, wolf3d-c4ix, doom, doom-full,
 //                                doom1-full, doom2-full, tnt-full, plutonia-full, tyrian, tyrian-full, rott,
-//                                rottreg, quake, quake-full, duke3d, duke3d-full, gui-demo, fb-demo,
+//                                rottreg, quake, quake-full, duke3d, duke3d-full, sw, sw-full, gui-demo, fb-demo,
 //                                snd-demo, raycast -- SYSTEMS below
 //   ?image=URL&disk=URL          any other image and disk instead
 //   ?args=A+B                    more arguments for the system's program, after its
@@ -150,6 +150,14 @@ const SYSTEMS = {
             argv: ['duke3d.c4r'], mhz: 400, mem: 64, persist: 'duke3d' },
   'duke3d-full': { label: 'Duke Nukem 3D, your files (bare machine)', image: `${IMAGES}/games/duke3d.c4r`,
                    disk: `${IMAGES}/games`, argv: ['duke3d.c4r', '-home'], mhz: 400, mem: 192, persist: 'duke3d' },
+  // Shadow Warrior (games/sw), the shareware episode; and the full game
+  // from the person's own SW.GRP, which the Uploads put on the disk (sw
+  // -home). Read whole, as Duke's: the shareware's GRP is 26 MB, the
+  // registered game's 47 MB.
+  sw: { label: 'Shadow Warrior (bare machine)', image: `${IMAGES}/games/sw.c4r`, disk: `${IMAGES}/games`,
+        argv: ['sw.c4r'], mhz: 400, mem: 128, persist: 'sw' },
+  'sw-full': { label: 'Shadow Warrior, your files (bare machine)', image: `${IMAGES}/games/sw.c4r`,
+               disk: `${IMAGES}/games`, argv: ['sw.c4r', '-home'], mhz: 400, mem: 192, persist: 'sw' },
   'wolf3d-c4ix': { label: 'Wolfenstein 3D (C4IX, direct)', image: `${IMAGES}/c4ix32.c4r`, disk: `${IMAGES}/disk`,
                    argv: ['c4ix32.c4r', '-e', 'persist -d 60 &', '-e', 'wolf3d --direct'], persist: 'c4ix', mhz: 400, mmu: true },
   'gui-demo': { label: 'GUI demo (bare machine)', image: `${IMAGES}/gui-demo.c4r`, disk: null, argv: ['gui-demo.c4r'] },

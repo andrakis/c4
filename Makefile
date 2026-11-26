@@ -1932,6 +1932,12 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	./c4sp src/c4sp/lisp/c4lc-ppdump.lisp $(TESTS)/c4lc_pp.c > .c4fc_a.txt
 	./c4th $(C4FC_LIB) src/c4fc/pp.f -e ': GO 67108864 ARENA-INIT PP-RESET S" $(TESTS)/c4lc_pp.c" PP-FILE DUMP-PPTOKENS ; GO' > .c4fc_b.txt
 	head -n -1 .c4fc_a.txt | cmp - .c4fc_b.txt
+	# ... and with CR LF line ends, where a backslash before one
+	# continues the line as before a LF (c4lc's test-c4lc does the same)
+	sed 's/$$/\r/' $(TESTS)/c4lc_pp.c > .c4fc_crlf.c
+	./c4th $(C4FC_LIB) src/c4fc/pp.f -e ': GO 67108864 ARENA-INIT PP-RESET S" .c4fc_crlf.c" PP-FILE DUMP-PPTOKENS ; GO' \
+	  | sed 's|\.c4fc_crlf\.c|$(TESTS)/c4lc_pp.c|' | cmp - .c4fc_b.txt
+	rm -f .c4fc_crlf.c
 	# Two, the bar the design asked for: real modules, preprocessed by
 	# c4fc, against the SAME modules preprocessed by gcc -E. Every one of
 	# the twelve C4IX modules plus a spread of the rest of the tree.
@@ -2683,7 +2689,7 @@ ifdef WINDOWS
 BSD_HOST_CC := $(subst -m32 , ,$(BSD_HOST_CC))
 PDC_HOST_CC := $(subst -m32 , ,$(PDC_HOST_CC))
 endif
-GAMES_ALL  :=wolf3d doom tyrian rott quake duke3d frotz advent puzzles ace sbk pdcurses bsdgames
+GAMES_ALL  :=wolf3d doom tyrian rott quake duke3d sw frotz advent puzzles ace sbk pdcurses bsdgames
 c4bb-images: libc-bare-objs grin-objs grin-apps $(GAME_OBJS)
 $(filter-out $(GAME_TESTS),$(GAMES_ALL:%=test-%)):
 	@echo "$@: skipped, games/$(@:test-%=%) is not here (games/README.md)"
@@ -3931,6 +3937,16 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# /#if/#elif/#else/#endif with constant expressions, #undef).
 	./c4sp src/c4sp/lisp/c4lc.lisp -P $(TESTS)/c4lc_pp.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-pp.txt
+	# The same battery with CR LF line ends, as a source written on DOS
+	# or Windows has them (jfaudiolib's, under games/sw): a backslash
+	# before a CR LF continues the line too. By the Lisp and by lc32;
+	# the copy's own name is its __FILE__.
+	sed 's/$$/\r/' $(TESTS)/c4lc_pp.c > .c4lc_crlf.c
+	./c4sp src/c4sp/lisp/c4lc.lisp -P .c4lc_crlf.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r | sed 's|\.c4lc_crlf\.c|$(TESTS)/c4lc_pp.c|' | cmp - src/c4sp/tests/expected/c4lc-pp.txt
+	$(call lc32,) -P .c4lc_crlf.c .c4lc_b.c4r > /dev/null
+	./c4m32 load-c4r.c -- .c4lc_b.c4r | sed 's|\.c4lc_crlf\.c|$(TESTS)/c4lc_pp.c|' | cmp - src/c4sp/tests/expected/c4lc-pp.txt
+	rm -f .c4lc_crlf.c
 	# A header is SPLICED in front of the rest, carrying its own line
 	# numbers, so the numbers in the stream stop increasing. A directive
 	# used to be every token sharing the Hash's line, and a header ending
@@ -3944,6 +3960,19 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# that includes it, as c4fc does, not in the working directory (M7b)
 	./c4sp src/c4sp/lisp/c4lc.lisp -P $(TESTS)/c4lc_ppinc.c .c4lc_b.c4r > /dev/null
 	./c4m load-c4r.c -- .c4lc_b.c4r > /dev/null; test $$? = 42
+	# typedef T A, *B, C[N]: several names in one typedef, each the base
+	# type with its own stars (games/sw's mytypes.h). By the Lisp and lc32.
+	./c4sp src/c4sp/lisp/c4lc.lisp $(TESTS)/c4lc_tdlist.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r > /dev/null; test $$? = 42
+	$(call lc32,) $(TESTS)/c4lc_tdlist.c .c4lc_b.c4r > /dev/null
+	./c4m32 load-c4r.c -- .c4lc_b.c4r > /dev/null; test $$? = 42
+	# A static local's initializer naming the array itself, and sizeof
+	# of an array after a block's `extern T a[];` (games/sw's state rings
+	# and save tables)
+	./c4sp src/c4sp/lisp/c4lc.lisp $(TESTS)/c4lc_swinit.c .c4lc_b.c4r > /dev/null
+	./c4m load-c4r.c -- .c4lc_b.c4r > /dev/null; test $$? = 42
+	$(call lc32,) $(TESTS)/c4lc_swinit.c .c4lc_b.c4r > /dev/null
+	./c4m32 load-c4r.c -- .c4lc_b.c4r > /dev/null; test $$? = 42
 	# Then the property that matters: preprocessing a real module
 	# with c4lc instead of gcc -E must produce the SAME OBJECT, byte
 	# for byte. If that holds, gcc is no longer in the pipeline.

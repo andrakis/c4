@@ -75,6 +75,11 @@ const RUNS = {
                  args: ['/v1', '/l1', '/s2', '/ns', '/nm', '-sum', '0', '-frames', '600', '-script'],
                  page: 'duke3d /v1 /l1 /s2 /ns /nm -sum 0 -frames 600 -script -show',
                  about: "test-duke3d's E1L1 script on the shareware GRP, 600 frames" },
+  // Shadow Warrior's shareware has no demos: test-sw's script, played
+  'sw': { image: 'sw.c4r', frame: 'sw_sum_frame', mem: 128, skip: 1,
+          args: ['-level1', '-s2', '-nosound', '-sum', '0', '-frames', '600', '-script'],
+          page: 'sw -level1 -s2 -nosound -sum 0 -frames 600 -script -show',
+          about: "test-sw's first-level script on the shareware GRP, 600 frames" },
   ...Object.fromEntries([1, 2, 3].map(n => [`quake-demo${n}`, {
     image: 'quake.c4r', frame: 'qg_sum_frame', mem: 128, skip: 8,
     args: ['-nosound', '-nocdaudio', '-sum', '0', '+timedemo', `demo${n}`],
@@ -105,6 +110,7 @@ const RUNS = {
 // the games played for --lag: started at the shell, then a turn key held
 const LAG = {
   'duke3d-sw': { page: 'duke3d /v1 /l1 /s2', settle: 25 },
+  'sw': { page: 'sw -level1 -s2', settle: 25 },
   'duke3d': { page: 'duke3d -home /v1 /l1 /s2', settle: 25 },
   'quake-demo1': { page: 'quake +map e1m1', settle: 40 },
   'doom-demo1': { page: 'doom -warp 1 1', settle: 25 },

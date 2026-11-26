@@ -41,7 +41,7 @@ repo=${PAGES_REPO:-$HOME/git/andrakis.github.io}
 [ -z "$(git -C "$repo" status --porcelain -- c4)" ] || die "$repo/c4 has changes of its own: commit or drop them first"
 [ -z "${TYRIAN_ZIP+x}" ] || die "TYRIAN_ZIP is set: Tyrian 2.1's data may not be published (unset it)"
 # the games: every one but sbk
-GAMES="wolf3d doom rott quake duke3d frotz advent puzzles ace bsdgames pdcurses tyrian"
+GAMES="wolf3d doom rott quake duke3d sw frotz advent puzzles ace bsdgames pdcurses tyrian"
 
 # the build tree, at BRANCH
 [ -d "$tree/.git" ] || git clone -q --no-checkout "$here" "$tree"
@@ -69,10 +69,11 @@ DOOM_WAD=${DOOM_WAD:-$(have doom/data/doom1.wad)} \
 ROTT_ZIP=${ROTT_ZIP:-$(have rott/data/1rott13.zip)} \
 QUAKE_ZIP=${QUAKE_ZIP:-$(have quake/data/quake106.zip)} \
 DUKE3D_ZIP=${DUKE3D_ZIP:-$(have duke3d/data/3dduke13.zip)} \
+SW_ZIP=${SW_ZIP:-$(have sw/data/3dsw12.zip)} \
 ZORK1_Z3=${ZORK1_Z3:-$(have frotz/data/zork1.z3)} \
 ZORK2_Z3=${ZORK2_Z3:-$(have frotz/data/zork2.z3)} \
 ZORK3_Z3=${ZORK3_Z3:-$(have frotz/data/zork3.z3)} \
-    make -s wolf3d-data doom-data rott-data quake-data duke3d-data frotz-data
+    make -s wolf3d-data doom-data rott-data quake-data duke3d-data sw-data frotz-data
 echo "libjs/pages.sh: building the images in $tree at $branch ($rev)"
 QUAKE_AS_ZIP=1 make -s -j"${PAGES_JOBS:-2}" c4bb-images
 

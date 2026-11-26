@@ -185,7 +185,7 @@ not the one the game's `c4.mk` gives:
 | Super Blit Kart | its PNGs, maps and font, from a fixed commit of upstream's; the licence on them is not settled (`games/sbk/data/README.md`) | none |
 | OpenTyrian | `tyrian21.zip`, Tyrian 2.1, the user's own copy: it may not be passed on (the site's visitors add theirs with the page's Uploads: `tyrian --home`) | `TYRIAN_ZIP` |
 | Duke Nukem 3D | `3dduke13.zip`, 3D Realms' shareware package (1.3D) | `DUKE3D_ZIP` |
-| Shadow Warrior | `3dsw12.zip`, 3D Realms' shareware package (1.2); not on the published site until its licence, which names no web sites, is settled (`games/sw/data/README.md`) | `SW_ZIP` |
+| Shadow Warrior | `3dsw12.zip`, 3D Realms' shareware package (1.2) | `SW_ZIP` |
 | Quake | `quake106.zip`, id's shareware package (`pak0.pak` is taken out of it; with `QUAKE_AS_ZIP=1`, as the site is built, the disks carry the zip itself and libjs makes `pak0.pak` from it: `games/quake/data/README.md`) | `QUAKE_ZIP` |
 | Frotz | `zork1.z3`, `zork2.z3`, `zork3.z3`, Microsoft's MIT release of Zork, fetched from a fixed commit | `ZORK1_Z3`, `ZORK2_Z3`, `ZORK3_Z3` |
 

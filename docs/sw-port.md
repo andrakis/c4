@@ -42,8 +42,9 @@ the Wayback Machine's copy of 3D Realms' FTP), fetched by its SHA-256 by
 `make sw-data`; `SW.GRP` in it (26,056,769 bytes, CRC `08A7FA1F`) becomes
 `SWSW.GRP` on the disks. Its `LICENSE.TXT` (V.5.01.97) lets individuals
 give copies away without charge, all files unmodified; unlike Duke's later
-licence (V.7.16.98) it names no web or FTP sites, so `libjs/pages.sh` does
-not put it on the published site until that is settled. The full game is
+licence (V.7.16.98) it names no web or FTP sites. c4's page is free, and
+the user chose to put the episode on the published site (`libjs/pages.sh`,
+2026-11-26), as Duke's and ROTT's are. The full game is
 the person's own `SW.GRP` (`sw -home`); Steam's Shadow Warrior Classic has
 it, byte for byte the registered 1.2 by its size.
 

@@ -338,6 +338,12 @@ static void sched_wakeup(struct task *n) {
 
 // Data has come to a pipe, or its last writer has gone. Their reads run again,
 // and whoever is too late blocks again.
+// ... and to a socket, or it changed (net.c): SYS_EVWAIT's sleepers look
+// again. Its readers are on the poll queue, looked at each ms.
+void sched_netgen() {
+    ++sched_pipegen;
+}
+
 void sched_pipewake(struct vnode *vn) {
     sched_lock();
     ++sched_pipegen;
@@ -717,6 +723,7 @@ static int sched_pipesready(struct task *t) {
         f = (struct file *)t->fds[fd];
         if (f && f->vn->type == VN_PIPE && (f->flags & 3) == C4IX_O_RDONLY
             && (f->vn->size > f->vn->rpos || !f->vn->writers)) return 1;
+        if (f && f->vn->type == VN_SOCK && net_readable(f->vn->host)) return 1;
         ++fd;
     }
     return 0;
@@ -1059,7 +1066,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     // looked at, so that a task waiting for the datagram one brought is
     // woken now -- after, it waited for the next look, and the idle task's
     // nap came first (pings of 100 to 300 ms)
-    if (net_up && d != net_ms) net_tick(d);
+    if ((net_up || net_tcp) && d != net_ms) net_tick(d);
     // the queues: what nothing says has happened (sched_tick)
     if (d != sched_tickms) sched_tick(d);
 

@@ -9,13 +9,20 @@
 
 enum {
     SYS_SOCKET = 258, SYS_BIND = 259, SYS_SENDTO = 260, SYS_RECVFROM = 261, SYS_NETCTL = 262,
-    SOCK_UDP = 1, SOCK_ICMP = 2,
-    NET_TIMEDOUT = -2, NET_NOWAIT = -1,
+    SYS_CONNECT = 263, SYS_LISTEN = 264, SYS_ACCEPT = 265, SYS_SHUTSOCK = 266,
+    SOCK_UDP = 1, SOCK_ICMP = 2, SOCK_TCP = 3,
+    NET_TIMEDOUT = -2, NET_NOWAIT = -1, NET_REFUSED = -4,
     // NETCTL 0's words: the card, its MAC's six bytes, address, mask, frames
     // and bytes in and out, dropped, round inside, malformed, to no port,
-    // sockets open
+    // sockets open, TCP segments sent, TCP timeouts, RSTs sent
     NI_UP = 0, NI_MAC = 1, NI_IP = 7, NI_MASK = 8, NI_RX = 9, NI_RXB = 10, NI_TX = 11, NI_TXB = 12,
-    NI_DROP = 13, NI_LO = 14, NI_BAD = 15, NI_NOPORT = 16, NI_SOCKS = 17, NI_WORDS = 18
+    NI_DROP = 13, NI_LO = 14, NI_BAD = 15, NI_NOPORT = 16, NI_SOCKS = 17,
+    NI_TSEG = 18, NI_TREX = 19, NI_TRST = 20, NI_WORDS = 21,
+    // NETCTL 3's words for each socket: kind, TCP state (TS_*), local port,
+    // peer's address and port, bytes (datagrams) in, bytes to go, closing
+    NS_KIND = 0, NS_STATE = 1, NS_PORT = 2, NS_RIP = 3, NS_RPORT = 4, NS_IN = 5, NS_OUT = 6,
+    NS_ORPHAN = 7, NS_WORDS = 8,
+    TS_CLOSED = 0, TS_LISTEN = 1, TS_SYNSENT = 2, TS_SYNRCVD = 3, TS_EST = 4
 };
 #define NET_ALL 0xffffffff
 
@@ -44,6 +51,28 @@ static int urecvfrom(int fd, char *buf, int len, int *ip, int *port, int deadlin
 }
 static int unetinfo(int *v) { return nsys(SYS_NETCTL, 0, (int)v, NI_WORDS); }
 static int unetset(int ip, int bits) { return nsys(SYS_NETCTL, 1, ip, bits); }
+// the sockets, NS_WORDS each, into V (N words): how many
+static int unetsocks(int *v, int n) { return nsys(SYS_NETCTL, 3, (int)v, n); }
+
+// TCP (SOCK_TCP): a socket's fd read and written as a pipe's is -- read
+// waits for bytes and says 0 at the connection's end, write waits for room
+// to send them all; uavail says the bytes waiting, -1 at the end.
+// A connection to IP:PORT: 0, -1 (no route, reset), NET_REFUSED (nobody
+// listens there) or NET_TIMEDOUT (nobody answered, 5 s)
+static int uconnect(int fd, int ip, int port) { return nsys(SYS_CONNECT, fd, ip, port); }
+// connections to its port (ubind first) taken, BACKLOG waiting at most
+static int ulisten(int fd, int backlog) { return nsys(SYS_LISTEN, fd, backlog, 0); }
+// the next connection's fd, waited for; its peer at *IP:*PORT (if not 0)
+static int uaccept(int fd, int *ip, int *port) {
+    int w[2], r;
+    w[0] = 0; w[1] = 0;
+    r = nsys(SYS_ACCEPT, fd, (int)w, 0);
+    if (ip) *ip = w[0] & NET_ALL;
+    if (port) *port = w[1];
+    return r;
+}
+// no more to send: the peer reads its end once it has the rest
+static int ushutdown(int fd) { return nsys(SYS_SHUTSOCK, fd, 0, 0); }
 
 // "a.b.c.d" to an address, 0 if it is not one; *BITS, if not 0, a "/N" after it (-1 none)
 static int uparseip(char *s, int *bits) {

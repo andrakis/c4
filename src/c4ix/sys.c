@@ -42,10 +42,38 @@ static int sys_block(struct vnode *vn, int pos) {
     return 0;
 }
 
+// Sleep MS ms and run the syscall again (TCP's waits for room to write
+// and for a handshake, which nothing wakes a blocked task for)
+static int sys_nap(int ms) {
+    struct task *t;
+    int until;
+    t = sched_current();
+    if (sched_in_trap()) {
+        t->ev_wait = 0;
+        t->ck_wake = __time() + ms;
+        task_state(t, TS_SLEEPING);
+        sys_restart = 1;
+        return 1;
+    }
+    until = __time() + ms;
+    while (__time() - until < 0) sched_yield();
+    return 0;
+}
+
 int sys_write(int fd, char *buf, int len) {
     struct file *f;
-    if (!(f = fd_get(sched_current(), fd))) return -1;
-    return vfs_write(f, buf, len);
+    struct task *t;
+    int r;
+    t = sched_current();
+    if (!(f = fd_get(t, fd))) return -1;
+    if (f->vn->type != VN_SOCK) return vfs_write(f, buf, len);
+    // a TCP connection's send ring full: the writer waits for room, a ms at a time
+    while ((r = net_write(f->vn->host, buf, len)) == NET_AGAIN) {
+        if (f->flags & C4IX_O_NONBLOCK) return -1;
+        if (sys_nap(1)) return 0;                 // trap path: restarting
+        if (!(f = fd_get(t, fd)) || f->vn->type != VN_SOCK) return -1;
+    }
+    return r;
 }
 
 int sys_read(int fd, char *buf, int len) {
@@ -672,7 +700,8 @@ static int sys_args_ok(int num, int *args) {
     case SYS_FMAP:     return uaccess(args[2], 3 * sizeof(int), 1);
     case SYS_SENDTO:   return uaccess(args[1], 4 * sizeof(int), 0) && uaccess(((int *)args[1])[0], ((int *)args[1])[1], 0);
     case SYS_RECVFROM: return uaccess(args[1], 5 * sizeof(int), 1) && uaccess(((int *)args[1])[0], ((int *)args[1])[1], 1);
-    case SYS_NETCTL:   return args[0] == 0 ? uaccess(args[1], args[2] * sizeof(int), 1) : (args[0] != 2 || ustrlen((char *)args[1]) >= 0);
+    case SYS_NETCTL:   return args[0] == 0 || args[0] == 3 ? uaccess(args[1], args[2] * sizeof(int), 1) : (args[0] != 2 || ustrlen((char *)args[1]) >= 0);
+    case SYS_ACCEPT:   return !args[1] || uaccess(args[1], 2 * sizeof(int), 1);
     }
     return 1;
 }
@@ -736,6 +765,7 @@ int sys_dispatch(int num, int *args) {
             return f->vn->writers ? 0 : -1;
         }
         if (f->vn->type == VN_CONSOLE) return con_poll() ? 1 : 0;
+        if (f->vn->type == VN_SOCK) return net_avail(f->vn->host);
         if (f->vn->type == VN_RAMFILE || f->vn->type == VN_PROC) return f->vn->size > f->pos ? f->vn->size - f->pos : -1;
         return 1;
     case SYS_INTR:     return sched_intr_below(task_get(args[0]));
@@ -789,6 +819,29 @@ int sys_dispatch(int num, int *args) {
         }
         return nr;
     case SYS_NETCTL:   return net_ctl(args[0], args[1], args[2]);
+    // TCP (net.c)
+    case SYS_CONNECT: case SYS_LISTEN: case SYS_ACCEPT: case SYS_SHUTSOCK:
+        if (!t || !(f = fd_get(t, args[0])) || f->vn->type != VN_SOCK) return -1;
+        if (num == SYS_LISTEN) return net_listen(f->vn->host, args[1]);
+        if (num == SYS_SHUTSOCK) return net_shutdown(f->vn->host);
+        if (num == SYS_CONNECT) {
+            // the handshake, waited for a ms at a time
+            while ((nr = net_connect(f->vn->host, args[1], args[2])) == NET_AGAIN) {
+                if (sys_nap(1)) return 0;         // trap path: restarting
+                if (!(f = fd_get(t, args[0])) || f->vn->type != VN_SOCK) return -1;
+            }
+            return nr;
+        }
+        // the next connection made, waited for as a pipe's reader waits
+        while ((ns = net_accept(f->vn->host, (int *)args[1])) == NET_AGAIN) {
+            if (f->flags & C4IX_O_NONBLOCK) return -1;
+            if (sys_block(f->vn, 0)) return 0;    // trap path: restarting
+            if (!(f = fd_get(t, args[0])) || f->vn->type != VN_SOCK) return -1;
+        }
+        if (ns < 0) return -1;
+        if (!(nv = vfs_socket(ns))) { net_close(ns); return -1; }
+        if ((nr = fd_open_vnode(t, nv, C4IX_O_RDWR)) < 0) net_close(ns);
+        return nr;
     // where a disk's file keeps a block (c4ix.h SYS_FMAP)
     case SYS_FMAP:
         if (!t || !(f = fd_get(t, args[0])) || !f->vn->e2) return -1;

@@ -1,15 +1,22 @@
-// C4IX userland: nc -- netcat's UDP mode (docs/c4pc-network.md): two
-// machines talking.
+// C4IX userland: nc -- netcat (docs/c4pc-network.md): two machines talking,
+// over TCP or UDP.
 //
-//   nc -u [-w SECS] HOST PORT   stdin's lines to HOST:PORT; what comes back to stdout
-//   nc -u -l PORT               what comes to PORT to stdout; stdin's lines
-//                               back to whoever sent last
+//   nc [-w SECS] HOST PORT        a TCP connection: stdin to it, it to stdout
+//                                 (-w: closed after SECS with nothing either way)
+//   nc -l [-w SECS] [-e PROG] PORT  one connection taken on PORT, the same;
+//                                 with -e, PROG run with it as its stdin,
+//                                 stdout and stderr (nc -l -e sh 2323: a shell)
+//   nc -u [-w SECS] HOST PORT     UDP: stdin's lines to HOST:PORT as datagrams,
+//                                 what comes back to stdout
+//   nc -u -l PORT                 what comes to PORT to stdout; stdin's lines
+//                                 back to whoever sent last
 //
-// A datagram a read of stdin (a line, as a terminal gives them), 1472
-// bytes at most. Without -l, nc ends SECS (1) after stdin's end, having
-// printed what came meanwhile: `echo hello | nc -u one 7000` is a message.
-// With -l it runs until Ctrl-C. Two machines, one `nc -u -l 7000` and the
-// other `nc -u NAME 7000`, are a chat. TCP's nc is the next milestone's.
+// TCP: at stdin's end nc says so (the FIN) and goes on printing until the
+// other side closes too: `echo hello | nc one 7000` is a message, and
+// `nc -l 7000 > file` on one machine and `cat file | nc one 7000` on
+// another a copy. A datagram is a read of stdin (a line, as a terminal
+// gives them), 1472 bytes at most; UDP's nc ends SECS (1) after stdin's
+// end, having printed what came meanwhile; with -l it runs until Ctrl-C.
 
 #include "c4ix_user.h"
 #include "c4ix_net.h"
@@ -17,31 +24,109 @@
 static char buf[1500];
 
 static void usage() {
-    ufprintf(STDERR, "usage: nc -u [-w SECS] HOST PORT\n       nc -u -l PORT\n");
+    ufprintf(STDERR, "usage: nc [-u] [-w SECS] HOST PORT\n       nc -l [-u] [-e PROG] PORT\n");
     uexit(2);
+}
+
+// a connection's bytes both ways until it ends: stdin to FD (then a FIN at
+// stdin's end), FD to stdout; or until IDLE ms (0: no limit) with nothing either way
+static int tcp_pump(int fd, int idle) {
+    int n, a, moved, eof, last;
+    eof = 0;
+    last = __time();
+    while (1) {
+        if (idle > 0 && __time() - last >= idle) return 0;
+        moved = 0;
+        n = uavail(fd);
+        if (n < 0) return 0;                       // the other side has closed
+        if (n > 0) {
+            n = uread(fd, buf, n > (int)sizeof buf ? (int)sizeof buf : n);
+            if (n <= 0) return 0;
+            write(STDOUT, buf, n);
+            moved = 1;
+        }
+        if (!eof) {
+            a = uavail(STDIN);
+            if (a < 0) { eof = 1; ushutdown(fd); }
+            else if (a > 0) {
+                a = uread(STDIN, buf, a > (int)sizeof buf ? (int)sizeof buf : a);
+                if (a <= 0) { eof = 1; ushutdown(fd); }
+                else if (write(fd, buf, a) != a) { ufprintf(STDERR, "nc: the connection is gone\n"); return 1; }
+                moved = 1;
+            }
+        }
+        // nothing either way: until a pipe or the socket has something, 10 ms at most
+        if (moved) last = __time();
+        else uevwait(10, 0, 1);
+    }
+    return 0;
+}
+
+// PROG run with the connection FD as its stdin, stdout and stderr; its exit code
+// (as sh starts a program: nc's own descriptors pointed at it, spawned)
+static int tcp_exec(int fd, char *prog) {
+    char *argv[2];
+    char path[80];
+    int pid;
+    if (prog[0] == '/') ustrcpy(path, prog);
+    else { ustrcpy(path, "/bin/"); ustrcat(path, prog); }
+    argv[0] = prog;
+    argv[1] = 0;
+    udup2(fd, STDIN);
+    udup2(fd, STDOUT);
+    udup2(fd, STDERR);
+    close(fd);
+    pid = spawn(path, 1, argv);
+    close(STDIN);
+    close(STDOUT);
+    if (pid < 0) return 127;
+    return uwait(pid);
+}
+
+static int tcp_main(int listen, char *host, int port, char *prog, int idle) {
+    char a[20];
+    int fd, c, r, ip, pp;
+    if ((fd = usocket(SOCK_TCP)) < 0) { ufprintf(STDERR, "nc: no socket (no network in this kernel?)\n"); return 1; }
+    if (!listen) {
+        if (!(ip = uresolve(host))) { ufprintf(STDERR, "nc: %s: unknown host\n", host); return 1; }
+        r = uconnect(fd, ip, port);
+        if (r == NET_REFUSED) { ufprintf(STDERR, "nc: %s port %d: connection refused\n", host, port); return 1; }
+        if (r == NET_TIMEDOUT) { ufprintf(STDERR, "nc: %s port %d: timed out\n", host, port); return 1; }
+        if (r < 0) { ufprintf(STDERR, "nc: %s port %d: no route\n", host, port); return 1; }
+        return tcp_pump(fd, idle);
+    }
+    if (ubind(fd, port) < 0) { ufprintf(STDERR, "nc: port %d is taken\n", port); return 1; }
+    if (ulisten(fd, 1) < 0) { ufprintf(STDERR, "nc: cannot listen on %d\n", port); return 1; }
+    ufprintf(STDERR, "nc: listening on TCP port %d\n", port);
+    if ((c = uaccept(fd, &ip, &pp)) < 0) { ufprintf(STDERR, "nc: accept failed\n"); return 1; }
+    close(fd);
+    ufprintf(STDERR, "nc: connection from %s port %d\n", uipstr(ip, a), pp);
+    if (prog) return tcp_exec(c, prog);
+    return tcp_pump(c, idle);
 }
 
 int main(int argc, char **argv) {
     char a[20];
-    int udp, listen, wait, k, fd, peer, pport, n, from, fport, eof_at, avail, port;
-    char *host, *ps;
-    udp = 0; listen = 0; wait = 1; host = 0; ps = 0;
+    int udp, listen, wait, wset, k, fd, peer, pport, n, from, fport, eof_at, avail, port;
+    char *host, *ps, *prog;
+    udp = 0; listen = 0; wait = 1; wset = 0; host = 0; ps = 0; prog = 0;
     k = 1;
     while (k < argc) {
         if (!ustrcmp(argv[k], "-u")) udp = 1;
         else if (!ustrcmp(argv[k], "-l")) listen = 1;
         else if (!ustrcmp(argv[k], "-ul") || !ustrcmp(argv[k], "-lu")) { udp = 1; listen = 1; }
-        else if (!ustrcmp(argv[k], "-w") && k + 1 < argc) { wait = uatoi(argv[k + 1]); ++k; }
+        else if (!ustrcmp(argv[k], "-w") && k + 1 < argc) { wait = uatoi(argv[k + 1]); wset = 1; ++k; }
+        else if (!ustrcmp(argv[k], "-e") && k + 1 < argc) { prog = argv[k + 1]; ++k; }
         else if (argv[k][0] == '-') usage();
         else if (!listen && !host) host = argv[k];
         else if (!ps) ps = argv[k];
         else usage();
         ++k;
     }
-    if (!udp) { ufprintf(STDERR, "nc: only UDP (-u) for now: C4IX has no TCP yet\n"); return 2; }
-    if (!ps || (!listen && !host)) usage();
+    if (!ps || (!listen && !host) || (prog && (udp || !listen))) usage();
     port = uatoi(ps);
     if (port <= 0 || port > 65535) usage();
+    if (!udp) return tcp_main(listen, host, port, prog, wset ? wait * 1000 : 0);
     peer = 0; pport = 0;
     if (!listen && !(peer = uresolve(host))) { ufprintf(STDERR, "nc: %s: unknown host\n", host); return 1; }
     pport = port;

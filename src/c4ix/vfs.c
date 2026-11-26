@@ -1761,7 +1761,7 @@ int vfs_write(struct file *f, char *buf, int len) {
         return len;
     }
     if (vn->type == VN_HOSTFILE) { sched_unlock(); return -1; }  // no write()
-    if (vn->type == VN_SOCK) { sched_unlock(); return -1; }      // SENDTO, not write (no TCP yet)
+    if (vn->type == VN_SOCK) { sched_unlock(); return net_write(vn->host, buf, len); }   // TCP's (sys_write waits for room)
     if (vn->type == VN_DIR || vn->type == VN_PROC) { sched_unlock(); return -1; }
 
     if (vn->type == VN_PIPE) {

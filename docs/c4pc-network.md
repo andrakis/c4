@@ -102,7 +102,16 @@ Syscalls (three words each, as every C4IX syscall):
 | 259 BIND (fd, port) | a UDP port, or ICMP's ident (0: one is chosen) | the port |
 | 260 SENDTO (fd, msg) | msg = {buf, len, ip, port} | bytes, or -1 (no route, ARP gave up) |
 | 261 RECVFROM (fd, msg) | msg = {buf, len, ip out, port out, deadline ms (0 none, -1 don't wait)} | bytes, -1, -2 timed out |
-| 262 NETCTL (op, a, b) | 0 interfaces as text into a (b bytes), 1 set the address (a ip, b mask bits), 2 resolve the name at a | |
+| 262 NETCTL (op, a, b) | 0 the card's counts into a (b words), 1 set the address (a ip, b mask bits), 2 resolve the name at a, 3 the sockets into a (8 words each, b words at most) | |
+| 263 CONNECT (fd, ip, port) | a TCP connection (N3) | 0, -1 no route or reset, -4 refused, -2 timed out (5 s) |
+| 264 LISTEN (fd, backlog) | after BIND; backlog 1 to 8 | 0 or -1 |
+| 265 ACCEPT (fd, peer) | the next connection, waited for; peer = {ip, port} out (or 0) | its fd |
+| 266 SHUTSOCK (fd) | no more to send: the FIN after what is queued | 0 or -1 |
+
+A TCP socket's fd is read and written as a pipe's: read waits for bytes
+and returns 0 at the connection's end; write waits for room for all of
+them (8 KB at most at once); AVAIL (`uavail`) is the bytes waiting, -1 at
+the end; SYS_EVWAIT with pipes set wakes for a socket too.
 
 ### Userland
 
@@ -114,6 +123,13 @@ Syscalls (three words each, as every C4IX syscall):
 - `nc -u HOST PORT` and `nc -u -l PORT` -- netcat's UDP mode: stdin's lines
   out as datagrams, what comes printed. Two machines each running one is
   the talk program; `echo hi | nc -u one 7000` a one-shot message.
+- (N3) `nc HOST PORT` and `nc -l PORT` -- the same over TCP, until both
+  sides have closed (stdin's end sends the FIN); `-w SECS` ends an idle
+  connection; `nc -l -e PROG PORT` runs PROG with the connection as its
+  stdin, stdout and stderr (`nc -l -e sh 2323`: a machine's shell for
+  another; `nc -l -e cat 7` an echo server).
+- (N3) `netstat` -- each socket (protocol, bytes queued each way, local and
+  peer's address, TCP state) and TCP's counts (segments, timeouts, resets).
 
 ### libjs, the browser machine
 
@@ -142,7 +158,8 @@ milestone N2.
   `cat`, sh's redirections and pipes work over a connection),
   retransmission and a fixed window first; `nc` without -u, a `telnetd`
   giving a guest's shell to another machine, a small `httpd`; select/poll
-  over sockets (uevwait learns them).
+  over sockets (uevwait learns them). **Built (2026-11-26) but for the
+  httpd: below.** `nc -l -e sh` is the telnetd.
 - **N4: the outside world.** c4pc drives the PC's NIC (e1000/82540EM: QEMU,
   VMware and VirtualBox all offer it; virtio-net after), and the switch
   gets an uplink port: NAT for the guests (simplest for the user: no
@@ -164,7 +181,7 @@ milestone N2.
   fine for ping and chat; bulk transfers (N3) may want rings and an
   interrupt (a hard IRQ trap) -- measure first.
 - **No TCP yet** means no streams: `nc` is UDP only and a lost datagram is
-  lost (the switch drops only when a queue of 64 is full).
+  lost (the switch drops only when a queue of 64 is full). *(N3 has TCP.)*
 - **c4's C** (c4lc): no unsigned arithmetic the stack can lean on; header
   fields are built a byte at a time with masks, and checksums in ints.
 - **The shared files.** The CPU 0 session is changing `engine.c`, `hv.c`
@@ -205,6 +222,63 @@ Not done in N1: TCP, `write()` on a socket (no connected sockets yet), ICMP
 so nothing goes stale), Machines' Network tab (`net_counts` is there for
 INFO), c4pc-host and libjs (N2).
 
+## N3: TCP (2026-11-26)
+
+TCP in the kernel's `src/c4ix/net.c`, nothing in c4pc: the card and the
+switch carry its segments as any frame. `make test-c4pc-net` has it, and
+passes on 4 processors and on 1.
+
+**What it does.** The handshake both ways (CONNECT; LISTEN with a backlog
+of up to 8 and ACCEPT), the MSS option on a SYN, both closes (SHUTSOCK, and
+close() sending the FIN, or a RST when bytes came that were never read),
+TIME_WAIT (2 s), a RST for a port nobody listens on (`connection
+refused`). A window of 8 KB each way; what comes in order is taken, what
+comes out of order dropped and asked for again by the ACK. A
+retransmission timer from 200 ms doubling to 2 s, going back to the first
+byte unacknowledged; a shut window probed a byte at a time; a peer silent
+through 8 timeouts (5 for the handshake, about 5 s) gets a RST and the
+socket an error. Sequence numbers work on the 64-bit word too (`sdiff`).
+
+**What it leaves out**, for machines a switch apart: Nagle, delayed ACKs
+(each segment with data is ACKed), urgent data, window scaling, SACK, an
+RTT estimate (200 ms is far above the switch's 1-4 ms), simultaneous open,
+keepalives. A connection is 16 KB of the kernel's (its two rings), made the
+first time a slot is used and kept for the next; 32 sockets at most.
+
+**Streams as fds.** read() waits as a pipe's reader does (the scheduler's
+poll queue) and says 0 at the end; write() waits a millisecond at a time
+for room (a TCP ack wakes nothing a blocked task sleeps on) and takes all
+of a write of up to 8 KB at once, so programs that never look for a short
+write (cat) are right; AVAIL is the bytes waiting, -1 at the end;
+SYS_EVWAIT's pipes include sockets (`sched_netgen`), so a program waiting
+for its stdin or a socket sleeps until either has something. So `nc -l -e
+sh` gives a shell (it reads its stdin and writes its stdout as it would a
+terminal's), and the test copies VM 0's `/bin/sh` (41 KB) to b's `nc -l -e
+cat` and back, the CRCs the same.
+
+**Loopback** (a connection to localhost or the machine's own address)
+needed one change: a datagram round inside is queued and taken in as the
+net call that sent it ends. Taken in at once, from inside the send, TCP's
+answer arrived before the sender had noted what it had sent: the ACK of a
+FIN was taken for one of something never sent, and the connection sat in
+LAST_ACK until the timer sent the FIN again.
+
+**Measured** (QEMU KVM, helios, 4 processors): the whole test sends 257
+segments from VM 0 with no timeouts and no resets: nothing was sent
+twice.
+
+| file | |
+|---|---|
+| `src/c4ix/net.c` | TCP (`tcp_*`), the sockets' slots (`sock_new`), loopback's queue (`lo_drain`, `net_unlock`) |
+| `src/c4ix/sys.c` | syscalls 263-266; write() on a socket (`sys_nap`: a ms, and the syscall again) |
+| `src/c4ix/vfs.c`, `sched.c`, `c4ix.h` | write and AVAIL on VN_SOCK; `sched_netgen`, sockets in SYS_EVWAIT; the trap's net_tick while TCP sockets are open |
+| `src/c4ix/include/c4ix_net.h`, `user/nc.c`, `user/netstat.c` (new) | `uconnect`, `ulisten`, `uaccept`, `ushutdown`, `unetsocks`; nc's TCP, `-e`, `-w`; netstat |
+| `src/c4pc/test-c4pc-net.sh` | TCP's checks |
+
+Not done in N3: an `httpd`; `select`/`poll` proper (SYS_EVWAIT does for
+now); SO_REUSEADDR and friends (a listener's port may be bound again while
+its old connections finish, nothing else); the BSD socket API (N5).
+
 ## Trying it (the ISO)
 
 *(the ISO's path, md5 and time are in the report; the steps:)*
@@ -236,3 +310,10 @@ INFO), c4pc-host and libjs (N2).
    line.
 4. `vm send a ping -c 3 b` runs a command in a guest without attaching:
    its output is in `vm log` (and Machines' Log tab).
+5. TCP (N3): attach **a** and type `nc -l -e sh 2323` -- a's shell, for
+   whoever connects. In the control's Terminal, `nc a 2323` and type
+   `ifconfig`, `ls /bin`: a's answers (10.4.0.2). Exit a's shell with
+   `exit`. A chat over TCP is `nc -l 7001` on one machine and `nc a 7001`
+   on the other; a copy, `nc -l 7002 > /got` on the control and, in a
+   guest's own shell, `cat /bin/sh | nc control 7002`. `netstat` shows the
+   connections.

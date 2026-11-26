@@ -1,0 +1,8 @@
+( ( p != 0 ) ? 0 : fail ( "p != NULL" ) ) ;
+( ( strcmp ( s , "*.MAP" ) == 0 ) ? 0 : fail ( "strcmp(s, \"*.MAP\") == 0" ) ) ;
+char * a = "TWO" , * b = "2" ;
+int x1 = 12 ; unsigned long long u = 0xfffffffffULL ;
+printf ( "%d %d" , 1 , 2 ) ; printf ( "%d" , 3 ) ; printf ( "none" ) ; printf ( "none" ) ;
+int s = SELF + 1 ; int f = F ( 1 ) ;
+int ( * g ) ( int ) = F ;
+char * j = "one\ntwo" ;

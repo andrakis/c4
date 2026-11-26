@@ -1,0 +1,4 @@
+int q_true ;
+int defined_ok ;
+int elif_taken ;
+int arithmetic_ok ;

@@ -61,11 +61,12 @@ int ide_dma_run(int ch, int tomem, i64 ms) {
   outb(bm, (u8)((tomem ? 8 : 0) | 1));
   i64 t0 = plat_now_ms();
   int r = 0;
-  for (;;) {
+  for (u32 k = 1;; k++) {
     u8 s = inb(bm + 2);
     if (s & 2) { r = -1; break; }                        /* the bus master's error */
     if (!(s & 1) || (s & 4)) break;                      /* no longer active, or the device's done */
-    if (plat_now_ms() - t0 > ms) { r = -1; break; }
+    /* the clock every 64th poll: the TSC, a trip out of VirtualBox each */
+    if (!(k & 63) && plat_now_ms() - t0 > ms) { r = -1; break; }
     io_pause_();
   }
   outb(bm, tomem ? 8 : 0);

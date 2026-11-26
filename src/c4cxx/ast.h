@@ -122,7 +122,10 @@ enum {
 	ND_RAWFUNC,
 	// lowering (M5): (ty) lhs, a cast to a type sema has; and a top-level
 	// declaration written as text (tok)
-	ND_TCAST, ND_RAW
+	ND_TCAST, ND_RAW,
+	// gcc's builtins that take a type (M6, glibc's and gcc's headers):
+	// __builtin_va_arg (lhs, decl), __builtin_offsetof (decl, name)
+	ND_VA_ARG, ND_OFFSETOF
 };
 
 struct Node {

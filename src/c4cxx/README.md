@@ -396,6 +396,68 @@ Still M6: the oracle. Blood built from c4cxx's C by gcc `-m32` must play
 B0's demos with B0's checksums, frame for frame, and the class sizes must
 be checked against g++'s.
 
+## State: M6, done (2026-11-27)
+
+**The oracle passes.** Blood built from c4cxx's C by gcc `-m32` plays the
+shareware 1.11A's demos (BS111A) with the checksums of c4-Blood's host
+build (B0, g++), frame for frame: 4000 frames, about 24 minutes of game
+time across the demos, every frame's checksum the same, total `4e6389c4`
+(800 frames give B0's `744cafc0`). Each struct and class c4cxx writes
+has g++'s size, unit by unit. `src/c4cxx/blood-oracle.sh` is the whole
+of it, and `make test-c4cxx-blood` runs it. It needs c4-Blood and
+`BLOOD_RUN`, a directory of the game's files with `BLOOD.CFG`, and it
+takes minutes. The steps:
+
+1. **B0:** c4-Blood's `c4/host.sh`.
+2. **Every C++ unit through c4cxx:** all 80 of Blood's and
+   `c4/netnone.cpp`. c4cxx reads the host's headers (glibc's and gcc's,
+   after c4-Blood's own) as g++ reads them: with Watcom's layouts
+   (`-fshort-enums -mms-bitfields -funsigned-char`) and gcc's
+   `__GNUC__` and `__i386__`, so that glibc takes the paths it takes for
+   g++. Then gcc `-m32` compiles each with host.sh's flags, and with
+   `-fno-common`, since C++ has no common symbols.
+3. **The link,** as host.sh links: `loadsave` first (Blood-RE builds
+   `LoadSave::head` in a global constructor that its savers link onto),
+   host.sh's C objects, and `rt/libc4cxx.c` in place of `c4/cxxrt.cpp`.
+4. **The demos:** both programs play them, every frame's checksum
+   printed (`-sum 1`), and the two lists must be the same.
+5. **The sizes:** with gdb, each struct and class c4cxx defined in a
+   unit, in g++'s object for that unit and in c4cxx's.
+
+What it took in c4cxx, besides the first part:
+
+- **glibc's and gcc's headers** in C++:
+  - `__builtin_va_list` (a type of its own: `Ty`'s new `cname` names it
+    for the checks);
+  - `__builtin_va_arg (ap, T)` and `__builtin_offsetof (T, m)` (new
+    nodes, since both take a type);
+  - other `__builtin_` functions called undeclared;
+  - `wchar_t` (gcc `-m32`'s `long`);
+  - `_Float32` to `_Float64x`;
+  - exception specifications (`throw ()`, `noexcept`), which mean nothing
+    with no exceptions;
+  - asm labels (`__REDIRECT`);
+  - `extern "C++"` inside `extern "C"`, as a stack of linkages.
+- **A declaration directly in `extern "C"`** is `extern` ([dcl.link]).
+  Before, key.h's `extern "C" volatile byte keystatus[256];` was a
+  definition in every unit; common symbols had hidden that.
+- **A class with no data** is one byte, as in g++ (`_e`, for `CFX` and
+  `CCheatMgr`).
+
+One thing B0 relies on: Blood calls `CheckLink` with sector -1 and reads
+`gUpperLink[-1]`, which is `gLowerLink`'s last element in both builds
+once c4cxx's C has no common symbols. With them, the linker put
+`baseSprite` there, and a warp marker seemed to exist.
+
+Test: `g_gnu.cpp` (the builtins, `extern "C++"`, `throw ()`, an asm label,
+`wchar_t`, `extern "C"`'s declaration). A `g_*.cpp` runs through g++ and
+c4cxx with gcc, not c4lc.
+
+Not done, for M7: c4lc has no `-fshort-enums` or `-funsigned-char` yet, so
+Blood through c4lc does not yet have Watcom's layouts. c4lc compiles
+every unit (`blood-units.sh -compile`), but nothing links or runs that
+yet.
+
 ## Files
 
 | file | what |
@@ -414,5 +476,6 @@ be checked against g++'s.
 | `test-same.sh`, `run-corpora.sh` | the c4lc oracle and its corpora (`make test-c4cxx`) |
 | `c4odiff.py` | which functions and data differ between two objects |
 | `test-cxx.sh` | C++ programs against g++ (gcc and c4lc), and what c4cxx refuses |
+| `blood-oracle.sh` | M6's oracle: Blood from c4cxx's C by gcc against c4-Blood's host build, frame for frame, and the sizes (`make test-c4cxx-blood`) |
 | `blood-units.sh` | Blood's C++ units through c4cxx (`-parse` by default; `-compile` with Watcom's layouts, then gcc and c4lc) |
 | `tests/` | the preprocessor's cases, with their output (checked against gcc -E); `t_*.cpp` programs, `m_*/` programs of several units, `e_*.cpp` refusals and `rt-gxx.cpp` (g++'s runtime) for `test-cxx.sh` |

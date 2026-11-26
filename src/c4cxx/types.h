@@ -48,6 +48,7 @@ struct Ty {
 	int complete;
 	int is_unsigned_enum;	// T_ENUM: all values >= 0 (gcc then makes it unsigned int)
 	struct Class *cls;	// C++: a class's members, constructors and the rest
+	const char *cname;	// gcc's own type, which C names only so (__builtin_va_list)
 };
 
 extern Ty *ty_void, *ty_bool, *ty_char, *ty_schar, *ty_uchar, *ty_short, *ty_ushort,

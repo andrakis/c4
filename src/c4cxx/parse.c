@@ -11,7 +11,16 @@ static Token *T;	// the next token
 static Token *name_qual;	// X in X::name
 static int name_dtor;		// ~X
 static int ctor_args_ok;
-static int extern_c;		// inside extern "C" { }
+// extern "C" { } and extern "C++" { }, nested: 1 for C. Outside them a
+// header found through -isystem is C.
+static int link_sp, link_stack[64];
+
+static void link_push (int c)
+{
+	if (link_sp == 64)
+		error_at (T, "linkage specifications nested too deep");
+	link_stack[link_sp++] = c;
+}
 static Token *ctor_name_at;	// a constructor's name, where specifiers stop
 
 Token *make_ident (Token *like, const char *name)
@@ -106,7 +115,8 @@ static Token *expect (const char *s)
 }
 
 static const char *type_words[] = { "void", "char", "short", "int", "long", "float", "double",
-	"signed", "unsigned", "_Bool", "__signed__", "__signed", 0 };
+	"signed", "unsigned", "_Bool", "__signed__", "__signed", "__builtin_va_list",
+	"_Float32", "_Float64", "_Float128", "_Float32x", "_Float64x", 0 };
 static const char *qual_words[] = { "const", "volatile", "restrict", "__restrict", "__restrict__",
 	"__const", "__const__", "__volatile", "__volatile__", 0 };
 static const char *storage_words[] = { "typedef", "extern", "static", "auto", "register",
@@ -135,7 +145,7 @@ static int in_list (Token *t, const char **l)
 
 static int is_type_word (Token *t)
 {
-	return in_list (t, type_words) || (opt_cplusplus && equal (t, "bool"));
+	return in_list (t, type_words) || (opt_cplusplus && (equal (t, "bool") || equal (t, "wchar_t")));
 }
 
 static int is_storage_word (Token *t)
@@ -237,7 +247,9 @@ static Attr *parse_attr (void)
 
 static Attr *attrs (Attr *list)
 {
-	while (is_attribute (T)) {
+	// and an asm label, `name proto __asm__ ("alias")` (glibc's __REDIRECT),
+	// kept as its tokens for gcc
+	while (is_attribute (T) || ((equal (T, "__asm__") || equal (T, "__asm")) && equal (T->next, "("))) {
 		Attr *a = parse_attr (), **p = &list;
 		while (*p)
 			p = &(*p)->next;
@@ -344,7 +356,7 @@ static Spec *parse_spec (int allow_storage)
 {
 	Spec *sp = xalloc (sizeof *sp);
 	sp->tok = T;
-	sp->extern_c = extern_c || (T->file && T->file->c_header);
+	sp->extern_c = link_sp ? link_stack[link_sp - 1] : (T->file && T->file->c_header);
 	for (;;) {
 		if (is_storage_word (T)) {
 			if (!allow_storage)
@@ -504,8 +516,23 @@ static Type *type_suffix (Type *base)
 				f->const_method = 1;
 				advance ();
 			}
-			if (is ("throw"))
-				error_at (T, "exception specifications are not supported");
+			// throw (...) and noexcept [(...)] (glibc's __THROW): nothing,
+			// with no exceptions at all
+			if (is ("throw") || is ("noexcept")) {
+				int d = 0;
+				int paren = equal (T->next, "(");
+				advance ();
+				if (paren)
+					do {
+						if (T->kind == TK_EOF)
+							error_at (T, "an unterminated exception specification");
+						if (is ("("))
+							d++;
+						else if (is (")"))
+							d--;
+						advance ();
+					} while (d > 0);
+			}
 		}
 		return f;
 	}
@@ -1338,6 +1365,25 @@ static Node *unary (void)
 		n->lhs = n->args;
 		return postfix (n);
 	}
+	if ((is ("__builtin_va_arg") || is ("__builtin_offsetof")) && equal (T->next, "(")) {
+		// gcc's, as its stdarg.h and stddef.h use them: a type for an argument
+		Node *n = new_node (is ("__builtin_va_arg") ? ND_VA_ARG : ND_OFFSETOF, t);
+		advance ();
+		expect ("(");
+		if (n->kind == ND_VA_ARG) {
+			n->lhs = assign ();
+			expect (",");
+			n->decl = type_name ();
+		} else {
+			n->decl = type_name ();
+			expect (",");
+			if (T->kind != TK_IDENT)
+				error_at (T, "__builtin_offsetof of other than a member's name is not supported");
+			n->name = advance ();
+		}
+		expect (")");
+		return n;
+	}
 	if (is ("sizeof")) {
 		advance ();
 		if (is ("(") && is_typename_start (T->next)) {
@@ -1485,21 +1531,27 @@ Node *parse (Token *t)
 		if (accept (";"))
 			continue;
 		if (opt_cplusplus && is ("extern") && T->next->kind == TK_STR) {
-			// extern "C" { ... } or extern "C" declaration
+			// extern "C" { ... } or extern "C" declaration; "C++" too
+			int c;
 			advance ();
+			c = !(T->len == 5 && !memcmp (T->loc, "\"C++\"", 5));
 			advance ();
-			if (accept ("{")) {
-				extern_c++;
+			link_push (c);
+			if (accept ("{"))
 				continue;
-			}
-			extern_c++;
 			cur = cur->next = declaration (1);
-			extern_c--;
+			link_sp--;
+			// [dcl.link]: a declaration directly in it is extern, so
+			// `extern "C" volatile byte keystatus[256];` declares and does
+			// not define (key.h, in every unit that includes it)
+			if (cur->kind == ND_DECL && cur->decl && cur->decl->spec &&
+			    !(cur->decl->spec->storage & (ST_STATIC | ST_TYPEDEF | ST_EXTERN)))
+				cur->decl->spec->storage |= ST_EXTERN;
 			continue;
 		}
-		if (opt_cplusplus && extern_c && is ("}")) {
+		if (opt_cplusplus && link_sp && is ("}")) {
 			advance ();
-			extern_c--;
+			link_sp--;
 			continue;
 		}
 		if (opt_cplusplus && (is ("template") || is ("namespace") || is ("using")))

@@ -2602,6 +2602,15 @@ test-c4cxx: c4cxx c4m32 c4rlink32
 	if [ -d $${BLOOD_DIR:-$$HOME/git/games/c4-blood}/source/blood ]; then src/c4cxx/blood-units.sh -compile; fi
 PHONY += test-c4cxx
 
+# test-c4cxx-blood: M6's oracle (src/c4cxx/blood-oracle.sh). Blood built
+# from c4cxx's C by gcc -m32 plays the shareware's demos with the checksums
+# of c4-Blood's host build (g++), frame for frame, and every struct and
+# class is g++'s size. Needs c4-Blood (BLOOD_DIR) and BLOOD_RUN, a directory
+# of the game's files with BLOOD.CFG (c4-Blood's README.c4.md); minutes.
+test-c4cxx-blood: c4cxx
+	src/c4cxx/blood-oracle.sh
+PHONY += test-c4cxx-blood
+
 # 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.

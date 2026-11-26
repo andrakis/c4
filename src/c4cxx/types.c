@@ -379,6 +379,8 @@ char *ty_str (Ty *t, const char *inner)
 {
 	const char *b = base_name (t);
 	char *sp = (char *)(*inner ? " " : "");
+	if (t->cname)
+		return xformat ("%s%s%s", quals (t, t->cname), sp, inner);
 	if (b)
 		return xformat ("%s%s%s", quals (t, b), sp, inner);
 	switch (t->kind) {

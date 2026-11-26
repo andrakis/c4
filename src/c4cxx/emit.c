@@ -186,6 +186,8 @@ static void spec (Spec *sp)
 				put (" ");
 			if (opt_cplusplus && equal (sp->words[i], "bool"))
 				put ("_Bool");
+			else if (opt_cplusplus && equal (sp->words[i], "wchar_t"))
+				put ("long");	// gcc -m32's wchar_t, a keyword of C++ but not of C
 			else
 				puttok (sp->words[i]);
 			first = 0;
@@ -441,6 +443,20 @@ static void expr (Node *n, int minprec)
 	case ND_SIZEOF_EXPR:
 		put ("sizeof ");
 		expr (n->lhs, 14);
+		break;
+	case ND_VA_ARG:
+		put ("__builtin_va_arg (");
+		expr (n->lhs, 2);
+		put (", ");
+		put (type_name_str (n->decl));
+		put (")");
+		break;
+	case ND_OFFSETOF:
+		put ("__builtin_offsetof (");
+		put (type_name_str (n->decl));
+		put (", ");
+		puttok (n->name);
+		put (")");
 		break;
 	case ND_COMPLIT:
 		put ("(");

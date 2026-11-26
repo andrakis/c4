@@ -1384,7 +1384,8 @@ static void call (Node *n)
 			return;
 		}
 	}
-	if (opt_cplusplus && n->lhs->kind == ND_IDENT && !n->lhs->qual && !find_sym (n->lhs->tok))
+	if (opt_cplusplus && n->lhs->kind == ND_IDENT && !n->lhs->qual && !find_sym (n->lhs->tok) &&
+	    strncmp (n->lhs->tok->loc, "__builtin_", 10))
 		error_at (n->lhs->tok, "'%.*s' is not declared (C++ has no implicit declarations)", n->lhs->tok->len,
 		          n->lhs->tok->loc);
 	if (n->lhs->kind == ND_IDENT && !find_sym (n->lhs->tok)) {
@@ -1406,11 +1407,13 @@ static void call (Node *n)
 		n->unsure = 1;
 		return;
 	}
-	if (opt_cplusplus) {
+	if (opt_cplusplus)
 		finish_call (n, f);
-		return;
-	}
-	n->ty = unqualified (f->base);
+	else
+		n->ty = unqualified (f->base);
+	// gcc knows its builtins' types (__builtin_va_start's is void); c4cxx not
+	if (n->lhs->kind == ND_IDENT && !strncmp (n->lhs->tok->loc, "__builtin_", 10))
+		n->unsure = 1;
 }
 
 static int anon_path (Node *n, Ty *o);
@@ -1922,6 +1925,21 @@ static void expr (Node *n)
 	case ND_MEMBER:
 		member (n);
 		return;
+	case ND_VA_ARG:
+		expr (n->lhs);
+		n->ty = unqualified (type_name_type (n->decl));
+		return;
+	case ND_OFFSETOF: {
+		Ty *t = type_name_type (n->decl);
+		Field *f;
+		int off = 0;
+		n->ty = ty_uint;
+		if ((t->kind == T_STRUCT || t->kind == T_UNION) && (f = find_field (t, n->name, &off)) && f->bit_width < 0) {
+			n->is_const = 1;
+			n->val = off;
+		}
+		return;
+	}
 	case ND_NEW:
 		new_expr (n);
 		return;
@@ -2030,8 +2048,23 @@ static Ty *arith_type (Spec *sp)
 		else if (equal (w, "unsigned")) uns++;
 		else if (equal (w, "void")) nvoid++;
 		else if (equal (w, "_Bool") || equal (w, "bool")) nbool++;
+		else if (equal (w, "wchar_t")) nlong++;	// C++: gcc -m32's long
 		else if (equal (w, "float")) nfloat++;
 		else if (equal (w, "double")) ndouble++;
+		else if (equal (w, "__builtin_va_list")) {
+			// gcc -m32's: a char * underneath, but a type of its own
+			static Ty *va;
+			if (!va) {
+				va = new_ty (T_PTR, 4, 4);
+				va->base = ty_char;
+				va->cname = "__builtin_va_list";
+			}
+			return va;
+		}
+		// gcc's _FloatN, which glibc declares functions of: as near as C has
+		else if (equal (w, "_Float32")) nfloat++;
+		else if (equal (w, "_Float64") || equal (w, "_Float32x")) ndouble++;
+		else if (equal (w, "_Float128") || equal (w, "_Float64x")) { ndouble++; nlong++; }
 	}
 	if (nvoid) return ty_void;
 	if (nbool) return ty_bool;
@@ -2531,6 +2564,17 @@ static void cxx_record (Spec *sp, Ty *rec, int pack)
 		f->ty = m->rty = decl_type (ms, m->type);
 		cur = cur->next = f;
 		kc = kc->next = m;
+	}
+	if (!head.next && sp->kind == SP_STRUCT && sp->tag) {
+		// a class with no data is one byte in C++ (and an empty struct none
+		// in GNU C): Blood's CFX and CCheatMgr, g++'s size
+		Spec *s = xalloc (sizeof *s);
+		s->tok = sp->tok;
+		s->words = xalloc (sizeof (Token *));
+		s->words[0] = make_ident (sp->tok, "char");
+		s->nwords = 1;
+		s->rty = ty_char;
+		kc = kc->next = hidden_member (s, &sema_base, "_e", sp->tok, ty_char, &cur);
 	}
 	// the data members are the struct; each declaration group printed from
 	// the first that is left

@@ -108,6 +108,7 @@ node libjs/tests/test-sheap.mjs  || fail=1
 node libjs/tests/test-sswap.mjs  || fail=1   # the swap pages on threads (sswap.js)
 node libjs/tests/test-gui.mjs    || fail=1
 node libjs/tests/test-snd.mjs    || fail=1   # the sound card: a sample in one write (PCM_START), whoever else is playing; the OPL3 mode a program leaves on
+node libjs/tests/test-net.mjs    || fail=1   # the network card (net.js): three on a hub of BroadcastChannels, its registers, the MAC filter, drops
 node libjs/tests/test-shared.mjs || fail=1
 node libjs/tests/test-rom.mjs    || fail=1
 node libjs/tests/test-unpack.mjs || fail=1   # a file made from its package when opened: pak0.pak from quake106.zip (QUAKE_AS_ZIP=1)

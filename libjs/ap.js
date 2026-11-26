@@ -172,7 +172,7 @@ class ApBus {
     this.swapPages = null; this.swapSlots = 0;  // the shared pages (sswap.js), if the host has them
   }
   get machine() { return this.m; }              // devices.js swapOp's heap
-  dev(addr) { return (addr >= 0x100 && addr < 0x200) || (addr >= 0x400 && addr < 0x500) || (addr >= 0x540 && addr < 0x560); }
+  dev(addr) { return (addr >= 0x100 && addr < 0x200) || (addr >= 0x400 && addr < 0x500) || (addr >= 0x540 && addr < 0x560) || (addr >= 0x580 && addr < 0x5a0); }
   read32(addr) {
     addr = addr >>> 0;
     if (this.dev(addr)) {

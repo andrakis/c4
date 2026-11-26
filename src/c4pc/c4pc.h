@@ -137,6 +137,10 @@ void net_counts(struct machine *m, unsigned long long *c);
 i32 net_rd(struct machine *m, u32 a);
 void net_wr(struct machine *m, u32 a, i32 v);
 extern void (*net_kick_fn)(int id);
+/* the switch's way out (c4pc-host --net): frames for outside, and from it */
+extern void (*net_uplink_fn)(const u8 *f, u32 len);
+extern unsigned long long net_up_counts[4];
+void net_inject(const u8 *f, u32 len);
 typedef struct blkdev {
   u32 sectors; int flags;              /* 512-byte sectors; 1 read-only, 2 removable */
   /* n sectors at lba to or from buf: 0, or -1 */

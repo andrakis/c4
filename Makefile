@@ -3412,6 +3412,11 @@ PHONY += test-c4pc
 test-c4pc-net: c4pc.elf c4pc.iso
 	bash $(C4PC_SRC)/test-c4pc-net.sh
 PHONY += test-c4pc-net
+# ... and outside the hypervisor (N2): two c4pc-hosts on a UDP cable, then
+# cli.js and a c4pc-host, no QEMU (src/c4pc/test-c4pc-hostnet.sh)
+test-c4pc-hostnet: c4pc-host c4pc.iso
+	bash $(C4PC_SRC)/test-c4pc-hostnet.sh
+PHONY += test-c4pc-hostnet
 
 # C4IX (docs/c4ix-design.md): the c4lc-compiled OS. Each module is
 # preprocessed, compiled to a .c4o object with full optimization, and

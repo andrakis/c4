@@ -48,6 +48,12 @@ struct netport {
 static struct netport ports[NPORT];
 static volatile int sw_lk;
 void (*net_kick_fn)(int id);           /* hv.c: a frame for machine ID, napping perhaps */
+/* The uplink (N2): the switch's way out, c4pc-host's --net udp:... (host.c),
+ * a frame a datagram. It is given every frame a machine sends that no port
+ * here is named by, broadcasts too; net_inject puts one from outside onto
+ * the switch, as a machine's would be but for the uplink itself. */
+void (*net_uplink_fn)(const u8 *f, u32 len);
+unsigned long long net_up_counts[4];   /* frames out, in; bytes out, in */
 
 static void sw_lock(void) { while (__atomic_exchange_n(&sw_lk, 1, __ATOMIC_ACQUIRE)) __builtin_ia32_pause(); }
 static void sw_unlock(void) { __atomic_store_n(&sw_lk, 0, __ATOMIC_RELEASE); }
@@ -95,16 +101,17 @@ void net_counts(machine *m, unsigned long long *c) {
   c[0] = p->rx; c[1] = p->tx; c[2] = p->rxb; c[3] = p->txb; c[4] = p->drops;
 }
 
-/* a frame from port SRC through the switch */
+/* a frame from port SRC through the switch (0: from the uplink) */
 static void sw_send(struct netport *src, const u8 *f, u32 len) {
-  int kick[NPORT], nk = 0;
+  int kick[NPORT], nk = 0, mine = 0;
   int bcast = f[0] & 1;
   sw_lock();
-  src->tx++; src->txb += len;
+  if (src) { src->tx++; src->txb += len; }
   for (int k = 0; k < NPORT; k++) {
     struct netport *p = &ports[k];
     if (!p->used || !p->m || p == src) continue;
     if (!bcast && memcmp(f, p->mac, 6)) continue;
+    mine = 1;
     if (p->head - p->tail >= NQ) { p->drops++; continue; }
     u32 at = p->head % NQ;
     memcpy(p->q + (size_t)at * FMAX, f, len);
@@ -113,8 +120,17 @@ static void sw_send(struct netport *src, const u8 *f, u32 len) {
     p->rx++; p->rxb += len;
     kick[nk++] = p->id;
   }
+  int up = src && net_uplink_fn && (bcast || !mine);
+  if (up) { net_up_counts[0]++; net_up_counts[2] += len; }
+  else if (!src) { net_up_counts[1]++; net_up_counts[3] += len; }
   sw_unlock();
   if (net_kick_fn) for (int k = 0; k < nk; k++) net_kick_fn(kick[k]);
+  if (up) net_uplink_fn(f, len);
+}
+
+/* a frame from outside (the uplink) onto the switch */
+void net_inject(const u8 *f, u32 len) {
+  if (len >= 14 && len <= FMAX) sw_send(0, f, len);
 }
 
 static u32 resolve(const char *s) {
@@ -125,6 +141,8 @@ static u32 resolve(const char *s) {
     const char *q = s + 2;
     while (*q >= '0' && *q <= '9') id = id * 10 + (*q++ - '0');
     if (!*q) for (int k = 0; k < NPORT; k++) if (ports[k].used && ports[k].id == id) ip = ports[k].ip;
+    /* beyond the uplink, a machine N is 10.4.0.N+1 all the same */
+    if (!*q && !ip && net_uplink_fn && id < 254) ip = 0x0a040001u + (u32)id;
   }
   for (int k = 0; k < NPORT && !ip; k++) {
     if (!ports[k].used) continue;

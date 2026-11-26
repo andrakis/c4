@@ -407,6 +407,15 @@ static i32 info(int id, u32 addr, u32 len) {
   if (id) { PUT("\nmmu "); PUT(v->mmu == 1 || (!v->mmu && hv_mmu) ? "yes" : "no"); PUT("\ncpus "); NUM(v->cpus > 0 ? v->cpus : 1); }
   else { PUT("\ncpus "); NUM(ctl->smp ? ctl->smp->n : 1); }
   if (id && v->state == S_RUN) { PUT("\nscreen "); PUT(text_shown(v) ? "text" : "display"); }
+  /* its network card (net.c): frames in and out, bytes in and out, dropped;
+   * the address it was given (Machines' Network) */
+  { machine *nm = id ? (v->state == S_RUN || v->state == S_PAUSE ? v->m : 0) : ctl;
+    if (nm && nm->dv->net) {
+      unsigned long long c[5]; u32 ip = (u32)net_rd(nm, NET_BASE + 0xc);
+      net_counts(nm, c);
+      PUT("\nnet "); NUM(c[0]); PUT(" "); NUM(c[1]); PUT(" "); NUM(c[2]); PUT(" "); NUM(c[3]); PUT(" "); NUM(c[4]);
+      PUT("\nnetip "); NUM(ip >> 24); PUT("."); NUM(ip >> 16 & 255); PUT("."); NUM(ip >> 8 & 255); PUT("."); NUM(ip & 255);
+    } }
   /* its memory, swap, block devices and idle (Machines' Load tabs) */
   { machine *im = id ? (v->state == S_RUN || v->state == S_PAUSE ? v->m : 0) : ctl;
     if (im && im->u8 && im->heap) {

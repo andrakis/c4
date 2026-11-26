@@ -19,7 +19,8 @@
 //             scale and its value now beside it: CPU (each CPU's
 //             instructions a second and its time busy, %), Disk (each disk
 //             image's reads and writes, and c4pc's own disks), Memory (used,
-//             free, cached, swap), Network (its layout: there is none yet)
+//             free, cached, swap), Network (each machine's card: bytes a
+//             second each way, its frames, drops and address -- INFO's net)
 //   Overview  btop's look, in the GUI: the processors across the top, then
 //             memory, disks and network, and the machines and the control
 //             C4IX's tasks, all at a glance
@@ -74,8 +75,8 @@ enum { CF_NAME = 0, CF_SYS = 1, CF_ISO = 2, CF_MB = 3, CF_CPUS = 4, CF_DISK = 5,
 // the tabs, Load's own, and the counters' sizes: disks a machine, PC processors
 enum { T_SUM = 0, T_CON = 1, T_HW = 2, T_OPT = 3, T_LOAD = 4, T_TOP = 5, T_LOG = 6 };
 enum { L_CPU = 0, L_DISK = 1, L_MEM = 2, L_NET = 3, N_LTABS = 4, MAXB = 4, BNAME = 40, MAXP = 16 };
-// what a graph's numbers are: thousands of instructions a second, %, KB a second
-enum { G_KIPS = 0, G_PCT = 1, G_KBS = 2 };
+// what a graph's numbers are: thousands of instructions a second, %, KB a second, bytes a second
+enum { G_KIPS = 0, G_PCT = 1, G_KBS = 2, G_BPS = 3 };
 // screens and graphs are black whatever the scheme (a dark one makes C_DARK light)
 enum { C_BLACK = 0x000000, C_GRID = 0x1c3a1c, C_RD = 0x40c040, C_WR = 0xd06060, C_LBL = 0x9aa0a8 };
 
@@ -138,6 +139,14 @@ struct machines {
     // now, and all of them busy, %, the last minute
     long long pidle[MAXP];
     int ppct[MAXP], npp, tot[HIST], ntot;
+    // each machine's network card (INFO's net: frames in and out, bytes in
+    // and out, dropped; netip): at the last look, and bytes a second each
+    // way, the last minute; and the switch's, all of them together
+    int hasnet[MAXM], nnh[MAXM];
+    long long nrxf[MAXM], ntxf[MAXM], nrxb[MAXM], ntxb[MAXM], ndrop[MAXM];
+    int nhr[MAXM * HIST], nht[MAXM * HIST];
+    char nip[MAXM * 16];
+    int nall[HIST], nnall;
 };
 
 static struct machines *S(struct win *w) { return (struct machines *)w->st; }
@@ -289,6 +298,7 @@ static void row_clear(struct machines *t, int k) {
     c = 0; while (c < MAXB) { t->brd[k * MAXB + c] = 0; t->bwr[k * MAXB + c] = 0; t->bsize[k * MAXB + c] = 0; ++c; }
     t->nb[k] = 0; t->nbh[k] = 0;
     t->heap[k] = 0 - 1; t->hused[k] = 0 - 1; t->sslots[k] = 0 - 1; t->sused[k] = 0 - 1;
+    t->hasnet[k] = 0; t->nnh[k] = 0; t->nrxb[k] = 0; t->ntxb[k] = 0;
 }
 // row J's counters into row I (a row gone from the list: those after it move up)
 static void row_move(struct machines *t, int i, int j) {
@@ -302,6 +312,11 @@ static void row_move(struct machines *t, int i, int j) {
     memcpy((char *)(t->bhw + i * MAXB * HIST), (char *)(t->bhw + j * MAXB * HIST), MAXB * HIST * sizeof(int));
     t->nb[i] = t->nb[j]; t->nbh[i] = t->nbh[j];
     t->heap[i] = t->heap[j]; t->hused[i] = t->hused[j]; t->sslots[i] = t->sslots[j]; t->sused[i] = t->sused[j];
+    t->hasnet[i] = t->hasnet[j]; t->nnh[i] = t->nnh[j];
+    t->nrxf[i] = t->nrxf[j]; t->ntxf[i] = t->ntxf[j]; t->nrxb[i] = t->nrxb[j]; t->ntxb[i] = t->ntxb[j]; t->ndrop[i] = t->ndrop[j];
+    memcpy((char *)(t->nhr + i * HIST), (char *)(t->nhr + j * HIST), HIST * sizeof(int));
+    memcpy((char *)(t->nht + i * HIST), (char *)(t->nht + j * HIST), HIST * sizeof(int));
+    memcpy(t->nip + i * 16, t->nip + j * 16, 16);
 }
 // row K's memory and disks from info_buf (INFO's heap, heapused, swapslots,
 // swapused, blk<k>): the disks' KB a second onto their histories
@@ -328,6 +343,25 @@ static void extras_from_info(struct machines *t, int k, int dt) {
     }
     t->nb[k] = b;
     if (b && t->nbh[k] < HIST) ++t->nbh[k];
+}
+// bytes a second, from a count then and now, DT ms apart (THEN -1: no look yet)
+static int bps(long long now, long long then, int dt) {
+    if (dt <= 0 || then < 0 || now < then) return 0;
+    return (int)((now - then) * 1000 / dt);
+}
+// row K's network card from info_buf (INFO's net, netip): its bytes a
+// second each way onto their histories
+static void net_from_info(struct machines *t, int k, int dt) {
+    long long fi, fo, bi, bo, dr;
+    char *p;
+    if (!line_get(info_buf, "net", buf, 120)) { t->hasnet[k] = 0; return; }
+    p = num_at(buf, &fi); p = num_at(p, &fo); p = num_at(p, &bi); p = num_at(p, &bo); p = num_at(p, &dr);
+    hpush(t->nhr + k * HIST, t->nnh[k], bps(bi, t->hasnet[k] ? t->nrxb[k] : 0 - 1, dt));
+    hpush(t->nht + k * HIST, t->nnh[k], bps(bo, t->hasnet[k] ? t->ntxb[k] : 0 - 1, dt));
+    if (t->nnh[k] < HIST) ++t->nnh[k];
+    t->nrxf[k] = fi; t->ntxf[k] = fo; t->nrxb[k] = bi; t->ntxb[k] = bo; t->ndrop[k] = dr;
+    t->hasnet[k] = 1;
+    if (!line_get(info_buf, "netip", t->nip + k * 16, 16)) t->nip[k * 16] = 0;
 }
 // the control C4IX's own: /proc/meminfo's heap, used, free, cached and swap
 // (KB), and each of its CPUs' time busy and its tasks' shares (cpustat.h)
@@ -503,7 +537,8 @@ static void refresh(struct machines *t) {
                 c = info_num("cycles");
                 t->rate[k] = st == S_RUN && dt > 0 && t->cyc[k] && c >= t->cyc[k] ? (int)((c - t->cyc[k]) / dt) : 0;
                 t->cyc[k] = c;
-                if (st == S_RUN) { cpus_from_info(t, k, dt); extras_from_info(t, k, dt); }
+                if (st == S_RUN) { cpus_from_info(t, k, dt); extras_from_info(t, k, dt); net_from_info(t, k, dt); }
+                else t->hasnet[k] = 0;
             }
         }
         ++id;
@@ -513,6 +548,7 @@ static void refresh(struct machines *t) {
         t->mb[CTL] = (int)info_num("mb");
         cpus_from_info(t, CTL, dt);
         extras_from_info(t, CTL, dt);
+        net_from_info(t, CTL, dt);
         control_own(t);
         c = 0; i = 0; while (i < t->ncpu[CTL]) { c = c + t->ccyc[CTL * MAXC + i]; ++i; }
         t->rate[CTL] = dt > 0 && t->cyc[CTL] && c >= t->cyc[CTL] ? (int)((c - t->cyc[CTL]) / dt) : 0;
@@ -551,6 +587,11 @@ static void refresh(struct machines *t) {
     }
     k = 1;
     while (k < t->n) { hist_add(t->hist + k * HIST, t->nhist + k, t->rate[k]); ++k; }
+    // the switch's traffic: every card's bytes in, a second (what each sends another receives)
+    c = 0; k = CTL;
+    while (k < t->n) { if (t->hasnet[k] && t->nnh[k]) c = c + t->nhr[k * HIST + t->nnh[k] - 1]; ++k; }
+    hpush(t->nall, t->nnall, (int)c);
+    if (t->nnall < HIST) ++t->nnall;
 }
 
 // the chosen machine's screen into the images, at the size the page last
@@ -982,6 +1023,8 @@ static void field(int x, int y, char *label, char *value) {
 static void gfmt(int v, int kind, char *out) {
     if (v < 0) { ui_cpy(out, "-"); return; }
     if (kind == G_PCT) { ui_num(out, v); ui_cat(out, "%"); return; }
+    if (kind == G_BPS && v < 1024) { ui_num(out, v); ui_cat(out, " B/s"); return; }
+    if (kind == G_BPS) { kind = G_KBS; v = v / 1024; }
     if (kind == G_KBS) {
         if (v < 1024) { ui_num(out, v); ui_cat(out, " KB/s"); }
         else if (v < 102400) { ui_num(out, v / 1024); ui_cat(out, "."); ui_num(out + ui_len(out), (v % 1024) * 10 / 1024); ui_cat(out, " MB/s"); }
@@ -1441,19 +1484,43 @@ static void draw_load_mem(struct machines *t, int x, int y, int w, int h) {
     if (t->hused[k] < 0) d_text(x, y + 172, C_LBL, F_SANS, "c4pc does not say this machine's heap and swap (INFO heap, swap): an older c4pc.");
 }
 
-// Network: its layout, for when the machines have network cards
-static int empty_h[2];
-static void draw_load_net(struct machines *t, int x, int y, int w, int h) {
-    int j, yy, gw;
-    d_text(x, y, C_DARK, F_BOLD, "Network");
-    d_text(x, y + 18, C_LBL, F_SANS, "No network yet: the machines have no network card. Each one's traffic will show here, as below.");
+// a count, as "1234", "12k" or "4M"
+static void cntfmt(long long v, char *out) {
+    if (v < 10000) { ui_num(out, (int)v); return; }
+    if (v < 10000000) { ui_num(out, (int)(v / 1000)); ui_cat(out, "k"); return; }
+    ui_num(out, (int)(v / 1000000)); ui_cat(out, "M");
+}
+// row J's card, as a block at X, Y, W wide (64 high): its name and address,
+// frames and drops, and bytes a second received and sent, the last minute
+static void net_block(struct machines *t, int j, int x, int y, int w) {
+    char s[96], n2[16];
+    int gw;
     gw = (w - 150 - 10) / 2;
-    yy = y + 46; j = CTL;
-    while (j < t->n && yy + 44 < y + h) {
-        d_text(x, yy + 12, C_DARK, F_SANS, j == CTL ? "control" : mname(t, j));
-        d_text(x + 150, yy - 2, C_RD, F_SANS, "received"); graphc(empty_h, 0, x + 150, yy + 12, gw, 28, 1, G_KBS, C_RD);
-        d_text(x + 160 + gw, yy - 2, C_WR, F_SANS, "sent"); graphc(empty_h, 0, x + 160 + gw, yy + 12, gw, 28, 1, G_KBS, C_WR);
-        yy = yy + 50; ++j;
+    d_text(x, y + 10, C_DARK, F_BOLD, j == CTL ? "control" : mname(t, j));
+    if (!t->hasnet[j]) { d_text(x, y + 26, C_LBL, F_SANS, up(t, j) || j == CTL ? "no network card" : "not running"); return; }
+    d_text(x, y + 26, C_LBL, F_SANS, t->nip[j * 16] ? t->nip + j * 16 : "-");
+    ui_cpy(s, "in "); cntfmt(t->nrxf[j], n2); ui_cat(s, n2); ui_cat(s, ", out "); cntfmt(t->ntxf[j], n2); ui_cat(s, n2);
+    d_text(x, y + 40, C_LBL, F_SANS, s);
+    if (t->ndrop[j]) { ui_cpy(s, "dropped "); cntfmt(t->ndrop[j], n2); ui_cat(s, n2); d_text(x, y + 54, C_WR, F_SANS, s); }
+    d_text(x + 150, y - 2, C_RD, F_SANS, "received"); graphc(t->nhr + j * HIST, t->nnh[j], x + 150, y + 12, gw, 40, 0, G_BPS, C_RD);
+    d_text(x + 160 + gw, y - 2, C_WR, F_SANS, "sent"); graphc(t->nht + j * HIST, t->nnh[j], x + 160 + gw, y + 12, gw, 40, 0, G_BPS, C_WR);
+}
+// Network: each machine's card (c4pc: all of them); a machine's own alone
+static void draw_load_net(struct machines *t, int x, int y, int w, int h) {
+    int j, yy, any;
+    d_text(x, y, C_DARK, F_BOLD, "Network");
+    j = CTL; any = 0; while (j < t->n) { if (t->hasnet[j]) any = 1; ++j; }
+    if (!any) { d_text(x, y + 18, C_LBL, F_SANS, "c4pc does not say what the machines' network cards send (INFO's net): an older c4pc, or none has one."); return; }
+    if (t->sel > 0) {
+        d_text(x, y + 18, C_LBL, F_SANS, "Its card on the machines' switch: frames in and out, and bytes a second each way.");
+        net_block(t, t->sel, x, y + 50, w);
+        return;
+    }
+    d_text(x, y + 18, C_LBL, F_SANS, "The machines' switch: each machine's card, frames in and out, and bytes a second each way.");
+    yy = y + 50; j = CTL;
+    while (j < t->n && yy + 64 < y + h) {
+        if (j == CTL || t->id[j] || t->cfg[j]) { net_block(t, j, x, yy, w); yy = yy + 72; }
+        ++j;
     }
 }
 
@@ -1686,8 +1753,11 @@ static void draw_top(struct machines *t, int x, int y, int w, int h) {
         ++j;
     }
     box(x, my + mh - nh, lw, nh - 4, "net");
-    d_text(x + 10, my + mh - nh + 10, C_LBL, F_SANS, "no network yet: the machines have no network card");
-    graphc(empty_h, 0, x + 10, my + mh - nh + 28, lw - 20, nh - 40, 1, G_KBS, 0xa060d0);
+    j = CTL; k = 0; while (j < t->n) { if (t->hasnet[j]) ++k; ++j; }
+    if (k) { ui_cpy(s, "the switch, all its machines: "); ui_num(s + ui_len(s), k); ui_cat(s, k == 1 ? " card" : " cards"); }
+    else ui_cpy(s, "no network: c4pc does not say (an older c4pc)");
+    d_text(x + 10, my + mh - nh + 10, C_LBL, F_SANS, s);
+    graphc(t->nall, t->nnall, x + 10, my + mh - nh + 28, lw - 20, nh - 40, 0, G_BPS, 0xa060d0);
     // the machines, then the control C4IX's busiest tasks
     px = x + lw + 8;
     box(px, my, rw2, mh - 4, "proc");

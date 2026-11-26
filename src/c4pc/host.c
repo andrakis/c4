@@ -2,7 +2,8 @@
  * libjs/cli.js's flags, so that one can stand in for the other in a test:
  *
  *   c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz]
- *             [--fpu|--no-fpu] [--mmu|--no-mmu] program.c4r [args...]
+ *             [--fpu|--no-fpu] [--mmu|--no-mmu] [--net udp:LPORT:[HOST:]PPORT
+ *             [--net-id N]] program.c4r [args...]
  *
  * Piped stdin without -i is fed to the keyboard up front with end of
  * input, as cli.js does. The PC's own front end is pc/pc.c.
@@ -25,6 +26,9 @@
 #include <linux/futex.h>
 #include <sys/syscall.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 #include "snd.h"
 
 /* ---- the parallel engine's CPUs (par.c): a thread each, and a futex ---- */
@@ -241,7 +245,7 @@ static FILE *texts;
 static void text_hook(int x, int y, const char *s, int n) { fprintf(texts, "%d %d %.*s\n", x, y, n, s); }
 
 static void usage(void) {
-  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--disk FILE.img] [--tar FILE.tar] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] [--c4m] program.c4r [args...]\n");
+  fprintf(stderr, "usage: c4pc-host [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--no-fpu] [--mmu] [--cpus N [-q N] [--parallel]] [--cdrom FILE.iso] [--disk FILE.img] [--tar FILE.tar] [--no-accel] [--no-osaccel] [--wav FILE] [--gui WxH [--events FILE] [--shot FILE.png] [--texts FILE]] [--c4m] [--net udp:LPORT:[HOST:]PPORT [--net-id N]] program.c4r [args...]\n");
   exit(1);
 }
 
@@ -267,6 +271,56 @@ static int img_rw(blkdev *b, int write, u32 lba, u32 n, u8 *buf) {
 }
 static int img_flush(blkdev *b) { return fflush((FILE *)b->ctx) ? -1 : 0; }
 
+/* --net udp:LPORT:[HOST:]PPORT (docs/c4pc-network.md, N2): a network card,
+ * on a switch of its own whose uplink is a UDP socket -- each frame a
+ * datagram from LPORT to HOST:PPORT (HOST 127.0.0.1 if not given), and
+ * what comes to LPORT a frame in. Two c4pc-hosts, or one and cli.js,
+ * pointed at each other are machines on one cable. --net-id N: its id
+ * there, its MAC 52:54:00:c4:00:N and address 10.4.0.N+1 (1, 10.4.0.2, if
+ * not given). The machine runs on the real clock then (TIME, as pc.c's
+ * paced machine), its naps waited out on the socket, so that its timers
+ * and its peer's agree. */
+static int net_fd = -1;
+static struct sockaddr_in net_peer;
+static void udp_out(const u8 *f, u32 len) {
+  if (sendto(net_fd, f, len, 0, (struct sockaddr *)&net_peer, sizeof net_peer) < 0) { /* dropped, as a cable would */ }
+}
+static void udp_drain(void) {
+  u8 b[1600];
+  ssize_t n;
+  while (net_fd >= 0 && (n = recv(net_fd, b, sizeof b, MSG_DONTWAIT)) > 0) net_inject(b, (u32)n);
+}
+static int udp_open(const char *spec) {
+  char host[256] = "127.0.0.1";
+  int lport, pport;
+  if (strncmp(spec, "udp:", 4)) return -1;
+  const char *p = spec + 4;
+  lport = atoi(p);
+  if (!(p = strchr(p, ':'))) return -1;
+  p++;
+  const char *c = strrchr(p, ':');
+  if (c) {
+    size_t l = (size_t)(c - p);
+    if (l >= sizeof host) return -1;
+    memcpy(host, p, l); host[l] = 0;
+    pport = atoi(c + 1);
+  } else pport = atoi(p);
+  if (lport <= 0 || lport > 65535 || pport <= 0 || pport > 65535) return -1;
+  struct addrinfo hints, *res;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
+  if (getaddrinfo(host, 0, &hints, &res) || !res) return -1;
+  memcpy(&net_peer, res->ai_addr, sizeof net_peer);
+  net_peer.sin_port = htons((u16)pport);
+  freeaddrinfo(res);
+  struct sockaddr_in me;
+  memset(&me, 0, sizeof me);
+  me.sin_family = AF_INET; me.sin_port = htons((u16)lport); me.sin_addr.s_addr = htonl(INADDR_ANY);
+  if ((net_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 || bind(net_fd, (struct sockaddr *)&me, sizeof me)) return -1;
+  net_uplink_fn = udp_out;
+  return 0;
+}
+
 /* SIGTERM: the machine's power button, SIGTERM to the program (C4IX shuts
  * down, sched.c); a second, or a program that takes none, ends it here */
 static volatile sig_atomic_t host_terms;
@@ -276,6 +330,7 @@ int main(int argc, char **argv) {
   u32 mb = 32; double maxc = -1, mhz = 20; int cpus = 0, quantum = 0, parallel = 0, stats = 0, inter = 0, nofpu = 0, mmu_on = 0, noaccel = 0, noosaccel = 0, gw = 0, gh = 0, c4m_info = 0;
   const char *shot = 0, *wav = 0;
   int modes = 0;
+  const char *net = 0; int net_id = 1;
   drive *drives[16]; int nd = 0;
   const char *cds[4]; int ncd = 0;
   const char *disks[8]; int ndisk = 0;
@@ -328,6 +383,8 @@ int main(int argc, char **argv) {
       gui_text_hook = text_hook;
     }
     else if (!strcmp(f, "--no-mmu")) mmu_on = 0;
+    else if (!strcmp(f, "--net") && i + 1 < argc) net = argv[++i];        /* a network card, its uplink a UDP socket */
+    else if (!strcmp(f, "--net-id") && i + 1 < argc) net_id = atoi(argv[++i]);
     else if (!strcmp(f, "--c4m")) c4m_info = 1;          /* INFO as native c4m's: no devices (engine.c machine_info) */
     else if (!strcmp(f, "--fast") || !strcmp(f, "--no-accel") || !strcmp(f, "--no-osaccel")) ;
     else if (!strcmp(f, "--")) { i++; break; }
@@ -367,6 +424,12 @@ int main(int argc, char **argv) {
     m->blk[m->nblk++] = b;
   }
   if (cpus > 0) smp_new(m, cpus, quantum);
+  if (net) {
+    if (net_id < 1 || net_id > 253 || udp_open(net)) { fprintf(stderr, "c4pc-host: --net %s: not udp:LPORT:[HOST:]PPORT, or that port is taken\n", net); return 1; }
+    char nm[16]; snprintf(nm, sizeof nm, "vm%d", net_id);
+    net_attach(m, net_id, nm);
+    m->dv->wall = 1; m->dv->wall_base = plat_now_ms();
+  }
   if (gw > 0 && gh > 0) m->gui = gui_new(m, gw, gh);
   if (m->gui && modes) {
     static const int mw[] = { 640, 800, 1024, 1152, 1280, 1280, 1280, 1366, 1440, 1600, 1680, 1920, 1920 };
@@ -405,9 +468,10 @@ int main(int argc, char **argv) {
     /* the machine's time: with several CPUs, the round robin's, not CPU 0's */
     i64 left = limit - machine_clock(m);
     if (left <= 0) { flush_out(); fprintf(stderr, "libjs: stopped at cycle budget (%lld cycles)\n", (long long)machine_clock(m)); status = 9; break; }
-    i64 slice = m->gui ? 1000000 : 50000000;
+    i64 slice = m->gui || net ? 1000000 : 50000000;
     int r = machine_run(m, left < slice ? left : slice);
     flush_out();
+    udp_drain();
     /* the parallel engine: CPU 0 answers the others between runs, and
      * waits for them when it is parked or halted (cli.js) */
     if (m->smp && m->smp->par && !m->halted) {
@@ -423,12 +487,23 @@ int main(int argc, char **argv) {
       if (r == STOP_INPUT && !inter) { struct timespec ts = {0, 1000000}; nanosleep(&ts, 0); continue; }
     }
     if (r == STOP_HALT) { status = m->status; break; }
+    /* --net: a nap on the real clock, until its time, or a frame comes; none
+     * with a frame already waiting for the card (hv.c's guests' rule) */
+    if (net && r == STOP_SLEEP) {
+      udp_drain();
+      i64 w = m->dv->wall_base + m->dv->nap_until - plat_now_ms();
+      if (m->pit_ms && m->pit_next - plat_now_ms() < w) w = m->pit_next - plat_now_ms();
+      if (w > 100) w = 100;
+      if (w > 0 && !net_waiting(m)) { struct pollfd nf = { net_fd, POLLIN, 0 }; poll(&nf, 1, (int)w); }
+      udp_drain();
+      continue;
+    }
     if (r == STOP_INPUT) {
       if (!inter) { fprintf(stderr, "libjs: blocked on input with nothing left to read\n"); status = 8; break; }
-      struct pollfd pf = { 0, POLLIN, 0 };
+      struct pollfd pfs[2] = { { 0, POLLIN, 0 }, { net_fd, POLLIN, 0 } };
       int wait = 100;
       if (m->pit_ms) { i64 w = m->pit_next - plat_now_ms(); wait = w < 1 ? 1 : (int)w; }
-      if (poll(&pf, 1, wait) > 0) {
+      if (poll(pfs, net_fd >= 0 ? 2 : 1, wait) > 0 && (pfs[0].revents & (POLLIN | POLLHUP))) {
         u8 b[256]; ssize_t n = read(0, b, sizeof b);
         if (n <= 0) m->rx_eof = 1;
         for (ssize_t k = 0; k < n; k++) {

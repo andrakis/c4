@@ -301,7 +301,7 @@ export class C4M {
       type: 'boot', image: image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
       argv, disk: disk.map(([n, b]) => [n, b]), lazy, arenaMb: opts.arenaMb || 64,
       mhz: opts.mhz || 20, unpaced: !!opts.unpaced, realtime: !!opts.realtime, mbox: opts.mbox | 0, fpu: opts.fpu, accel: opts.accel, osAccel: opts.osAccel,
-      cpus: opts.cpus | 0, quantum: opts.quantum | 0, mmu: !!opts.mmu,
+      cpus: opts.cpus | 0, quantum: opts.quantum | 0, mmu: !!opts.mmu, net: opts.net || null,
       // threads need SharedArrayBuffer: a cross-origin isolated page
       parallel: !!opts.parallel && !!globalThis.crossOriginIsolated,
       gui: this.display ? { w: this.display.width, h: this.display.height } : (opts.gui || null),

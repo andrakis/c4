@@ -107,6 +107,11 @@ Syscalls (three words each, as every C4IX syscall):
 | 264 LISTEN (fd, backlog) | after BIND; backlog 1 to 8 | 0 or -1 |
 | 265 ACCEPT (fd, peer) | the next connection, waited for; peer = {ip, port} out (or 0) | its fd |
 | 266 SHUTSOCK (fd) | no more to send: the FIN after what is queued | 0 or -1 |
+| 267 POLL (list, n, ms) | n entries {fd, events, revents} (64 at most), any fds: POLLIN 1, POLLOUT 4, POLLERR 8, POLLHUP 16, POLLNVAL 32; ms -1 no limit, 0 none | how many have revents, 0 timed out, -1 |
+
+ACCEPT's third word, C4IX_O_NONBLOCK (2048), makes the connection's fd
+not wait (accept4's SOCK_NONBLOCK): a read with nothing is -1, a write
+takes what there is room for.
 
 A TCP socket's fd is read and written as a pipe's: read waits for bytes
 and returns 0 at the connection's end; write waits for room for all of
@@ -130,6 +135,9 @@ the end; SYS_EVWAIT with pipes set wakes for a socket too.
   another; `nc -l -e cat 7` an echo server).
 - (N3) `netstat` -- each socket (protocol, bytes queued each way, local and
   peer's address, TCP state) and TCP's counts (segments, timeouts, resets).
+- `httpd [-p PORT] [-q] [-d] [-n COUNT] [DIR]` -- a directory's files over
+  HTTP/1.0 (GET, HEAD; a directory's index.html or a list of it), its
+  connections at once in one task through poll; `-d` in the background.
 
 ### libjs, the browser machine
 
@@ -153,13 +161,13 @@ milestone N2.
 - **N2: the card outside the hypervisor.** c4pc-host `--net udp:PORT:PEER`
   (two hosts on one PC ping each other: a fast test with no QEMU); libjs
   net.js with a BroadcastChannel port and cli.js's UDP; Machines' Network
-  tab (each port's counts in INFO).
+  tab (each port's counts in INFO). **Built (2026-11-26): below.**
 - **N3: TCP.** connect/listen/accept, streams as fds (read and write, so
   `cat`, sh's redirections and pipes work over a connection),
   retransmission and a fixed window first; `nc` without -u, a `telnetd`
   giving a guest's shell to another machine, a small `httpd`; select/poll
-  over sockets (uevwait learns them). **Built (2026-11-26) but for the
-  httpd: below.** `nc -l -e sh` is the telnetd.
+  over sockets (uevwait learns them). **Built (2026-11-26): below**; the
+  httpd and a real poll with N2. `nc -l -e sh` is the telnetd.
 - **N4: the outside world.** c4pc drives the PC's NIC (e1000/82540EM: QEMU,
   VMware and VirtualBox all offer it; virtio-net after), and the switch
   gets an uplink port: NAT for the guests (simplest for the user: no
@@ -276,8 +284,73 @@ twice.
 | `src/c4pc/test-c4pc-net.sh` | TCP's checks |
 
 Not done in N3: an `httpd`; `select`/`poll` proper (SYS_EVWAIT does for
-now); SO_REUSEADDR and friends (a listener's port may be bound again while
-its old connections finish, nothing else); the BSD socket API (N5).
+now) -- both since, below; SO_REUSEADDR and friends (a listener's port may
+be bound again while its old connections finish, nothing else); the BSD
+socket API (N5).
+
+## poll, httpd and N2 (2026-11-26)
+
+**poll** (syscall 267, `upoll` in `c4ix_net.h`; `uselect` over it, its sets
+two words of 32 fds) works on any fd: a pipe (POLLIN with data, POLLHUP
+with no writer left; its write end always POLLOUT, a pipe grows), a socket
+(POLLIN as AVAIL says, a listener with a connection waiting; POLLOUT with
+room in the send ring; POLLHUP closed both ways; POLLERR reset or timed
+out), the console (POLLIN with a key), and files (always both). It looks
+once; with nothing, the task sleeps on the scheduler's poll queue, and each
+millisecond the scheduler looks again -- but only when some pipe or socket
+has changed since (`sched_pipegen`, as SYS_EVWAIT's), or the console is
+among them. What it waits for is copied into the kernel (a slot each in
+sys.c's table, `sys_pollready`): under the MMU another task's trap cannot
+read the poller's own list. A wake runs the call again (`sys_restart`),
+which finds its slot and its deadline; the slot is freed when the call
+returns or the task ends (`sys_pollgone`). `nc` waits with it now (its
+connection and its stdin) where it looked every 10 ms.
+
+**httpd** (`src/c4ix/user/httpd.c`): one task, 16 connections at once, each
+taken with ACCEPT's C4IX_O_NONBLOCK so that nothing waits but the poll: a
+request read as it comes, its answer sent as there is room, a file 2 KB at
+a time, a directory's list made as it is sent. HTTP/1.0, `Connection:
+close`; 301 for a directory named without its `/`, 403, 404, 501, a 503
+for the seventeenth; a request ends at its empty line or at the client's
+FIN, so `echo "GET / HTTP/1.0" | nc host 80` is one. `-d` starts a copy and
+returns (C4IX's sh has no quoting, so `vm send b httpd -d /` is how a guest
+gets one in the background), `-n COUNT` ends it after COUNT answers.
+
+**N2, the card outside the hypervisor.** c4pc's switch has an uplink
+(`net_uplink_fn`, `net_inject`): every frame no port is named by goes out
+of it, broadcasts too, and what comes in goes to the ports as a machine's
+would. `c4pc-host --net udp:LPORT:[HOST:]PPORT --net-id N` makes the uplink
+a UDP socket (a frame a datagram) and the machine N on it (MAC
+52:54:00:c4:00:N, 10.4.0.N+1). libjs has the same card (`libjs/net.js`,
+the same registers, INFO's C4I_NET): `cli.js --net udp:...` the same way,
+so a cli.js and a c4pc-host are machines on one cable, and in the page,
+`?net=N` (Settings: Network) puts the tab on a hub of the page's tabs (a
+BroadcastChannel), machine N. Beyond the switch, `vmN` resolves to
+10.4.0.N+1. A machine with --net runs on the real clock, its naps waited
+out on the socket (c4pc-host) or paced with the time a frame cut short
+given back (cli.js, as the page's worker does for a key): TCP's timers
+mean the same on both ends.
+
+Machines' **Network** tab (Load) shows each machine's card: its address,
+frames in and out, drops, and bytes a second each way over the last minute
+(INFO's `net` and `netip`, from hv.c); Overview's net box the switch's
+traffic, all of it.
+
+`make test-c4pc-hostnet` (`src/c4pc/test-c4pc-hostnet.sh`, no QEMU): two
+c4pc-hosts, then cli.js and a c4pc-host, a ping each way's replies, b's
+`/bin/` over HTTP, a line over TCP. `make test-c4pc-net` has httpd: b's
+lists, the 301 and the 404, `/bin/sh` fetched twice at once (the same
+bytes), a HEAD typed at a's nc.
+
+| file | |
+|---|---|
+| `src/c4ix/sys.c`, `sched.c`, `vfs.c`, `net.c`, `task.c`, `c4ix.h` | SYS_POLL (its table, `sys_pollready`), `vfs_pollev`, `net_pollev`, `net_room`; ACCEPT's O_NONBLOCK, a short write without waiting |
+| `src/c4ix/include/c4ix_net.h` | `upoll`, `uselect`, `uaccept4` |
+| `src/c4ix/user/httpd.c` (new), `user/nc.c` | httpd; nc's waits through poll |
+| `src/c4pc/net.c`, `host.c`, `c4pc.h` | the uplink; c4pc-host's `--net`, `--net-id`, the real clock |
+| `src/c4pc/pc/hv.c`, `src/c4ix/user/desktop/machines.c` | INFO's net counts; the Network tab, Overview's net |
+| `libjs/net.js` (new), `bus.js`, `boot.js`, `c4m.js`, `ap.js`, `cli.js`, `worker.js`, `page.js`, `web/app.js` | the card; cli.js's `--net`, the page's `?net=N` |
+| `src/c4pc/test-c4pc-hostnet.sh` (new), `test-c4pc-net.sh` | the checks |
 
 ## Trying it (the ISO)
 
@@ -317,3 +390,6 @@ its old connections finish, nothing else); the BSD socket API (N5).
    on the other; a copy, `nc -l 7002 > /got` on the control and, in a
    guest's own shell, `cat /bin/sh | nc control 7002`. `netstat` shows the
    connections.
+6. A web server: `vm send b httpd -d /`, then in the control's Terminal
+   `echo GET /bin/ HTTP/1.0 | nc b 80` -- b's /bin as a page. Machines'
+   Load, Network: each machine's traffic.

@@ -75,8 +75,9 @@ export function createMachine(opts = {}) {
     hostNow: opts.hostNow,
   });
   // the block devices (blk.js): opts.disks, each a disk blk.js describes
+  // ... and the network card (net.js): opts.net, a NetCard on its port
   const bus = new Bus(arena, opts.gui || null, opts.snd || null,
-    opts.disks && opts.disks.length ? new BlockDevices(opts.disks) : null);
+    opts.disks && opts.disks.length ? new BlockDevices(opts.disks) : null, opts.net || null);
   // on threads, a heap every CPU's thread allocates from itself (sheap.js)
   const machine = new Machine(arena, dev, bus, par ? new SharedHeap(arena, null) : new Heap(0, 0));
   // the FPU opcode (F3): on unless asked otherwise (fpu: false)

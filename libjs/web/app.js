@@ -252,6 +252,9 @@ const opts = {
   persistReset: params.get('persist') === 'reset',
   uploads: params.get('uploads') === '0' ? null : UPLOADS,
   uploadsHome: !!sys.uploadsHome,
+  // a network card (net.js) on a hub that is the tabs of this page (a
+  // BroadcastChannel): ?net=N makes this tab machine N, 10.4.0.N+1
+  net: params.get('net') ? { channel: 'c4net', id: Math.max(1, Math.min(253, Number(params.get('net')) || 1)) } : null,
 };
 // Configuration: the URL's parameters (above) as a form. OK writes the ones
 // that differ from their defaults into the URL, keeps any it does not know,
@@ -267,6 +270,8 @@ const CONFIG = [
     help: 'empty or 1 is one; more are simulated, taking turns' },
   { key: 'parallel', label: 'A thread each', kind: 'flag', tab: 'machine',
     help: 'several processors at once, each on a worker (needs the page cross-origin isolated)' },
+  { key: 'net', label: 'Network', kind: 'text', tab: 'machine', options: ['', '1', '2', '3'],
+    help: "empty: no network card; N: one, this tab machine N (10.4.0.N+1) on a network of this page's tabs -- ping vm2 from the tab that is 1" },
   { key: 'mmu', label: 'MMU', kind: 'select', tab: 'machine', def: mmuDefault ? '1' : '0',
     options: [['0', 'off'], ['1', 'on: C4IX gives each program its own memory']],
     help: 'paged memory with protection: a program that writes where it should not is stopped, and nothing else is hurt (C4IX only)' },

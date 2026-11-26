@@ -39,6 +39,13 @@
 //                loops, as on any other machine
 //   --no-osaccel ... nor C4IX's own (src/c4ix/accel.mjs): its gunzip, tar and
 //                boot unpack the root archive in its own C
+//   --net udp:LPORT:[HOST:]PPORT
+//                fit a network card (net.js) on a cable that is a UDP socket:
+//                each frame a datagram from LPORT to HOST:PPORT (127.0.0.1 if
+//                no HOST), what comes to LPORT a frame in -- c4pc-host's
+//                --net, so the two (or two cli.js) are machines on one cable.
+//                The machine is paced to the real clock then, as -i is
+//   --net-id N   its id there: MAC 52:54:00:c4:00:N, address 10.4.0.N+1 (1)
 //
 // The flags are c4bb's (src/c4bb/sim/cli.js), so a test can swap one
 // runner for the other. Piped stdin without -i is fed to the keyboard up
@@ -57,6 +64,8 @@ import { STOP } from './c4m.js';
 import { requireSlot } from './hostlock.mjs';
 import { SoundDevice, EVT } from './snd-device.js';
 import { renderWav } from './snd-mix.js';
+import { NetCard } from './net.js';
+import { createSocket } from 'node:dgram';
 
 function usage() {
   console.error('usage: cli.js [-m MB] [-c cycles] [-s] [-d dir] [-w dir] [-i] [-hz MHz] [--fast] [--mbox BYTES] [--wav FILE] [--midi FILE] [--sf2 FILE] program.c4r [args...]');
@@ -83,6 +92,8 @@ function parseArgs(argv) {
     else if (f === '--mbox') o.mbox = parseInt(argv[++i], 10);
     else if (f === '--wav') o.wav = argv[++i];
     else if (f === '--disk') (o.disks = o.disks || []).push(argv[++i]);
+    else if (f === '--net') o.net = argv[++i];
+    else if (f === '--net-id') o.netId = parseInt(argv[++i], 10);
     else if (f === '--midi') o.midi = argv[++i];
     else if (f === '--sf2') o.sf2 = argv[++i];
     else if (f === '--cpus') o.cpus = parseInt(argv[++i], 10);
@@ -153,13 +164,29 @@ async function main(argv) {
   }));
 
   const snd = o.wav || o.midi || o.sf2 ? new SoundDevice({ midi: !!(o.midi || o.sf2) }) : null;
+  // --net udp:LPORT:[HOST:]PPORT: the card, its port a UDP socket
+  let net = null, udp = null;
+  if (o.net) {
+    const m = /^udp:(\d+):(?:(.+):)?(\d+)$/.exec(o.net);
+    const id = o.netId === undefined ? 1 : o.netId;
+    if (!m || !(id >= 1 && id <= 253)) { console.error(`cli.js: --net ${o.net}: not udp:LPORT:[HOST:]PPORT (--net-id 1 to 253)`); process.exit(1); }
+    const host = m[2] || '127.0.0.1', pport = +m[3];
+    udp = createSocket('udp4');
+    const port = { onframe: null, send: f => udp.send(f, pport, host) };
+    udp.on('message', b => { if (port.onframe) port.onframe(new Uint8Array(b)); });
+    await new Promise((res, rej) => { udp.once('error', rej); udp.bind(+m[1], () => { udp.off('error', rej); res(); }); })
+      .catch(e => { console.error(`cli.js: --net: UDP port ${m[1]}: ${e.message}`); process.exit(1); });
+    udp.unref();
+    net = new NetCard(port, id);
+  }
+  const paced = (o.interactive || net) && !o.unpaced;
   const played = [];
   // the games' accelerators, the build's list (accel.js), before it starts
   if (o.accel !== false) await loadAccel(await accelManifest());
   const machine = createMachine({
     arenaMb: o.arenaMb, drives, mhz: o.mhz, fpu: o.fpu, accel: o.accel, osAccel: o.osAccel, snd, cpus: o.cpus, quantum: o.quantum,
     parallel: o.parallel, spawn: url => new Worker(url), mmu: o.mmu,
-    disks: (o.disks || []).map(fileDisk),
+    disks: (o.disks || []).map(fileDisk), net,
     onByte: b => { out.push(b); if (out.length >= 4096 || b === 10) flush(); },
   });
   const dev = machine.dev;
@@ -167,6 +194,8 @@ async function main(argv) {
   // Input. -i streams it; otherwise piped stdin is fed up front with EOF.
   let wake = null;                       // resolves a parked run loop
   const poke = () => { if (wake) { const w = wake; wake = null; w(); } };
+  // a frame in ends a nap, as a key does
+  if (net) net.onwake = poke;
   // SIGTERM: the machine's power button, SIGTERM to the program (C4IX
   // shuts down, src/c4ix/sched.c); a second, or a program that takes
   // none, ends it here
@@ -230,7 +259,9 @@ async function main(argv) {
     }
     // Interactive and paced: slices of 16 simulated milliseconds, so the
     // pacing below never lets the machine get far ahead of the clock.
-    const slice = o.interactive && !o.unpaced ? dev.cyclesPerMs * 16 : 50e6;
+    // (--net: 4, as the page's worker runs, for a frame's sake: the socket's
+    // datagrams are taken between slices)
+    const slice = paced ? dev.cyclesPerMs * (net ? 4 : 16) : 50e6;
     const r = machine.run(Math.min(left, slice));
     flush();
     if (par && !dev.halted) {
@@ -283,14 +314,21 @@ async function main(argv) {
       parkedMs += Date.now() - t;
       continue;
     }
-    if (o.interactive) {
-      if (!o.unpaced) {
+    if (o.interactive || net) {
+      if (paced) {
         // Pace to the machine's own clock (cli.js in c4bb does the same):
         // a simulated second should take a real one, or `top` redraws
         // twenty times a second.
         const ahead = dev.simMs() - (Date.now() - t0 - parkedMs);
         if (ahead > 2) {
-          await new Promise(res => { wake = res; setTimeout(poke, Math.min(ahead, 100)); });
+          const t = Date.now();
+          // a nap with a frame already waiting for the card is none
+          if (!(net && r === STOP.SLEEP && net.q.length))
+            await new Promise(res => { wake = res; setTimeout(poke, Math.min(ahead, 100)); });
+          // a nap a frame ended: the clock given back what it did not sleep
+          // (worker.js wake), so the machine's time is the real one
+          const cut = Math.min(Math.floor(ahead - (Date.now() - t)), dev.napMs);
+          if (net && r === STOP.SLEEP && cut > 0) { dev.sleepMs -= cut; dev.napMs -= cut; }
           continue;
         }
       }

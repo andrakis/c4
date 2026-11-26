@@ -18,6 +18,8 @@
 //           parallel: ... each on a worker of its own (par.js), when the page is
 //           cross-origin isolated; simulated otherwise
 //           shared: { ring, fb } SharedArrayBuffers from shared.js, when the page is isolated
+//           net: { channel, id } fits a network card (net.js) whose port is the
+//           BroadcastChannel CHANNEL: the page's tabs on one hub, this one machine ID
 //   key     { key, ctrlKey, altKey, metaKey }     a keydown on the terminal
 //   input   { bytes: Uint8Array }                 typed programmatically
 //   paste   { text }                              pasted: typed a line at a time, as the guest reads (keys.js Paste)
@@ -48,6 +50,8 @@
 //   error   { message }
 
 import { createMachine, boot } from './boot.js';
+import { NetCard, ChannelPort } from './net.js';
+let netCard = null;                    // boot's net: the card, on the page's tabs' hub
 import { STOP } from './c4m.js';
 import { keyDown, typeBytes, Paste } from './keys.js';
 import { GuiDevice } from './gui-device.js';
@@ -195,8 +199,13 @@ function start(msg) {
       remove: msg.persist ? persistDrive.remove : null,
     };
   }
+  if (netCard) { netCard.port.close(); netCard = null; }
+  if (msg.net && typeof BroadcastChannel !== 'undefined') {
+    netCard = new NetCard(new ChannelPort(msg.net.channel || 'c4net'), msg.net.id | 0 || 1);
+    netCard.onwake = () => wake();
+  }
   vm = createMachine({
-    unpackLog: m => console.log(m),
+    unpackLog: m => console.log(m), net: netCard,
     arenaMb: msg.arenaMb || 64, drives, mhz: msg.mhz || 20, gui, snd, fpu: msg.fpu, accel: msg.accel, osAccel: msg.osAccel,
     cpus: msg.cpus | 0, quantum: msg.quantum | 0, mmu: !!msg.mmu,
     parallel: !!msg.parallel, spawn: url => new Worker(url, { type: 'module' }),

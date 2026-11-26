@@ -411,6 +411,12 @@ int          vfs_write(struct file *f, char *buf, int len);
 int          vfs_on_disk(struct file *f);
 // A file whose reads go to a device: a lazy one, still on a disk or a drive
 int          vfs_from_device(struct file *f);
+// ... a disk's file still on the disk, too big to be kept once read: its
+// next run read into a kernel buffer, or started there (ext2_aread: *SLOT)
+int          vfs_aread_ok(struct file *f);
+int          vfs_aread(struct file *f, char *buf, int len, int *slot);
+// a task's chain of steps (sys.c) let go of: its commands waited for
+void         sys_steps_end(struct task *t);
 extern int   vfs_nocommit;
 void         vfs_commit_file(struct file *f);
 int          vfs_readable(struct vnode *vn, int pos);  // 1 = read won't block
@@ -474,6 +480,15 @@ int  blk_read(int dev, int lba, int n, char *buf);    // 0, or -1
 int  blk_write(int dev, int lba, int n, char *buf);
 int  blk_flush(int dev);
 int  blk_user(int dev, int lba, int count, char *buf, int write);   // SYS_BLKIO
+// Commands that do not wait (c4pc): whether the machine has them; one
+// started in a slot for the running task (it holding at most MAX): the
+// slot, or -1 (then do it the plain way); a slot's: 0 busy, 1 done, -1
+// failed, the slot freed when it is not busy (WAIT: until then); and task
+// T's: the done ones freed, how many are busy still
+int  blk_async();
+int  blk_astart(int dev, int lba, int n, char *buf, int write, int max);
+int  blk_adone(int slot, int wait);
+int  blk_aheld(int t, int wait, int *failed);
 char *blk_name(int dev, char *out);   // hd0, hd0p1
 char *blk_nm(int dev);                // ... in a buffer of its own
 int  blk_parse(char *name);           // hd0, hd0p1: the number, or -1
@@ -486,6 +501,10 @@ int  ext2_sync(struct e2fs *fs);
 int  ext2_commit(struct e2fs *fs);    // the superblock, where its counts changed
 int  ext2_mkfs(int dev, int bsize, char *label);
 int  ext2_read(struct e2fs *fs, int ino, char *buf, c4off pos, int len);
+// the next run of the file's at POS (to 128 KB) into the kernel's BUF, or
+// started there as a command that does not wait (*SLOT, else -1): the count
+int ext2_aread(struct e2fs *fs, int ino, char *buf, c4off pos, int len, int *slot);
+extern int ext2_awrite;      // ext2_pwrite's runs as commands that do not wait (a write's steps)
 c4off ext2_size(struct e2fs *fs, int ino);   // a file's whole size: past 4 GB with C4IX_LFS
 int  ext2_pwrite(struct e2fs *fs, int ino, char *buf, c4off pos, int len);   // LEN bytes at POS, on the disk
 int  ext2_write(struct e2fs *fs, int ino, char *buf, int len);      // the whole file
@@ -771,6 +790,10 @@ struct task {
     // step's buffer starts (a call that is not that one's next step starts afresh)
     int  stepdone;
     int  stepnext;
+    // ... a command of the disk's that failed among them (blk_aheld), and a
+    // read's buffer (sys_rsteps: two runs of the file in flight at a time)
+    int  stepfail;
+    char *stepbuf;
 };
 
 // What the hot paths ask of a task, answered from one word, kept where the

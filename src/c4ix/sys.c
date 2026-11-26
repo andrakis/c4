@@ -91,6 +91,101 @@ int sys_read(int fd, char *buf, int len) {
     return vfs_read(f, buf, len);
 }
 
+enum { SYS_STEP = 131072 };
+
+// A chain let go of (its call done, left, or its task gone): the disk's
+// commands for it waited for, its read's buffer freed
+void sys_steps_end(struct task *t) {
+    int fail;
+    blk_aheld((int)t, 1, &fail);
+    if (t->stepbuf) { free(t->stepbuf); t->stepbuf = 0; }
+    t->stepdone = 0;
+    t->stepfail = 0;
+}
+
+// A read's steps where the disk has commands that do not wait (c4pc): two
+// runs of the file in flight at a time, into the halves of the task's own
+// buffer (t->stepbuf, after a header), while it naps a ms at a time and
+// the CPU and the kernel's lock are the rest's; each given to the
+// program's buffer in order as it comes, and the next started. Its
+// position is past what is in flight; a run the disk refused ends the
+// call where the bytes given end, and the position goes back to there.
+enum { SB_LEN = 0, SB_SLOT = 2, SB_HEAD = 4, SB_CNT = 5, SB_END = 6, SB_FAIL = 7, SB_INFL = 8, SB_HDR = 128 };   // the header: 16 words, at 8 bytes too
+static int sys_rsteps(struct task *t, struct file *f, int *args) {
+    int *h;
+    int i, k, s, r, want, d, moved, given;
+    if (!t->stepbuf) {
+        if (!(t->stepbuf = vfs_malloc(SB_HDR + 2 * SYS_STEP))) return vfs_read(f, (char *)args[1], args[2] > SYS_STEP ? SYS_STEP : args[2]);
+        memset(t->stepbuf, 0, SB_HDR);
+        h = (int *)t->stepbuf;
+        h[SB_SLOT] = 0 - 1;
+        h[SB_SLOT + 1] = 0 - 1;
+        t->stepdone = 0;
+        t->stepfail = 0;
+    }
+    h = (int *)t->stepbuf;
+    given = 0;
+    while (1) {
+        moved = 0;
+        // what has come, given in order
+        while (h[SB_CNT]) {
+            i = h[SB_HEAD];
+            if ((s = h[SB_SLOT + i]) >= 0) {
+                if (!(r = blk_adone(s, h[SB_FAIL]))) break;
+                h[SB_SLOT + i] = 0 - 1;
+                if (r < 0) h[SB_FAIL] = 1;
+            }
+            k = h[SB_LEN + i];
+            if (!h[SB_FAIL] && !uaccess(args[1], k, 1)) h[SB_FAIL] = 1;
+            if (!h[SB_FAIL]) {
+                memcpy((char *)args[1], t->stepbuf + SB_HDR + i * SYS_STEP, k);
+                t->stepdone = t->stepdone + k;
+                args[1] = args[1] + k;
+                args[2] = args[2] - k;
+                h[SB_INFL] = h[SB_INFL] - k;
+                given = given + k;
+            }
+            h[SB_HEAD] = i ^ 1;
+            h[SB_CNT] = h[SB_CNT] - 1;
+            moved = 1;
+        }
+        // the next runs started, while there is room and it wants more
+        while (!h[SB_FAIL] && !h[SB_END] && h[SB_CNT] < 2 && (want = args[2] - h[SB_INFL]) > 0) {
+            i = (h[SB_HEAD] + h[SB_CNT]) & 1;
+            r = vfs_aread(f, t->stepbuf + SB_HDR + i * SYS_STEP, want < SYS_STEP ? want : SYS_STEP, &s);
+            if (r <= 0) { h[SB_END] = 1; if (r < 0) h[SB_FAIL] = 1; break; }
+            h[SB_LEN + i] = r;
+            h[SB_SLOT + i] = s;
+            h[SB_CNT] = h[SB_CNT] + 1;
+            h[SB_INFL] = h[SB_INFL] + r;
+            moved = 1;
+        }
+        if (!h[SB_CNT]) break;
+        // a step's worth given: the turns go round, the next runs in
+        // flight meanwhile (the disk keeps up with a look straight after:
+        // QEMU's 128 KB came in before it, and the whole of a 53 MB read
+        // was one trap, the shell on the other CPU kept waiting for it)
+        if (given >= SYS_STEP) {
+            t->stepnext = args[1];
+            sys_restart = 1;
+            return 0;
+        }
+        // something given or started: looked at again before a nap (a
+        // file's, a guest's disk's: done as they start)
+        if (moved) continue;
+        t->stepnext = args[1];
+        sys_nap(1);
+        return 0;
+    }
+    // the bytes started but not given: the position back to the end of those given
+    if (h[SB_INFL]) f->pos = f->pos - h[SB_INFL];
+    r = h[SB_FAIL];
+    d = t->stepdone;
+    sys_steps_end(t);
+    if (d) return d;
+    return r ? 0 - 1 : 0;
+}
+
 // A read or write of a disk's file, a step of SYS_STEP bytes a trap. The
 // kernel serves a trap start to finish, holding the kernel lock, and
 // nothing else runs on its CPU meanwhile -- nor anything that needs the
@@ -105,19 +200,34 @@ int sys_read(int fd, char *buf, int len) {
 // metadata is committed once, at the last (vfs_nocommit: write-through
 // files). Writes step on an ext2 file (vfs_on_disk); reads on one still on
 // a disk or a drive (vfs_from_device), whose bytes the device brings.
-enum { SYS_STEP = 131072 };
+// Where the disk has commands that do not wait (c4pc, blk_async), a
+// write's runs are those (ext2_awrite), two in flight at a time while the
+// next step is made, the step napping for room; the last waits for them,
+// and a failed one fails the call. A read's go as sys_rsteps says.
 static int sys_steps(struct task *t, int *args, int wr) {
     struct file *f;
-    int n, r, d;
+    int n, r, d, fail;
     n = args[2];
-    // a step left over from a call that did not come back for the rest
+    // a chain left over from a call that did not come back for the rest
     // (killed, or a signal's handler in between): not this one's
-    if (t && t->stepdone && t->stepnext != args[1]) t->stepdone = 0;
+    if (t && (t->stepdone || t->stepbuf) && t->stepnext != args[1]) sys_steps_end(t);
+    if (!wr && t && (n > SYS_STEP || t->stepbuf) && sched_in_trap() && (f = fd_get(t, args[0])) && vfs_aread_ok(f) && blk_async())
+        return sys_rsteps(t, f, args);
     if (n > SYS_STEP && t && sched_in_trap() && (f = fd_get(t, args[0])) && (wr ? vfs_on_disk(f) : vfs_from_device(f))) {
         if (wr) {
+            if (blk_aheld((int)t, 0, &fail) >= 2) {
+                // the disk has two of this one's still: a ms, and again
+                if (fail) t->stepfail = 1;
+                t->stepnext = args[1];
+                sys_nap(1);
+                return 0;
+            }
+            if (fail) t->stepfail = 1;
+            ext2_awrite = 1;
             vfs_nocommit = 1;
             r = vfs_write(f, (char *)args[1], SYS_STEP);
             vfs_nocommit = 0;
+            ext2_awrite = 0;
         } else r = vfs_read(f, (char *)args[1], SYS_STEP);
         if (r == SYS_STEP) {
             t->stepdone = t->stepdone + r;
@@ -127,9 +237,16 @@ static int sys_steps(struct task *t, int *args, int wr) {
             sys_restart = 1;
             return 0;
         }
-        if (wr) vfs_commit_file(f);
+        if (wr) {
+            vfs_commit_file(f);
+            blk_aheld((int)t, 1, &fail);
+            if (fail) t->stepfail = 1;
+        }
         d = t->stepdone;
+        fail = t->stepfail;
         t->stepdone = 0;
+        t->stepfail = 0;
+        if (fail) return 0 - 1;                 // the disk refused some of it
         if (r < 0) return d ? d : 0 - 1;
         return d + r;
     }
@@ -137,8 +254,16 @@ static int sys_steps(struct task *t, int *args, int wr) {
     if (n > SYS_STEP && !uaccess(args[1] + SYS_STEP, n - SYS_STEP, !wr)) r = 0 - 1;
     else r = wr ? sys_write(args[0], (char *)args[1], n) : sys_read(args[0], (char *)args[1], n);
     if (t && t->stepdone) {
+        // a chain's last: its commands waited for
+        if (wr) {
+            blk_aheld((int)t, 1, &fail);
+            if (fail) t->stepfail = 1;
+        }
         d = t->stepdone;
+        fail = t->stepfail;
         t->stepdone = 0;
+        t->stepfail = 0;
+        if (fail) return 0 - 1;
         r = r < 0 ? d : d + r;
     }
     return r;

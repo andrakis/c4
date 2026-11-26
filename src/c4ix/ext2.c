@@ -502,6 +502,49 @@ static int ext2_read_via(struct e2fs *fs, int ino, char *ib, char *buf, c4off po
     return done;
 }
 
+// The next of inode INO's bytes at POS, up to LEN (to E2_RUN_BYTES), into
+// BUF, the kernel's: a run of whole blocks side by side on the disk,
+// started as a command that does not wait (blk_astart: *SLOT its slot,
+// the bytes there once it is done), or what is not one -- a part of a
+// block, a hole, a run no slot was free for -- read now (*SLOT -1). A run
+// a call, however short, and the count of it; 0 at the end, -1 if the
+// disk refused (a write's steps: sys.c sys_rsteps)
+int ext2_aread(struct e2fs *fs, int ino, char *buf, c4off pos, int len, int *slot) {
+    char ib[256];
+    c4off size;
+    int lbn, off, b, n, run, i;
+    *slot = 0 - 1;
+    if (iget(fs, ino, ib) < 0) return 0 - 1;
+    if ((i_mode(ib) & S_IFMT) == S_IFLNK) return ext2_read(fs, ino, buf, pos, len);
+    size = i_fsize(ib);
+    if (pos >= size) return 0;
+    if (len > size - pos) len = (int)(size - pos);
+    if (len > E2_RUN_BYTES) len = E2_RUN_BYTES;
+    lbn = (int)(pos / fs->bsize);
+    off = (int)(pos % fs->bsize);
+    b = bmap(fs, ino, ib, lbn, 0);
+    n = fs->bsize - off;
+    if (n > len) n = len;
+    if (!b) { memset(buf, 0, n); return n; }
+    if (off || n < fs->bsize) {
+        // a part of a block: the block, its part moved down to the start
+        if (bread_to(fs, b, 1, buf) < 0) return 0 - 1;
+        i = 0;
+        while (off && i < n) { buf[i] = buf[off + i]; ++i; }
+        return n;
+    }
+    run = 1;
+    while (run < len / fs->bsize && bmap(fs, ino, ib, lbn + run, 0) == b + run) ++run;
+    *slot = blk_astart(fs->dev, b * fs->spb, run * fs->spb, buf, 0, 2);
+    if (*slot < 0 && bread_to(fs, b, run, buf) < 0) return 0 - 1;
+    return run * fs->bsize;
+}
+
+// ext2_pwrite's runs of whole blocks as commands that do not wait, two of
+// the writer's at a time (blk_astart), their sectors copied as they start:
+// set by a write's steps (sys.c), whose last waits for them
+int ext2_awrite;
+
 // LEN bytes of BUF at POS of inode INO, on the disk, and nowhere else (a
 // file too big for the RAM: vfs.c's write-through): its blocks made where
 // there were none -- a part of one the rest zeros -- and its size grown to
@@ -528,7 +571,8 @@ int ext2_pwrite(struct e2fs *fs, int ino, char *buf, c4off pos, int len) {
             run = 1;
             while (run < E2_RUN_BYTES / fs->bsize && done + (run + 1) * fs->bsize <= len && bmap(fs, ino, ib, lbn + run, 1) == b0 + run) ++run;
             memcpy(blk, buf + done, run * fs->bsize);
-            if (bwrite_from(fs, b0, run, blk) < 0) break;
+            if (!(ext2_awrite && !fs->ro && blk_astart(fs->dev, b0 * fs->spb, run * fs->spb, blk, 1, 2) >= 0) &&
+                bwrite_from(fs, b0, run, blk) < 0) break;
             done = done + run * fs->bsize;
             continue;
         }

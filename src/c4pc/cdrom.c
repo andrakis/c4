@@ -190,8 +190,18 @@ static int read_dma(cd *c, const u8 *cmd, u8 *buf, u32 k) {
   memcpy(buf, ide_dma_buf, k * SECT);
   return 0;
 }
+static int read_sectors_(cd *c, u32 lba, u32 n, u8 *buf);
+/* under the disks' lock (dev.c), their queue emptied: the controller's
+ * bus master and ide_dma_buf are theirs too, and a command of theirs that
+ * does not wait may be on this channel */
 static int read_sectors(cd *c, u32 lba, u32 n, u8 *buf) {
   if (c->rd) return c->rd(c->rctx, lba, n, buf);
+  dev_blk_hold(1);
+  int r = read_sectors_(c, lba, n, buf);
+  dev_blk_hold(0);
+  return r;
+}
+static int read_sectors_(cd *c, u32 lba, u32 n, u8 *buf) {
   while (n) {
     u32 k = n > MAXRUN ? MAXRUN : n;
     u8 cmd[12] = {0x28, 0, (u8)(lba >> 24), (u8)(lba >> 16), (u8)(lba >> 8), (u8)lba, 0, (u8)(k >> 8), (u8)k, 0, 0, 0};

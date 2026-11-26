@@ -142,6 +142,12 @@ typedef struct blkdev {
   /* n sectors at lba to or from buf: 0, or -1 */
   int (*rw)(struct blkdev *, int write, u32 lba, u32 n, u8 *buf);
   int (*flush)(struct blkdev *);
+  /* a command that does not wait (dev.c's queue): started, 0, or -1 where
+   * it cannot be (rw does it then); and the one started looked at: 0 while
+   * it runs (WAIT: until it does not), 1 done, -1 failed, a read's sectors
+   * in its buf once it is done. 0 for a device that has none */
+  int (*start)(struct blkdev *, int write, u32 lba, u32 n, u8 *buf);
+  int (*poll)(struct blkdev *, int wait);
   void *ctx;
   char what[48];                       /* for the console */
   unsigned long long rd, wr;           /* bytes read and written by a machine's BLK commands (INFO's blkN) */
@@ -317,6 +323,7 @@ struct machine {
   /* the block devices (BLK_*): fitted, selected, the next command's */
   blkdev *blk[8]; int nblk, blk_sel;
   u32 blk_lba, blk_nsect, blk_addr; i32 blk_result;
+  struct bq *bq;                       /* its commands that do not wait (dev.c, BLK_CMD 0x100 on), or 0 */
   int reset_requested;
   /* the console sink */
   void (*on_byte)(machine *, int b);
@@ -432,6 +439,10 @@ void dev_write32(machine *m, u32 addr, i32 val);
 i32 dev_disk_open(machine *m, u32 name_addr);
 i32 blk_read32(machine *m, u32 addr);  /* the block devices' window (BLK_BASE) */
 void blk_write32(machine *m, u32 addr, i32 val);
+extern volatile int blk_abusy;         /* commands that do not wait, queued or running: */
+void blk_apump(void);                  /* ... looked in on at the engines' boundaries */
+void dev_blk_hold(int on);             /* the disks' lock, the queue emptied first (cdrom.c's DMA) */
+void dev_blk_forget(machine *m);       /* a machine's commands finished and dropped (hv.c release) */
 i32 dev_disk_read(machine *m, i32 len);
 int dev_opcode_by_name(const char *name);
 void dev_con_bytes(machine *m, const u8 *b, u32 n);

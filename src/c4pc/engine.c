@@ -904,6 +904,7 @@ static inline __attribute__((always_inline)) i64 boundary(machine *m, i64 cycle,
   word interval = m->cycle_interval;
   int fired = 1;
   int dv = !m->par_ap;                 /* the devices' interrupts: CPU 0's alone on threads */
+  if (blk_abusy && (cycle & 4095) == 0) blk_apump();   /* the disks' commands that do not wait (dev.c) */
   if (dv && m->dv->pit_ms && (cycle & 4095) == 0 && !held && plat_now_ms() >= m->dv->pit_next) {
     m->dv->pit_next = plat_now_ms() + m->dv->pit_ms;
     hirq(m, 1);

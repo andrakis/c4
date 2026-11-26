@@ -44,6 +44,15 @@ static int sched_pipesready(struct task *t);
 static int sched_pipegen;       // bumped by every pipe's write and last writer's close (sched_events)
 static void sched_banner();
 static int sched_interval;   // preemption interval, 0 = none
+// A turn is also this many ms of the machine's clock at most. The slice
+// is counted in cycles, and a device's work costs the machine none: a
+// task whose time goes in a disk's commands (vm mkdisk's 1 GB, a MB a
+// write) made a few thousand cycles of kernel code a write, and so ran
+// on for seconds of the clock on one slice, the desktop and every other
+// task on its CPU waiting until it was done. The turn's start by the
+// clock, each CPU's (the trap's own __time(): nothing more is read)
+enum { SCHED_TURN_MS = 20 };
+static int sched_slice0ms[CPU_MAX];
 
 // ---- processors (docs/c4ix-smp.md S3) ----
 //
@@ -152,7 +161,34 @@ int klock_drop_slow(int *lk) {
 // a program's malloc and free reach without it (sched_trap's light path).
 int sched_bkl[2];
 int sched_lightcpu[CPU_MAX];
-static void bkl_take() { klock_spin(sched_bkl); }
+// It is taken in turns when it is wanted. A CPU that let it go took it
+// again a few instructions later, at its task's next syscall, while one
+// parked waiting for it was still being woken: so a task writing a disk
+// (vm mkdisk, a syscall after another, each holding the lock some ms)
+// had it for as long as it wrote, 30 s, and the desktop and the shells on
+// the other CPU waited all that time for theirs. So a CPU that has parked
+// on it says so here (1 + its id), and a CPU coming to take it afresh
+// while another is owed it waits until that one has had it.
+static int bkl_owed;
+// how long a CPU spins for its turn before it parks: the other's hold is a
+// syscall or two, much less than a park and a wake on both sides
+enum { BKL_OWED_SPIN = 4096 };
+static void bkl_take() {
+    int me, o, w, spin;
+    if (smp_ncpu < 2) return;
+    me = cpu_self->id + 1;
+    if (sched_bkl[0] == me) { ++sched_bkl[1]; return; }
+    spin = 0;
+    while ((w = bkl_owed) && w != me) {
+        if (++spin > BKL_OWED_SPIN) { __c4_wait((int)&bkl_owed, w); spin = 0; }
+    }
+    spin = 0;
+    while ((o = __c4_cas((int)sched_bkl, 0, me))) {
+        if (++spin > BKL_SPIN) { __c4_cas((int)&bkl_owed, 0, me); __c4_wait((int)sched_bkl, o); spin = 0; }
+    }
+    sched_bkl[1] = 1;
+    if (bkl_owed == me) { __c4_xchg((int)&bkl_owed, 0); __c4_wake((int)&bkl_owed, 0); }
+}
 // Whether this CPU holds the kernel lock: the MMU swaps only then (mmu.c)
 static void bkl_drop() { klock_let(sched_bkl); }
 
@@ -681,6 +717,7 @@ int sched_unlock_slow() {
 // spent its slice in the kernel on the task's behalf (SYS_SPAWN).
 void sched_new_slice() {
     sched_slice0 = __c4_cycles();
+    sched_slice0ms[cpu_self->id] = __time();
 }
 
 // ---- picking the next task ----
@@ -1184,10 +1221,11 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
     if (fv) {
         n = fv;
         sched_slice0 = acct_in;
+        sched_slice0ms[cpu_self->id] = d;
     }
     else if ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched
         && t->state == TS_RUNNING && SCHED_STAYS(t)
-        && (!sched_interval || acct_in - sched_slice0 < sched_turn(t)))
+        && (!sched_interval || (acct_in - sched_slice0 < sched_turn(t) && d - sched_slice0ms[cpu_self->id] < SCHED_TURN_MS * (t->nice < 0 ? 1 - t->nice : 1))))
         n = t;
     // An IPI arrives whatever the mask: a task that masked preemption (an
     // idle loop under sched_lock, a C4KE program's exclusive section)
@@ -1196,7 +1234,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
         n = t;
     // a favoured task's turn is several slices
     else if (trap == C4IX_TRAP_HARD_IRQ && t->nice < 0 && t->state == TS_RUNNING && !sched_resched &&
-             sched_mine(t) && acct_in - sched_slice0 < sched_turn(t))
+             sched_mine(t) && acct_in - sched_slice0 < sched_turn(t) && d - sched_slice0ms[cpu_self->id] < SCHED_TURN_MS * (1 - t->nice))
         n = t;
     else {
         n = sched_pick(t);
@@ -1211,6 +1249,7 @@ static void sched_trap(int interval, int trap, int param, int mode, int a, int b
             (trap == C4IX_TRAP_HARD_IRQ || ((trap == C4IX_TRAP_ILLOP || trap == C4IX_TRAP_PM) && !sched_resched)) &&
             smp_idlefor(n) >= 0) n = t;
         sched_slice0 = acct_in;
+        sched_slice0ms[cpu_self->id] = d;
     }
     // (kept, and it was woken in its own trap: it is running, not waiting its turn)
     if (n == t && t->q == Q_READY) { q_off(t); t->state = TS_RUNNING; }

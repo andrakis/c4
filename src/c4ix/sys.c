@@ -91,6 +91,53 @@ int sys_read(int fd, char *buf, int len) {
     return vfs_read(f, buf, len);
 }
 
+// A write to a disk's file, a step of SYS_WSTEP bytes a trap. The kernel
+// serves a trap start to finish, holding the kernel lock, and nothing else
+// runs on its CPU meanwhile -- nor anything that needs the lock, on any:
+// vm mkdisk's writes of a MB were 2.6M cycles of ext2 and the disk's
+// time each, against a slice of 50K, so it had nearly all of the machine
+// while it wrote 1.5 GB, and the desktop and the shells froze. So a write
+// of more is the same syscall again for what is left (sys_restart, its
+// buffer and length moved on in the task's own arguments), and the turns
+// go round between its steps. The program sees one write of the whole:
+// the steps' bytes are counted (t->wdone) and given at the last. The
+// metadata the steps changed is committed once, at the last (or where
+// one falls short), not after each (vfs_nocommit: write-through files).
+enum { SYS_WSTEP = 131072 };
+static int sys_write_steps(struct task *t, int *args) {
+    struct file *f;
+    int n, r, d;
+    n = args[2];
+    // a step left over from a write that did not come back for the rest
+    // (killed, or a signal's handler writing in between): not this one's
+    if (t && t->wdone && t->wnext != args[1]) t->wdone = 0;
+    if (n > SYS_WSTEP && t && sched_in_trap() && (f = fd_get(t, args[0])) && vfs_on_disk(f)) {
+        vfs_nocommit = 1;
+        r = vfs_write(f, (char *)args[1], SYS_WSTEP);
+        vfs_nocommit = 0;
+        if (r == SYS_WSTEP) {
+            t->wdone = t->wdone + r;
+            args[1] = args[1] + r;
+            args[2] = n - r;
+            t->wnext = args[1];
+            sys_restart = 1;
+            return 0;
+        }
+        vfs_commit_file(f);
+        d = t->wdone;
+        t->wdone = 0;
+        if (r < 0) return d ? d : 0 - 1;
+        return d + r;
+    }
+    r = sys_write(args[0], (char *)args[1], n);
+    if (t && t->wdone) {
+        d = t->wdone;
+        t->wdone = 0;
+        r = r < 0 ? d : d + r;
+    }
+    return r;
+}
+
 static int sys_same(char *a, char *b) {
     while (*a && *a == *b) { ++a; ++b; }
     return *a == *b;
@@ -719,7 +766,7 @@ int sys_dispatch(int num, int *args) {
     if (!sys_args_ok(num, args)) return -1;
 
     switch (num) {
-    case SYS_WRITE:    return sys_write(args[0], (char *)args[1], args[2]);
+    case SYS_WRITE:    return sys_write_steps(t, args);
     case SYS_READ:     return sys_read(args[0], (char *)args[1], args[2]);
     // disks (docs/c4ix-ext2.md): block device args[0]'s ext2 at a path,
     // read-only where args[2]; unmounted; made (block size, label); the

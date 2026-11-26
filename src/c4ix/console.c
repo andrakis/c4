@@ -44,7 +44,13 @@ static char con_buf[CON_BUF];   // bytes read but not yet consumed
 static int  con_len;
 static int  con_pos;
 static int  con_eof;
-static int  con_gate;           // cycle count of the last host read
+// The cycle count of the last host read, each CPU's: the counters are each
+// CPU's own, and words that wrap. One gate stamped by the shell's CPU held
+// CPU 0's looks shut until CPU 0's count had passed it -- up to half the
+// word, 12 s at 175 MHz -- and the shell's input waited unseen while CPU 0
+// ran vm mkdisk (VM 0 on two CPUs under c4pc's hypervisor)
+static int  con_gate[CPU_MAX];
+static void con_open() { int k; k = 0; while (k < CPU_MAX) { con_gate[k] = 0; ++k; } }
 // While a task has the keys raw (below), the host's /dev/tty plus one, and
 // reads come from it: the host still holds /dev/stdin's bytes back until
 // Enter, whatever else is open. 0 while cooked.
@@ -68,7 +74,7 @@ void con_init() {
     con_len = 0;
     con_pos = 0;
     con_eof = 0;
-    con_gate = 0;
+    con_open();
     if (con_fd >= 0)
         klog("console: the host's terminal, read without blocking (fd %d), polled every %d cycles\n",
             con_fd, CON_POLL_CYCLES);
@@ -84,7 +90,7 @@ int con_is_booting() { return con_booting; }
 // would never reopen and a prompt with nothing else running would
 // never see a keystroke. The idle loop calls this after each nap.
 void con_wake() {
-    con_gate = 0;
+    con_open();
 }
 
 // 1 if a console read can be answered without stopping the machine.
@@ -101,8 +107,8 @@ int con_poll() {
     if (con_fd < 0) return 1;      // blocking fallback: pretend, then block
 
     now = __c4_cycles();
-    if (con_gate && now - con_gate < CON_POLL_CYCLES) return 0;
-    con_gate = now ? now : 1;      // 0 means "open", so never store it
+    if (con_gate[cpu_self->id] && now - con_gate[cpu_self->id] < CON_POLL_CYCLES) return 0;
+    con_gate[cpu_self->id] = now ? now : 1;      // 0 means "open", so never store it
 
     con_pos = 0;
     con_len = 0;

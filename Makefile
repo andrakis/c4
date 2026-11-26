@@ -3211,6 +3211,16 @@ C4PC_FONTS := $(addprefix $(C4PC_FONTDIR)/,dejavu/DejaVuSansMono.ttf liberation/
 # whose images are made: C4PC_IMAGES=~/git/c4/src/c4bb/images C4PC_IMAGES_DEP=
 C4PC_IMAGES ?= src/c4bb/images
 C4PC_IMAGES_DEP ?= c4bb-images
+# .c4pc/images.from names the images C4PC_IMAGES is, written again only
+# when that changes, so what is made from them (the boot disk, the programs
+# linked against their libraries, the DOS disks) is made again from the
+# others and not kept from the last. A tree's own images without its games
+# checked out have none: c4pc.iso made from those and test-c4pc then run
+# with main's ran the first's disk (2026-11-26: the windowed games black,
+# no Doom, Settings' screen size not where the test clicks)
+C4PC_IMAGES_ABS := $(abspath $(C4PC_IMAGES))
+.c4pc/images.from: FORCE
+	@mkdir -p .c4pc; [ "$$(cat $@ 2>/dev/null)" = "$(C4PC_IMAGES_ABS)" ] || echo "$(C4PC_IMAGES_ABS)" > $@
 # -fno-tree-slp-vectorize: gcc 15 at -O2 packs the loops' four registers into an
 # SSE register for their saves, spilling the rest; the MMU's user loop ran at
 # half the speed for it (126M against 226M instructions a second on helios)
@@ -3273,7 +3283,7 @@ C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin
 # vmd is vm under another name (its argv[0]: autostart)
 .c4pc/bin/c4ix-vmd.c4r: .c4pc/bin/c4ix-vm.c4r
 	cp $< $@
-.c4pc/bin/c4ix-%.c4r: $(SRCS)/c4ix/user/%.c .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP)
+.c4pc/bin/c4ix-%.c4r: $(SRCS)/c4ix/user/%.c .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP) .c4pc/images.from
 	mkdir -p .c4pc/bin
 	./c4sc-host32 -c 400000 compile -O -c -D C4IX_SHARED -I $(SRCS)/c4ix/include $< .c4pc/u_$*.c4o > /dev/null
 	./c4rlink32 .c4pc/u_$*.c4o -l .c4pc/lib/libc4ix.c4s -o $@ > /dev/null
@@ -3282,7 +3292,7 @@ C4PC_IX_NEW := mount umount df cp mkfs chmod shutdown reboot install cc nice pin
 # build-images.sh builds it: its modules and the window kit's, libc's fp.c,
 # against the images' libgui and libarc and this tree's libc4ix
 C4PC_DESK_MODS := shell tools host term files taskmgr apps edit hl explore wall machines draw ui wmcore dialog look95 look31 textgrid savers calc notepad clock
-.c4pc/bin/c4ix-desktop.c4r: $(wildcard $(SRCS)/c4ix/user/desktop/*.c $(SRCS)/c4ix/user/desktop/*.h $(SRCS)/winkit/*.c $(SRCS)/winkit/*.h) .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP)
+.c4pc/bin/c4ix-desktop.c4r: $(wildcard $(SRCS)/c4ix/user/desktop/*.c $(SRCS)/c4ix/user/desktop/*.h $(SRCS)/winkit/*.c $(SRCS)/winkit/*.h) .c4pc/lib/libc4ix.c4s $(C4PC_IMAGES_DEP) .c4pc/images.from
 	mkdir -p .c4pc/bin .c4pc/desk
 	for m in $(C4PC_DESK_MODS); do src=$(SRCS)/c4ix/user/desktop/$$m.c; [ -f $$src ] || src=$(SRCS)/winkit/$$m.c; \
 	  ./c4sc-host32 -c 400000 compile -O -c -D C4IX_SHARED -I $(SRCS)/c4ix/include -I $(SRCS)/c4ix/user/desktop -I $(SRCS)/winkit $$src .c4pc/desk/$$m.c4o > /dev/null || exit 1; done
@@ -3305,7 +3315,10 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 	for m in $(C4PC_IX_MODS); do ./c4sc-host32 -c 400000 compile -O -c -I $(SRCS)/c4ix $(SRCS)/c4ix/$$m.c .c4pc/kernel/$$m.c4o > /dev/null || exit 1; done
 	./c4rlink32 $(patsubst %,.c4pc/kernel/%.c4o,$(C4PC_IX_MODS)) -o $@ > /dev/null
 # The boot disk as one archive, for a loader to hand c4pc as a module
-.c4pc/disk.tar: $(C4PC_IMAGES_DEP) $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/bin/c4ix-vmd.c4r .c4pc/bin/c4ix-desktop.c4r .c4pc/lib/libc4ix.c4s $(C4PC_SRC)/pc/disksizes.py
+.c4pc/disk.tar: $(C4PC_IMAGES_DEP) $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/bin/c4ix-vmd.c4r .c4pc/bin/c4ix-desktop.c4r .c4pc/lib/libc4ix.c4s $(C4PC_SRC)/pc/disksizes.py .c4pc/images.from
+	@# images made where the games are not checked out have none (games/README.md)
+	@[ -d $(C4PC_IMAGES)/disk/games ] || echo "c4pc: $(C4PC_IMAGES) has no games (games/ not checked out?), so neither has this disk:" \
+	  "C4PC_IMAGES=~/git/c4/src/c4bb/images C4PC_IMAGES_DEP= for main's" >&2
 	rm -rf .c4pc/add && mkdir -p .c4pc/add
 	tar --format=ustar -C $(C4PC_IMAGES)/disk -cf $@ .
 	cp $(patsubst %,.c4pc/bin/c4ix-%.c4r,$(C4PC_IX_NEW)) .c4pc/bin/c4ix-vmd.c4r .c4pc/add/
@@ -3324,7 +3337,7 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 # The boot disk less the games, for machines with little memory: plain
 # DOSBox has 63 MB at most. Every file under 300 KB outside the games'
 # folders, and the root archive.
-.c4pc/small.tar: $(C4PC_IMAGES_DEP)
+.c4pc/small.tar: $(C4PC_IMAGES_DEP) .c4pc/images.from
 	mkdir -p .c4pc
 	cd $(C4PC_IMAGES)/disk && { find . -type f -size -300k ! -path './games/*' ! -path './tyrian/*' \
 		! -path './bsdgames/*' ! -path './frotz/*'; echo ./c4ix-root.tgz; } | sort > $(CURDIR)/.c4pc/small.lst
@@ -3335,7 +3348,7 @@ C4PC_IX_MODS := boot console va host sl4b task sched vfs sys c4ke loader mmu blk
 # disk (libjs/images/dos, build-images.sh) as one archive, compressed as
 # disk.tar's members are. C4PC_DOS: that disk (main's has the games).
 C4PC_DOS ?= $(abspath $(C4PC_IMAGES)/../../../libjs/images/dos)
-.c4pc/c4dos.tar: $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/packdisk.py
+.c4pc/c4dos.tar: $(C4PC_IMAGES_DEP) $(C4PC_SRC)/pc/packdisk.py .c4pc/images.from
 	mkdir -p .c4pc
 	tar --format=ustar -C $(C4PC_DOS) --exclude=./index.json --exclude=./manifest.json -cf .c4pc/c4dos-raw.tar .
 	python3 $(C4PC_SRC)/pc/packdisk.py .c4pc/c4dos-raw.tar $@

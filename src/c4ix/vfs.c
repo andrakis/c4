@@ -1737,6 +1737,23 @@ int vfs_nocommit;
 
 int vfs_on_disk(struct file *f) { return f->vn->type == VN_RAMFILE && f->vn->e2 != 0; }
 int vfs_from_device(struct file *f) { return f->vn->type == VN_RAMFILE && f->vn->lazy; }
+int vfs_aread_ok(struct file *f) {
+    struct vnode *vn;
+    vn = f->vn;
+    return vn->type == VN_RAMFILE && vn->lazy && vn->e2 && vn->size > VFS_KEEP;
+}
+int vfs_aread(struct file *f, char *buf, int len, int *slot) {
+    struct vnode *vn;
+    int n;
+    *slot = 0 - 1;
+    sched_lock();
+    vn = f->vn;
+    if (!vn->lazy || !vn->e2 || f->pos >= VN_END(vn)) { sched_unlock(); return 0; }
+    n = ext2_aread(vn->e2, vn->e2ino, buf, f->pos, len, slot);
+    if (n > 0) f->pos = f->pos + n;
+    sched_unlock();
+    return n;
+}
 void vfs_commit_file(struct file *f) {
     sched_lock();
     if (f->vn->e2) ext2_commit(f->vn->e2);

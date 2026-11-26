@@ -208,8 +208,12 @@ static i32 kbd_read(machine *m, u32 addr, i32 len, int nonblock, int raw) {
  * (BLK_CMD) and swap's, one at a time: the processors share the disks */
 unsigned long long blk_counts[4];                    /* BLK_CMD's reads, writes, sectors read, written (-s) */
 static volatile int blk_lk;
-static void blk_take(void) { while (__atomic_exchange_n(&blk_lk, 1, __ATOMIC_ACQUIRE)) { } }
+static void blk_lock(void) { while (__atomic_exchange_n(&blk_lk, 1, __ATOMIC_ACQUIRE)) { } }
 static void blk_drop(void) { __atomic_store_n(&blk_lk, 0, __ATOMIC_RELEASE); }
+static void bq_drain(void);
+/* the disks to itself, the commands that do not wait finished first (BLK_CMD
+ * 0x100 on, below): a disk does one thing at a time, and a machine's in order */
+static void blk_take(void) { blk_lock(); bq_drain(); }
 static int sw_disk_rw(machine *m, int write, u32 slot, u8 *p) {
   blk_take();
   int r = m->dv->swap_dev->rw(m->dv->swap_dev, write, m->dv->swap_lba + slot * 8, 8, p);
@@ -767,6 +771,117 @@ u32 dev_dma_read(machine *m, u32 addr, u32 len, u8 *out) { return dma_read(m, ad
 enum { BLK_COUNT = 0x540, BLK_SEL = 0x544, BLK_SECTORS = 0x548, BLK_FLAGS = 0x54c,
        BLK_LBA = 0x550, BLK_NSECT = 0x554, BLK_ADDR = 0x558, BLK_CMD = 0x55c };
 #define BLK_MAX_RUN 256                 /* sectors a command moves at most: 128 KB */
+
+/* ---- commands that do not wait ----
+ * BLK_CMD 0x100 | S << 4 | 1 (read) or 2 (write) puts a command in the
+ * machine's slot S (0 to BLK_ASLOTS - 1, the kernel's to choose) and is
+ * done at once, 0 in BLK_CMD after (-1: refused, S busy among them): a
+ * write's sectors are copied from the machine's memory then, a read's put
+ * there when a later 6 finds it done. 6 says which slots are busy still
+ * (bit S), and which of the rest it found failed (bit 8 + S), and frees
+ * those; 7 waits for them all first; 8 waits, and frees them unread (a
+ * kernel that starts again). The disks are the PC's: one command on them
+ * at a time, the rest queued in order (bq_head), each started as the last
+ * is found done -- at an engine's boundary (blk_apump), or the next
+ * command -- and the sectors move by the IDE controller's DMA meanwhile
+ * (ata.c start, poll) while the processors run, the device lock not held.
+ * A device that cannot (no start: a file, a guest's disk) does it at once
+ * when its turn comes. Every other command waits for the queue to empty
+ * (blk_take). In the --hv control machine's vm mkdisk the disk's time was
+ * a quarter of the writer's processor's, polled with the kernel's lock held */
+enum { BQ_FREE, BQ_QUEUED, BQ_RUN, BQ_DONE, BQ_TAKEN };
+typedef struct bq { struct bq *next; blkdev *b; int write, state, r; u32 lba, n, addr; u8 *buf; } bq;
+#define BLK_ASLOTS 4
+static bq *bq_head, *bq_tail, *bq_run;            /* under blk_lk */
+volatile int blk_abusy;
+static void bq_done(bq *q, int r) {
+  q->r = r; q->state = BQ_DONE;
+  if (!r) { unsigned long long by = (unsigned long long)q->n * 512; if (q->write) q->b->wr += by; else q->b->rd += by; }
+}
+/* the device's next, while it has none: started, or done there and then */
+static void bq_kick(void) {
+  while (!bq_run && bq_head) {
+    bq *q = bq_head;
+    if (!(bq_head = q->next)) bq_tail = 0;
+    if (q->b->start && !q->b->start(q->b, q->write, q->lba, q->n, q->buf)) { q->state = BQ_RUN; bq_run = q; }
+    else bq_done(q, q->b->rw(q->b, q->write, q->lba, q->n, q->buf) ? -1 : 0);
+  }
+  blk_abusy = bq_run || bq_head;
+}
+/* the running one looked at (WAIT: until it is done): 1 if it is */
+static int bq_look(int wait) {
+  if (!bq_run) return 0;
+  int r = bq_run->b->poll(bq_run->b, wait);
+  if (!r) return 0;
+  bq_done(bq_run, r < 0 ? -1 : 0);
+  bq_run = 0;
+  return 1;
+}
+static void bq_drain(void) { for (bq_kick(); bq_run; bq_kick()) bq_look(1); }
+/* an engine's boundary while there are any: the device's done one taken
+ * and the next started. Another processor with the lock: next time */
+void blk_apump(void) {
+  if (__atomic_exchange_n(&blk_lk, 1, __ATOMIC_ACQUIRE)) return;
+  if (bq_look(0)) bq_kick();
+  blk_drop();
+}
+void dev_blk_hold(int on) { if (on) blk_take(); else blk_drop(); }
+/* BLK_CMD 0x100 on: the command into its slot, and queued */
+static void bq_start(machine *m, blkdev *b, int v) {
+  machine *d = m->dv;
+  int s = v >> 4 & 15, op = v & 15;
+  u32 n = d->blk_nsect, lba = d->blk_lba;
+  if (s >= BLK_ASLOTS || (op != 1 && op != 2)) return;
+  if (!n || n > BLK_MAX_RUN || lba >= b->sectors || n > b->sectors - lba) return;
+  if (op == 2 && (b->flags & 1)) return;
+  if (!d->bq) {
+    d->bq = xmalloc(BLK_ASLOTS * sizeof(bq));
+    for (int i = 0; i < BLK_ASLOTS; i++) d->bq[i].buf = xmalloc(BLK_MAX_RUN * 512);
+  }
+  bq *q = &d->bq[s];
+  if (q->state != BQ_FREE) return;
+  if (op == 2 && dma_read(m, d->blk_addr, n * 512, q->buf) != n * 512) return;
+  q->b = b; q->write = op == 2; q->lba = lba; q->n = n; q->addr = d->blk_addr; q->next = 0; q->r = 0;
+  blk_counts[q->write]++; blk_counts[q->write ? 3 : 2] += n;
+  blk_lock();
+  q->state = BQ_QUEUED;
+  if (bq_tail) bq_tail->next = q; else bq_head = q;
+  bq_tail = q;
+  bq_look(0);
+  bq_kick();
+  blk_drop();
+  d->blk_result = 0;
+}
+/* BLK_CMD 6, 7 (WAIT) and 8 (DROP): machine M's slots */
+static void bq_status(machine *m, int wait, int drop) {
+  machine *d = m->dv;
+  int done[BLK_ASLOTS], nd = 0, busy = 0, bad = 0;
+  d->blk_result = 0;
+  if (!d->bq) return;
+  blk_lock();
+  if (wait) bq_drain();
+  else if (bq_look(0)) bq_kick();
+  for (int i = 0; i < BLK_ASLOTS; i++) {
+    bq *q = &d->bq[i];
+    if (q->state == BQ_QUEUED || q->state == BQ_RUN) busy |= 1 << i;
+    else if (q->state == BQ_DONE) { q->state = BQ_TAKEN; done[nd++] = i; }
+  }
+  blk_drop();
+  /* a read's sectors put where it asked, outside the lock: the memory may
+   * be out, and swap_page takes it to bring it in */
+  for (int k = 0; k < nd; k++) {
+    bq *q = &d->bq[done[k]];
+    if (q->r || (!drop && !q->write && dma_write(m, q->addr, q->buf, q->n * 512) != q->n * 512)) bad |= 1 << done[k];
+    q->state = BQ_FREE;
+  }
+  d->blk_result = busy | bad << 8;
+}
+void dev_blk_forget(machine *m) {
+  if (!m->dv || !m->dv->bq) return;
+  i32 r = m->dv->blk_result;
+  bq_status(m, 1, 1);
+  m->dv->blk_result = r;
+}
 i32 blk_read32(machine *m, u32 a) {
   machine *d = m->dv;
   blkdev *b = d->blk_sel >= 0 && d->blk_sel < d->nblk ? d->blk[d->blk_sel] : 0;
@@ -792,10 +907,12 @@ void blk_write32(machine *m, u32 a, i32 v) {
     case BLK_CMD: break;
     default: return;
   }
+  if (v >= 6 && v <= 8) { bq_status(m, v != 6, v == 8); return; }
   blkdev *b = d->blk_sel >= 0 && d->blk_sel < d->nblk ? d->blk[d->blk_sel] : 0;
   d->blk_result = -1;
   if (!b) return;
-  if (v == 3) { d->blk_result = b->flush ? b->flush(b) : 0; return; }
+  if (v == 3) { blk_take(); d->blk_result = b->flush ? b->flush(b) : 0; blk_drop(); return; }
+  if (v & 0x100) { bq_start(m, b, v); return; }
   if (v != 1 && v != 2) return;
   u32 n = d->blk_nsect, lba = d->blk_lba, addr = d->blk_addr;
   if (!n || n > BLK_MAX_RUN || lba >= b->sectors || n > b->sectors - lba) return;

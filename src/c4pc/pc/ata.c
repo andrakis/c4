@@ -41,6 +41,7 @@ static void pci_wr(u32 bus, u32 dev, u32 fn, u32 off, u32 v) {
   outl(0xCF8, 0x80000000u | bus << 16 | dev << 11 | fn << 8 | (off & 0xfc));
   outl(0xCFC, v);
 }
+static u8 *a_buf; static u32 *a_prd;
 /* the controller of the legacy ports (1F0h, 170h), if it has a bus
  * master: what to say on the console, 0 if none (PIO, then) */
 const char *ide_pci_init(void) {
@@ -56,10 +57,12 @@ const char *ide_pci_init(void) {
            * the bus master in I/O space */
           if ((cls & 0x0500) || !(bar & 1) || !(bar & ~3u)) return 0;
           pci_wr(bus, dev, fn, 4, pci_rd(bus, dev, fn, 4) | 5);    /* I/O, bus master */
-          u8 *raw = xmalloc(3 * 65536);
+          u8 *raw = xmalloc(5 * 65536);
           ide_dma_buf = (u8 *)(((uintptr_t)raw + 65535) & ~(uintptr_t)65535);
           ide_prd = (u32 *)(ide_dma_buf + 65536);               /* 8 bytes, aligned, past the buffer */
-          if ((uintptr_t)ide_dma_buf + 2 * 65536 > 0xFFFFFFFFu) return 0;
+          a_prd = (u32 *)(ide_dma_buf + 65536 + 64);           /* ... and the queue's table, 16 */
+          a_buf = ide_dma_buf + 2 * 65536;                      /* the queue's 128 KB (start, below) */
+          if ((uintptr_t)ide_dma_buf + 4 * 65536 > 0xFFFFFFFFu) { a_buf = 0; return 0; }
           ide_bm[0] = bar & ~3u; ide_bm[1] = (bar & ~3u) + 8;
           return "the IDE controller's DMA";
         }
@@ -97,12 +100,8 @@ static void cmd(ata *d, u32 lba, u32 n, int write) {
     outb(d->io + 7, d->mult > 1 ? (write ? 0xC5 : 0xC4) : (write ? 0x30 : 0x20));
   }
 }
-/* K sectors (to 128) at LBA by DMA: 0, or -1 */
-static int rw_dma(ata *d, int write, u32 lba, u32 k, u8 *buf) {
-  int ch = d->io == 0x170 ? 1 : 0;
-  if (wait(d, 0)) return -1;
-  if (write) memcpy(ide_dma_buf, buf, k * 512);
-  ide_dma_arm(ch, k * 512, !write);
+/* READ or WRITE DMA (EXT) of K sectors at LBA: K to 256, 0 is 256 in LBA28's count */
+static void dma_cmd(ata *d, u32 lba, u32 k, int write) {
   if (d->lba48) {
     outb(d->io + 6, (u8)(0x40 | d->slave << 4));
     outb(d->io + 2, (u8)(k >> 8)); outb(d->io + 3, (u8)(lba >> 24)); outb(d->io + 4, 0); outb(d->io + 5, 0);
@@ -114,6 +113,14 @@ static int rw_dma(ata *d, int write, u32 lba, u32 k, u8 *buf) {
     outb(d->io + 3, (u8)lba); outb(d->io + 4, (u8)(lba >> 8)); outb(d->io + 5, (u8)(lba >> 16));
     outb(d->io + 7, write ? 0xCA : 0xC8);                /* WRITE / READ DMA */
   }
+}
+/* K sectors (to 128) at LBA by DMA: 0, or -1 */
+static int rw_dma(ata *d, int write, u32 lba, u32 k, u8 *buf) {
+  int ch = d->io == 0x170 ? 1 : 0;
+  if (wait(d, 0)) return -1;
+  if (write) memcpy(ide_dma_buf, buf, k * 512);
+  ide_dma_arm(ch, k * 512, !write);
+  dma_cmd(d, lba, k, write);
   if (ide_dma_run(ch, !write, 10000)) return -1;
   if (wait(d, 0)) return -1;
   if (!write) memcpy(buf, ide_dma_buf, k * 512);
@@ -153,6 +160,61 @@ static int rw_(blkdev *b, int write, u32 lba, u32 n, u8 *buf) {
   }
   return 0;
 }
+/* ---- a command that does not wait (dev.c's queue: one at a time) ----
+ * Up to 256 sectors, the 128 KB in one DMA command, from a buffer and a
+ * table of its own (two 64 KB entries; ide_dma_buf is the CD's and the
+ * waiting commands'): started, and left to the controller while the
+ * processor goes back to its machines. poll finds the bus master stopped
+ * or the device's interrupt, and the drive no longer busy. A failed one
+ * is done again by rw, by PIO (DMA given up, as rw_ does) */
+static ata *a_d; static int a_write; static u8 *a_dst; static u32 a_lba, a_n, a_polls; static i64 a_t0;
+static int start(blkdev *b, int write, u32 lba, u32 n, u8 *buf) {
+  ata *d = (ata *)b;
+  u32 bm = ide_bm[d->io == 0x170 ? 1 : 0], len = n * 512;
+  if (!d->dma || !a_buf || !bm || !n || n > 256 || a_d) return -1;
+  if (wait(d, 0)) return -1;
+  if (write) memcpy(a_buf, buf, len);
+  a_prd[0] = (u32)(uintptr_t)a_buf;
+  if (len > 65536) {
+    a_prd[1] = 0;                                        /* 64 KB */
+    a_prd[2] = (u32)(uintptr_t)a_buf + 65536;
+    a_prd[3] = ((len - 65536) & 0xFFFF) | 0x80000000u;   /* the table's end */
+  } else a_prd[1] = (len & 0xFFFF) | 0x80000000u;
+  outb(bm, 0);
+  outl(bm + 4, (u32)(uintptr_t)a_prd);
+  outb(bm + 2, (u8)(inb(bm + 2) | 6));                   /* the interrupt and error bits cleared */
+  outb(bm, write ? 0 : 8);
+  dma_cmd(d, lba, n, write);
+  outb(bm, (u8)((write ? 0 : 8) | 1));                   /* started */
+  a_d = d; a_write = write; a_dst = buf; a_lba = lba; a_n = n; a_t0 = plat_now_ms();
+  return 0;
+}
+static int poll(blkdev *b, int block) {
+  ata *d = a_d;
+  if (!d) return -1;
+  u32 bm = ide_bm[d->io == 0x170 ? 1 : 0];
+  int r = 0;
+  for (;;) {
+    u8 s = inb(bm + 2);
+    if (s & 2) { r = -1; break; }                        /* the bus master's error */
+    if (!(s & 1) || (s & 4)) {                           /* no longer active, or the device's done */
+      u8 st = inb(d->io + 7);
+      if (!(st & 0x80)) { if (st & 0x21) r = -1; break; }
+    }
+    /* the clock every 64th look: the TSC, a trip out of VirtualBox each */
+    if (!(++a_polls & 63) && plat_now_ms() - a_t0 > 10000) { r = -1; break; }
+    if (!block) return 0;
+    io_pause();
+  }
+  outb(bm, a_write ? 0 : 8);                             /* the bus master stopped */
+  a_d = 0;
+  if (r) { d->dma = 0; return rw(b, a_write, a_lba, a_n, a_write ? a_buf : a_dst) ? -1 : 1; }
+  if (!a_write) memcpy(a_dst, a_buf, a_n * 512);
+  unsigned long long by = (unsigned long long)a_n * 512;
+  if (a_write) { b->io_wr += by; ata_io_wr += by; } else { b->io_rd += by; ata_io_rd += by; }
+  return 1;
+}
+
 static int flush(blkdev *b) {
   ata *d = (ata *)b;
   if (wait(d, 0)) return -1;
@@ -215,7 +277,7 @@ blkdev *ata_one(u32 io, int slave) {
   ata *d = xmalloc(sizeof *d);
   d->io = io; d->ctl = io == 0x1F0 ? 0x3F6 : 0x376; d->slave = slave;
   if (!identify(d)) { xfree(d); return 0; }
-  d->b.rw = rw; d->b.flush = flush; d->b.ctx = d;
+  d->b.rw = rw; d->b.flush = flush; d->b.start = start; d->b.poll = poll; d->b.ctx = d;
   return &d->b;
 }
 
@@ -230,7 +292,7 @@ int ata_find(blkdev **blks, int *n, int max, u32 skip_io, int skip_slave) {
       ata *d = xmalloc(sizeof *d);
       d->io = ports[ch][0]; d->ctl = ports[ch][1]; d->slave = s;
       if (!identify(d)) { xfree(d); continue; }
-      d->b.rw = rw; d->b.flush = flush; d->b.ctx = d;
+      d->b.rw = rw; d->b.flush = flush; d->b.start = start; d->b.poll = poll; d->b.ctx = d;
       blks[(*n)++] = &d->b;
       found++;
     }

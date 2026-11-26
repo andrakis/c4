@@ -173,6 +173,125 @@ int blk_flush(int id) {
     return r;
 }
 
+// ---- commands that do not wait (c4pc: dev.c's queue) ----
+//
+// A command in one of BLK_ASLOTS slots (BLK_CMD 0x100 | S << 4 | 1 to
+// read, 2 to write) is the kernel's to forget as the write that starts it
+// returns: the PC's disk moves the sectors by DMA meanwhile, and this CPU
+// and the kernel's lock go on with the rest -- where a command that waits
+// polled the disk to its end, with the lock held, a quarter of vm
+// mkdisk's processor. A write's sectors are copied as it starts, so its
+// buffer is free again at once; a read's are in its buffer once a look
+// (BLK_CMD 6, or 7, which waits first) finds its slot no longer busy.
+// Every other command waits for them all (c4pc does them in order). The
+// slots are the kernel's to hand out, a_owner the task each is for. A file,
+// a guest's disk: done as it starts, and the same calls serve. A machine
+// without them (libjs): 8 refused, blk_async 0, and the plain ways.
+enum { BLK_ASLOTS = 4, A_FREE = 0, A_BUSY = 1, A_DONE = 2, A_FAILED = 3 };
+static int a_on;                // 0 not asked yet, 1 the machine has them, -1 not
+static int a_state[BLK_ASLOTS];
+static int a_owner[BLK_ASLOTS];
+static int a_busy;              // the busy slots, a bit each
+
+// the busy ones looked at (WAIT: once none is), those done made A_DONE or
+// A_FAILED. Under blk_lk
+static void a_look(int wait) {
+    int r, s;
+    if (!a_busy) return;
+    *(int *)BLK_CMD = wait ? 7 : 6;
+    r = *(int *)BLK_CMD;
+    if (r < 0) return;
+    s = 0;
+    while (s < BLK_ASLOTS) {
+        if ((a_busy >> s & 1) && !(r >> s & 1)) {
+            a_state[s] = (r >> (8 + s) & 1) ? A_FAILED : A_DONE;
+            a_busy = a_busy & ~(1 << s);
+        }
+        ++s;
+    }
+}
+int blk_async() {
+    int r;
+    if (a_on) return a_on > 0;
+    if (!disk_count()) return 0;          // asked again once there are disks
+    klock_take(blk_lk);
+    *(int *)BLK_CMD = 8;                  // what a kernel before this one left: dropped
+    r = *(int *)BLK_CMD;
+    klock_drop(blk_lk);
+    a_on = r == 0 ? 1 : 0 - 1;
+    return a_on > 0;
+}
+int blk_astart(int id, int lba, int n, char *buf, int write, int max) {
+    int d, s, k, i, mine, me, r;
+    if (a_on <= 0 && !blk_async()) return 0 - 1;
+    if (n < 1 || n > BLK_RUN || lba < 0 || dev_split(id, &d, &s) < 0) return 0 - 1;
+    if (s >= 0) {
+        if (lba + n > p_len[s] || lba + n < lba) return 0 - 1;    // a partition's never leave it
+        lba = p_start[s] + lba;
+    }
+    me = (int)sched_current();
+    r = 0 - 1;
+    klock_take(blk_lk);
+    k = 0 - 1;
+    mine = 0;
+    i = 0;
+    while (i < BLK_ASLOTS) {
+        if (a_state[i] == A_FREE) { if (k < 0) k = i; }
+        else if (a_owner[i] == me) ++mine;
+        ++i;
+    }
+    if (k >= 0 && mine < max) {
+        *(int *)BLK_SEL = d;
+        *(int *)BLK_LBA = lba;
+        *(int *)BLK_NSECT = n;
+        *(int *)BLK_ADDR = (int)buf;
+        *(int *)BLK_CMD = 0x100 | k << 4 | (write ? 2 : 1);
+        if (*(int *)BLK_CMD == 0) {
+            a_state[k] = A_BUSY;
+            a_owner[k] = me;
+            a_busy = a_busy | 1 << k;
+            r = k;
+        }
+    }
+    klock_drop(blk_lk);
+    return r;
+}
+int blk_adone(int s, int wait) {
+    int st;
+    klock_take(blk_lk);
+    if (a_state[s] == A_BUSY) a_look(wait);
+    st = a_state[s];
+    if (st != A_BUSY) { a_state[s] = A_FREE; a_owner[s] = 0; }
+    klock_drop(blk_lk);
+    if (st == A_BUSY) return 0;
+    return st == A_DONE ? 1 : 0 - 1;
+}
+int blk_aheld(int t, int wait, int *failed) {
+    int i, n;
+    *failed = 0;
+    if (a_on <= 0) return 0;
+    klock_take(blk_lk);
+    n = 0;
+    i = 0;
+    while (i < BLK_ASLOTS) { if (a_state[i] == A_BUSY && a_owner[i] == t) n = 1; ++i; }
+    if (n) a_look(wait);
+    n = 0;
+    i = 0;
+    while (i < BLK_ASLOTS) {
+        if (a_state[i] != A_FREE && a_owner[i] == t) {
+            if (a_state[i] == A_BUSY) ++n;
+            else {
+                if (a_state[i] == A_FAILED) *failed = 1;
+                a_state[i] = A_FREE;
+                a_owner[i] = 0;
+            }
+        }
+        ++i;
+    }
+    klock_drop(blk_lk);
+    return n;
+}
+
 // SYS_BLKIO: COUNT sectors at LBA of device ID to or from a user task's
 // BUF (install.c: the MBR, the boot loader, the boot partition's files),
 // through the kernel's own buffer, since a user task's address is not

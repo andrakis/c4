@@ -185,6 +185,7 @@ static int xmap_cd_rd(void *ctx, u32 lba, u32 n, u8 *buf) { return xmap_rw(ctx, 
 static void release(vm *v) {
   machine *m = v->m;
   if (!m || !m->u8) return;
+  dev_blk_forget(m);
   net_detach(m);
   xfree(m->u8); m->u8 = 0;
   if (m->gui) { extern void gui_release(gui *g); gui_release(m->gui); m->gui = 0; }

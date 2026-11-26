@@ -431,6 +431,7 @@ void task_drop_image(struct task *t) {
 // the kernel is standing somewhere else. (C4KE learned the same
 // lesson: its idle task reaps zombies for exactly this reason.)
 void task_release(struct task *t) {
+    sys_steps_end(t);
     sched_lock();
     task_last_syscalls = t->nsyscalls;
     task_remember(t);

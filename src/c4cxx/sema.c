@@ -1248,6 +1248,16 @@ static int method_call (Node *n)
 	return 1;
 }
 
+// an operand's type as arithmetic takes it: C promotes a bit-field
+// narrower than int to int, unsigned or not (as c4lc's values are)
+static Ty *operand_ty (Node *n)
+{
+	Ty *t = decay (n->ty);
+	if (n->bitfield && is_integer (t) && t->size <= 4 && n->bitfield - 1 < 32)
+		return ty_int;
+	return t;
+}
+
 static void binary (Node *n)
 {
 	Token *op = n->op;
@@ -1256,8 +1266,8 @@ static void binary (Node *n)
 	long long a, b;
 	expr (n->lhs);
 	expr (n->rhs);
-	l = decay (n->lhs->ty);
-	r = decay (n->rhs->ty);
+	l = operand_ty (n->lhs);
+	r = operand_ty (n->rhs);
 	if (equal (op, "&&") || equal (op, "||") || equal (op, "==") || equal (op, "!=") ||
 	    equal (op, "<") || equal (op, ">") || equal (op, "<=") || equal (op, ">=")) {
 		n->ty = ty_int;
@@ -1321,7 +1331,7 @@ static void binary (Node *n)
 
 static Ty *cond_type (Node *n)
 {
-	Ty *a = decay (n->then->ty), *b = decay (n->els->ty);
+	Ty *a = operand_ty (n->then), *b = operand_ty (n->els);
 	if (opt_cplusplus && a->kind == T_ENUM && same_type (a, b)) {
 		// C++: the enum (evPost (..., c ? COMMAND_ID_1 : COMMAND_ID_0));
 		// C's int, for enumerators, is what gcc would say
@@ -1508,7 +1518,7 @@ static void member (Node *n)
 	}
 	n->ty = qualified (f->ty, o->qual & (Q_CONST | Q_VOLATILE));
 	n->lvalue = 1;
-	n->bitfield = f->bit_width >= 0;
+	n->bitfield = f->bit_width >= 0 ? f->bit_width + 1 : 0;	// its width, plus one
 	if (opt_cplusplus)
 		deref_ref (n);
 }
@@ -1794,6 +1804,8 @@ static void expr (Node *n)
 		expr (n->lhs);
 		expr (n->rhs);
 		n->ty = unqualified (n->lhs->ty);
+		// gcc types an assignment to a bit-field as the field: no typeof
+		n->bitfield = n->lhs->bitfield;
 		if (opt_cplusplus && equal (n->op, "="))
 			conv (n->rhs, n->ty);
 		return;
@@ -1831,8 +1843,9 @@ static void expr (Node *n)
 			if (n->lhs->is_const) { n->is_const = 1; n->val = !n->lhs->val; n->cvar = n->lhs->cvar; }
 		} else if (equal (n->op, "++") || equal (n->op, "--")) {
 			n->ty = unqualified (t);
+			n->bitfield = n->lhs->bitfield;
 		} else {
-			n->ty = is_arith (t) ? promote (t) : unqualified (decay (t));
+			n->ty = is_arith (t) ? promote (operand_ty (n->lhs)) : unqualified (decay (t));
 			n->cvar = n->lhs->cvar;
 			if (n->lhs->is_const && is_integer (n->ty)) {
 				long long v = n->lhs->val;
@@ -1850,6 +1863,7 @@ static void expr (Node *n)
 		}
 		expr (n->lhs);
 		n->ty = unqualified (n->lhs->ty);
+		n->bitfield = n->lhs->bitfield;
 		return;
 	case ND_CAST:
 		if (n->functional && class_of (type_name_type (n->decl))) {
@@ -2633,7 +2647,7 @@ static Ty *record (Spec *sp)
 		return rec;
 	if (kind == T_ENUM) {
 		Enumer *e;
-		long long v = 0;
+		long long v = 0, lo = 0, hi = 0;
 		int neg = 0;
 		for (e = sp->enumers; e; e = e->next) {
 			Sym *y;
@@ -2644,9 +2658,20 @@ static Ty *record (Spec *sp)
 			e->val = v;
 			if (v < 0)
 				neg = 1;
+			if (e == sp->enumers || v < lo)
+				lo = v;
+			if (e == sp->enumers || v > hi)
+				hi = v;
 			v++;
 		}
 		rec->is_unsigned_enum = !neg;
+		if (opt_short_enums) {
+			// gcc -fshort-enums (Watcom's enums): the smallest type that holds
+			// the values, unsigned when none is negative
+			int s = !neg ? (hi <= 255 ? 1 : hi <= 65535 ? 2 : 4)
+			             : (lo >= -128 && hi <= 127 ? 1 : lo >= -32768 && hi <= 32767 ? 2 : 4);
+			rec->size = rec->align = s;
+		}
 		return rec;
 	}
 	if (opt_cplusplus) {

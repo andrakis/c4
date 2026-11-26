@@ -10,12 +10,15 @@
 # src/c4cxx/tests/m_*/ of units linked in their names' order (which the
 # order their globals are built in follows). The runtime is linked in each
 # way: tests/rt-gxx.cpp for g++ (new, delete), rt/libc4cxx.c for c4cxx's C.
+# A src/c4cxx/tests/w_*.cpp has Watcom's layouts, as Blood's host build:
+# -fshort-enums -mms-bitfields -funsigned-char for g++, c4cxx and gcc, and
+# no c4lc run (c4lc has -mms-bitfields only, so far).
 # From the c4 tree's root, with c4cxx, c4sc-host32, c4m32 and c4rlink32 built.
 LC=${C4CXX_LC:-./c4sc-host32}
 R=src/c4cxx
 T=$(mktemp -d)
 trap 'rm -rf $T' EXIT
-progs=${*:-$(ls -d $R/tests/t_*.cpp $R/tests/m_*/)}
+progs=${*:-$(ls -d $R/tests/t_*.cpp $R/tests/w_*.cpp $R/tests/m_*/)}
 n=0 bad=0
 mkdir $T/rt
 if ! { g++ -m32 -std=gnu++98 -fno-exceptions -fno-rtti -nostdinc++ -w -c -o $T/rt/rt-gxx.o $R/tests/rt-gxx.cpp &&
@@ -30,20 +33,21 @@ for p in $progs; do
 	fail () { echo "FAIL $b: $1"; bad=$((bad + 1)); }
 	mkdir $T/$b
 	ok=1 gxx= cs= c4s=
+	case $b in w_*) xf="-fshort-enums -mms-bitfields -funsigned-char" lc= ;; *) xf= lc=1 ;; esac
 	for u in $units; do
 		v=$(basename $u .cpp)
 		# linked by gcc: there is no 32-bit libstdc++ here, and no need of one
-		if ! g++ -m32 -std=gnu++98 -fno-exceptions -fno-rtti -nostdinc++ -w -c -o $T/$b/$v.o $u 2> $T/$b/$v.gxx; then
+		if ! g++ -m32 -std=gnu++98 -fno-exceptions -fno-rtti -nostdinc++ -w $xf -c -o $T/$b/$v.o $u 2> $T/$b/$v.gxx; then
 			fail "g++ rejects $v: $(head -1 $T/$b/$v.gxx)"; ok=0; break
 		fi
-		if ! ./c4cxx -o $T/$b/$v.c $u 2> $T/$b/$v.err; then
+		if ! ./c4cxx $xf -o $T/$b/$v.c $u 2> $T/$b/$v.err; then
 			fail "c4cxx: $(head -1 $T/$b/$v.err)"; ok=0; break
 		fi
-		if ! { ./c4cxx -check-types -o $T/$b/$v.t.c $u &&
-		       gcc -m32 -std=gnu11 -fsyntax-only -fpermissive -w -fno-builtin $T/$b/$v.t.c; } > $T/$b/$v.terr 2>&1; then
+		if ! { ./c4cxx $xf -check-types -o $T/$b/$v.t.c $u &&
+		       gcc -m32 -std=gnu11 -fsyntax-only -fpermissive -w -fno-builtin $xf $T/$b/$v.t.c; } > $T/$b/$v.terr 2>&1; then
 			fail "gcc does not confirm c4cxx's types in $v: $(grep -m1 error $T/$b/$v.terr)"; ok=0; break
 		fi
-		if ! $LC compile -P -c $T/$b/$v.c $T/$b/$v.c4o > $T/$b/$v.lc 2>&1; then
+		if [ -n "$lc" ] && ! $LC compile -P -c $T/$b/$v.c $T/$b/$v.c4o > $T/$b/$v.lc 2>&1; then
 			fail "c4lc rejects c4cxx's C of $v: $(grep -v '^;;' $T/$b/$v.lc | head -1)"; ok=0; break
 		fi
 		gxx="$gxx $T/$b/$v.o" cs="$cs $T/$b/$v.c" c4s="$c4s $T/$b/$v.c4o"
@@ -53,13 +57,14 @@ for p in $progs; do
 		fail "g++'s objects do not link: $(head -1 $T/$b/ld)"; continue
 	fi
 	$T/$b/ref > $T/$b/ref.out 2>&1
-	if ! gcc -m32 -std=gnu99 -w -o $T/$b/gcc $cs $T/rt/libc4cxx.o 2> $T/$b/gccerr; then
+	if ! gcc -m32 -std=gnu99 -w $xf -o $T/$b/gcc $cs $T/rt/libc4cxx.o 2> $T/$b/gccerr; then
 		fail "gcc rejects c4cxx's C: $(grep -m1 error $T/$b/gccerr)"; continue
 	fi
 	$T/$b/gcc > $T/$b/gcc.out 2>&1
 	if ! cmp -s $T/$b/ref.out $T/$b/gcc.out; then
 		fail "c4cxx+gcc prints otherwise than g++:"; diff $T/$b/ref.out $T/$b/gcc.out | head -10; continue
 	fi
+	[ -n "$lc" ] || continue
 	if ! ./c4rlink32 $c4s $T/rt/libc4cxx.c4o -o $T/$b/prog.c4r > $T/$b/link 2>&1; then
 		fail "c4rlink: $(head -1 $T/$b/link)"; continue
 	fi

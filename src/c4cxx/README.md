@@ -350,6 +350,52 @@ c4cxx's output:
 - **Parameters of function type** (5 units): mact's `control.h` declares
   `CONTROL_CenterJoystick (void CenterCenter (void), ...)`.
 
+## State: M6, first part (2026-11-27)
+
+All 80 of Blood's C++ units translate, and both gcc `-m32` and c4lc
+compile every one (`blood-units.sh -compile`, now in `make test-c4cxx`).
+What it took:
+
+- **In c4lc and c4fc** (their own commits; c4lc-design §14.15 and §14.16):
+  - bit-fields, by gcc's layout and by MSVC's under the new
+    `-mms-bitfields`, which Blood's host build uses (`PICANM`, `XSPRITE`
+    and the rest);
+  - a local's initializer list that sets bit-fields (`EVENT evn = { a1,
+    a2, 0, 0 }`);
+  - pointers to arrays, `byte (*gammaTable)[256]` and its cast;
+  - `extern AISTATE handIdle;` under `-c`, of a struct the unit never
+    defines.
+- **In C4IX's libc** (its own commit): `tmpnam`, which `tile.cpp` calls.
+- **In c4cxx:**
+  - `-fshort-enums`, `-mms-bitfields` and `-funsigned-char`. These are
+    the layouts Blood's host build gives g++, as Watcom had them, so that
+    what c4cxx works out itself (an array's length from a `sizeof`)
+    agrees with gcc's.
+  - A parameter of function type (mact's `control.h`, `void
+    CONTROL_CenterJoystick (void CenterCenter (void), ...)`) is written as
+    the pointer C makes it, which c4lc takes.
+  - A bit-field narrower than `int` promotes to `int` in arithmetic, and
+    an assignment to one, or its `++`, keeps its bit-field mark (gcc gives
+    such an expression no `typeof`).
+
+Tests (`test-cxx.sh`):
+
+- **`t_bits.cpp`**: an `XSPRITE`-shaped struct and a class setting its
+  bit-fields through pointers, compound assignments, `++` and `--`; and
+  parameters of function type.
+- **`w_watcom.cpp`**: Watcom's layouts. Enum sizes (`GAMEOPTIONS`), an
+  `INPUT`-shaped packed struct, a double aligned to 8, array lengths from
+  `sizeof`, unsigned plain `char`. A `w_*.cpp` program has
+  `-fshort-enums -mms-bitfields -funsigned-char` in g++, c4cxx and gcc,
+  and no c4lc run, since c4lc has no `-fshort-enums` or
+  `-funsigned-char` yet.
+
+All 12 programs print as g++ `-m32`'s do.
+
+Still M6: the oracle. Blood built from c4cxx's C by gcc `-m32` must play
+B0's demos with B0's checksums, frame for frame, and the class sizes must
+be checked against g++'s.
+
 ## Files
 
 | file | what |
@@ -368,5 +414,5 @@ c4cxx's output:
 | `test-same.sh`, `run-corpora.sh` | the c4lc oracle and its corpora (`make test-c4cxx`) |
 | `c4odiff.py` | which functions and data differ between two objects |
 | `test-cxx.sh` | C++ programs against g++ (gcc and c4lc), and what c4cxx refuses |
-| `blood-units.sh` | Blood's C++ units through c4cxx (`-parse` by default) |
+| `blood-units.sh` | Blood's C++ units through c4cxx (`-parse` by default; `-compile` with Watcom's layouts, then gcc and c4lc) |
 | `tests/` | the preprocessor's cases, with their output (checked against gcc -E); `t_*.cpp` programs, `m_*/` programs of several units, `e_*.cpp` refusals and `rt-gxx.cpp` (g++'s runtime) for `test-cxx.sh` |

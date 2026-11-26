@@ -2583,7 +2583,8 @@ c4sc-host32: $(C4SC_GEN) $(C4SP_SRCS) src/c4sc/c4sc-host.c src/c4sc/body.h \
 # C++ programs printing as g++ -m32's do, through gcc and through c4lc on
 # c4m32 (linked with src/c4cxx/rt/libc4cxx.c by c4rlink32), and what c4cxx
 # refuses (src/c4cxx/test-cxx.sh); and Blood's C++
-# units parsing, when c4-Blood is there (src/c4cxx/blood-units.sh).
+# units translated with Watcom's layouts and compiled by gcc and by c4lc, when
+# c4-Blood is there (src/c4cxx/blood-units.sh -compile).
 # C4CXX_LC is the c4lc it holds c4cxx to.
 C4CXX_SRCS := $(wildcard src/c4cxx/*.c)
 C4CXX_LC ?= ./c4sc-host32
@@ -2598,7 +2599,7 @@ test-c4cxx: c4cxx c4m32 c4rlink32
 	C4LC32=$(C4CXX_LC) src/c4cxx/run-corpora.sh -C
 	C4LC32=$(C4CXX_LC) src/c4cxx/run-corpora.sh -T
 	C4CXX_LC=$(C4CXX_LC) src/c4cxx/test-cxx.sh
-	if [ -d $${BLOOD_DIR:-$$HOME/git/games/c4-blood}/source/blood ]; then src/c4cxx/blood-units.sh -parse; fi
+	if [ -d $${BLOOD_DIR:-$$HOME/git/games/c4-blood}/source/blood ]; then src/c4cxx/blood-units.sh -compile; fi
 PHONY += test-c4cxx
 
 # 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the

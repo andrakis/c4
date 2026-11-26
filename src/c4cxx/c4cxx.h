@@ -75,6 +75,10 @@ int is_ident_char (int c);
 
 // ---- pp.c ----
 extern int opt_cplusplus;
+// main.c (M6): the layouts Blood's host build gives gcc, as Watcom had them
+extern int opt_short_enums;	// -fshort-enums: an enum the smallest type that holds it
+extern int opt_ms_bitfields;	// -mms-bitfields: MSVC's bit-field units
+extern int opt_unsigned_char;	// -funsigned-char
 void pp_add_include_path (const char *dir);
 void pp_add_c_include_path (const char *dir);	// -isystem: headers of C
 void pp_define (const char *spec);		// NAME or NAME=VALUE

@@ -140,7 +140,7 @@ struct Node {
 	// sema
 	struct Ty *ty;		// the expression's type, before arrays decay
 	int lvalue;
-	int bitfield;		// a bit-field member
+	int bitfield;		// a bit-field member: its width plus one
 	int is_const;		// an integer constant expression, of value val
 	long long val;
 	int implicit;		// ND_CALL: of a function declared by the call

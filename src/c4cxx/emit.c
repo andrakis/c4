@@ -102,10 +102,19 @@ static char *params_str (Type *f)
 	}
 	for (p = f->params; p; p = p->next) {
 		char *d;
+		Type fp = { TY_PTR };
+		Type *pt = p->type;
 		if (p != f->params)
 			put (", ");
 		spec (p->spec);
-		d = declarator_str (p->type, p->name ? xstrndup (p->name->loc, p->name->len) : "");
+		// C++ (M6): a parameter of function type is the pointer C makes it,
+		// written so: c4lc takes `void f (void g (void))` no other way
+		// (mact's control.h)
+		if (opt_cplusplus && pt && pt->kind == TY_FUNC) {
+			fp.base = pt;
+			pt = &fp;
+		}
+		d = declarator_str (pt, p->name ? xstrndup (p->name->loc, p->name->len) : "");
 		if (*d) {
 			put (" ");
 			put (d);

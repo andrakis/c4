@@ -3352,8 +3352,12 @@ C4IX_MASK := sed -E -e 's/[0-9]+ cycles/N cycles/g' -e 's/info 0x[0-9a-f]+/info 
 # "C4IX under plain c4" means c4 -> c4m -> C4IX, which is what
 # test-c4ix-c4 below runs. In that chain C4IX sees a c4m host and
 # behaves identically, so it compares against the same pin.
-test-c4ix: c4m c4ix.c4r $(C4IX_PROGS)
+test-c4ix: c4m c4ix.c4r $(C4IX_PROGS) $(C4CC) $(TESTS)/test_ralc.c
 	$(C4M) load-c4r.c -- c4ix.c4r $(C4IX_ARGS) | $(C4IX_MASK) | cmp - $(C4IX_SRC)/tests/x5-c4m.txt
+	@# a C4KE program's realloc, which traps to the kernel (sys.c)
+	$(C4CC) -o .c4ix_ralc.c4r $(U0) $(TESTS)/test_ralc.c
+	$(C4M) load-c4r.c -- c4ix.c4r .c4ix_ralc.c4r | grep -q "^test_ralc: ok$$"
+	@rm -f .c4ix_ralc.c4r
 	@echo "test-c4ix: OK"
 # There are two printf implementations a C4IX program can reach --
 # libc4ix formats in userland, while a raw printf traps and the KERNEL

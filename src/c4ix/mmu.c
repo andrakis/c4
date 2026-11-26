@@ -1056,6 +1056,26 @@ void umem_free(struct task *t, int p) {
     if (r->kind == UR_BLOCK && !mmu_off(r, p)) mmu_release(r);
 }
 
+// How many bytes T's block at P holds -- its slab's block size, or a big
+// block's whole pages -- or -1 when P is not the start of a block of T's
+// heap that is in use: realloc's old size (task_urealloc)
+int umem_size(struct task *t, int p) {
+    struct urgn *r;
+    int i, n;
+    t = mmu_root(t);
+    if (!p || !(r = mmu_rgn(p)) || r->owner != t || !r->heap) return -1;
+    if (r->kind == UR_SLAB) {
+        i = mmu_off(r, p) / r->size;
+        if (i * r->size != mmu_off(r, p)) return -1;
+        klock_take(mmu_ulock);
+        n = (r->used[i >> 5] & (1 << (i & 31))) ? r->size : -1;
+        klock_drop(mmu_ulock);
+        return n;
+    }
+    if (r->kind == UR_BLOCK && !mmu_off(r, p)) return r->npages * MMU_PAGE;
+    return -1;
+}
+
 // T's heap, at its end or its execve (task_drop_image): its blocks, the
 // chunks and slabs its small ones came from, and its entry page. Its
 // image, stack and arguments are freed by name. ALL: everything it still

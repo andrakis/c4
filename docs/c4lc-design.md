@@ -378,6 +378,15 @@ battery green and adds its own target.
   splices the two spellings and re-lexes the result, so it can
   produce an identifier, a number or an operator without the
   preprocessor knowing which in advance.
+  The spellings are the source's (since 2026-11-27, found by c4cxx's
+  byte-identical oracle): under -P the lexer keeps each literal's
+  spelling and whether white space came before each token. So `#`
+  gives what C and gcc give -- a string or character constant keeps
+  its quotes, a number its base and suffix, and there is one space
+  where the source had white space and none elsewhere (Duke's
+  `assert(stricmp(kind, "*.MAP") == 0)`) -- and `c##ULL` of
+  0xfffffffff, a wide number at 32 bits whose value has no spelling,
+  re-lexes as 0xfffffffffULL. c4fc's lexer keeps the same two things.
   A wrinkle worth recording: `#if` and `#else` lex as C KEYWORDS, not
   identifiers, so the directive dispatcher maps them back -- without
   that both silently do nothing and every `#endif` looks unbalanced.

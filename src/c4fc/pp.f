@@ -115,7 +115,7 @@ VARIABLE PPOUT                           \ where survivors go
 \ macro's own expansion has been fully rescanned and it may expand again.
 : MARK ( m -- t ) {: m | t -- t :}
    TOK ALLOT: TO t  EndMac t t.kind !  m t t.val !
-   0 t t.len !  0 t t.line !  0 t t.adj !  0 t t.file !  t ;
+   0 t t.len !  0 t t.line !  0 t t.adj !  0 t t.file !  0 t t.su !  t ;
 : PP-UNMARK ( t -- )  t.val @ ?DUP IF 0 SWAP m.busy ! THEN ;
 : PP-SETTLE ( -- )                       \ retire any markers on top
    BEGIN PP# 0> IF PP-TOP t.kind @ EndMac = ELSE 0 THEN WHILE
@@ -158,10 +158,24 @@ SPELL Switch switch   SPELL Case case      SPELL Default default
 SPELL Do do      SPELL Attribute __attribute__
 SPELL Constructor constructor  SPELL Destructor destructor
 
+\ a string's value as a literal: in quotes, its " and \ escaped
+: PP-QUOTE ( a u -- a' u' ) {: a u | d n c -- a' u' :}
+   u 2* 2 + ALLOT: TO d   34 d C!  1 TO n
+   u 0 ?DO
+      a I + C@ TO c
+      c 34 = c 92 = OR IF 92 d n + C!  n 1+ TO n THEN
+      c d n + C!  n 1+ TO n
+   LOOP
+   34 d n + C!  d n 1+ ;
+\ A literal is spelled as the source spelled it (t.sa/t.su, lex.f): a
+\ string or character constant with its quotes, a number in its own base
+\ with its suffix. Only one pp made itself (# and __LINE__, __FILE__)
+\ is spelled from its value -- c4lc-pp.lisp's pp:spell.
 : PP-SPELL ( t -- a u ) {: t | k -- a u :}
+   t t.su @ IF t t.sa @ t t.su @ EXIT THEN
    t t.kind @ TO k
    k Id  = IF t t.val @ t t.len @ EXIT THEN
-   k Str = IF t t.val @ t t.len @ EXIT THEN
+   k Str = IF t t.val @ t t.len @ PP-QUOTE EXIT THEN
    k NUMK? IF t t.val @ N>TEXT EXIT THEN
    k CELLS SPOFF + @ SPBUF +  k CELLS SPLEN + @ ;
 
@@ -170,16 +184,21 @@ CREATE SPL 8192 ALLOT   VARIABLE SPLN
 : SPL+ ( a u -- )
    DUP SPLN @ + 8192 > IF ." c4fc: stringize buffer full" CR ABORT THEN
    DUP >R  SPL SPLN @ +  SWAP MOVE  R> SPLN +! ;
-\ Space-separated, which is what cpp does for the shapes that occur in
-\ a macro argument; its full whitespace rule is subtler and unused here.
+\ #x: one space wherever the source had white space between two of the
+\ argument's tokens, none elsewhere (C 6.10.3.2, and gcc). A literal's
+\ spelling goes in as it is, quotes and backslashes too: the string's
+\ VALUE is that text.
 : PP-SPELL-LIST ( v -- a u ) {: v -- a u :}
    SPL-RESET
-   v V# 0 ?DO  I 0> IF S"  " SPL+ THEN  I v V@ PP-SPELL SPL+  LOOP
+   v V# 0 ?DO
+      I 0> IF I v V@ t.adj @ ADJ-WHITE AND IF S"  " SPL+ THEN THEN
+      I v V@ PP-SPELL SPL+
+   LOOP
    SPL SPLN @ PP-STR ;
 : STR-TOK ( a u t -- t' ) {: a u t | n -- n :}   \ a Str token at t's place
    TOK ALLOT: TO n
    Str n t.kind !  a n t.val !  u n t.len !
-   t t.line @ n t.line !  0 n t.adj !  t t.file @ n t.file !  n ;
+   t t.line @ n t.line !  0 n t.adj !  t t.file @ n t.file !  0 n t.su !  n ;
 \ a ## b: splice the spellings and lex the result, which is how a paste
 \ can make an identifier, a number or an operator without pp knowing
 \ which it made.
@@ -576,7 +595,7 @@ VARIABLE PP-PVAR
    i v V@ t.kind @ Dot =  i 1+ v V@ t.kind @ Dot = AND  i 2 + v V@ t.kind @ Dot = AND ;
 : VA-TOK ( t -- t' ) {: t | n -- n :}         \ an Id __VA_ARGS__ at t's place
    t TOK-COPY TO n
-   Id n t.kind !  S" __VA_ARGS__" PP-STR n t.len ! n t.val !  0 n t.adj !  n ;
+   Id n t.kind !  S" __VA_ARGS__" PP-STR n t.len ! n t.val !  0 n t.adj !  0 n t.su !  n ;
 : PP-PARAMS ( v i -- params i' ) {: v i | ps t k -- ps i :}
    16 NEW-VEC TO ps   0 PP-PVAR !
    BEGIN i v V# < WHILE
@@ -600,7 +619,7 @@ VARIABLE PP-PVAR
    v V# 0= IF ." c4fc: #define needs a name" CR ABORT THEN
    0 v V@ TO n
    n t.kind @ Id <> IF ." c4fc: #define needs a name" CR ABORT THEN
-   n t.adj @ IF
+   n t.adj @ ADJ-PAREN AND IF
       v 2 PP-PARAMS TO i TO ps
       n t.val @ n t.len @ ps  v i V-TAIL MAC-DEF
       PP-PVAR @  MACROS DUP V# 1- SWAP V@  m.var !
@@ -685,7 +704,7 @@ CREATE IPATH 1024 ALLOT
    ex V# 0= IF ." c4fc: #include needs a file" CR ABORT THEN
    0 ex V@ TO n
    n t.kind @ Str <> IF ." c4fc: #include needs a quoted name or a bracketed one" CR ABORT THEN
-   n t.val @ n t.len @ n t.adj @ PP-RESOLVE PP-LEX-INCLUDE V-NOEOF PP-PUSHV ;
+   n t.val @ n t.len @ n t.adj @ ADJ-PAREN AND PP-RESOLVE PP-LEX-INCLUDE V-NOEOF PP-PUSHV ;
 
 CDIRECTIVE ifdef   D-IFDEF
 CDIRECTIVE ifndef  D-IFNDEF

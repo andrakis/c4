@@ -2561,6 +2561,33 @@ c4sc-host32: $(C4SC_GEN) $(C4SP_SRCS) src/c4sc/c4sc-host.c src/c4sc/body.h \
              src/c4sc/host.h src/c4sc/scrt.h src/c4sp/lisp/c4lc.lisp
 	@$(C4SC_FLAGCHECK)
 	gcc -m32 $(EXTRA_CC) -O2 -fwrapv -fno-omit-frame-pointer -g -Iinclude -I. -o $@ src/c4sc/c4sc-host.c
+# c4cxx: a translator from a C++ subset to C, whose output c4lc compiles
+# (docs/c4cxx-plan.md, src/c4cxx/README.md). A host tool, built by gcc.
+# test-c4cxx: the preprocessor's cases against their golden output, and
+# c4lc compiling each corpus unit to the same object as it compiles c4cxx's
+# output (src/c4cxx/test-same.sh; chocolate-blood's and Duke's units when
+# they are there); gcc -m32 confirming the types, struct layouts, sizes
+# and constants c4cxx works out (src/c4cxx/test-types.sh, -check-types);
+# C++ programs printing as g++ -m32's do, through gcc and through c4lc on
+# c4m32, and what c4cxx refuses (src/c4cxx/test-cxx.sh); and Blood's C++
+# units parsing, when c4-Blood is there (src/c4cxx/blood-units.sh).
+# C4CXX_LC is the c4lc it holds c4cxx to.
+C4CXX_SRCS := $(wildcard src/c4cxx/*.c)
+C4CXX_LC ?= ./c4sc-host32
+c4cxx: $(C4CXX_SRCS) src/c4cxx/c4cxx.h src/c4cxx/ast.h src/c4cxx/types.h
+	gcc -O2 -g -Wall -Wno-unused -Wno-parentheses -o $@ $(C4CXX_SRCS)
+test-c4cxx: c4cxx c4m32
+	@[ -x $(C4CXX_LC) ] || { echo "test-c4cxx: no $(C4CXX_LC) (make c4sc-host32, or C4CXX_LC=...)"; exit 1; }
+	for t in pp_macros pp_cond; do \
+		./c4cxx -E src/c4cxx/tests/$$t.c | grep -v '^#' | grep -v '^$$' | cmp - src/c4cxx/tests/$$t.expected || exit 1; \
+	done
+	C4LC32=$(C4CXX_LC) src/c4cxx/run-corpora.sh -E
+	C4LC32=$(C4CXX_LC) src/c4cxx/run-corpora.sh -C
+	C4LC32=$(C4CXX_LC) src/c4cxx/run-corpora.sh -T
+	C4CXX_LC=$(C4CXX_LC) src/c4cxx/test-cxx.sh
+	if [ -d $${BLOOD_DIR:-$$HOME/git/games/c4-blood}/source/blood ]; then src/c4cxx/blood-units.sh -parse; fi
+PHONY += test-c4cxx
+
 # 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.

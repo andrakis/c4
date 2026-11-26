@@ -38,43 +38,56 @@ int plat_self(void) {
 }
 
 /* the device lock (engine.c eng_lock_fn, set by hv.c): one processor at a
- * time, taken again by the one that holds it as often as it likes */
+ * time, taken again by the one that holds it as often as it likes.
+ * No TSC on its way in or out: VirtualBox emulates rdtsc (its log's
+ * "VirtTSCEmulated"), a VM exit each, and VM 0 under --hv, taking this for
+ * every device access, ran at a third of its speed there (2026-11-26). */
 static volatile int dl_flag, dl_owner = -1;
 static int dl_depth[MAXCPU];
-/* its account, in TSC ticks a processor: held, waited for, since the last report */
-static uint64_t dl_at[MAXCPU], dl_held[MAXCPU], dl_wait[MAXCPU], dl_since;
+/* its account since the last report: the waits, in TSC ticks, timed only
+ * when another processor had it; who held it, sampled by the boot
+ * processor's 1 kHz tick (pc_lock_sample) */
+static uint64_t dl_wait[MAXCPU], dl_since;
+static volatile u32 dl_held[MAXCPU], dl_ticks;
 void pc_lock(int on) {
   int me = plat_self();
   if (on > 0) {
     if (__atomic_load_n(&dl_owner, __ATOMIC_ACQUIRE) == me) { dl_depth[me]++; return; }
-    uint64_t t0 = __builtin_ia32_rdtsc();
-    while (__atomic_exchange_n(&dl_flag, 1, __ATOMIC_ACQUIRE))
-      while (__atomic_load_n(&dl_flag, __ATOMIC_RELAXED)) __builtin_ia32_pause();
+    if (__atomic_exchange_n(&dl_flag, 1, __ATOMIC_ACQUIRE)) {
+      uint64_t t0 = __builtin_ia32_rdtsc();
+      do while (__atomic_load_n(&dl_flag, __ATOMIC_RELAXED)) __builtin_ia32_pause();
+      while (__atomic_exchange_n(&dl_flag, 1, __ATOMIC_ACQUIRE));
+      dl_wait[me] += __builtin_ia32_rdtsc() - t0;
+    }
     __atomic_store_n(&dl_owner, me, __ATOMIC_RELAXED);
     dl_depth[me] = 1;
-    dl_at[me] = __builtin_ia32_rdtsc();
-    dl_wait[me] += dl_at[me] - t0;
   } else if (__atomic_load_n(&dl_owner, __ATOMIC_ACQUIRE) == me && dl_depth[me] > 0 && --dl_depth[me] == 0) {
-    dl_held[me] += __builtin_ia32_rdtsc() - dl_at[me];
     __atomic_store_n(&dl_owner, -1, __ATOMIC_RELAXED);
     __atomic_store_n(&dl_flag, 0, __ATOMIC_RELEASE);
   }
+}
+/* the boot processor's tick (pc.c's isr): who holds the lock now */
+void pc_lock_sample(void) {
+  int o = __atomic_load_n(&dl_owner, __ATOMIC_RELAXED);
+  if (o >= 0 && o < MAXCPU) dl_held[o]++;
+  dl_ticks++;
 }
 /* "processor 0 held it 23%, waited 1%; ..." since the last, for each that
  * took it; the account starts again */
 int pc_lock_report(char *out, int max) {
   uint64_t now = __builtin_ia32_rdtsc(), span = dl_since ? now - dl_since : 0;
+  u32 ticks = dl_ticks;
   int n = 0;
-  dl_since = now;
+  dl_since = now; dl_ticks = 0;
   if (!span) return 0;
   for (int k = 0; k < MAXCPU; k++) {
     uint64_t h = dl_held[k], w = dl_wait[k];
-    dl_held[k] = dl_wait[k] = 0;
+    dl_held[k] = 0; dl_wait[k] = 0;
     if (!h && !w) continue;
     char t[96]; int j = 0;
     const char *a = n ? "; processor " : "processor ";
     while (*a) t[j++] = *a++;
-    int v[3] = { k, (int)(h * 1000 / span), (int)(w * 1000 / span) };
+    int v[3] = { k, ticks ? (int)(h * 1000 / ticks) : 0, (int)(w * 1000 / span) };
     for (int q = 0; q < 3; q++) {
       if (q == 1) { a = " held it "; while (*a) t[j++] = *a++; }
       if (q == 2) { a = ", waited "; while (*a) t[j++] = *a++; }

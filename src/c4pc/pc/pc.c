@@ -507,7 +507,7 @@ void isr(struct regs *r) {
   if (r->vec == 240) { extern void lapic_eoi(void); lapic_eoi(); return; }
   if (r->vec == 255) return;
   u32 irq = (u32)r->vec - 32;
-  if (irq == 0) { extern void ap_tick(void); ticks++; ap_tick(); }
+  if (irq == 0) { extern void ap_tick(void), pc_lock_sample(void); ticks++; pc_lock_sample(); ap_tick(); }
   else if (irq == 1) kbd_irq();
   else if (irq == 12) { u8 st = inb(0x64); if (st & 1) { u8 b = inb(0x60); if (st & 0x20) mouse_byte(b); } }
   else if (irq == 4) { while (inb(0x3FD) & 1) { int c = inb(0x3F8); inq_push(c == '\r' ? '\n' : c); } }
@@ -1037,7 +1037,7 @@ void pc_main(u32 magic, struct mb_info *mb) {
     if (hv) { if (hv_detach) { hv_detach = 0; hv_attach(0); } hv_run(); }
     /* -s at the keyboard: every 10 s, on COM1 alone, how the PC kept up */
     if (stats && paced) {
-      static i64 rep_at, rep_cyc, rep_disp, rep_idle;
+      static i64 rep_at, rep_cyc, rep_disp, rep_idle; static u32 rep_frames;
       i64 now = plat_now_ms();
       if (!rep_at) { rep_at = now; rep_cyc = m->cycle - m->skipped; }
       else if (now - rep_at >= 10000) {
@@ -1046,12 +1046,13 @@ void pc_main(u32 magic, struct mb_info *mb) {
         con_puts("c4pc: "); con_dec((ran - rep_cyc) / dt); con_puts("k inst/s, ");
         con_dec((display_ms - rep_disp) * 100 / dt); con_puts("% drawing to the screen, ");
         con_dec((idle_ms - rep_idle) * 100 / dt); con_puts("% idle");
+        if (m->gui) { con_puts(", "); con_dec((i64)(pc_screen_frames - rep_frames) * 1000 / dt); con_puts(" frames a second shown"); }
         if (m->snd) { con_puts(", "); con_dec(sb16_underruns + hda_underruns + es137x_underruns); con_puts(" sound underruns"); }
         con_puts("\n");
         /* the other processors' requests of CPU 0, since the boot (par.c) */
         if (m->smp && m->smp->par) { static char b[700]; par_stats(m->smp, b, sizeof b); con_puts("c4pc: "); con_puts(b); con_puts("\n"); }
         com1_only = 0;
-        rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_idle = idle_ms;
+        rep_at = now; rep_cyc = ran; rep_disp = display_ms; rep_idle = idle_ms; rep_frames = pc_screen_frames;
       }
     }
     /* the parallel engine: CPU 0 parked or halted waits for the others,

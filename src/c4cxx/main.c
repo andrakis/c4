@@ -13,6 +13,7 @@
 #include "ast.h"
 
 char *opt_unit;
+int opt_short_enums, opt_ms_bitfields, opt_unsigned_char;
 
 static void usage (void)
 {
@@ -36,6 +37,12 @@ int main (int argc, char **argv)
 			opt_parse = 1;
 		else if (!strcmp (a, "-check-types"))
 			emit_check = 1;
+		else if (!strcmp (a, "-fshort-enums"))
+			opt_short_enums = 1;
+		else if (!strcmp (a, "-mms-bitfields"))
+			opt_ms_bitfields = 1;
+		else if (!strcmp (a, "-funsigned-char"))
+			opt_unsigned_char = 1;
 		else if (!strcmp (a, "-o") && i + 1 < argc)
 			out = argv[++i];
 		else if (!strcmp (a, "-x") && i + 1 < argc) {

@@ -781,6 +781,235 @@ Not done, as the plan allows:
   outside its class is defined in each unit that defines it, so a header
   doing that would define it twice at link time. Blood has none so far.
 
+### 4.8 M5, done (2026-11-27)
+
+Inheritance, virtual functions, `new` and `delete`, and globals, about
+750 lines more in `sema.c` and the runtime `src/c4cxx/rt/libc4cxx.c`:
+
+- **Inheritance** (plan section 3.2): one public base, which in C is the
+  class's first member, `_b`: `struct TextButton { struct Button _b; ...
+  }`. A base's member `p->x` is `p->_b._b.x`. A pointer to a derived class
+  converts to its base's by a cast at offset 0, in arguments,
+  assignments, initializers, returns and references, and overload
+  resolution ranks that as a conversion. A base's members are the derived
+  class's, unless its own of the same name hide them. `Base::f ()` calls
+  the base's function, never through the vtable.
+- **Constructors and destructors** in C++'s order: the base (the init
+  list's constructor, or its default one), `_vp`, the members, the body.
+  A destructor sets `_vp` back, runs the body, destroys the members last
+  first, then the base.
+- **Virtual functions:** the polymorphic root's first member is `const
+  struct X__vt *_vp`. `struct X__vt` has a function pointer per slot, the
+  base's slots first, each typed with `this` of the class that introduced
+  it. An override is cast to its slot's type in the vtable. A call of a
+  virtual function, unless qualified, goes through the vtable:
+  `((const struct Panel__vt *) p->_b._b._vp)->Paint__iic ((struct Widget
+  *) p, x, y, c)`. An object expression that is not simple goes into a
+  hidden local first. A virtual destructor takes the slot `_dtor`. A pure
+  virtual's slot holds `__c4x_pure`. Virtual calls from constructors and
+  destructors reach the class's own functions, as in C++.
+- **Where the vtable goes** (Itanium's key-function rule): the unit that
+  defines the class's first virtual function that is neither pure nor
+  inline defines `X__vtbl`, and every other unit declares it `extern`. A
+  class without one (Blood's `Widget`, `HeadWidget`, and the savers with
+  all their functions in the class) has a `static` copy in each unit.
+- **`new` and `delete`** (plan section 3.7), on the runtime
+  `rt/libc4cxx.c`, which is C for c4lc and gcc:
+  - `new T (args)` is `T__C__codes ((struct T *) __c4x_new (sizeof
+    (struct T)), args)`.
+  - `new T[n]` of a class with a constructor or destructor builds each
+    element in `__c4x_new_vec`. When the class has a destructor, it keeps
+    the count before the elements.
+  - `delete p` runs the destructor, through the vtable when the
+    destructor is virtual (`__c4x_delete_v`, given the slot's index), and
+    frees the storage.
+  - `delete[]` destroys the elements last first.
+- **Globals:**
+  - A global array of class objects is built element by element in the
+    unit's initializer and destroyed, last first, after `main`.
+  - A struct whose initializer list holds values known only at run time
+    (Blood's `AISTATE`s) is assigned from a compound literal in the
+    initializer.
+  - The units' initializers run in link order. c4rlink appends the
+    units' constructor lists in command-line order, and C4IX's loader,
+    C4DOS's `dosload.c` and c4m's `load-c4r.c` all run the list before
+    `main` (read in their source; run here only on c4m).
+- **Also:**
+  - Default arguments add up over a function's declarations (Blood's
+    headers have them, its definitions not).
+  - `c ? COMMAND_ID_1 : COMMAND_ID_0` has the enum's type, so `evPost`'s
+    overloads are told apart.
+  - A static member's definition outside its class is external, const
+    or not, and a `static` written on it (Watcom took that, g++ does not)
+    is dropped.
+  - Constructors and destructors are no longer entered in their class's
+    scope, where they hid the class's name inside its member functions.
+
+Refused, as the plan's subset says: multiple inheritance, virtual base
+classes, a class with virtual functions whose base has none, local or
+unnamed classes with virtual functions, `new T[n] (...)`, `new T (...)` of
+a type without a constructor, and arrays of class objects other than
+globals of one dimension without an initializer.
+
+The tests are the plan's, through `src/c4cxx/test-cxx.sh`, which now takes
+programs of several units (`tests/m_*/`, linked in their names' order) and
+links the runtime in each build:
+
+- **`t_virt1.cpp`**: a Widget tree in the shape of Blood's `gui.h`,
+  painted and deleted through base pointers. It has pure virtuals, a
+  virtual destructor in the class, a key function outside it, a class
+  whose virtuals are all inline, overrides two levels down, `Base::f ()`
+  from an override, virtual calls from constructors and destructors, and
+  each kind of derived-to-base conversion.
+- **`t_virt2.cpp`**: `new` and `delete` of each kind. qtools'
+  `DICTNODE : CACHENODE`, `new[]` and `delete[]` of a class with a
+  constructor and destructor and of one with a constructor only, `delete`
+  of 0, and a class whose base and member both have destructors.
+- **`t_virt3.cpp`**: Blood's globals. `AISTATE`s whose lists hold a seq
+  client registered by another global's initializer, a global array of
+  menu items, default arguments from a declaration, `evPost` on a `?:`,
+  and a static const member defined outside its class.
+- **`m_loadsave/`**: Blood-RE's `LoadSave` registry across three units,
+  packed as Blood was built. The head is built first in its unit, and
+  every saver's constructor joins the list in link order. There are key
+  function vtables in their units, and static ones.
+- **Refusals**: `e_multiple.cpp` and `e_polybase.cpp`.
+
+All print as g++ `-m32`'s do, through gcc and through c4lc.
+
+Blood: 79 of the 80 units translate in full. The other, `tile.cpp`,
+calls `tmpnam`, which C4IX's libc does not declare. gcc `-m32` compiles
+all 79 (with `-fpermissive`: c4's libc declares `memset` and the like on
+`char *`). c4lc compiles 17. The other 62 stop at what c4lc lacks, not at
+c4cxx's output:
+
+- **Bit-fields** (57 units, from `PICANM` in `build.h` on): c4lc has none,
+  the plan's M2b.
+- **Parameters of function type** (5 units): mact's `control.h` declares
+  `CONTROL_CenterJoystick (void CenterCenter (void), ...)`.
+
+Not done, as the plan allows:
+
+- **Tail padding:** `_b` does not reuse a base's tail padding as g++ does
+  for a non-POD base. Blood's classes have none to reuse so far: `Widget`
+  ends on four chars, and `LoadSave` is packed. M6's `sizeof` table is the
+  check.
+- **Mixed pointer comparisons:** a comparison or `?:` of a base and a
+  derived pointer gets no cast. c4lc takes it, and gcc only warns.
+- **Runs under C4IX and C4DOS:** the test programs run on c4m only. That
+  C4IX and C4DOS run a program's constructor list is read in their
+  loaders, not run.
+- **`tmpnam`:** C4IX's libc does not declare it, so `tile.cpp` stops. That
+  is a fix in the libc or in c4-Blood's shim, not in c4cxx.
+
+### 4.9 M6, first part (2026-11-27)
+
+All 80 of Blood's C++ units translate, and both gcc `-m32` and c4lc
+compile every one (`blood-units.sh -compile`, now in `make test-c4cxx`).
+What it took:
+
+- **In c4lc and c4fc** (their own commits; c4lc-design §14.15 and §14.16):
+  - bit-fields, by gcc's layout and by MSVC's under the new
+    `-mms-bitfields`, which Blood's host build uses (`PICANM`, `XSPRITE`
+    and the rest);
+  - a local's initializer list that sets bit-fields (`EVENT evn = { a1,
+    a2, 0, 0 }`);
+  - pointers to arrays, `byte (*gammaTable)[256]` and its cast;
+  - `extern AISTATE handIdle;` under `-c`, of a struct the unit never
+    defines.
+- **In C4IX's libc** (its own commit): `tmpnam`, which `tile.cpp` calls.
+- **In c4cxx:**
+  - `-fshort-enums`, `-mms-bitfields` and `-funsigned-char`. These are
+    the layouts Blood's host build gives g++, as Watcom had them, so that
+    what c4cxx works out itself (an array's length from a `sizeof`)
+    agrees with gcc's.
+  - A parameter of function type (mact's `control.h`, `void
+    CONTROL_CenterJoystick (void CenterCenter (void), ...)`) is written as
+    the pointer C makes it, which c4lc takes.
+  - A bit-field narrower than `int` promotes to `int` in arithmetic, and
+    an assignment to one, or its `++`, keeps its bit-field mark (gcc gives
+    such an expression no `typeof`).
+
+Tests (`test-cxx.sh`):
+
+- **`t_bits.cpp`**: an `XSPRITE`-shaped struct and a class setting its
+  bit-fields through pointers, compound assignments, `++` and `--`; and
+  parameters of function type.
+- **`w_watcom.cpp`**: Watcom's layouts. Enum sizes (`GAMEOPTIONS`), an
+  `INPUT`-shaped packed struct, a double aligned to 8, array lengths from
+  `sizeof`, unsigned plain `char`. A `w_*.cpp` program has
+  `-fshort-enums -mms-bitfields -funsigned-char` in g++, c4cxx and gcc,
+  and no c4lc run, since c4lc has no `-fshort-enums` or
+  `-funsigned-char` yet.
+
+All 12 programs print as g++ `-m32`'s do.
+
+Still M6: the oracle. Blood built from c4cxx's C by gcc `-m32` must play
+B0's demos with B0's checksums, frame for frame, and the class sizes must
+be checked against g++'s.
+
+### 4.10 M6, done (2026-11-27)
+
+**The oracle passes.** Blood built from c4cxx's C by gcc `-m32` plays the
+shareware 1.11A's demos (BS111A) with the checksums of c4-Blood's host
+build (B0, g++), frame for frame: 4000 frames, about 24 minutes of game
+time across the demos, every frame's checksum the same, total `4e6389c4`
+(800 frames give B0's `744cafc0`). Each struct and class c4cxx writes
+has g++'s size, unit by unit. `src/c4cxx/blood-oracle.sh` is the whole
+of it, and `make test-c4cxx-blood` runs it. It needs c4-Blood and
+`BLOOD_RUN`, a directory of the game's files with `BLOOD.CFG`, and it
+takes minutes. The steps:
+
+1. **B0:** c4-Blood's `c4/host.sh`.
+2. **Every C++ unit through c4cxx:** all 80 of Blood's and
+   `c4/netnone.cpp`. c4cxx reads the host's headers (glibc's and gcc's,
+   after c4-Blood's own) as g++ reads them: with Watcom's layouts
+   (`-fshort-enums -mms-bitfields -funsigned-char`) and gcc's
+   `__GNUC__` and `__i386__`, so that glibc takes the paths it takes for
+   g++. Then gcc `-m32` compiles each with host.sh's flags, and with
+   `-fno-common`, since C++ has no common symbols.
+3. **The link,** as host.sh links: `loadsave` first (Blood-RE builds
+   `LoadSave::head` in a global constructor that its savers link onto),
+   host.sh's C objects, and `rt/libc4cxx.c` in place of `c4/cxxrt.cpp`.
+4. **The demos:** both programs play them, every frame's checksum
+   printed (`-sum 1`), and the two lists must be the same.
+5. **The sizes:** with gdb, each struct and class c4cxx defined in a
+   unit, in g++'s object for that unit and in c4cxx's.
+
+What it took in c4cxx, besides the first part:
+
+- **glibc's and gcc's headers** in C++:
+  - `__builtin_va_list` (a type of its own: `Ty`'s new `cname` names it
+    for the checks);
+  - `__builtin_va_arg (ap, T)` and `__builtin_offsetof (T, m)` (new
+    nodes, since both take a type);
+  - other `__builtin_` functions called undeclared;
+  - `wchar_t` (gcc `-m32`'s `long`);
+  - `_Float32` to `_Float64x`;
+  - exception specifications (`throw ()`, `noexcept`), which mean nothing
+    with no exceptions;
+  - asm labels (`__REDIRECT`);
+  - `extern "C++"` inside `extern "C"`, as a stack of linkages.
+- **A declaration directly in `extern "C"`** is `extern` ([dcl.link]).
+  Before, key.h's `extern "C" volatile byte keystatus[256];` was a
+  definition in every unit; common symbols had hidden that.
+- **A class with no data** is one byte, as in g++ (`_e`, for `CFX` and
+  `CCheatMgr`).
+
+One thing B0 relies on: Blood calls `CheckLink` with sector -1 and reads
+`gUpperLink[-1]`, which is `gLowerLink`'s last element in both builds
+once c4cxx's C has no common symbols. With them, the linker put
+`baseSprite` there, and a warp marker seemed to exist.
+
+Test: `g_gnu.cpp` (the builtins, `extern "C++"`, `throw ()`, an asm label,
+`wchar_t`, `extern "C"`'s declaration). A `g_*.cpp` runs through g++ and
+c4cxx with gcc, not c4lc.
+
+Not done, for M7: c4lc has no `-fshort-enums` or `-funsigned-char` yet, so
+Blood through c4lc does not yet have Watcom's layouts. c4lc compiles
+every unit (`blood-units.sh -compile`), but nothing links or runs that
+yet.
+
 ## 5. What is left for Blood after the compiler
 
 The Duke port (`~/git/c4/games/duke3d`, `c4/` is 3,250 lines) shows what a

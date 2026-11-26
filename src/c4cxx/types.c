@@ -115,6 +115,8 @@ int is_unsigned (Ty *t)
 	switch (t->kind) {
 	case T_BOOL: case T_UCHAR: case T_USHORT: case T_UINT: case T_ULONG: case T_ULLONG:
 		return 1;
+	case T_CHAR:
+		return opt_unsigned_char;
 	case T_ENUM:
 		return t->def && t->def->is_unsigned_enum;
 	}
@@ -219,11 +221,53 @@ void layout (Ty *rec, int pack)
 {
 	Field *f;
 	int bits = 0, align = 1, size = 0;
+	int unit_size = 0, unit_off = 0, unit_used = 0;	// -mms-bitfields: the open unit
 	for (f = rec->fields; f; f = f->next) {
 		Ty *t = f->ty;
 		int a = t->align;
+		// -mms-bitfields: a scalar is as aligned as it is big (a double 8)
+		if (opt_ms_bitfields && (t->kind == T_DOUBLE || t->kind == T_LLONG || t->kind == T_ULLONG))
+			a = t->size;
 		if (pack && a > pack)
 			a = pack;
+		if (opt_ms_bitfields && rec->kind != T_UNION) {
+			// MSVC's rule (c4lc's -mms-bitfields, c4lc-design 14.15): a unit of
+			// the field's type holds the fields that follow while they are
+			// of a type of its size and fit; any other member, or T : 0,
+			// closes it. bit_offset counts within the unit.
+			if (f->bit_width == 0) {
+				unit_size = 0;
+				f->offset = bits / 8;
+				f->bit_offset = 0;
+				continue;
+			}
+			if (f->bit_width > 0) {
+				if (unit_size == t->size && unit_used + f->bit_width <= t->size * 8) {
+					f->offset = unit_off;
+					f->bit_offset = unit_used;
+					unit_used += f->bit_width;
+				} else {
+					bits = align_to (bits, a * 8);
+					unit_off = bits / 8;
+					unit_size = t->size;
+					unit_used = f->bit_width;
+					f->offset = unit_off;
+					f->bit_offset = 0;
+					bits += t->size * 8;
+				}
+				if (a > align)
+					align = a;
+				continue;
+			}
+			unit_size = 0;
+		}
+		if (rec->kind == T_UNION && opt_ms_bitfields && f->bit_width > 0) {
+			f->offset = 0;
+			f->bit_offset = 0;
+			if (a > align) align = a;
+			if (t->size > size) size = t->size;
+			continue;
+		}
 		if (rec->kind == T_UNION) {
 			f->offset = 0;
 			f->bit_offset = 0;
@@ -335,6 +379,8 @@ char *ty_str (Ty *t, const char *inner)
 {
 	const char *b = base_name (t);
 	char *sp = (char *)(*inner ? " " : "");
+	if (t->cname)
+		return xformat ("%s%s%s", quals (t, t->cname), sp, inner);
 	if (b)
 		return xformat ("%s%s%s", quals (t, b), sp, inner);
 	switch (t->kind) {

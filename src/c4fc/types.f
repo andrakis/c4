@@ -55,6 +55,13 @@ CREATE MB-OFF   MMAX-MEM CELLS ALLOT
 CREATE MB-AGG   MMAX-MEM CELLS ALLOT     \ an array member is its own address
 CREATE MB-QUAL  MMAX-MEM CELLS ALLOT     \ its qualifier mask
 CREATE MB-ASZ   MMAX-MEM CELLS ALLOT     \ an array member's bytes, for sizeof (M7b)
+\ a bit-field (c4lc-parse's p:bfrec): its width (0 for any other member),
+\ its bits' offset in its unit, the unit's bytes, and whether it is signed.
+\ MB-OFF is the unit's offset and MB-TYPE the type of its value.
+CREATE MB-BW    MMAX-MEM CELLS ALLOT
+CREATE MB-BO    MMAX-MEM CELLS ALLOT
+CREATE MB-BZ    MMAX-MEM CELLS ALLOT
+CREATE MB-BS    MMAX-MEM CELLS ALLOT
 VARIABLE #MEMS   0 #MEMS !
 
 : T-BASE ( t -- b )
@@ -159,11 +166,16 @@ VARIABLE #MEMS   0 #MEMS !
    ag #MEMS @ CELLS MB-AGG  + !
    0 #MEMS @ CELLS MB-QUAL  + !
    0 #MEMS @ CELLS MB-ASZ   + !
+   0 #MEMS @ CELLS MB-BW    + !
    1 #MEMS +! ;
 \ the qualifier mask of the member MEM, just recorded
 : MEM-Q! ( q -- )  #MEMS @ 1- CELLS MB-QUAL + ! ;
 \ ... and its storage in bytes, when it is an array
 : MEM-ASZ! ( n -- )  #MEMS @ 1- CELLS MB-ASZ + ! ;
+\ ... and its bits, when it is a bit-field
+: MEM-BF! ( bo w usize signed -- ) {: o w z sg | i -- :}
+   #MEMS @ 1- CELLS TO i
+   o i MB-BO + !  w i MB-BW + !  z i MB-BZ + !  sg i MB-BS + ! ;
 : MEM-FIND ( struct a u -- i|-1 ) {: k a u -- i :}
    #MEMS @ 0 ?DO
       I CELLS MB-OWNER + @ k = IF

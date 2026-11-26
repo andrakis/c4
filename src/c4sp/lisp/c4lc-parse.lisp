@@ -343,7 +343,7 @@
 			(begin
 				(p:advance)
 				(define ms (p:members (list)))
-				(define lay (p:slayout ms isu 0 0 1 (list)))
+				(define lay (p:slayout0 ms isu))
 				(define recs (p:reverse (p:second lay)))
 				(set! p:slayouts (p:cons (list ty (head lay) recs (index lay 2)) p:slayouts))
 				(set! p:pending (p:cons
@@ -388,7 +388,8 @@
 		(if (p:svalue? ty) (index (p:slay ty) 3)
 		(begin
 			(define s (p:ctysize ty))
-			(if (< s p:WORD) s p:WORD)))))))
+			;; -mms-bitfields: a long long or double to 8 (as MSVC)
+			(if (if p:msbf true (< s p:WORD)) s p:WORD)))))))
 ;; #pragma pack(n) caps a member's alignment at n, and with it its
 ;; struct's: p:pack is the n in force, 0 for none. A struct keeps the
 ;; alignment it was laid out with.
@@ -426,11 +427,114 @@
 		(set! p:pack (head as))))))))
 ;; n rounded up to a multiple of a
 (define p:alignup (lambda (n a) (* a (/ (+ n (- a 1)) a))))
+;; ---- bit-fields (docs/c4cxx-plan.md 3.9) ----
+;;
+;; A member `T name : W` is W bits of a unit of T's size, which the
+;; generator loads whole, shifts and masks. Its record has a sixth element,
+;; (USIZE BITOFF WIDTH SIGNED BOOL), OFF being the unit's offset and TYPE
+;; the type its value has: int, unless it is unsigned and as wide as int.
+;; Two layouts, as gcc's two:
+;;   - gcc's (i386 System V), by default: a field starts at the next bit
+;;     unless it would cross a boundary of its type's alignment, and then
+;;     at that boundary; `T : 0` goes to the next one; an unnamed field
+;;     adds nothing to the struct's alignment. Not under a #pragma pack
+;;     that lowers a field type's alignment (gcc packs the bits across
+;;     the units then), which needs the other layout.
+;;   - MSVC's, under -mms-bitfields (gcc's -mms-bitfields, as Blood is
+;;     built): a unit of the field's type holds the fields that follow
+;;     while they are of a type of its size and fit; any other member, or
+;;     `T : 0`, closes it. A long long or double is then aligned to 8, as
+;;     a scalar is to its size, in a struct.
+(define p:msbf false)     ;; -mms-bitfields
+(define p:bfu nil)        ;; MSVC's: the open unit, (OFF SIZE BITSUSED)
+(define p:bfend nil)      ;; gcc's: the bit after the last member, while they are bit-fields
+;; an integer type a bit-field may have (not long long, float, a pointer)
+(define p:bitty? (lambda (ty)
+	(if (= ty p:CHAR) true (if (= ty p:INT) true
+	(if (= ty p:UCHAR) true (if (= ty p:SCHAR) true (if (= ty p:SHORT) true
+	(if (= ty p:USHORT) true (if (= ty p:UINT) true (if (= ty p:ULONG) true
+	(= ty p:BOOL)))))))))))
+(define p:bfuns? (lambda (ty)
+	(if (= ty p:UCHAR) true (if (= ty p:USHORT) true (if (= ty p:UINT) true
+	(if (= ty p:ULONG) true (= ty p:BOOL)))))))
+;; the widest a field of type ty may be: its bits (an unsigned int's
+;; value is 32 bits on a 64-bit target too)
+(define p:bfmax (lambda (ty)
+	(if (= ty p:BOOL) 1
+	(if (if (= ty p:UINT) (= p:WORD 8) false) 32
+	(* 8 (p:ctysize ty))))))
+;; the record of a named field, unit at uo, bits from bo
+(define p:bfrec (lambda (m uo bo)
+	(begin
+		(define ty (head m))
+		(define w (index m 4))
+		(define uns (p:bfuns? ty))
+		(list (p:second m) uo
+			(if (if uns (= w (* 8 p:WORD)) false) ty p:INT)
+			nil (if (= (index m 3) nil) 0 (index m 3))
+			(list (p:ctysize ty) bo w (not uns) (= ty p:BOOL))))))
+;; a bit-field member m: returns what p:slayout's recursion takes next,
+;; (OFF MAX ALIGN ACC)
+(define p:bflay (lambda (m isu off mx al acc)
+	(begin
+		(define ty (head m))
+		(define n (p:second m))
+		(define w (index m 4))
+		(if (p:bitty? ty) nil (p:die "a bit-field of a type other than an integer type"))
+		(if (< w 0) (p:die "a bit-field of negative width") nil)
+		(if (> w (p:bfmax ty)) (p:die "a bit-field wider than its type") nil)
+		(if (if (= w 0) (not (= n nil)) false) (p:die "a named bit-field of width 0") nil)
+		(define s (p:ctysize ty))
+		(define na (p:talign ty))
+		(define a (p:palign na))
+		(if p:msbf (p:bflay/ms m isu off mx al acc n w s a)
+		(begin
+			(if (< a na) (p:die "a bit-field in a packed struct takes -mms-bitfields") nil)
+			(p:bflay/gcc m isu off mx al acc n w s a))))))
+(define p:bflay/gcc (lambda (m isu off mx al acc n w s a)
+	(begin
+		(define ub (* 8 a))
+		(define sb0 (if isu 0 (if (= p:bfend nil) (* 8 off) p:bfend)))
+		(define sb (if (= w 0) (p:alignup sb0 ub)
+			(if (= (/ sb0 ub) (/ (+ sb0 (- w 1)) ub)) sb0 (p:alignup sb0 ub))))
+		(define eb (+ sb w))
+		(define uo (* a (/ sb ub)))
+		(set! p:bfend (if isu nil eb))
+		(list
+			(if isu off (/ (+ eb 7) 8))
+			(if (> (/ (+ w 7) 8) mx) (/ (+ w 7) 8) mx)
+			(if (if (= n nil) false (> a al)) a al)
+			(if (= n nil) acc (p:cons (p:bfrec m uo (- sb (* 8 uo))) acc))))))
+(define p:bflay/ms (lambda (m isu off mx al acc n w s a)
+	(if (= w 0)
+		(begin (set! p:bfu nil) (list off mx al acc))
+	(begin
+		(define fits (if isu false (if (= p:bfu nil) false
+			(if (= (p:second p:bfu) s) (<= (+ (p:third p:bfu) w) (* 8 s)) false))))
+		(define uo (if isu 0 (if fits (head p:bfu) (p:alignup off a))))
+		(define bo (if fits (p:third p:bfu) 0))
+		(set! p:bfu (if isu nil (list uo s (+ bo w))))
+		(list
+			(if isu off (if fits off (+ uo s)))
+			(if (> s mx) s mx)
+			(if (> a al) a al)
+			(if (= n nil) acc (p:cons (p:bfrec m uo bo) acc)))))))
+(define p:slayout0 (lambda (ms isu)
+	(begin
+		(set! p:bfu nil)
+		(set! p:bfend nil)
+		(p:slayout ms isu 0 0 1 (list)))))
 ;; returns (SIZE REVRECORDS ALIGN)
 (define p:slayout (lambda (ms isu off mx al acc)
 	(if (empty? ms)
 		(list (p:alignup (if isu mx off) al) acc al)
+	(if (if (> (length (head ms)) 4) (not (= (index (head ms) 4) nil)) false)
+		(begin
+			(define r (p:bflay (head ms) isu off mx al acc))
+			(next p:slayout (tail ms) isu (head r) (p:second r) (p:third r) (index r 3)))
 	(begin
+		(set! p:bfu nil)
+		(set! p:bfend nil)
 		(define m (head ms))           ;; (TYPE NAME ASIZE [Q])
 		(define mty (head m))
 		(define asz (p:third m))
@@ -447,7 +551,7 @@
 			(if isu off (+ at msize))
 			(if (> msize mx) msize mx)
 			(if (> a al) a al)
-			(p:cons (list (p:second m) at mty bytes (if (= q nil) 0 q)) acc))))))
+			(p:cons (list (p:second m) at mty bytes (if (= q nil) 0 q)) acc)))))))
 ;; the record of member n of struct type ty
 (define p:smember (lambda (ty n)
 	(begin
@@ -467,6 +571,21 @@
 (define p:members/2 (lambda (bt bq acc)
 	(begin
 		(define ty0 (p:stars bt bq))
+		(if (= (p:kind) 'Colon)
+			;; an unnamed bit-field, `int : 3;` or `int : 0;`: layout only
+			(begin
+				(p:advance)
+				(define w0 (p:const "bit-field width"))
+				(next p:members/3 bt bq (p:cons (list ty0 nil nil 0 w0) acc)))
+		(p:members/4 bt bq acc ty0)))))
+(define p:members/3 (lambda (bt bq acc)
+	(if (= (p:kind) 'Comma)
+		(begin (p:advance) (next p:members/2 bt bq acc))
+	(begin
+		(p:expect 'Semi "semicolon after struct member")
+		(next p:members acc)))))
+(define p:members/4 (lambda (bt bq acc ty0)
+	(begin
 		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
 		(define ty (if fp p:fnty ty0))
 		(define q (if fp 0 p:sq))
@@ -475,15 +594,17 @@
 		(define n (if fp (head fp) (p:value)))
 		(if fp nil (p:advance))
 		(define size (if fp (p:second fp) (p:arraysize/t ty)))
+		;; `name : W`, a bit-field (TYPE NAME nil Q WIDTH)
+		(define bw (if (if fp false (if (= size nil) (= (p:kind) 'Colon) false))
+			(begin (p:advance) (p:const "bit-field width"))
+			nil))
 		(define acc2 (p:cons
-			(p:qnode (list (if (= size nil) ty (+ (p:elemty ty) p:PTR)) n size)
-				(if (= size nil) q (bit:shl q 2)))
+			(if (= bw nil)
+				(p:qnode (list (if (= size nil) ty (+ (p:elemty ty) p:PTR)) n size)
+					(if (= size nil) q (bit:shl q 2)))
+				(list ty n nil q bw))
 			acc))
-		(if (= (p:kind) 'Comma)
-			(begin (p:advance) (next p:members/2 bt bq acc2))
-		(begin
-			(p:expect 'Semi "semicolon after struct member")
-			(next p:members acc2))))))
+		(next p:members/3 bt bq acc2))))
 
 ;; optional base type: any run of the specifiers C allows -- const,
 ;; volatile, signed, unsigned, short, long, int, char, a struct/union, or
@@ -708,6 +829,7 @@
 		(if (if (= h 'member) true (= h 'arrow))
 			(begin
 				(define r (p:membrec e what))
+				(if (> (length r) 5) (p:die "sizeof of a bit-field") nil)
 				(if (= (index r 3) nil) (p:tysize (p:third r)) (index r 3)))
 		(p:tysize (p:ctyof e what))))))))
 ;; the record of the member a member or arrow node names
@@ -1434,6 +1556,18 @@
 		(set! p:inner nil)
 		(if wrap (p:expect 'Rparen ") in a function pointer declarator") nil)
 		(p:expect 'Rparen ") in a function pointer declarator")
+		(if (= (p:kind) 'Brak) (p:arrptrdecl n size stars)
+			(p:fnptrdecl/2 n size stars rt)))))
+;; `T (*p)[N][M]`, `(T (*)[N])`: a pointer to an array, which is a row of
+;; T's (M9) -- Blood's `static byte (*gammaTable)[256]` -- the innermost
+;; dimension wrapped first, as p:elemty wraps them; c4fc's FNPTR-DECL too
+(define p:arrptrdecl (lambda (n size stars)
+	(begin
+		(define dims (p:innerdims (list)))
+		(set! p:fnty (+ stars (+ (p:rowwrap p:lastty (p:reverse dims)) p:PTR)))
+		(list n size))))
+(define p:fnptrdecl/2 (lambda (n size stars rt)
+	(begin
 		(if (= (p:kind) 'Lparen) nil (p:die "parameter list of a function pointer expected"))
 		(define hasfp (p:fpparams? p:toks 0))
 		;; only then parsed: a struct first named in a list is not given an
@@ -2721,6 +2855,7 @@ static int *__c4ll_neg(int *d, int *a) {
 				(define b (if (= h 'member) (p:cflv (p:second x)) (p:cfold (p:second x))))
 				(if (if (= (head b) 'adr) (p:ptrty? (index b 3)) false) nil (p:cfdie))
 				(define r (p:smember (- (index b 3) p:PTR) (p:third x)))
+				(if (> (length r) 5) (p:die "the address of a bit-field") nil)
 				(list 'adr (p:second b) (+ (p:third b) (p:second r))
 					(if (p:arrmem? r) (p:third r) (+ (p:third r) p:PTR))))
 		(if (= h 'deref) (p:cfold (p:second x))

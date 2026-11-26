@@ -102,10 +102,19 @@ static char *params_str (Type *f)
 	}
 	for (p = f->params; p; p = p->next) {
 		char *d;
+		Type fp = { TY_PTR };
+		Type *pt = p->type;
 		if (p != f->params)
 			put (", ");
 		spec (p->spec);
-		d = declarator_str (p->type, p->name ? xstrndup (p->name->loc, p->name->len) : "");
+		// C++ (M6): a parameter of function type is the pointer C makes it,
+		// written so: c4lc takes `void f (void g (void))` no other way
+		// (mact's control.h)
+		if (opt_cplusplus && pt && pt->kind == TY_FUNC) {
+			fp.base = pt;
+			pt = &fp;
+		}
+		d = declarator_str (pt, p->name ? xstrndup (p->name->loc, p->name->len) : "");
 		if (*d) {
 			put (" ");
 			put (d);
@@ -177,6 +186,8 @@ static void spec (Spec *sp)
 				put (" ");
 			if (opt_cplusplus && equal (sp->words[i], "bool"))
 				put ("_Bool");
+			else if (opt_cplusplus && equal (sp->words[i], "wchar_t"))
+				put ("long");	// gcc -m32's wchar_t, a keyword of C++ but not of C
 			else
 				puttok (sp->words[i]);
 			first = 0;
@@ -319,7 +330,7 @@ static int prec (Node *n)
 	case ND_ASSIGN: return 2;
 	case ND_COND: return 3;
 	case ND_BINARY: return binprec (n->op);
-	case ND_CAST: case ND_PREFIX: case ND_SIZEOF_TYPE: case ND_SIZEOF_EXPR: return 14;
+	case ND_CAST: case ND_TCAST: case ND_PREFIX: case ND_SIZEOF_TYPE: case ND_SIZEOF_EXPR: return 14;
 	case ND_POSTFIX: case ND_CALL: case ND_INDEX: case ND_MEMBER: case ND_COMPLIT: case ND_TMPREF: return 15;
 	default: return 16;
 	}
@@ -416,6 +427,14 @@ static void expr (Node *n, int minprec)
 		put (") ");
 		expr (n->lhs, 14);
 		break;
+	case ND_TCAST: {
+		char *t = ty_str (n->ty, "");
+		if (!t)
+			error_at (n->tok, "emit: a cast to a type without a name");
+		buf_fmt (&out, "(%s) ", t);
+		expr (n->lhs, 14);
+		break;
+	}
 	case ND_SIZEOF_TYPE:
 		put ("sizeof (");
 		put (type_name_str (n->decl));
@@ -425,9 +444,24 @@ static void expr (Node *n, int minprec)
 		put ("sizeof ");
 		expr (n->lhs, 14);
 		break;
+	case ND_VA_ARG:
+		put ("__builtin_va_arg (");
+		expr (n->lhs, 2);
+		put (", ");
+		put (type_name_str (n->decl));
+		put (")");
+		break;
+	case ND_OFFSETOF:
+		put ("__builtin_offsetof (");
+		put (type_name_str (n->decl));
+		put (", ");
+		puttok (n->name);
+		put (")");
+		break;
 	case ND_COMPLIT:
 		put ("(");
-		put (type_name_str (n->decl));
+		// C++ lowering: one of sema's types, a global's list as an assignment
+		put (n->decl ? type_name_str (n->decl) : ty_str (n->ty, ""));
 		put (") ");
 		initz (n->initz);
 		break;
@@ -818,6 +852,10 @@ static void top (Node *n)
 			nl ();
 		puttok (n->tok);
 		stmt (n->body);
+	} else if (n->kind == ND_RAW) {
+		if (out.n && out.p[out.n - 1] != '\n')
+			nl ();
+		puttok (n->tok);
 	} else {
 		mark (n->tok);
 		decl_stmt (n->decl);

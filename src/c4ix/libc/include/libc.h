@@ -36,6 +36,8 @@
 #define EOF (-1)
 #define BUFSIZ 1024
 #define FILENAME_MAX 256
+#define L_tmpnam 20         // tmpnam's names: tmp<pid>.<n>
+#define TMP_MAX 10000
 #define PATH_MAX 256
 #define INT_MAX 2147483647
 #define INT_MIN (-2147483647 - 1)
@@ -96,6 +98,7 @@ int  remove(char *path);
 int  rmdir(char *path);
 int  mkdir(char *path, int mode);
 int  rename(char *from, char *to);
+char *tmpnam(char *s);
 int  chdir(char *path);
 char *getcwd(char *buf, int n);
 int  getpid();

@@ -248,15 +248,61 @@ VARIABLE VUNUSED   0 VUNUSED !
    t T-BYTE? t T-HALF? OR t T-STRUCT? OR 0= ;
 : STL, ( lhs -- )  >sym @ y.val @ oSTL OP2, ;
 
-\ x, whose value nobody wants (c4lc's g:effect).
+\ -- bit-fields (c4lc-gen's, docs/c4cxx-plan.md 3.9) ---------------------
+\ A bit-field's value is its unit, loaded unsigned (LCU, LHU, LI), shifted
+\ up to the word's top and back down (SHR or LSR). A store loads the unit,
+\ clears the field's bits, ORs in the new ones and stores the unit; its
+\ value, when wanted, is the field read back from that unit. op=, ++ and
+\ -- keep the unit's address in a temporary (n_bftemp) and are a store of
+\ the value worked out. The instructions are c4lc's, one for one.
+VARIABLE BFOK   0 BFOK !
+\ the member number of a bit-field lvalue, or -1
+: BFI ( n -- i ) {: n -- i :}
+   n >TAG n_member = IF n >mbit @ 1- EXIT THEN
+   n >TAG n_bftemp = IF n >bmix @ EXIT THEN
+   -1 ;
+: BF-W ( i -- w )  CELLS MB-BW + @ ;
+: BF-O ( i -- o )  CELLS MB-BO + @ ;
+: BF-Z ( i -- z )  CELLS MB-BZ + @ ;
+: BF-S ( i -- f )  CELLS MB-BS + @ ;
+\ the field's width as a mask of low bits
+: BF-LOW ( i -- m )  BF-W DUP WBITS = IF DROP -1 ELSE 1 SWAP LSHIFT 1- THEN ;
+: BF-LOAD, ( i -- )  BF-Z DUP 1 = IF DROP oLCU OP, EXIT THEN  2 = IF oLHU OP, ELSE oLI OP, THEN ;
+: BF-STORE, ( i -- ) BF-Z DUP 1 = IF DROP oSC OP, EXIT THEN  2 = IF oSH OP, ELSE oSI OP, THEN ;
+: SHIFT, ( n op -- ) {: n op -- :}  n 0> IF oPSH OP,  n oIMM OP2,  op OP, THEN ;
+\ the field, from its unit in A
+: BF-EXT, ( i -- ) {: i -- :}
+   WBITS i BF-O i BF-W + - oSHL SHIFT,
+   WBITS i BF-W - i BF-S IF oSHR ELSE oLSR THEN SHIFT, ;
+\ the unit's address in A
+: BF-ADDR ( n -- ) {: n -- :}
+   n >TAG n_bftemp = IF n >off @ oLEA OP2,  oLI OP, EXIT THEN
+   1 BFOK !  n GEN-ADDR ;
+: BF-GET ( n -- ) {: n | i -- :}
+   n BFI TO i   n BF-ADDR  i BF-LOAD,  i BF-EXT, ;
+\ the new bits, from the value in A of type f: converted, cut, moved up
+: BF-BITS, ( i f vt -- ) {: i f vt -- :}
+   f vt SCONV,
+   i BF-W WBITS < IF i BF-LOW MASK, THEN
+   i BF-O oSHL SHIFT, ;
+\ the unit, its field's bits cleared
+: BF-CLEAR, ( i -- ) {: i -- :}
+   i BF-LOAD,  oPSH OP,  i BF-LOW i BF-O LSHIFT INVERT oIMM OP2,  oAND OP, ;
+DEFER BF-ASGN ( lhs rhs -- )
+
+\ x, whose value nobody wants (c4lc's g:effect). A store to a bit-field,
+\ then, costs no reading back.
 : EFFECT ( x -- ) {: x -- :}
    x >TAG n_preinc =  x >TAG n_predec = OR  x >TAG n_postinc = OR  x >TAG n_postdec = OR
    IF 1 VUNUSED ! THEN
+   x >TAG n_asgn = x >TAG n_opasgn = OR IF
+      x >lhs @ BFI 0< 0= IF 1 VUNUSED !  x GEN EXIT THEN THEN
    x >TAG n_asgn = IF x CT t_uchar = VUNUSED ! THEN
    x GEN ;
 
 :M GEN n_asgn {: n | u -- :}
    n >lhs @ CT T-STRUCT? IF n STRUCT-ASGN EXIT THEN
+   n >lhs @ BFI 0< 0= IF n >lhs @ n >rhs @ BF-ASGN EXIT THEN
    VUNUSED @ TO u  0 VUNUSED !
    \ base and index both stay on the stack, unscaled, until the value is
    \ evaluated -- SXI wants all three, and computing the address first
@@ -364,10 +410,14 @@ VARIABLE VUNUSED   0 VUNUSED !
 :M CT  n_index  >lhs @ CT T-DEREF DECAY ;M
 :M CQ  n_index  >lhs @ CQ 2 RSHIFT ;M
 
-:M GEN-ADDR n_member {: n -- :}
+\ a bit-field's unit only for the bit-field code (BF-ADDR)
+:M GEN-ADDR n_member {: n | ok -- :}
+   BFOK @ TO ok  0 BFOK !
    n >lhs @ GEN
+   n >mbit @ ok 0= AND IF ." c4fc: the address of a bit-field" CR ABORT THEN
    n >moff @ ?DUP IF oPSH OP, oIMM OP2, oADD OP, THEN ;M
 :M GEN n_member {: n -- :}
+   n >mbit @ IF n BF-GET EXIT THEN
    n GEN-ADDR
    n >magg @ IF EXIT THEN               \ an array member is its address
    n >mtype @ LOAD, ;M
@@ -431,6 +481,74 @@ VARIABLE TMAX   0 TMAX !
    TCUR !
    w ;
 
+\ can n store anything (an assignment, ++ or --, a call)? Then a store to
+\ a bit-field reads its unit after n, which may write that unit too
+\ (f.a = f.b = 7). Anything not known here counts as storing: c4lc-gen's
+\ g:bfstores?.
+: BF-STORES? ( n -- f ) {: n | k -- f :}
+   n >TAG TO k
+   k n_num = k n_str = OR k n_var = OR k n_gvar = OR k n_fnref = OR k n_bftemp = OR
+   IF 0 EXIT THEN
+   k n_member = IF n >lhs @ RECURSE EXIT THEN
+   k n_deref = k n_addr = OR k n_neg = OR k n_bnot = OR k n_not = OR
+   IF n >opnd @ RECURSE EXIT THEN
+   k n_cast = IF n >expr @ RECURSE EXIT THEN
+   k n_index = k n_land = OR k n_lor = OR k n_bin = OR IF
+      n >lhs @ RECURSE IF -1 EXIT THEN  n >rhs @ RECURSE EXIT THEN
+   k n_cond = IF
+      n >cond @ RECURSE IF -1 EXIT THEN  n >body @ RECURSE IF -1 EXIT THEN
+      n >else @ RECURSE EXIT THEN
+   -1 ;
+\ a two-word temporary, freed when the statement ends (as n_opasgn's)
+: BF-TEMPW ( -- off )
+   2 TCUR +!   TCUR @ TMAX @ MAX TMAX !
+   NLOC @ TCUR @ + NEGATE ;
+: (BF-ASGN) ( lhs rhs -- ) {: l r | u i vt t -- :}
+   VUNUSED @ TO u  0 VUNUSED !
+   l BFI TO i   l CT TO vt
+   l S" assignment" WCHECK
+   r BF-STORES? IF
+      \ the unit's address, then the new bits, in the temporary's two
+      \ words; then the unit, read last
+      BF-TEMPW TO t
+      t oLEA OP2,  oPSH OP,  l BF-ADDR  oSI OP,
+      t 1+ oLEA OP2,  oPSH OP,  r GEN  i r CT vt BF-BITS,  oSI OP,
+      t oLEA OP2,  oLI OP,  oPSH OP,  i BF-CLEAR,
+      oPSH OP,  t 1+ oLEA OP2,  oLI OP,
+   ELSE
+      l BF-ADDR  oPSH OP,  i BF-CLEAR,  oPSH OP,
+      r GEN  i r CT vt BF-BITS,
+   THEN
+   oOR OP,  i BF-STORE,
+   u 0= IF i BF-EXT, THEN ;
+' (BF-ASGN) IS BF-ASGN
+\ the unit's address in a temporary: the field as an n_bftemp
+: BF-TEMP ( lhs -- node ) {: l | off t -- t :}
+   BF-TEMPW TO off
+   off oLEA OP2,  oPSH OP,  l BF-ADDR  oSI OP,
+   n_bftemp 4 CELLS NEW TO t
+   off t >off !  l CT t >nty !  l BFI t >bmix !
+   t ;
+:M GEN n_bftemp  BF-GET ;M
+:M CT  n_bftemp  >nty @ ;M
+:M CQ  n_bftemp  DROP 0 ;M
+\ ++ and -- of a bit-field: a store of the value stepped; x++'s value is
+\ the new one stepped back and cut to the field again
+: BF-INCDEC, ( node op post -- ) {: n op post | l i u t b -- :}
+   n >opnd @ TO l   l BFI TO i
+   VUNUSED @ TO u  0 VUNUSED !
+   l op oADD = IF S" increment" ELSE S" decrement" THEN WCHECK
+   l BF-TEMP TO t
+   u VUNUSED !
+   n_bin 4 CELLS NEW TO b
+   t b >lhs !   1 t_int NUM-OF b >rhs !   op b >op !
+   t b BF-ASGN
+   post u 0= AND IF
+      oPSH OP,  1 oIMM OP2,  op oADD = IF oSUB ELSE oADD THEN OP,
+      WBITS i BF-W - oSHL SHIFT,
+      WBITS i BF-W - i BF-S IF oSHR ELSE oLSR THEN SHIFT,
+   THEN ;
+
 \ L op= R whose L does something (n_opasgn), as c4lc-gen's g:oplower: L's
 \ address goes in a two-word temporary, once, and the rest is the plain
 \ assignment over *temporary, which already knows every type's load,
@@ -445,7 +563,16 @@ VARIABLE TMAX   0 TMAX !
 \ c4lc's g:qualof knows neither, so neither does this: a const L is not
 \ refused here, as it is not there
 :M CQ  n_opasgn DROP 0 ;M
-:M GEN n_opasgn {: n | off t d b -- :}
+:M GEN n_opasgn {: n | off t d b u -- :}
+   n >lhs @ BFI 0< 0= IF
+      \ a bit-field: its unit's address in a temporary, and a store
+      n >lhs @ S" assignment" WCHECK
+      VUNUSED @ TO u  0 VUNUSED !
+      n >lhs @ BF-TEMP TO t
+      u VUNUSED !
+      n_bin 4 CELLS NEW TO b
+      t b >lhs !   n >rhs @ >rhs @ b >rhs !   n >rhs @ >op @ b >op !
+      t b BF-ASGN EXIT THEN
    2 TCUR +!   TCUR @ TMAX @ MAX TMAX !
    NLOC @ TCUR @ + NEGATE TO off
    off oLEA OP2,  oPSH OP,
@@ -676,14 +803,27 @@ VARIABLE UFN   0 UFN !
 \ c4lc-gen's g:localaggr: MSET zeroes the object, then each value goes to
 \ its offset (LADDR,) -- or, with LTMPL constants or more, they come from
 \ a template and only the rest are stored
-:M STMT n_lagg {: n | b v r e t -- :}
+\ does a local's list hold a bit-field (a record of type -(m+1))?
+: LR-BF? ( v -- f ) {: v -- f :}
+   v V# 0 ?DO  I v V@ CELL+ @ 0< IF -1 UNLOOP EXIT THEN  LOOP 0 ;
+:M STMT n_lagg {: n | b v r e t i -- :}
    TCUR @
    n >lsym @ y.val @ TO b
    n >lrecs @ TO v
-   v LR-SCAN v LTMPL? TO t
+   \ bit-fields share their units' offsets: no template for them
+   v LR-BF? IF 0 ELSE v LR-SCAN v LTMPL? THEN TO t
    t IF b n >lbytes @ v LTEMPLATE ELSE b 0 n >lbytes @ LMSET, THEN
    v V# 0 ?DO
       I v V@ TO r
+      r CELL+ @ 0< IF
+         \ a bit-field: its store, as c4lc-gen's g:lbits/e
+         r CELL+ @ NEGATE 1- TO i
+         b r @ LADDR,  oPSH OP,  i BF-CLEAR,  oPSH OP,
+         r 2 CELLS + @ TO e
+         e IF e GEN  i e CT ELSE r 3 CELLS + @ oIMM OP2,  i t_int THEN
+         i CELLS MB-TYPE + @ BF-BITS,
+         oOR OP,  i BF-STORE,
+      ELSE
       t r LR-CONST? AND 0= IF
       b r @ LADDR,  oPSH OP,
       r 2 CELLS + @ TO e
@@ -692,6 +832,7 @@ VARIABLE UFN   0 UFN !
          e CT T-STRUCT? IF ." c4fc: a struct value in an initializer is not supported" CR ABORT THEN
       ELSE r 3 CELLS + @ oIMM OP2, THEN
       r CELL+ @ STORE,
+      THEN
       THEN
    LOOP
    TCUR ! ;M
@@ -775,9 +916,12 @@ VARIABLE UFN   0 UFN !
    oPSH OP,  oPSH OP,  t STEP-OF oIMM OP2,  op OP,
    n >opnd @ STL,
    oPOPA OP, ;
-:M GEN n_preinc   oADD 0 INCDEC, ;M
-:M GEN n_predec   oSUB 0 INCDEC, ;M
+:M GEN n_preinc {: n -- :}
+   n >opnd @ BFI 0< 0= IF n oADD 0 BF-INCDEC, EXIT THEN  n oADD 0 INCDEC, ;M
+:M GEN n_predec {: n -- :}
+   n >opnd @ BFI 0< 0= IF n oSUB 0 BF-INCDEC, EXIT THEN  n oSUB 0 INCDEC, ;M
 :M GEN n_postinc {: n | u -- :}
+   n >opnd @ BFI 0< 0= IF n oADD 1 BF-INCDEC, EXIT THEN
    VUNUSED @ TO u  0 VUNUSED !
    u 0= IF n >opnd @ STL? IF n oADD POST-LOCAL, EXIT THEN THEN
    n oADD 1 INCDEC,
@@ -785,6 +929,7 @@ VARIABLE UFN   0 UFN !
    oPSH OP, n >opnd @ CT STEP-OF oIMM OP2, oSUB OP,
    n >opnd @ CT t_uchar = IF 255 MASK, THEN ;M
 :M GEN n_postdec {: n | u -- :}
+   n >opnd @ BFI 0< 0= IF n oSUB 1 BF-INCDEC, EXIT THEN
    VUNUSED @ TO u  0 VUNUSED !
    u 0= IF n >opnd @ STL? IF n oSUB POST-LOCAL, EXIT THEN THEN
    n oSUB 1 INCDEC,

@@ -119,7 +119,13 @@ enum {
 	// lowering: &(type){ expr }, a const reference to an rvalue
 	ND_TMPREF,
 	// lowering: a function written as text (tok) with a body
-	ND_RAWFUNC
+	ND_RAWFUNC,
+	// lowering (M5): (ty) lhs, a cast to a type sema has; and a top-level
+	// declaration written as text (tok)
+	ND_TCAST, ND_RAW,
+	// gcc's builtins that take a type (M6, glibc's and gcc's headers):
+	// __builtin_va_arg (lhs, decl), __builtin_offsetof (decl, name)
+	ND_VA_ARG, ND_OFFSETOF
 };
 
 struct Node {
@@ -137,7 +143,7 @@ struct Node {
 	// sema
 	struct Ty *ty;		// the expression's type, before arrays decay
 	int lvalue;
-	int bitfield;		// a bit-field member
+	int bitfield;		// a bit-field member: its width plus one
 	int is_const;		// an integer constant expression, of value val
 	long long val;
 	int implicit;		// ND_CALL: of a function declared by the call

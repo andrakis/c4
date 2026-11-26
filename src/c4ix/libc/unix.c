@@ -115,6 +115,21 @@ int dup2(int fd, int to) { int r; r = udup2(fd, to); return r < 0 ? fail(EBADF) 
 int pipe(int *fds) { return upipe(fds) < 0 ? fail(EMFILE) : 0; }
 int unlink(char *path) { return uunlink(path) < 0 ? fail(ENOENT) : 0; }
 int remove(char *path) { return unlink(path); }
+// tmpnam(s): a name no file has yet, in the current directory as DOS
+// compilers gave one, so that renaming the file into place is a rename and
+// not a copy (Blood's tile.cpp writes an ART file so): tmp<pid>.<n>, into
+// s (L_tmpnam bytes) or, when s is 0, into a buffer of its own
+char *tmpnam(char *s) {
+    static char own[L_tmpnam];
+    static int n;
+    int st[4], tries;
+    if (!s) s = own;
+    for (tries = 0; tries < TMP_MAX; tries++) {
+        sprintf(s, "tmp%d.%d", getpid(), n++);
+        if (ustat(s, st) < 0) return s;
+    }
+    return 0;
+}
 int rmdir(char *path) { return uunlink(path) < 0 ? fail(ENOTEMPTY) : 0; }
 int mkdir(char *path, int mode) {
     int st[4];

@@ -28,6 +28,7 @@
 	(define NoBuiltin false)   ;; -fno-builtin: the library table is plain names
 	(define Pic false)         ;; -fpic: data through a per-task base (shared libraries)
 	(define Lines false)       ;; -g: a source map (docs/c4-explorer.md, track S); -g0 none
+	(define MsBf false)        ;; -mms-bitfields: MSVC's bit-field layout, as gcc's flag
 	(define Paths nil)
 	(define PreDefs nil)
 	(define Args argv)
@@ -111,6 +112,11 @@
 			(begin (set! Lines true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-g0")
 			(begin (set! Lines false) (set! Args (tail Args)) (next flags))
+		;; -mms-bitfields: bit-fields laid out as MSVC (and gcc
+		;; -mms-bitfields) lay them out, and a long long or double in a
+		;; struct aligned to 8 (c4lc-parse's p:msbf). Blood is built so.
+		(if (= (+ "" (head Args)) "-mms-bitfields")
+			(begin (set! MsBf true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-P")
 			(begin (set! Pp true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-I")
@@ -125,7 +131,7 @@
 				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
 				(set! Args (tail (tail Args)))
 				(next flags))
-		nil))))))))))))))))))
+		nil)))))))))))))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
@@ -140,6 +146,7 @@
 	(set! gen:opt Opt)
 	(set! lex:locs Lines)
 	(set! p:lines Lines)
+	(set! p:msbf MsBf)
 	(define Ast (parse:program
 		(if Pp
 			(begin

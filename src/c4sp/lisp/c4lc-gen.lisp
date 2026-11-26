@@ -632,6 +632,7 @@
 (define g:membsize (lambda (sty n)
 	(begin
 		(define m (g:member sty n))
+		(if (g:bfof m) (g:die (+ "sizeof of a bit-field: " n)) nil)
 		(if (= (index m 3) nil) (g:tysize (index m 2)) (index m 3)))))
 ;; size of what a pointer of type ty points at
 (define g:elemsize (lambda (ty) (g:tysize (- ty g:PTR))))
@@ -818,9 +819,13 @@
 ;; (which evaluates to its address, like arrays); for -> a pointer.
 (define g:memberaddr (lambda (e viaptr)
 	(begin
+		;; a bit-field's unit only for the bit-field code (g:bfaddr)
+		(define bfok g:bfok)
+		(set! g:bfok false)
 		(g:expr (g:second e))
 		(define st (if viaptr (- g:ty g:PTR) g:ty))
 		(define m (g:member st (g:third e)))
+		(if (if (g:bfof m) (not bfok) false) (g:die (+ "the address of a bit-field: " (g:third e))) nil)
 		(if (> (g:second m) 0)
 			(begin
 				(g:emit '(PSH))
@@ -831,6 +836,239 @@
 		;; array members (and struct-valued members) stay an address
 		(set! g:lastarray
 			(if (= (index m 3) nil) (g:svalue? (g:third m)) true)))))
+
+;; ---- bit-fields (docs/c4cxx-plan.md 3.9) ----
+;;
+;; A bit-field member's record has a sixth element, (USIZE BITOFF WIDTH
+;; SIGNED BOOL) (c4lc-parse's p:bfrec): the unit of USIZE bytes at the
+;; record's offset holds it at bits BITOFF up. Its value is the unit,
+;; loaded unsigned (LCU, LHU, LI), shifted up to the word's top and back
+;; down (SHR or LSR), which extends its sign or zeroes. A store loads the
+;; unit, clears the field's bits, ORs in the new ones and stores the unit;
+;; its value, when wanted, is the field read back from that unit. A
+;; compound assignment, ++ and -- keep the unit's address in a temporary,
+;; (bftemp OFF BF TYPE), and are a store of the field's value worked out.
+;; c4fc (src/c4fc/gen.f) emits the same instructions.
+(define g:bfok false)
+(define g:bfof (lambda (m) (if (> (length m) 5) (index m 5) false)))
+;; lvalue e's bit-field info, or false when it is no bit-field
+(define g:bfinfo (lambda (e)
+	(begin
+		(define h (head e))
+		(if (= h 'bftemp) (g:third e)
+		(if (= h 'member) (g:bfof (g:member (g:typeof (g:second e)) (g:third e)))
+		(if (= h 'arrow) (g:bfof (g:member (- (g:typeof (g:second e)) g:PTR) (g:third e)))
+		false))))))
+;; the unit's address in A
+(define g:bfaddr (lambda (e)
+	(if (= (head e) 'bftemp)
+		(begin
+			(g:emit (list 'LEA (g:second e)))
+			(g:emit '(LI)))
+	(begin
+		(set! g:bfok true)
+		(g:memberaddr e (= (head e) 'arrow))
+		(set! g:lastarray false)))))
+(define g:bfload! (lambda (bf)
+	(if (= (head bf) 1) (g:emit '(LCU))
+	(if (= (head bf) 2) (g:emit '(LHU))
+	(g:emit '(LI))))))
+(define g:bfstore! (lambda (bf)
+	(if (= (head bf) 1) (g:emit '(SC))
+	(if (= (head bf) 2) (g:emit '(SH))
+	(g:emit '(SI))))))
+(define g:shift! (lambda (n op)
+	(if (> n 0)
+		(begin
+			(g:emit '(PSH))
+			(g:emit (list 'IMM n))
+			(g:emit (list op)))
+	nil)))
+;; the field, from its unit in A
+(define g:bfext! (lambda (bf)
+	(begin
+		(g:shift! (- g:BITS (+ (g:second bf) (g:third bf))) 'SHL)
+		(g:shift! (- g:BITS (g:third bf)) (if (index bf 3) 'SHR 'LSR)))))
+;; the field's bits in place, as a mask of the unit
+(define g:bflow (lambda (bf) (if (= (g:third bf) g:BITS) -1 (- (bit:shl 1 (g:third bf)) 1))))
+(define g:bfget (lambda (e)
+	(begin
+		(define bf (g:bfinfo e))
+		(define vt (g:lvtype e))
+		(g:bfaddr e)
+		(g:bfload! bf)
+		(g:bfext! bf)
+		(set! g:ty vt)
+		(set! g:lastarray false))))
+;; can e store anything (an assignment, ++ or --, a call)? Then a store
+;; to a bit-field reads its unit after e, which may write that unit too
+;; (f.a = f.b = 7). Anything not known here counts as storing.
+(define g:bfstores? (lambda (e)
+	(begin
+		(define h (head e))
+		(if (if (= h 'num) true (if (= h 'llnum) true (if (= h 'str) true (if (= h 'var) true
+			(if (= h 'bftemp) true (if (= h 'sizeof) true (if (= h 'sizeofa) true (= h 'sizeofe)))))))) false
+		(if (if (= h 'member) true (if (= h 'arrow) true (if (= h 'deref) true (if (= h 'addr) true
+			(if (= h 'neg) true (if (= h 'bitnot) true (= h 'lognot)))))))
+			(g:bfstores? (g:second e))
+		(if (= h 'cast) (g:bfstores? (g:third e))
+		(if (if (= h 'index) true (if (= h 'land) true (if (= h 'lor) true (g:assoc/atom h g:binops))))
+			(if (g:bfstores? (g:second e)) true (g:bfstores? (g:third e)))
+		(if (= h 'cond)
+			(if (g:bfstores? (g:second e)) true (if (g:bfstores? (g:third e)) true (g:bfstores? (index e 3))))
+		true))))))))
+;; the new bits, from the value in A: converted, cut to the width, moved up
+(define g:bfbits! (lambda (bf vt)
+	(begin
+		(g:sconv! g:ty (if (index bf 4) g:BOOL vt))
+		(if (< (g:third bf) g:BITS)
+			(begin
+				(g:emit '(PSH))
+				(g:emit (list 'IMM (g:bflow bf)))
+				(g:emit '(AND)))
+			nil)
+		(g:shift! (g:second bf) 'SHL))))
+;; the unit in A, the field's bits cleared
+(define g:bfclear! (lambda (bf)
+	(begin
+		(g:bfload! bf)
+		(g:emit '(PSH))
+		(g:emit (list 'IMM (bit:xor (bit:shl (g:bflow bf) (g:second bf)) -1)))
+		(g:emit '(AND)))))
+(define g:bfassign (lambda (lv rhs)
+	(begin
+		(define used (not g:vunused))
+		(set! g:vunused false)
+		(define bf (g:bfinfo lv))
+		(define vt (g:lvtype lv))
+		(g:wcheck lv "assignment")
+		(if (g:bfstores? rhs)
+			;; the unit's address, then the new bits, in a temporary's two
+			;; words; then the unit, read last
+			(begin
+				(define t (g:ltemp))
+				(g:emit (list 'LEA t))
+				(g:emit '(PSH))
+				(g:bfaddr lv)
+				(g:emit '(SI))
+				(g:emit (list 'LEA (+ t 1)))
+				(g:emit '(PSH))
+				(g:expr rhs)
+				(g:bfbits! bf vt)
+				(g:emit '(SI))
+				(g:emit (list 'LEA t))
+				(g:emit '(LI))
+				(g:emit '(PSH))
+				(g:bfclear! bf)
+				(g:emit '(PSH))
+				(g:emit (list 'LEA (+ t 1)))
+				(g:emit '(LI)))
+		(begin
+			(g:bfaddr lv)
+			(g:emit '(PSH))
+			(g:bfclear! bf)
+			(g:emit '(PSH))
+			(g:expr rhs)
+			(g:bfbits! bf vt)))
+		(g:emit '(OR))
+		(g:bfstore! bf)
+		(if used (g:bfext! bf) nil)
+		(set! g:ty vt)
+		(set! g:lastarray false))))
+;; the unit's address in a temporary: the field as (bftemp OFF BF TYPE)
+(define g:bftemp (lambda (lv)
+	(begin
+		(define t (g:ltemp))
+		(g:emit (list 'LEA t))
+		(g:emit '(PSH))
+		(g:bfaddr lv)
+		(g:emit '(SI))
+		(list 'bftemp t (g:bfinfo lv) (g:lvtype lv)))))
+(define g:bfopassign (lambda (e)
+	(begin
+		(define lv (g:second e))
+		(define rhs (g:third e))
+		(g:wcheck lv "assignment")
+		(define used (not g:vunused))
+		(set! g:vunused false)
+		(define t (g:bftemp lv))
+		(set! g:vunused (not used))
+		(g:bfassign t (list (head rhs) t (g:third rhs))))))
+;; ++ and --: a store of the value stepped; x++'s value is the new one
+;; stepped back and cut to the field again
+(define g:bfincdec (lambda (e op post)
+	(begin
+		(define lv (g:second e))
+		(define bf (g:bfinfo lv))
+		(define vt (g:lvtype lv))
+		(define used (not g:vunused))
+		(set! g:vunused false)
+		(if (index bf 4) (g:die "++ or -- of a _Bool bit-field") nil)
+		(g:wcheck lv (if (= op 'ADD) "increment" "decrement"))
+		(define t (g:bftemp lv))
+		(set! g:vunused (not used))
+		(g:bfassign t (list (if (= op 'ADD) 'add 'sub) t (list 'num 1)))
+		(if (if post used false)
+			(begin
+				(g:emit '(PSH))
+				(g:emit '(IMM 1))
+				(g:emit (list (if (= op 'ADD) 'SUB 'ADD)))
+				(g:shift! (- g:BITS (g:third bf)) 'SHL)
+				(g:shift! (- g:BITS (g:third bf)) (if (index bf 3) 'SHR 'LSR)))
+			nil)
+		(set! g:ty vt))))
+;; a constant into a field of the data, the unit at AT (an initializer)
+(define g:dget (lambda (at s i acc)
+	(if (>= i s) acc
+	(next g:dget at s (+ i 1) (bit:or acc (bit:shl (string:byte g:data (+ at i)) (* 8 i)))))))
+(define g:dput (lambda (at s i u)
+	(if (>= i s) nil
+	(begin
+		(string:byte! g:data (+ at i) (bit:and (bit:shr u (* 8 i)) 255))
+		(next g:dput at s (+ i 1) u)))))
+(define g:dbits (lambda (at bf v)
+	(begin
+		(define m (bit:shl (g:bflow bf) (g:second bf)))
+		(define v2 (if (index bf 4) (if (= v 0) 0 1) v))
+		(g:dput at (head bf) 0
+			(bit:or (bit:and (g:dget at (head bf) 0 0) (bit:xor m -1))
+				(bit:and (bit:shl v2 (g:second bf)) m))))))
+;; a field's item of an initializer list; returns the rest of the items. A
+;; global's is a constant, merged into the data; a local's is recorded,
+;; (bf TYPE UNITOFF ITEM BF), and stored as the declaration runs
+(define g:ibits (lambda (m off items)
+	(begin
+		(define it (g:unwrap (head items)))
+		(if (= g:imode 'local)
+			(begin
+				(if (if (= (head it) 'num) true (= (head it) 'expr)) nil
+					(g:die (+ "an initializer of a bit-field that is not an integer: " (head m))))
+				(define r (list 'bf (g:third m) (+ off (g:second m)) it (g:bfof m)))
+				(if g:lrecording (set! g:lrecs (g:cons r g:lrecs)) (g:lbits/e r)))
+		(if (= (head it) 'num)
+			(if (= g:imode 'put) (g:dbits (+ off (g:second m)) (g:bfof m) (g:second it)) nil)
+		(g:die (+ "an initializer of a bit-field that is not an integer constant: " (head m)))))
+		(tail items))))
+;; a local's field from its record: the bit-field store, the unit at the
+;; local's offset (c4fc's n_lagg)
+(define g:lbits/e (lambda (r)
+	(begin
+		(define bf (index r 4))
+		(define it (index r 3))
+		(g:laddr (g:third r))
+		(g:emit '(PSH))
+		(g:bfclear! bf)
+		(g:emit '(PSH))
+		(if (= (head it) 'num)
+			(begin
+				(g:emit (list 'IMM (g:second it)))
+				(set! g:ty g:INT))
+			(g:expr (g:second it)))
+		(g:bfbits! bf (g:second r))
+		(g:emit '(OR))
+		(g:bfstore! bf))))
+(define g:hasbf? (lambda (rs)
+	(if (empty? rs) false (if (= (head (head rs)) 'bf) true (next g:hasbf? (tail rs))))))
 
 ;; ---- long long on a 32-bit target (M8) ----
 ;;
@@ -1636,16 +1874,18 @@
 	(begin
 		(define h (head e))
 		(if (if (= h 'var) true (= h 'cmpd)) (if (= h 'var) (g:third (g:find (g:second e))) (index e 2))
+		(if (= h 'bftemp) (index e 3)
 		(if (= h 'deref) (- (g:typeof (g:second e)) g:PTR)
 		(if (= h 'index) (- (g:typeof (g:second e)) g:PTR)
 		(if (= h 'member) (g:third (g:member (g:typeof (g:second e)) (g:third e)))
 		(if (= h 'arrow) (g:third (g:member (- (g:typeof (g:second e)) g:PTR) (g:third e)))
-		g:INT))))))))
+		g:INT)))))))))
 (define g:unres (lambda (t) (if (g:fp? t) t (if (g:uns? (g:promote t)) (g:promote t) (if (g:ll? t) t g:INT)))))
 (define g:typeof (lambda (e)
 	(if (= (head e) 'opassign) (g:lvtype (g:second e))
+	(if (= (head e) 'bftemp) (index e 3)
 	(if (= (head e) 'ltempv) (g:third e)
-	(g:typeof/0 e)))))
+	(g:typeof/0 e))))))
 (define g:typeof/0 (lambda (e)
 	(begin
 		(define h (head e))
@@ -1777,7 +2017,8 @@
 ;; off it -- converting first would lose the carry the undo needs, and
 ;; the loads convert anyway.
 (define g:preincdec (lambda (e op)
-	(g:incdec e op false)))
+	(if (g:bfinfo (g:second e)) (g:bfincdec e op false)
+	(g:incdec e op false))))
 (define g:incdec (lambda (e op post)
 	(begin
 		(define used (not g:vunused))
@@ -1799,6 +2040,9 @@
 
 ;; x++ / x-- (post): as pre, then undo the adjustment in the result
 (define g:postincdec (lambda (e op unop)
+	(if (g:bfinfo (g:second e)) (g:bfincdec e op true)
+	(g:postincdec/2 e op unop))))
+(define g:postincdec/2 (lambda (e op unop)
 	(begin
 		(define used (not g:vunused))
 		(set! g:vunused false)
@@ -2152,9 +2396,10 @@
 			(begin
 				(define t (g:lvtype (g:second x)))
 				(if (if (g:fp? t) true (g:ll? t)) nil (set! g:vunused true)))
+		(if (if (if (= h 'assign) true (= h 'opassign)) (g:bfinfo (g:second x)) false) (set! g:vunused true)
 		(if (= h 'assign)
 			(if (= (g:lvtype (g:second x)) g:UCHAR) (set! g:vunused true) nil)
-		nil))
+		nil)))
 		(g:expr x))))
 
 ;; (opassign L (op L R)): a[i++] += x. L's address goes in a temporary, once,
@@ -2176,13 +2421,14 @@
 (define g:expr (lambda (e)
 	(if g:fpon (if (g:fpnode? e) (g:fpexpr e) (g:expr/0 e)) (g:expr/0 e))))
 (define g:expr/0 (lambda (e)
-	(if (= (head e) 'opassign) (g:expr (g:oplower e))
+	(if (= (head e) 'opassign) (if (g:bfinfo (g:second e)) (g:bfopassign e) (g:expr (g:oplower e)))
+	(if (= (head e) 'bftemp) (g:bfget e)
 	(if (= (head e) 'ltempv)
 		(begin
 			(g:emit (list 'LEA (g:second e)))
 			(g:emit '(LI))
 			(set! g:ty (g:third e)))
-	(g:expr/1 e)))))
+	(g:expr/1 e))))))
 (define g:expr/1 (lambda (e)
 	(begin
 		(define h (head e))
@@ -2203,6 +2449,7 @@
 			(g:structassign (g:second e) (g:third e))
 		(if (if (= h 'assign) (g:ll? (g:lvtype (g:second e))) false)
 			(g:llassign (g:second e) (g:third e))
+		(if (if (= h 'assign) (g:bfinfo (g:second e)) false) (g:bfassign (g:second e) (g:third e))
 		(if (= h 'assign)
 			(begin
 				(define lv (g:second e))
@@ -2324,6 +2571,7 @@
 							(set! g:ty (g:decay g:ty))
 							(set! g:lastarray true))
 					(g:load! g:ty)))))
+		(if (if (if (= h 'member) true (= h 'arrow)) (g:bfinfo e) false) (g:bfget e)
 		(if (= h 'member)
 			(begin
 				(g:memberaddr e false)
@@ -2353,7 +2601,7 @@
 			(begin
 				(define b (g:assoc/atom h g:binops))
 				(if b (g:binary e (g:second b))
-				(g:die (+ "bad expression node: " (+ "" h))))))))))))))))))))))))))))))))))))))))))
+				(g:die (+ "bad expression node: " (+ "" h))))))))))))))))))))))))))))))))))))))))))))
 
 (define g:varexpr (lambda (n)
 	(begin
@@ -2954,8 +3202,12 @@
 			(begin
 				(define ty (g:second d))
 				(define size (index d 3))
+				;; a struct this unit never defines (Blood's `extern AISTATE
+				;; handIdle;`, whose address is all a unit can take): no
+				;; bytes, as c4fc gives it none
 				(define arrbytes
-					(if (if (= size nil) (g:svalue? ty) false) (g:tysize ty)
+					(if (if (= size nil) (g:svalue? ty) false)
+						(if (g:sfind (g:sid ty) g:structs) (g:tysize ty) nil)
 					(if (= size nil) nil
 						(* size (g:estride (- ty g:PTR))))))
 				(set! g:syms (g:cons
@@ -3222,19 +3474,24 @@
 		(if (empty? ms)
 			(if braced (g:die "too many initializers for a struct") items)
 		(begin
-			(define m (head ms))       ;; (NAME OFF TYPE BYTES Q)
+			(define m (head ms))       ;; (NAME OFF TYPE BYTES Q [BF])
 			(define mty (index m 2))
 			(define rest
+				(if (g:bfof m) (g:ibits m off items)
 				(if (if (g:isptr mty) (if (= (index m 3) nil) false true) false)
 					(g:ifill (- mty g:PTR) (/ (index m 3) (g:estride (- mty g:PTR)))
 						(+ off (g:second m)) items)
-				(g:ifill mty nil (+ off (g:second m)) items)))
+				(g:ifill mty nil (+ off (g:second m)) items))))
 			(next g:ifillst all (if uni (list) (tail ms)) off rest braced uni))))))))
 ;; a union lays every member at 0; it takes one initializer
 (define g:union? (lambda (ms)
 	(if (empty? ms) false (if (empty? (tail ms)) false (g:allzero? ms)))))
 (define g:allzero? (lambda (ms)
-	(if (empty? ms) true (if (= (g:second (head ms)) 0) (next g:allzero? (tail ms)) false))))
+	(if (empty? ms) true
+	(if (if (= (g:second (head ms)) 0)
+			;; a bit-field at 0 is at its unit's bit 0 too, in a union
+			(if (g:bfof (head ms)) (= (g:second (g:bfof (head ms))) 0) true) false)
+		(next g:allzero? (tail ms)) false))))
 (define g:memfrom (lambda (ms n)
 	(if (empty? ms) (g:die (+ "no such member in a designator: " n))
 	(if (= (head (head ms)) n) ms (next g:memfrom (tail ms) n)))))
@@ -3378,7 +3635,8 @@
 		(define rs (g:reverse g:lrecs))
 		(set! g:lrecs (list))
 		(set! g:lbase base)
-		(if (not (g:ltmpl? (g:lscan rs 0 0) rs))
+		;; bit-fields share their units' offsets: no template for them
+		(if (if (g:hasbf? rs) true (not (g:ltmpl? (g:lscan rs 0 0) rs)))
 			(begin
 				(g:lmset 0 (g:lbytes d))
 				(g:lreplay rs base false))
@@ -3415,8 +3673,9 @@
 		(begin
 			(set! g:lbase base)
 			(set! g:imode 'local)
+			(if (= (head r) 'bf) (g:lbits/e r)
 			(if (= (head r) 'sv) (g:lstruct/e (g:second r) (g:third r) (index r 3))
-			(g:lstore/e (g:second r) (g:third r) (index r 3)))))
+			(g:lstore/e (g:second r) (g:third r) (index r 3))))))
 		(next g:lreplay (tail rs) base varonly)))))
 
 ;; ---- a local's constants as a template (c4lc-array-init) ----

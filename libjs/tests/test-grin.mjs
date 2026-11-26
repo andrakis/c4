@@ -580,7 +580,7 @@ check(['File Manager', 'DOS Prompt', 'Control Panel', 'Notepad'].every(s => inPm
 const onDisk = f => existsSync(join(DISK, 'GAMES', f));
 const haveTyrData = onDisk('TYRIAN/tyrian/data/tyrian1.lvl');
 const ACTION = [[['Doom'], 'DOOM/doom.c4r'], [['Duke Nukem 3D'], 'DUKE3D/duke3d.c4r'], [['Quake'], 'QUAKE/quake.c4r'],
-  [['Rise of the', 'Triad'], 'ROTT/rott.c4r'], [['Super Blit', 'Kart'], 'SBK/sbk.c4r'],
+  [['Rise of the', 'Triad'], 'ROTT/rott.c4r'], [['Shadow Warrior'], 'SW/sw.c4r'], [['Super Blit', 'Kart'], 'SBK/sbk.c4r'],
   [['Tyrian'], 'TYRIAN/tyrian.c4r', 'TYRIAN/tyrian/data/tyrian1.lvl'], [['Wolfenstein 3D'], 'WOLF3D/wolf3d.c4r']];
 const actionThere = ACTION.filter(([, prog, data]) => onDisk(prog) && (!data || onDisk(data)));
 // a group window by its title (groupWin, below, is the same, for G7)

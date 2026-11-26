@@ -94,7 +94,7 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 
 | Parameter | Meaning |
 |---|---|
-| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|doom-full\|tyrian\|rott\|rottreg\|quake\|quake-full\|duke3d\|duke3d-full\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on a disk of its own with every game, booting into grin, its graphical shell (docs/grin.md; 256 MB, for the games that read their files whole, and the full games from the Uploads); `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian`, `rott`, `quake` and `duke3d` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), `doom-full` (or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` for one IWAD of several), `quake-full`, `duke3d-full` and `rottreg` the others that play the person's own files (the Uploads' folders, below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md, games/quake/README.c4.md, games/duke3d/README.c4.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
+| `?system=c4ix\|c4ke\|c4dos\|c4dos-ladder\|wolf3d\|wolf3d6\|wolf3d-c4ix\|doom\|doom-full\|tyrian\|rott\|rottreg\|quake\|quake-full\|duke3d\|duke3d-full\|sw\|sw-full\|gui-demo\|fb-demo\|snd-demo\|raycast` | Which machine to boot (default `c4ix`). `c4dos` is C4DOS on a disk of its own with every game, booting into grin, its graphical shell (docs/grin.md; 256 MB, for the games that read their files whole, and the full games from the Uploads); `c4dos-ladder` is the Build Ladder, C4DOS on a disk of its own that also builds and boots C4KE, from which C4KE builds and boots C4IX, all in one page session (docs/c4dos-ladder.md; 128 MB, and its own store for drive 1); `wolf3d`, `doom`, `tyrian`, `rott`, `quake`, `duke3d` and `sw` are those games on the bare machine, `wolf3d6` Wolfenstein 3D's registered game there, from its files in Uploads (below), `doom-full` (or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` for one IWAD of several), `quake-full`, `duke3d-full`, `sw-full` and `rottreg` the others that play the person's own files (the Uploads' folders, below), and `wolf3d-c4ix` Wolfenstein 3D on C4IX's whole display (docs/c4ix-wolf3d.md, games/doom/README.md, games/tyrian/README.md, games/rott/README.md, games/quake/README.c4.md, games/duke3d/README.c4.md, games/sw/README.c4.md; Tyrian's data only where it was there to copy). The last four are bare programs on the display or the sound card. |
 | `?image=URL&disk=URL` | Any other image and disk. |
 | `?args=A+B` | More arguments for the system's program, after its own: `?system=wolf3d&args=--secrets+--nodeath` (games/wolf3d/README.md). |
 | `?uploads=0` | The Uploads are not put on the disk. |
@@ -103,7 +103,7 @@ URL parameters (from `web/app.js`). The page's Configuration button shows them a
 | `?mhz=N` | Paced speed (default the system's own: 100, or 400 for C4DOS, the ladder and the games). |
 | `?fast` | Unpaced. |
 | `?realtime=0` | When the host cannot keep up with `?mhz`, the machine's clock slows with it. By default it keeps the wall's time (`worker.js`), so a game drops frames rather than playing in slow motion. |
-| `?mem=MB` | Arena size (default the system's own: 64, or C4DOS's 256, the ladder's 128, `quake` and `doom-full` 128, `duke3d-full` 192, `quake-full` 256). |
+| `?mem=MB` | Arena size (default the system's own: 64, or C4DOS's 256, the ladder's 128, `quake` and `doom-full` 128, `duke3d-full` and `sw-full` 192, `sw` 128, `quake-full` 256). |
 | `?snd=0` | No sound card. |
 | `?cpus=N` | N processors, simulated (`smp.js`, docs/c4ix-smp.md). |
 | `?parallel` | ... each on a worker of its own (`par.js`), when the page is cross-origin isolated. |
@@ -141,6 +141,7 @@ were folders still play:
 |---|---|---|---|
 | `/home/wolf3d` | `wolf3d6`: Wolfenstein 3D's registered `*.WL6` (games/wolf3d/README.md) | Wolfenstein 3D (your files) | `wolf3d6` |
 | `/home/duke3d` | `duke3d -home`: `DUKE3D.GRP` (games/duke3d/README.c4.md) | Duke Nukem 3D (your files) | `duke3d-full` |
+| `/home/sw` | `sw -home`: `SW.GRP`, the registered game (games/sw/README.c4.md) | Shadow Warrior (your files) | `sw-full` |
 | `/home/quake` | `quake -home`: `pak0.pak` and `pak1.pak`, the registered game (games/quake/README.c4.md) | Quake (your files) | `quake-full` (256 MB) |
 | `/home/doom` | `doom -home`: `doom.wad`, `doom2.wad`, `plutonia.wad`, `tnt.wad` (games/doom/README.md) | Doom (your files) > each IWAD | `doom-full`, or `doom1-full`, `doom2-full`, `tnt-full`, `plutonia-full` (128 MB) |
 | `/home/rott` | `rottreg`: `DARKWAR.WAD`, `.RTL`, `.RTC`, and `REMOTE1.RTS` if you have it (games/rott/README.md) | Rise of the Triad (your files) | `rottreg` |
@@ -163,7 +164,7 @@ writes back, for a file saved there, is kept without the uploads' names
 for the uploads alone, kept for that boot.
 Under C4DOS, grin's Program Manager has the same games in its Full Games
 (Uploads) group (docs/grin.md 3.7), or at `A>`: `\GAMES\WOLF3D\WOLF3D6`,
-`\GAMES\DUKE3D\DUKE3D -home`, `\GAMES\QUAKE\QUAKE -home`,
+`\GAMES\DUKE3D\DUKE3D -home`, `\GAMES\SW\SW -home`, `\GAMES\QUAKE\QUAKE -home`,
 `\GAMES\DOOM\DOOM -home` (`-iwad NAME` for one of several) and
 `\GAMES\ROTT\ROTTREG`; and README.TXT there says how to add each game's
 files (`A:\GAMES\README.TXT`, written from `NEEDS` at build time by

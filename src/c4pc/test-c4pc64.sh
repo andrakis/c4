@@ -100,8 +100,10 @@ else bad "C4IX and the MMU, 64-bit"; fi
 echo "  ---   the 64-bit desktop, on a display"
 # (the double click at 15 s: the 64-bit desktop is ready at about 9.6 s of
 # the machine's time -- boot 7.3, then its own start -- and at 9 s the
-# click came before it, 2026-11-24)
+# click came before it, 2026-11-24; "mouse" waits for its ring to ask for
+# the mouse besides, 2026-11-26)
 cat > $W/gui64-events.txt <<EV
+8000 mouse
 15000 move 40 330
 15100 packet 1 0 1
 15150 packet 0 1 0

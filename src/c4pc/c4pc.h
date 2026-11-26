@@ -561,6 +561,7 @@ int vmw_host_us(uint64_t *us);
 void gui_key(gui *g, int down, int code, int ch, int mods);
 void gui_focus(gui *g, int on);
 int gui_attached(gui *g);
+int gui_wants_mouse(gui *g);   /* a ring that asked for the mouse's moves */
 u32 *gui_front(gui *g, int *w, int *h);
 int gui_take_dirty(gui *g, int *x0, int *y0, int *x1, int *y1);
 void gui_redraw_all(gui *g);

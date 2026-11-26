@@ -89,9 +89,13 @@ if [ -z "${NO_MMU:-}" ]; then
 fi
 # The display (gui.c): the desktop booted on c4pc-host with a display
 # fitted (C4IX --desktop, as the web page boots it), the Calculator's icon
-# double-clicked, and the strings it then draws looked for
+# double-clicked, and the strings it then draws looked for. "mouse" waits
+# for the desktop's ring to ask for the mouse: c4pc's own images boot
+# 0.85 s longer than main's, and at 9 s the click came before the desktop
+# was attached (2026-11-26)
 echo "  ---   the desktop, on a display"
 cat > $W/gui-events.txt <<EV
+8000 mouse
 9000 move 40 330
 9100 packet 1 0 1
 9150 packet 0 1 0

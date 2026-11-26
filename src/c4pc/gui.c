@@ -724,6 +724,7 @@ void gui_focus(gui *g, int on) { i32 pl[1] = {on ? 1 : 0}; send(g, EV_FOCUS, pl,
 void gui_size(gui *g, int *w, int *h) { *w = g->cw; *h = g->ch; }
 int gui_locked(gui *g) { return g->cursor == PTR_LOCK; }
 int gui_attached(gui *g) { return g->mb && (g->evmask & 4); }
+int gui_wants_mouse(gui *g) { return g->mb && (g->evmask & MASK[EV_MOVE]); }
 int gui_ring(gui *g) { return g->mb; }
 u32 gui_flips(gui *g) { return g->flips; }
 u32 gui_switches(gui *g) { return g->switches; }

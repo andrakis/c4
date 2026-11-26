@@ -189,7 +189,10 @@ static void write_png(const char *path, const u32 *px, int w, int h) {
  *   stats: the display's counts so far, a line on stderr ("c4pc: at MS
  *   ms: screen S, N presents, N flips, N commands, N switches") |
  *   packet DX DY BUTTONS: a PS/2 packet's worth, motion and buttons at
- *   once (pc/screen.c mouse_poll), BUTTONS a mask */
+ *   once (pc/screen.c mouse_poll), BUTTONS a mask |
+ *   mouse: wait until a ring on the display has asked for the mouse's
+ *   moves (the desktop up, however long the boot took), and put off what
+ *   follows by as long as that wait */
 typedef struct { i64 ms; char what[16]; int a, b, c; char s[256]; } gev;
 static gev *gevs; static int ngev, gev_at;
 static void load_events(const char *path) {
@@ -220,7 +223,11 @@ static int run_events(machine *m) {
   while (gev_at < ngev && gevs[gev_at].ms <= now) {
     gev *e = &gevs[gev_at++];
     gui *g = m->gui;
-    if (!strcmp(e->what, "move")) gui_mouse_at(g, e->a, e->b, 0);
+    if (!strcmp(e->what, "mouse")) {
+      if (!gui_wants_mouse(g)) { gev_at--; return 0; }
+      for (int k = gev_at; k < ngev; k++) gevs[k].ms += now - e->ms;
+    }
+    else if (!strcmp(e->what, "move")) gui_mouse_at(g, e->a, e->b, 0);
     else if (!strcmp(e->what, "down")) { gui_mouse_at(g, e->a, e->b, 0); gui_mouse(g, 0, 0, 1 << e->c, 0); }
     else if (!strcmp(e->what, "up")) { gui_mouse_at(g, e->a, e->b, 1 << e->c); gui_mouse(g, 0, 0, 0, 0); }
     else if (!strcmp(e->what, "click")) { gui_mouse_at(g, e->a, e->b, 0); gui_mouse(g, 0, 0, 1, 0); gui_mouse(g, 0, 0, 0, 0); }

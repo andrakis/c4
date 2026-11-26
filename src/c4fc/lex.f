@@ -366,6 +366,8 @@ VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
 : LEX-STEP {: | c -- :}
    CH TO c
    c 92 = POS @ 1+ PEEK 10 = AND IF 2 POS +! 1 SPLICES +! EXIT THEN   \ splice
+   c 92 = POS @ 1+ PEEK 13 = AND POS @ 2 + PEEK 10 = AND
+   IF 3 POS +! 1 SPLICES +! EXIT THEN     \ and before a CR LF, as c4lc
    c 10 = IF 1 POS +! SPLICES @ 1+ LINE +! 0 SPLICES ! 0 WANT-HDR ! EXIT THEN
    c 33 < IF 1 POS +! EXIT THEN
    c 35 = IF T-HASH EXIT THEN

@@ -270,6 +270,20 @@
 (define p:structs nil)     ;; (("Name" TYPEID) ...)
 (define p:nstructs 0)
 (define p:typedefs nil)    ;; (("Name" TYPE) ...)
+;; Function typedefs, `typedef int ANIMATOR(short);` (Shadow Warrior's
+;; game.h): (("Name" TOKENS) ...), TOKENS its parameter list from ( to ).
+;; The name is in p:typedefs too, as its return type. A declaration of
+;; one, `ANIMATOR DoBunnyMove, NullBunny;`, declares functions: the
+;; parameter list is put back after each name, and the declarator reads
+;; a prototype as it would have. `ANIMATOR *p` is a pointer to such a
+;; function: a word, as every function pointer is here (p:fnty).
+(define p:fntds nil)
+(define p:fnbase false)    ;; the declaration's base is one: its TOKENS
+;; ... kept for the whole declaration, from where it starts: each of its
+;; declarators begins from it, since a prototype's parameter list (or a
+;; cast in an initializer) sets p:fnbase for its own base types
+(define p:fndecl false)
+(define p:fnstarred false) ;; and the declarator had a *
 (define p:pending nil)     ;; structdef nodes awaiting emission
 
 ;; type id for a struct name, registering a forward reference if new
@@ -477,7 +491,43 @@
 ;; seen, or `unsigned T;` could never declare a T). Nothing at all ->
 ;; default d (nil marks "no type seen" for callers that must know). The
 ;; qualifiers land in p:bq.
-(define p:basetype (lambda (d) (p:spec d 0 0 0 0 0 0 0 nil)))
+(define p:basetype (lambda (d)
+	(begin
+		;; looked for before p:spec, whose struct members call this again:
+		;; the declaration's own base is what is left in p:fnbase
+		(define fb (p:fntd-at p:toks))
+		(define r (p:spec d 0 0 0 0 0 0 0 nil))
+		(set! p:fnbase fb)
+		r)))
+;; the parameter tokens of the function typedef these tokens start with,
+;; past any qualifiers; false if they start with none
+(define p:fntd-at (lambda (toks)
+	(begin
+		(define k (head (head toks)))
+		(if (if (= k 'Const) true (= k 'Volatile)) (next p:fntd-at (tail toks))
+		(if (= k 'Id)
+			(begin
+				(define n (p:second (head toks)))
+				(define a (p:assoc n p:fntds))
+				(if a (if (p:assoc n p:typedefs) (p:second a) false) false))
+		false)))))
+;; after a declarator's stars: a function typedef's own name declares a
+;; function, so its parameter list goes back in after the name
+(define p:fnsplice (lambda ()
+	(if (if p:fnbase (if p:fnstarred false (= (p:kind) 'Id)) false)
+		(set! p:toks (p:cons (head p:toks) (+ p:fnbase (tail p:toks))))
+		nil)))
+;; from a '(' to its matching ')', inclusive, as a list of tokens
+(define p:grabparens (lambda (d acc)
+	(begin
+		(define t (head p:toks))
+		(define k (head t))
+		(if (= k 'Eof) (p:die "unterminated parameter list")
+		(begin
+			(p:advance)
+			(define d2 (if (= k 'Lparen) (+ d 1) (if (= k 'Rparen) (- d 1) d)))
+			(if (= d2 0) (p:reverse (p:cons t acc))
+			(next p:grabparens d2 (p:cons t acc))))))))
 (define p:spec (lambda (d q sg un sh lg ch it bt)
 	(begin
 		(define k (p:kind))
@@ -556,9 +606,14 @@
 ;; ty -> ty + 2 per star, and the mask q of the base moves up a level
 ;; per star. The declarator's mask is left in p:sq.
 (define p:stars (lambda (ty q)
-	(if (= (p:kind) 'Mul) (begin (p:advance) (next p:stars (+ ty p:PTR) (bit:shl q 2)))
-	(if (= (p:kind) 'Const) (begin (p:advance) (next p:stars ty (bit:or q 1)))
-	(if (= (p:kind) 'Volatile) (begin (p:advance) (next p:stars ty (bit:or q 2)))
+	(if (if p:fnbase (= (p:kind) 'Mul) false)
+		;; `F *p`, F a function typedef: a function pointer, a word
+		(begin (p:advance) (set! p:fnstarred true) (p:stars/2 p:INT (bit:shl q 2)))
+	(begin (set! p:fnstarred false) (p:stars/2 ty q)))))
+(define p:stars/2 (lambda (ty q)
+	(if (= (p:kind) 'Mul) (begin (p:advance) (next p:stars/2 (+ ty p:PTR) (bit:shl q 2)))
+	(if (= (p:kind) 'Const) (begin (p:advance) (next p:stars/2 ty (bit:or q 1)))
+	(if (= (p:kind) 'Volatile) (begin (p:advance) (next p:stars/2 ty (bit:or q 2)))
 	(begin (set! p:sq q) (set! p:lastty ty) ty))))))
 ;; the type p:stars made last: a function pointer declarator's return type
 (define p:lastty 1)
@@ -1534,13 +1589,15 @@
 				(p:advance)
 				(if (= (p:kind) 'Id)
 					(begin
-						(define n (p:value))
+						;; a static local by the global's name it now has
+						;; (Shadow Warrior's tables of its state rings)
+						(define n (p:srename (p:value)))
 						(p:advance)
 						(list 'fnaddr n))
 				(p:die "& initializer requires a name")))
 		(if (p:initname?)
 			(begin
-				(define fn (p:value))
+				(define fn (p:srename (p:value)))
 				(p:advance)
 				(list 'name fn))
 		(list 'num (p:const "initializer"))))))))))))))
@@ -1736,6 +1793,11 @@
 		(if r (p:second r) n))))
 (define p:statics (lambda (bt bq)
 	(begin
+		;; its new name from the start: its own initializer may name it,
+		;; as Shadow Warrior's state rings do (static STATE s[] = { ...,
+		;; &s[1] }), and the name there must be the global's
+		(define pn (p:declname p:toks))
+		(if pn (set! p:srenames (p:cons (list pn (+ (+ p:curfn ".") pn)) p:srenames)) nil)
 		(define d (p:declarator bt bq 8))
 		(if (= (head d) 'global) nil (p:die "a static local must be a variable"))
 		(define n (index d 2))
@@ -1751,6 +1813,13 @@
 			(+ (list (head d) (p:second d) m) (tail (tail (tail d)))) p:pending))
 		(if (= (p:kind) 'Comma) (begin (p:advance) (next p:statics bt bq))
 		(p:expect 'Semi "semicolon after a static declaration")))))
+;; the name a declarator at these tokens declares, past its stars and
+;; qualifiers; false when it is not a plain one
+(define p:declname (lambda (ts)
+	(begin
+		(define k (head (head ts)))
+		(if (if (= k 'Mul) true (if (= k 'Const) true (= k 'Volatile))) (next p:declname (tail ts))
+		(if (= k 'Id) (p:second (head ts)) false)))))
 ;; a function and the static locals its body queued: they go first
 (define p:hoist (lambda (acc)
 	(if (empty? p:pending) acc
@@ -1779,16 +1848,19 @@
 		(begin
 			(p:advance)
 			(define sbt (p:basetype p:INT))
+			(set! p:fndecl p:fnbase)
 			(p:statics sbt p:bq)
 			(list))
 	(if (= (p:kind) 'Extern)
 		(begin
 			(p:advance)
 			(define ebt (p:basetype p:INT))
+			(set! p:fndecl p:fnbase)
 			(p:blockexterns ebt p:bq)
 			(list))
 	(begin
 		(define bt (p:basetype p:INT))
+		(set! p:fndecl p:fnbase)
 		(next p:localline/2 bt p:bq (list)))))))
 ;; ---- declarations of globals inside a block ----
 ;;
@@ -1808,8 +1880,10 @@
 	(if (= (p:kind) 'Semi)
 		(begin (p:advance) (p:reverse acc))
 	(begin
+		(set! p:fnbase p:fndecl)
 		(define ty0 (p:stars bt bq))
 		(p:unparen)
+		(p:fnsplice)
 		(if (if (= (p:kind) 'Id) (= (head (head (tail p:toks))) 'Lparen) false)
 			(next p:localproto ty0 bt bq acc)
 			(next p:localline/3 ty0 bt bq acc))))))
@@ -1930,8 +2004,10 @@
 ;; TOP node
 (define p:declarator (lambda (bt bq attr)
 	(begin
+		(set! p:fnbase p:fndecl)
 		(define ty (p:stars bt bq))
 		(define q p:sq)
+		(p:fnsplice)
 		(if (p:fnptr?)
 			(begin
 				(define fp (p:fnptrdecl))
@@ -2072,7 +2148,12 @@
 			(set! p:sconsts (p:cons
 				(list n (p:convval (p:second init) ty) (p:promote ty)) p:sconsts))
 			nil)
-		(set! p:gvars (p:cons (list n ty2 fsize) p:gvars))
+		;; `extern T a[];` in a block, after the unit defined a (Shadow
+		;; Warrior's weapon.c): a is as big as before, for sizeof
+		(define prev (p:assoc n p:gvars))
+		(if (if (= fsize 0) (if prev (if (= (p:third prev) nil) false (> (p:third prev) 0)) false) false)
+			nil
+			(set! p:gvars (p:cons (list n ty2 fsize) p:gvars)))
 		(p:qnode (list 'global ty2 n fsize a2 init)
 			(if (= size nil) q (bit:shl q 2))))))
 
@@ -2224,7 +2305,25 @@
 		(p:advance)
 		(define bt (p:basetype nil))
 		(if (= bt nil) (p:die "typedef needs a type") nil)
-		(define ty0 (p:stars bt p:bq))
+		(define bq p:bq)
+		(set! p:fndecl p:fnbase)
+		(define node (p:typedef1 bt bq))
+		;; typedef T A, *B; (Shadow Warrior's mytypes.h): more names, each
+		;; the base type with its own stars and size, as in any declaration.
+		;; The first one's node stands for them all: gen has no use for it.
+		(p:typedefmore bt bq)
+		(p:expect 'Semi "semicolon after typedef")
+		node)))
+(define p:typedefmore (lambda (bt bq)
+	(if (= (p:kind) 'Comma)
+		(begin (p:advance) (p:typedef1 bt bq) (next p:typedefmore bt bq))
+		nil)))
+;; one typedef name of base type BT (qualifiers BQ): it is registered,
+;; and its node returned
+(define p:typedef1 (lambda (bt bq)
+	(begin
+		(set! p:fnbase p:fndecl)
+		(define ty0 (p:stars bt bq))
 		(define fp (if (p:fnptr?) (p:fnptrdecl) false))
 		(define ty (if fp p:fnty ty0))
 		(define q (if fp 0 p:sq))
@@ -2232,6 +2331,14 @@
 			(if (= (p:kind) 'Id) nil (p:die "typedef needs a name")))
 		(define n (if fp (head fp) (p:value)))
 		(if fp nil (p:advance))
+		;; typedef T NAME(params): a function type, its parameter list
+		;; kept for the declarations of it (p:fntds); typedef F NAME, F
+		;; one, is another name for it
+		(if (if fp false (= (p:kind) 'Lparen))
+			(set! p:fntds (p:cons (list n (p:grabparens 0 (list))) p:fntds))
+		(if (if fp false (if p:fnbase (not p:fnstarred) false))
+			(set! p:fntds (p:cons (list n p:fnbase) p:fntds))
+			nil))
 		;; typedef T NAME[N] (ports-feasibility §8 step 6): an array type
 		;; is a row (M9), N elements of T, which stands for the address of
 		;; its first element wherever its value is used, as an array does.
@@ -2240,7 +2347,6 @@
 		(if (= asz 0) (p:die "typedef of an array needs its size") nil)
 		(define ty2 (if (= asz nil) ty (p:rowtype (p:elemty ty) asz)))
 		(define q2 (if (= asz nil) q 0))
-		(p:expect 'Semi "semicolon after typedef")
 		(set! p:typedefs (p:cons (list n ty2 q2) p:typedefs))
 		(p:qnode (list 'typedefd n ty2) q2))))
 
@@ -2256,6 +2362,7 @@
 		(if (= (p:kind) 'Enum)
 			(begin
 				(define ed (p:enumdecl))
+				(set! p:fndecl false)
 				;; any declarators after the enum share INT base type
 				(next p:top (p:declarators p:INT 0 attr (p:cons ed acc))))
 		(if (= (p:kind) 'Typedef)
@@ -2264,6 +2371,7 @@
 				(next p:top (p:cons td (p:drain acc))))
 		(begin
 			(define bt (p:basetype p:INT))
+			(set! p:fndecl p:fnbase)
 			(next p:top (p:hoist (p:declarators bt p:bq attr (p:drain acc))))))))))))
 
 ;; ---- what c4 has no use for (M7b) ----
@@ -2585,7 +2693,7 @@ static int *__c4ll_neg(int *d, int *a) {
 	(p:die "a long long constant is too wide for an initializer here")))))
 ;; a global, by name: the one being initialized, or one declared before
 (define p:cfgv (lambda (n)
-	(if (if p:curgv (= (head p:curgv) n) false) p:curgv
+	(if (if p:curgv (if (= (head p:curgv) n) true (= (p:srename (head p:curgv)) n)) false) p:curgv
 	(if (p:member? n p:locals) false
 	(p:assoc n p:gvars)))))
 ;; a name's value: a static const's, or an array's address. A name that

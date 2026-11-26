@@ -169,6 +169,14 @@
 	(if (>= i lex:len) false
 	(= (string:byte lex:src i) 10))))
 
+;; the length of the line end at i, for a backslash before it: 1 for a LF,
+;; 2 for a CR LF (a source written on DOS or Windows, as jfaudiolib's,
+;; continues its macros so too), 0 for none
+(define lex:eolen (lambda (i)
+	(if (lex:eol? i) 1
+	(if (>= (+ i 1) lex:len) 0
+	(if (= (string:byte lex:src i) 13) (if (lex:eol? (+ i 1)) 2 0) 0)))))
+
 ;; end of a <...> header name, at the '>'
 (define lex:hdrend (lambda (i)
 	(if (>= i lex:len) i
@@ -645,13 +653,13 @@
 	(begin
 		(define c (string:byte lex:src i))
 		(define j (+ i 1))
-		(if (if (= c 92) (lex:eol? j) false)
+		(if (if (= c 92) (> (lex:eolen j) 0) false)
 			;; backslash-newline: splice, same logical line -- which is how
 			;; the preprocessor finds where a directive ends -- and counted,
 			;; so the line after it is the line it is (and __LINE__ too)
 			(begin
 				(set! lex:splice (+ lex:splice 1))
-				(next lex:go (+ j 1) line acc))
+				(next lex:go (+ j (lex:eolen j)) line acc))
 		(if (= c 10)
 			(begin
 				(set! lex:want-header false)

@@ -103,6 +103,21 @@ stack machine a textured pixel is 15 to 70 instructions; done by the host it is 
 
 ## 2. The operations
 
+**Shadow Warrior** (`games/sw/c4/accel.mjs`, `c4/c4accel.h`; `SA_*`), JFBuild's loops (`a-c.c`)
+and 64-bit helpers (`pragmas.h`), called from them under c4lc; c4pc's are `src/c4pc/games/sw.c`
+(docs/sw-port.md):
+
+| op | macro | JFBuild's C | what it is |
+|---|---|---|---|
+| 0, 1, 2 | `sw_vline`, `sw_mvline`, `sw_tvline` | `vlineasm1`, `mvlineasm1`, `tvlineasm1` | a wall's column; masked; translucent, through `transluc` |
+| 3 | `sw_hline` | `hlineasm4` | a floor's or ceiling's row, right to left |
+| 4, 5 | `sw_mhline`, `sw_thline` | `mhline`, `thline` | a floor sprite's row, masked or translucent |
+| 6, 7, 8 | `sw_sprv` | `spritevline`, `mspritevline`, `tspritevline` | rotatesprite's columns: plain, masked, translucent |
+| 9 | `sw_slope` | `slopevlin` | a sloped floor's column, 1/z from a float's bits each pixel (`krecipasm`) |
+| 10 to 14 | `sw_mulscale` ... `sw_divscale` | `mulscale`, `dmulscale`, `tmulscale`, `scale`, `divscale` | the 64-bit helpers, exactly as `int64_t` |
+
+The translucent ones write last, as Duke's do. test-sw's `acceltest.c4r` holds each to its loop.
+
 **Duke Nukem 3D** (`games/duke3d/c4/accel.mjs`, `c4/c4accel.h`; `DA_*`):
 
 | op | macro | Duke's C | what it is |
@@ -300,6 +315,7 @@ Duke's demo1 without its death (frames 1949 to 2782).
 | run | before | after |
 |---|---|---|
 | Duke, shareware script | 4.11 / 5.42 / 5.82 | 1.38 / 2.32 / 2.62 |
+| SW, shareware script (`sw`) | 6.46 / 12.01 / 13.57 | 2.73 / 4.60 / 9.26 |
 | Duke Atomic demo1, in play | 5.23 / 9.57 / 11.06 | 1.70 / 3.20 / 3.64 |
 | Duke Atomic demo2 | 4.41 / 7.66 / 9.74 | 1.69 / 4.19 / 5.96 |
 | Duke Atomic demo3 | 4.09 / 6.20 / 7.19 | 1.93 / 3.68 / 4.62 |

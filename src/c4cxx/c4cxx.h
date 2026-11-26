@@ -49,6 +49,7 @@ struct File {
 	char *dir;	// its directory, with a trailing '/', or ""
 	char *text;	// contents, line splices removed, LF line ends
 	int index;
+	int c_header;	// found in an -isystem directory: its declarations are C
 };
 
 struct Token {
@@ -75,6 +76,7 @@ int is_ident_char (int c);
 // ---- pp.c ----
 extern int opt_cplusplus;
 void pp_add_include_path (const char *dir);
+void pp_add_c_include_path (const char *dir);	// -isystem: headers of C
 void pp_define (const char *spec);		// NAME or NAME=VALUE
 void pp_undef (const char *name);
 Token *preprocess (const char *path);		// the whole unit

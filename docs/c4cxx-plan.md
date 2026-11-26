@@ -712,6 +712,75 @@ Found on the way:
 - **g++ `-m32` links with gcc here.** helios has no 32-bit libstdc++, and
   these programs need none, as `host.sh` found.
 
+### 4.7 M4, done (2026-11-27)
+
+Overloading and mangling, about 700 lines more in `sema.c`:
+
+- **Mangling** (plan section 3.4): every function of C++ linkage is named
+  in C by its parameters' codes, so that each unit names it the same:
+  `FindSector__iiiPi`, `Rect__C__iiii`, `Rect__op_andeq__R4Rect`,
+  `CMenuTextMgr__GetFontInfo__iPcPiPi`. Destructors are `X__D`. `extern
+  "C"` functions and `main` keep their names, as do the functions of
+  headers found through `-isystem` (c4's libc, which has no `extern "C"`
+  of its own), as an old C++ compiler took a system's headers.
+- **Overload resolution** (plan section 3.3), for free functions, member
+  functions and constructors. Each argument ranks as one of:
+  - exact, with exact-but-`const`-added below it (`int&` beats
+    `const int&`, `char*` beats `const char*`);
+  - a string literal as `char *`;
+  - a promotion;
+  - a conversion;
+  - `...`.
+
+  Default arguments count. The best candidate must be at least as good on
+  every argument and better on one; otherwise the call is an error that
+  lists the candidates. Enumerators have their enum's type, so `evPost`
+  on `COMMAND_ID` and on `CALLBACK_ID` are told apart. A string literal is
+  `const char [N]`. An enum promotes to `int`, as C++ promotes it.
+- **Constructors**, overloaded, are chosen by their arguments: in
+  declarations, init lists, `X x = v` (a user's copy constructor
+  included) and temporaries.
+- **Member operators**: `a[i]`, `!a`, `a &= b`, `a == b`, `++a`, `a++`
+  (`operator++ (int)`) and the rest call `X__op_idx`, `X__op_not`,
+  `X__op_andeq`... when the operand's class has the operator. A reference
+  result is the object (`gDudeInfo[11].x = 1`).
+- **Temporaries** `X (args)` of a class without a destructor are built in
+  a hidden local of the function, `*X__C__... (&__c4x_t0, args)`, which is
+  an lvalue, so that a `const X&` takes its address (`curHandler (Error
+  (module, line, buffer))`).
+- **`inline`** functions are `static`, because C99's `inline` alone
+  defines nothing outside the unit.
+
+The tests are the plan's, through `src/c4cxx/test-cxx.sh`:
+
+- **`t_over1.cpp`**: `evPost` on two enums; `sndStartSample (char *,
+  ...)` and `(ulong, ...)` with default arguments; `FindSector` with 3 and
+  4 arguments; `LevelWarp ()`; a call for each rank.
+- **`t_over2.cpp`**: qtools' `Rect`, with its constructors,
+  `operator!` and `Rect &= Rect`. Also `DUDEINFOACCESS[i].x = 1` (from
+  chocolate-blood, since Blood-RE has no such class), and `Error (...)`
+  as a temporary.
+
+Both print as g++ `-m32`'s do, through gcc and through c4lc. Two programs
+must fail, one ambiguous and one with no candidate that fits.
+
+Blood: 13 of 80 units translate in full and compile with gcc and c4lc.
+The other 67 all stop at qtools' `resource.h` (`struct DICTNODE :
+CACHENODE`), inheritance, which is M5.
+
+Not done, as the plan allows:
+
+- **User conversions:** neither converting constructors nor conversion
+  operators take part in overload resolution.
+- **By-value arguments:** an argument passed by value is copied as a C
+  struct, even where the class has a user copy constructor. Blood's one
+  (`Rect (Rect &)`) copies the members as C would.
+- **`__` in names:** a user's identifier containing `__` is not reported
+  where it could collide with a mangled name.
+- **`inline` outside the class:** a member function defined `inline`
+  outside its class is defined in each unit that defines it, so a header
+  doing that would define it twice at link time. Blood has none so far.
+
 ## 5. What is left for Blood after the compiler
 
 The Duke port (`~/git/c4/games/duke3d`, `c4/` is 3,250 lines) shows what a

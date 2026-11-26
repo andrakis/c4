@@ -1,11 +1,13 @@
 // main.c -- c4cxx's driver
 //
-//   c4cxx [-E | -check-types] [-x c|c++] [-I dir] [-D name[=value]] [-U name] [-o out] file
+//   c4cxx [-E | -parse | -check-types] [-x c|c++] [-I dir] [-isystem dir] [-D name[=value]]
+//         [-U name] [-o out] file
 //
 // -E writes the preprocessed tokens. Without it (M1b on), the unit is
 // parsed, typed (sema.c) and written out as C. -check-types adds
 // _Static_asserts of every expression's type, every struct's layout and every
-// global's size, for gcc -m32 to confirm (test-types.sh). -parse stops after
+// global's size, for gcc -m32 to confirm (test-types.sh). -isystem is -I for
+// headers of C: in C++, their functions keep their C names. -parse stops after
 // parsing (to see that a unit parses). A .cpp, .cc or .cxx file is C++ (defines
 // __cplusplus); -x says which.
 #include "ast.h"
@@ -39,7 +41,9 @@ int main (int argc, char **argv)
 		else if (!strcmp (a, "-x") && i + 1 < argc) {
 			i++;
 			lang = !strcmp (argv[i], "c++");
-		} else if (!strncmp (a, "-I", 2))
+		} else if (!strcmp (a, "-isystem") && i + 1 < argc)
+			pp_add_c_include_path (argv[++i]);
+		else if (!strncmp (a, "-I", 2))
 			pp_add_include_path (a[2] ? a + 2 : (i + 1 < argc ? argv[++i] : (usage (), "")));
 		else if (!strncmp (a, "-D", 2))
 			defs[ndef++] = a[2] ? a + 2 : (i + 1 < argc ? argv[++i] : (usage (), ""));

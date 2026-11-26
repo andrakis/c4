@@ -8,12 +8,14 @@ for Blood (andrakis/c4-Blood), whose game code is Watcom C++ 10.6 written as
 It is plain C, so gcc builds it on the host (`make c4cxx`) and c4lc can build
 it later.
 
-    c4cxx [-E | -parse | -check-types] [-x c|c++] [-I dir] [-D name[=value]] [-U name] [-o out] file
+    c4cxx [-E | -parse | -check-types] [-x c|c++] [-I dir] [-isystem dir] [-D name[=value]] [-U name] [-o out] file
 
 - `-E` writes the preprocessed tokens.
 - Without `-E` it parses the unit, types it, and writes it out as C (C++
   lowered to C).
 - `-parse` stops after parsing.
+- `-isystem dir` is `-I` for headers of C: in C++, their functions keep
+  their names in C.
 - `-check-types` adds `_Static_assert`s of what c4cxx worked out: every
   expression's type (and constant's value), every struct's layout, every
   global's size. gcc `-m32` then confirms them.
@@ -174,6 +176,68 @@ stop at what M4 and M5 bring:
 - **Overloading (M4):** overloaded functions (`credits.h`, debug4g, key,
   textio) and members (`inifile.h`, `gfx.h`), and a temporary
   `Error (...)` (error.cpp).
+
+## State: M4 (2026-11-27)
+
+M4 adds overloading:
+
+- **Mangling** (plan section 3.4): every function of C++ linkage is named
+  in C by its parameters' codes, so that each unit names it the same:
+  `FindSector__iiiPi`, `Rect__C__iiii`, `Rect__op_andeq__R4Rect`,
+  `CMenuTextMgr__GetFontInfo__iPcPiPi`. Destructors are `X__D`. `extern
+  "C"` functions and `main` keep their names, as do the functions of
+  headers found through `-isystem` (c4's libc, which has no `extern "C"`
+  of its own), as an old C++ compiler took a system's headers.
+- **Overload resolution** (plan section 3.3), for free functions, member
+  functions and constructors. Each argument ranks as one of:
+  - exact, with exact-but-`const`-added below it (`int&` beats
+    `const int&`, `char*` beats `const char*`);
+  - a string literal as `char *`;
+  - a promotion;
+  - a conversion;
+  - `...`.
+
+  Default arguments count. The best candidate must be at least as good on
+  every argument and better on one; otherwise the call is an error that
+  lists the candidates. Enumerators have their enum's type, so `evPost`
+  on `COMMAND_ID` and on `CALLBACK_ID` are told apart. A string literal is
+  `const char [N]`. An enum promotes to `int`, as C++ promotes it.
+- **Constructors**, overloaded, are chosen by their arguments: in
+  declarations, init lists, `X x = v` (a user's copy constructor
+  included) and temporaries.
+- **Member operators**: `a[i]`, `!a`, `a &= b`, `a == b`, `++a`, `a++`
+  (`operator++ (int)`) and the rest call `X__op_idx`, `X__op_not`,
+  `X__op_andeq`... when the operand's class has the operator. A reference
+  result is the object (`gDudeInfo[11].x = 1`).
+- **Temporaries** `X (args)` of a class without a destructor are built in
+  a hidden local of the function, `*X__C__... (&__c4x_t0, args)`, which is
+  an lvalue, so that a `const X&` takes its address (`curHandler (Error
+  (module, line, buffer))`).
+- **`inline`** functions are `static`, because C99's `inline` alone
+  defines nothing outside the unit.
+
+The tests (`test-cxx.sh`):
+
+- **`t_over1.cpp`**: Blood's overloads, `evPost` on two enums,
+  `sndStartSample (char *, ...)` and `(ulong, ...)` with default
+  arguments, `FindSector` with 3 and 4 arguments, `LevelWarp ()`. With
+  them, a set of `kind (...)` overloads, one call per rank, and overloaded
+  and static members.
+- **`t_over2.cpp`**: qtools' `Rect`, with three constructors (a copy
+  constructor among them), `operator!` and `operator&=`. Also an
+  `operator[]` returning a reference, qtools' `Error` as a temporary for
+  a handler called through a pointer, and `operator++` before and after.
+- **Refusals**: `e_ambiguous.cpp` and `e_nofit.cpp` must be refused, with
+  the candidates listed.
+
+All 6 programs print as g++ `-m32`'s do, through gcc and through c4lc, and
+gcc confirms their types.
+
+Blood: 13 of the 80 units now translate in full (qtools: debug4g, error,
+getopt, gfx, helix, inifile, iob, key, misc, pqueue, qheap, qmouse,
+textio), and each compiles with gcc and c4lc. The other 67 all stop at one
+place, qtools' `resource.h`, whose `DICTNODE` derives from `CACHENODE`.
+That is inheritance, M5.
 
 ## Files
 

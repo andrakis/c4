@@ -16,7 +16,8 @@ struct Sym {
 	// C++
 	int is_tagname;		// S_TYPEDEF: a class or enum's tag, as a type name
 	Method *m;		// S_METHOD
-	Token *cname;		// S_SVAR: the global's name in C (X__name)
+	Token *cname;		// S_SVAR: the global's name in C (X__name); S_FUNC: mangled
+	int c_link;		// S_FUNC: extern "C" (its name is its own)
 };
 enum { S_VAR, S_FUNC, S_TYPEDEF, S_ENUMC,
 	// C++: a class's members, in its scope
@@ -44,6 +45,7 @@ struct Method {
 	Decl *decl;		// as declared in the class
 	int is_static, is_ctor, is_dtor;
 	int inline_body;	// defined in the class body
+	struct Class *owner;
 	Token *cname;		// its name in C
 	Ty *fty;		// its type in C: `this` first unless static
 };
@@ -76,6 +78,9 @@ static Node *cur_top;		// the top-level node being typed (pre and post go on it)
 static int in_function;
 static Node *init_stmts, **init_tail = &init_stmts;	// global objects to construct
 static Node *fini_stmts;	// and to destroy (last first)
+static Scope *fn_scope;		// the function's outermost scope (temporaries go there)
+static Node *fn_temps;		// and their declarations
+static int n_temps;
 static Type sema_base = { TY_BASE };
 
 static void push_scope (void)
@@ -445,7 +450,7 @@ static void take_address (Node *n)
 static void bind_ref (Node *n, Ty *ref)
 {
 	Node *m, *next = n->next;
-	if (n->lvalue && !n->bitfield) {
+	if (n->lvalue && !n->bitfield && (!n->ty || same_type (unqualified (n->ty), unqualified (ref->base)))) {
 		take_address (n);
 		return;
 	}
@@ -584,6 +589,341 @@ static int live_objects (void)
 	return 0;
 }
 
+// ---- C++: mangling and overloads (M4) ----
+
+// operator names in C: operator[] as op_idx
+static const char *op_names[][2] = {
+	{ "[]", "idx" }, { "()", "call" }, { "!", "not" }, { "~", "compl" }, { "+", "add" }, { "-", "sub" },
+	{ "*", "mul" }, { "/", "div" }, { "%", "mod" }, { "&", "and" }, { "|", "or" }, { "^", "xor" },
+	{ "=", "assign" }, { "+=", "addeq" }, { "-=", "subeq" }, { "*=", "muleq" }, { "/=", "diveq" },
+	{ "%=", "modeq" }, { "&=", "andeq" }, { "|=", "oreq" }, { "^=", "xoreq" }, { "<<", "shl" },
+	{ ">>", "shr" }, { "<<=", "shleq" }, { ">>=", "shreq" }, { "==", "eq" }, { "!=", "ne" }, { "<", "lt" },
+	{ ">", "gt" }, { "<=", "le" }, { ">=", "ge" }, { "&&", "land" }, { "||", "lor" }, { "++", "inc" },
+	{ "--", "dec" }, { "->", "arrow" }, { ",", "comma" }, { 0, 0 }
+};
+
+static int is_operator_name (Token *t)
+{
+	return t->len > 8 && !strncmp (t->loc, "operator", 8) && !is_ident_char (t->loc[8]);
+}
+
+// a function's name as part of a C name
+static char *c_name (Token *name)
+{
+	int i, n;
+	const char *op;
+	if (!is_operator_name (name))
+		return xstrndup (name->loc, name->len);
+	op = name->loc + 8;
+	n = name->len - 8;
+	for (i = 0; op_names[i][0]; i++)
+		if ((int)strlen (op_names[i][0]) == n && !strncmp (op, op_names[i][0], n))
+			return xformat ("op_%s", op_names[i][1]);
+	error_at (name, "'%.*s' is not supported", name->len, name->loc);
+	return 0;
+}
+
+// plan section 3.4: Itanium's letters, kept short
+static void mangle_ty (Buf *b, Ty *t, Token *at)
+{
+	int i;
+	if (t->qual & Q_CONST)
+		buf_char (b, 'K');
+	switch (t->kind) {
+	case T_VOID: buf_char (b, 'v'); return;
+	case T_BOOL: buf_char (b, 'b'); return;
+	case T_CHAR: buf_char (b, 'c'); return;
+	case T_SCHAR: buf_char (b, 'a'); return;
+	case T_UCHAR: buf_char (b, 'h'); return;
+	case T_SHORT: buf_char (b, 's'); return;
+	case T_USHORT: buf_char (b, 't'); return;
+	case T_INT: buf_char (b, 'i'); return;
+	case T_UINT: buf_char (b, 'j'); return;
+	case T_LONG: buf_char (b, 'l'); return;
+	case T_ULONG: buf_char (b, 'm'); return;
+	case T_LLONG: buf_char (b, 'x'); return;
+	case T_ULLONG: buf_char (b, 'y'); return;
+	case T_FLOAT: buf_char (b, 'f'); return;
+	case T_DOUBLE: buf_char (b, 'd'); return;
+	case T_LDOUBLE: buf_char (b, 'e'); return;
+	case T_PTR: buf_char (b, 'P'); mangle_ty (b, t->base, at); return;
+	case T_REF: buf_char (b, 'R'); mangle_ty (b, t->base, at); return;
+	case T_ARRAY: buf_fmt (b, "A%d_", t->len < 0 ? 0 : t->len); mangle_ty (b, t->base, at); return;
+	case T_FUNC:
+		buf_char (b, 'F');
+		mangle_ty (b, t->base, at);
+		if (!t->nparams && !t->variadic)
+			buf_char (b, 'v');
+		for (i = 0; i < t->nparams; i++)
+			mangle_ty (b, t->params[i], at);
+		if (t->variadic)
+			buf_char (b, 'z');
+		buf_char (b, 'E');
+		return;
+	case T_STRUCT: case T_UNION: case T_ENUM: {
+		Ty *d = t->def;
+		if (d->tag)
+			buf_fmt (b, "%d%.*s", d->tag->len, d->tag->len, d->tag->loc);
+		else if (d->name)
+			buf_fmt (b, "%d%s", (int)strlen (d->name), d->name);
+		else
+			error_at (at, "a parameter of a type without a name cannot be mangled");
+		return;
+	}
+	}
+	error_at (at, "a type that cannot be mangled");
+}
+
+// PREFIX__codes, the codes of F's parameters from FROM on (after `this`)
+static Token *mangled (Token *at, const char *prefix, Ty *f, int from)
+{
+	Buf b = {0};
+	int i;
+	buf_fmt (&b, "%s__", prefix);
+	if (f->nparams <= from && !f->variadic)
+		buf_char (&b, 'v');
+	for (i = from; i < f->nparams; i++)
+		mangle_ty (&b, f->params[i], at);
+	if (f->variadic)
+		buf_char (&b, 'z');
+	return make_ident (at, b.p);
+}
+
+static int same_params (Ty *a, Ty *b, int skip_a, int skip_b)
+{
+	int i;
+	if (a->nparams - skip_a != b->nparams - skip_b || a->variadic != b->variadic)
+		return 0;
+	for (i = 0; i < a->nparams - skip_a; i++)
+		if (!same_type (a->params[i + skip_a], b->params[i + skip_b]))
+			return 0;
+	return 1;
+}
+
+// how well argument A converts to a parameter of type TO (plan section
+// 3.3), lower being better: R_EXACT; R_QUAL, exact but with const added
+// (int& is better than const int&, char* than const char*); R_LITERAL, a
+// string literal as char *; R_PROMOTE; R_CONVERT; R_ELLIPSIS. -1: not at all
+enum { R_EXACT, R_QUAL, R_LITERAL, R_PROMOTE, R_CONVERT, R_ELLIPSIS };
+
+static int rank_val (Node *a, Ty *to)
+{
+	Ty *from = unqualified (decay (a->ty));
+	to = unqualified (to);
+	if (same_type (from, to))
+		return R_EXACT;
+	if (is_ptr (to)) {
+		int lost, added;
+		if (is_null_const (a))
+			return R_CONVERT;
+		if (!is_ptr (from))
+			return -1;
+		lost = from->base->qual & ~to->base->qual & (Q_CONST | Q_VOLATILE);
+		added = to->base->qual & ~from->base->qual & (Q_CONST | Q_VOLATILE);
+		if (lost && a->kind == ND_STR && !added && same_type (unqualified (from->base), unqualified (to->base)))
+			return R_LITERAL;	// C++98's conversion of a literal to char *
+		if (same_type (unqualified (from->base), unqualified (to->base)))
+			return lost ? -1 : added ? R_QUAL : R_EXACT;
+		if (to->base->kind == T_VOID && from->base->kind != T_FUNC)
+			return lost ? -1 : R_CONVERT;
+		return -1;
+	}
+	if (to->kind == T_BOOL && is_ptr (from))
+		return R_CONVERT;
+	if (is_arith (from) && is_arith (to)) {
+		if (to->kind == T_ENUM)
+			return -1;
+		if (to->kind == T_INT && (from->kind == T_BOOL || from->kind == T_CHAR || from->kind == T_SCHAR ||
+		                          from->kind == T_UCHAR || from->kind == T_SHORT || from->kind == T_USHORT))
+			return R_PROMOTE;
+		if (from->kind == T_ENUM && same_type (promote (from), to))
+			return R_PROMOTE;
+		if (from->kind == T_FLOAT && to->kind == T_DOUBLE)
+			return R_PROMOTE;
+		return R_CONVERT;
+	}
+	return -1;
+}
+
+static int rank_arg (Node *a, Ty *to)
+{
+	if (to->kind == T_REF) {
+		Ty *b = to->base;
+		if (a->lvalue && !a->bitfield && same_type (unqualified (a->ty), unqualified (b)) &&
+		    !(a->ty->qual & ~b->qual & (Q_CONST | Q_VOLATILE)))
+			return (b->qual & ~a->ty->qual & (Q_CONST | Q_VOLATILE)) ? R_QUAL : R_EXACT;
+		if (!(b->qual & Q_CONST))
+			return -1;
+		{
+			int r = rank_val (a, b);
+			return r == R_EXACT ? R_QUAL : r;
+		}
+	}
+	return rank_val (a, to);
+}
+
+// a candidate function: its type, and how many parameters (this) come
+// before the arguments
+typedef struct { Ty *f; int skip; Sym *y; Method *m; } Cand;
+
+#define MAXARGS 32
+
+// the candidate's ranks for ARGS, or 0 if it cannot be called with them
+static int ranks (Cand *c, Node *args, int *r)
+{
+	Ty *f = c->f;
+	Node *a;
+	int i = 0, k;
+	for (a = args; a; a = a->next, i++) {
+		if (i >= MAXARGS)
+			return 0;
+		if (i + c->skip < f->nparams) {
+			r[i] = rank_arg (a, f->params[i + c->skip]);
+			if (r[i] < 0)
+				return 0;
+		} else if (f->variadic)
+			r[i] = R_ELLIPSIS;
+		else
+			return 0;
+	}
+	for (k = i + c->skip; k < f->nparams; k++)
+		if (!f->defaults || !f->defaults[k])
+			return 0;
+	return 1;
+}
+
+static int better (int *a, int *b, int n)
+{
+	int i, strictly = 0;
+	for (i = 0; i < n; i++) {
+		if (a[i] > b[i])
+			return 0;
+		if (a[i] < b[i])
+			strictly = 1;
+	}
+	return strictly;
+}
+
+static char *cand_str (Cand *c, const char *name)
+{
+	Ty *f = c->f;
+	Buf b = {0};
+	int i;
+	buf_fmt (&b, "%s(", name);
+	for (i = c->skip; i < f->nparams; i++) {
+		char *s = ty_str (f->params[i], "");
+		buf_fmt (&b, "%s%s", i > c->skip ? ", " : "", s ? s : "?");
+	}
+	if (f->variadic)
+		buf_str (&b, f->nparams > c->skip ? ", ..." : "...");
+	buf_str (&b, ")");
+	return b.p;
+}
+
+// overload resolution among N candidates for ARGS (typed): the best one's
+// index; or -1 if QUIET and none fits; otherwise an error naming them
+static int choose (Cand *c, int n, Node *args, Token *at, const char *name, int quiet)
+{
+	static int r[64][MAXARGS];
+	int ok[64], i, j, best = -1, nargs = 0;
+	Node *a;
+	Buf why = {0};
+	for (a = args; a; a = a->next)
+		nargs++;
+	if (n > 64)
+		n = 64;
+	for (i = 0; i < n; i++) {
+		ok[i] = ranks (&c[i], args, r[i]);
+		if (ok[i] && (best < 0 || better (r[i], r[best], nargs)))
+			best = i;
+	}
+	if (best >= 0) {
+		for (j = 0; j < n; j++)
+			if (j != best && ok[j] && !better (r[best], r[j], nargs))
+				break;
+		if (j == n)
+			return best;
+	}
+	if (best < 0 && quiet)
+		return -1;
+	for (i = 0; i < n; i++)
+		buf_fmt (&why, "\n    %s%s", cand_str (&c[i], name), ok[i] ? "" : " (does not fit)");
+	error_at (at, "%s call to '%s'; the candidates:%s", best < 0 ? "no fitting" : "an ambiguous", name, why.p);
+	return -1;
+}
+
+// the functions (S_FUNC) named NAME in the innermost scope from S that has
+// the name
+static int func_set (Scope *s, Token *name, Cand *c, int max)
+{
+	int n = 0;
+	Sym *y;
+	for (; s; s = s->up) {
+		for (y = s->syms; y; y = y->next)
+			if (same_tok (y->name, name)) {
+				if (y->kind != S_FUNC)
+					return n;
+				if (n < max) {
+					c[n].f = y->ty;
+					c[n].skip = 0;
+					c[n].y = y;
+					c[n].m = 0;
+					n++;
+				}
+			}
+		if (n)
+			return n;
+	}
+	return 0;
+}
+
+// a class's member functions named NAME (or its constructors)
+static int method_set (Class *k, Token *name, int ctors, Cand *c, int max)
+{
+	Method *m;
+	int n = 0;
+	for (m = k->methods; m && n < max; m = m->next)
+		if (ctors ? m->is_ctor : !m->is_ctor && !m->is_dtor && same_tok (m->name, name)) {
+			c[n].f = m->fty;
+			c[n].skip = m->is_static ? 0 : 1;
+			c[n].y = 0;
+			c[n].m = m;
+			n++;
+		}
+	return n;
+}
+
+static Token *cname_tok (Token *at, Token *cname)
+{
+	return make_ident (at, xstrndup (cname->loc, cname->len));
+}
+
+// a constructor of class K, chosen for ARGS, called on the object at ADDR;
+// 0 if QUIET and none fits
+static Node *ctor_call (Class *k, Node *addr, Node *args, Token *at, int quiet)
+{
+	Cand c[64];
+	Node *a, *call, *fn;
+	int n = method_set (k, 0, 1, c, 64), i;
+	Method *m;
+	for (a = args; a; a = a->next)
+		expr (a);
+	if (!n)
+		error_at (at, "'%.*s' has no constructor", k->name->len, k->name->loc);
+	i = choose (c, n, args, at, xformat ("%.*s::%.*s", k->name->len, k->name->loc, k->name->len, k->name->loc), quiet);
+	if (i < 0)
+		return 0;
+	m = c[i].m;
+	call = mk (ND_CALL, at);
+	fn = mk (ND_IDENT, cname_tok (at, m->cname));
+	fn->ty = m->fty;
+	addr->next = args;
+	call->lhs = fn;
+	call->args = addr;
+	finish_call (call, m->fty);
+	return mk_stmt (call);
+}
+
 // ::name (file scope) or X::name (X's members, then where X's nested types'
 // enumerators are)
 static Sym *find_qualified (Node *n)
@@ -636,6 +976,16 @@ static int cxx_ident (Node *n)
 		n->qual = 0;
 		n->ty = y->m->fty;
 		return 1;
+	case S_FUNC: {
+		Cand c[2];
+		if (func_set (n->qual ? file_scope : sc, name, c, 2) > 1)
+			error_at (name, "the address of an overloaded function is not supported");
+		if (y->cname)
+			n->tok = cname_tok (name, y->cname);
+		n->qual = 0;
+		n->ty = y->ty;
+		return 1;
+	}
 	}
 	return 0;
 }
@@ -647,6 +997,8 @@ static int method_call (Node *n)
 	Node *f = n->lhs, *obj = 0, *a;
 	Method *m = 0;
 	Sym *y = 0;
+	Cand cs[64];
+	int nc, i;
 	if (f->kind == ND_MEMBER) {
 		Ty *o;
 		Class *c;
@@ -676,21 +1028,26 @@ static int method_call (Node *n)
 		if (!y || y->kind != S_METHOD)
 			return 0;
 		m = y->m;
-		if (!m->is_static) {
-			if (!cur_class)
-				error_at (f->tok, "a member function called without an object");
-			obj = mk_this (f->tok);
-		}
 	} else
 		return 0;
 	if (m->is_ctor || m->is_dtor)
 		error_at (f->tok, "constructors and destructors are not called by name");
+	// the overloads, and the one these arguments pick
+	for (a = n->args; a; a = a->next)
+		expr (a);
+	nc = method_set (m->owner, m->name, 0, cs, 64);
+	i = nc == 1 ? 0 : choose (cs, nc, n->args, f->kind == ND_MEMBER ? f->name : f->tok,
+	                          xformat ("%.*s::%s", m->owner->name->len, m->owner->name->loc, c_name (m->name)), 0);
+	m = cs[i].m;
+	if (f->kind == ND_IDENT && !m->is_static) {
+		if (!cur_class)
+			error_at (f->tok, "a member function called without an object");
+		obj = mk_this (f->tok);
+	}
 	if (m->is_static)
 		obj = 0;
 	n->lhs = mk (ND_IDENT, make_ident (f->tok, xstrndup (m->cname->loc, m->cname->len)));
 	n->lhs->ty = m->fty;
-	for (a = n->args; a; a = a->next)
-		expr (a);
 	if (obj) {
 		obj->next = n->args;
 		n->args = obj;
@@ -741,6 +1098,9 @@ static void binary (Node *n)
 	b = fold (n->rhs, &ok2);
 	n->cvar = n->lhs->cvar || n->rhs->cvar;
 	n->unsure |= n->lhs->unsure || n->rhs->unsure;
+	// C++ promotes an enum to int; gcc's C (the check) may to unsigned int
+	if (opt_cplusplus && (l->kind == T_ENUM || r->kind == T_ENUM))
+		n->unsure = 1;
 	if (ok1 && ok2 && is_integer (n->ty)) {
 		int u = is_unsigned (usual_arith (promote (l), is_integer (r) ? promote (r) : l));
 		long long v = 0;
@@ -797,6 +1157,25 @@ static void call (Node *n)
 	Ty *f;
 	if (opt_cplusplus && method_call (n))
 		return;
+	if (opt_cplusplus && n->lhs->kind == ND_IDENT && (!n->lhs->qual || equal (n->lhs->qual, "::"))) {
+		// a function, of its overloads the one the arguments pick
+		Node *fn = n->lhs;
+		Cand c[64];
+		int k = func_set (fn->qual ? file_scope : sc, fn->tok, c, 64), i;
+		if (k) {
+			Sym *y;
+			for (a = n->args; a; a = a->next)
+				expr (a);
+			i = k == 1 ? 0 : choose (c, k, n->args, fn->tok, c_name (fn->tok), 0);
+			y = c[i].y;
+			if (y->cname)
+				fn->tok = cname_tok (fn->tok, y->cname);
+			fn->ty = y->ty;
+			fn->qual = 0;
+			finish_call (n, y->ty);
+			return;
+		}
+	}
 	if (opt_cplusplus && n->lhs->kind == ND_IDENT && !n->lhs->qual && !find_sym (n->lhs->tok))
 		error_at (n->lhs->tok, "'%.*s' is not declared (C++ has no implicit declarations)", n->lhs->tok->len,
 		          n->lhs->tok->loc);
@@ -827,6 +1206,74 @@ static void call (Node *n)
 }
 
 static int anon_path (Node *n, Ty *o);
+static Spec *class_spec (struct Class *c, Token *at);
+static void append (Node **list, Node *n);
+
+// C++: a member operator, OBJ.operator OP (ARG), if OBJ is of a class that
+// has one; N becomes the call. 0 if not (C's meaning stands).
+static int op_call (Node *n, Token *op, Node *obj, Node *arg)
+{
+	Class *k;
+	Node *m, *next = n->next;
+	Token *at = n->tok, *name;
+	expr (obj);
+	k = class_of (obj->ty);
+	if (!k)
+		return 0;
+	name = make_ident (at, xformat ("operator%.*s", op->len, op->loc));
+	if (!find_in (k->scope, name))
+		return 0;
+	m = mk (ND_MEMBER, at);
+	m->lhs = obj;
+	m->op = make_ident (at, ".");
+	m->name = name;
+	if (arg)
+		arg->next = 0;
+	memset (n, 0, sizeof *n);
+	n->kind = ND_CALL;
+	n->tok = at;
+	n->lhs = m;
+	n->args = arg;
+	n->next = next;
+	call (n);
+	return 1;
+}
+
+// C++: X (args), a temporary: built by its constructor in a hidden local
+// of the function, *X__C__... (&__c4x_tN, args)
+static void class_temp (Node *n, Class *k)
+{
+	Node *next = n->next, *d, *call;
+	Token *at = n->tok;
+	Decl *x;
+	if (k->needs_dtor)
+		error_at (at, "a temporary of a class with a destructor is not supported");
+	if (!k->ctor)
+		error_at (at, "a temporary of a class without a constructor is not supported");
+	if (!fn_scope)
+		error_at (at, "a temporary outside a function is not supported");
+	x = xalloc (sizeof *x);
+	x->spec = class_spec (k, at);
+	x->spec->rty = k->rec;
+	x->type = &sema_base;
+	x->name = make_ident (at, xformat ("__c4x_t%d", n_temps++));
+	x->tok = at;
+	x->first_of_spec = 1;
+	x->rty = k->rec;
+	add_sym (fn_scope, x->name, S_VAR, k->rec);
+	d = mk (ND_DECL, at);
+	d->decl = x;
+	append (&fn_temps, d);
+	call = ctor_call (k, var_addr (x->name, at), n->args, at, 0)->lhs;
+	memset (n, 0, sizeof *n);
+	n->kind = ND_PREFIX;
+	n->tok = at;
+	n->op = make_ident (at, "*");
+	n->lhs = call;
+	n->ty = k->rec;
+	n->lvalue = 1;
+	n->next = next;
+}
 
 static void member (Node *n)
 {
@@ -932,7 +1379,8 @@ static void expr (Node *n)
 		int i, len = 0;
 		for (i = 0; i < n->ntoks; i++, s = s->next)
 			len += str_chars (s);
-		n->ty = array_of (ty_char, len + 1);
+		// C++: const char[N]
+		n->ty = array_of (opt_cplusplus ? qualified (ty_char, Q_CONST) : ty_char, len + 1);
 		n->lvalue = 1;
 		return;
 	}
@@ -954,7 +1402,7 @@ static void expr (Node *n)
 			error_at (n->tok, "a type where a value should be");
 		n->ty = y->ty;
 		if (y->kind == S_ENUMC) {
-			n->ty = ty_int;
+			n->ty = opt_cplusplus ? y->ty : ty_int;	// C++: its enum's type
 			n->is_const = 1;
 			n->val = y->val;
 		} else if (y->kind == S_VAR) {
@@ -971,9 +1419,13 @@ static void expr (Node *n)
 			deref_ref (n);
 		return;
 	case ND_BINARY:
+		if (opt_cplusplus && op_call (n, n->op, n->lhs, n->rhs))
+			return;
 		binary (n);
 		return;
 	case ND_ASSIGN:
+		if (opt_cplusplus && op_call (n, n->op, n->lhs, n->rhs))
+			return;
 		expr (n->lhs);
 		expr (n->rhs);
 		n->ty = unqualified (n->lhs->ty);
@@ -995,6 +1447,8 @@ static void expr (Node *n)
 		n->ty = unqualified (decay (n->rhs->ty));
 		return;
 	case ND_PREFIX:
+		if (opt_cplusplus && !equal (n->op, "&") && op_call (n, n->op, n->lhs, 0))
+			return;
 		expr (n->lhs);
 		t = n->lhs->ty;
 		if (equal (n->op, "&")) {
@@ -1021,16 +1475,22 @@ static void expr (Node *n)
 		}
 		return;
 	case ND_POSTFIX:
+		if (opt_cplusplus) {
+			// x++ is x.operator++ (0)
+			Node *zero = mk (ND_NUM, make_ident (n->tok, "0"));
+			if (op_call (n, n->op, n->lhs, zero))
+				return;
+		}
 		expr (n->lhs);
 		n->ty = unqualified (n->lhs->ty);
 		return;
 	case ND_CAST:
-		if (n->functional) {
-			if (!n->args || n->args->next)
-				error_at (n->tok, "T(...) without exactly one argument (a temporary) is not supported");
-			if (class_of (type_name_type (n->decl)))
-				error_at (n->tok, "a class's temporary, X(...), is not supported");
+		if (n->functional && class_of (type_name_type (n->decl))) {
+			class_temp (n, class_of (type_name_type (n->decl)));
+			return;
 		}
+		if (n->functional && (!n->args || n->args->next))
+			error_at (n->tok, "T(...) of a type not a class, without exactly one argument, is not supported");
 		expr (n->lhs);
 		n->ty = unqualified (type_name_type (n->decl));
 		n->cvar = n->lhs->cvar;
@@ -1063,6 +1523,8 @@ static void expr (Node *n)
 		return;
 	case ND_INDEX: {
 		Ty *a, *b;
+		if (opt_cplusplus && op_call (n, make_ident (n->tok, "[]"), n->lhs, n->rhs))
+			return;
 		expr (n->lhs);
 		expr (n->rhs);
 		a = decay (n->lhs->ty);
@@ -1274,6 +1736,7 @@ static Decl *lowered (Class *c, Method *m, Decl *d, int storage)
 	x->init = 0;
 	x->rty = 0;
 	x->is_ctor = x->is_dtor = 0;
+	x->cname_done = 1;
 	x->name = make_ident (d->tok, xstrndup (m->cname->loc, m->cname->len));
 	*f = *d->type;
 	if (m->is_ctor) {
@@ -1341,13 +1804,14 @@ static Method *new_method (Class *c, Decl *m, int is_ctor, int is_dtor, int is_s
 	me->is_dtor = is_dtor;
 	me->is_static = is_static;
 	me->inline_body = m->body != 0;
+	me->owner = c;
+	// for now: mangled once its type is known (cxx_record)
 	me->cname = make_ident (m->tok, is_ctor ? xformat ("%.*s__C", n->len, n->loc) :
 	                                is_dtor ? xformat ("%.*s__D", n->len, n->loc) :
-	                                xformat ("%.*s__%.*s", n->len, n->loc, m->name->len, m->name->loc));
+	                                xformat ("%.*s__%s", n->len, n->loc, c_name (m->name)));
 	for (p = &c->methods; *p; p = &(*p)->next)
-		if ((is_ctor && (*p)->is_ctor) || (is_dtor && (*p)->is_dtor) ||
-		    (!is_ctor && !is_dtor && !(*p)->is_ctor && !(*p)->is_dtor && same_tok ((*p)->name, m->name)))
-			error_at (m->tok, "overloaded member functions are not supported yet (M4)");
+		if (is_dtor && (*p)->is_dtor)
+			error_at (m->tok, "a second destructor");
 	*p = me;
 	if (is_ctor)
 		c->ctor = me;
@@ -1435,8 +1899,6 @@ static void cxx_record (Spec *sp, Ty *rec, int pack)
 		if (m->type && m->type->kind == TY_FUNC) {
 			if ((ms->storage & ST_VIRTUAL) || m->pure)
 				error_at (m->tok, "virtual functions are not supported yet (M5)");
-			if (!strncmp (m->name->loc, "operator", 8) && m->name->len > 8 && !is_ident_char (m->name->loc[8]))
-				error_at (m->tok, "member operators are not supported yet (M4)");
 			if (!c->name)
 				error_at (m->tok, "member functions in a class without a name");
 			new_method (c, m, m->is_ctor, m->is_dtor, (ms->storage & ST_STATIC) != 0);
@@ -1526,8 +1988,17 @@ static void cxx_record (Spec *sp, Ty *rec, int pack)
 		Decl *x = lowered (c, me, me->decl, me->inline_body ? ST_STATIC : 0);
 		Node *n = mk (ND_DECL, me->decl->tok);
 		Sym *y;
+		Method *o;
+		me->fty = decl_type (x->spec, x->type);
+		for (o = c->methods; o != me; o = o->next)
+			if (o->is_ctor == me->is_ctor && o->is_dtor == me->is_dtor && (me->is_ctor || same_tok (o->name, me->name)) &&
+			    same_params (o->fty, me->fty, !o->is_static, !me->is_static))
+				error_at (me->decl->tok, "a member function declared twice");
+		// its name in C: X__name__codes, X__C__codes, X__D (plan section 3.4)
+		if (!me->is_dtor)
+			me->cname = mangled (me->decl->tok, xstrndup (me->cname->loc, me->cname->len), me->fty, !me->is_static);
+		x->name = cname_tok (x->name, me->cname);
 		declaration (x, 1);
-		me->fty = x->rty;
 		y = add_sym (c->scope, me->name, S_METHOD, me->fty);
 		y->m = me;
 		n->decl = x;
@@ -1573,7 +2044,7 @@ static Ty *record (Spec *sp)
 			Sym *y;
 			if (e->value)
 				v = const_value (e->value);
-			y = add_sym (sc, e->name, S_ENUMC, ty_int);
+			y = add_sym (sc, e->name, S_ENUMC, opt_cplusplus ? rec : ty_int);
 			y->val = v;
 			e->val = v;
 			if (v < 0)
@@ -1699,6 +2170,39 @@ static Ty *decl_type (Spec *sp, Type *t)
 	return chain (sp, t);
 }
 
+// C++: a function's declaration: another of its overloads, or the same one
+// again; named in C by its mangled name, unless its linkage is C
+static void cxx_function (Decl *d, Ty *t)
+{
+	Sym *y, *same = 0;
+	int clink = d->cname_done || d->spec->extern_c || equal (d->name, "main");
+	// C++'s inline is a definition in each unit that has it; C99's (not
+	// extern) is no definition at all: static
+	if ((d->spec->storage & ST_INLINE) && !(d->spec->storage & ST_EXTERN) && !d->cname_done)
+		d->spec->storage = (d->spec->storage & ~ST_INLINE) | ST_STATIC;
+	for (y = sc->syms; y; y = y->next)
+		if (same_tok (y->name, d->name) && y->kind == S_FUNC) {
+			if (same_params (y->ty, t, 0, 0)) {
+				same = y;
+				break;
+			}
+			if (clink && y->c_link)
+				error_at (d->name, "two extern \"C\" functions of one name");
+		}
+	if (same) {
+		same->ty = t;
+		y = same;
+	} else {
+		y = add_sym (sc, d->name, S_FUNC, t);
+		y->c_link = clink;
+		if (!clink)
+			y->cname = mangled (d->name, c_name (d->name), t, 0);
+	}
+	if (y->cname)
+		d->name = cname_tok (d->name, y->cname);
+	d->rty = t;
+}
+
 // C++: is an object of type T const (a const integer, or an array of
 // const), which at file scope has internal linkage?
 static int const_object (Ty *t)
@@ -1801,19 +2305,25 @@ static void class_object (Decl *d, Ty *t, int top)
 		error_at (d->name, "arrays of objects with constructors or destructors are not supported yet");
 	if (!c)
 		return;
-	if (d->init && !d->init->is_list && c->ctor && !same_type (unqualified (d->init->expr->ty), unqualified (t))) {
-		// X x = v: X's constructor of v
-		d->args = d->init->expr;
-		d->args->next = 0;
-		d->has_args = 1;
-		d->init = 0;
-	}
-	if (c->needs_ctor && !d->init) {
-		Node *call;
-		if (global && !top)
+	if (c->ctor && (!d->init || !d->init->is_list)) {
+		Node *call = 0;
+		if (d->init) {
+			// X x = v: a constructor of v (the user's copy constructor too),
+			// or else a copy
+			Node *v = d->init->expr;
+			v->next = 0;
+			call = ctor_call (c, var_addr (d->name, d->tok), v, d->tok, 1);
+			if (call)
+				d->init = 0;
+			else if (!same_type (unqualified (v->ty), unqualified (t)))
+				ctor_call (c, var_addr (d->name, d->tok), v, d->tok, 0);
+		} else
+			call = ctor_call (c, var_addr (d->name, d->tok), d->args, d->tok, 0);
+		if (call && global && !top)
 			error_at (d->name, "a static local object with a constructor is not supported");
-		call = special_call (c->ctor, var_addr (d->name, d->tok), d->args, d->tok);
-		if (top) {
+		if (!call)
+			;
+		else if (top) {
 			*init_tail = call;
 			init_tail = &call->next;
 		} else
@@ -1865,6 +2375,10 @@ static void declaration (Decl *d, int top)
 			    !rec->def->name)
 				rec->def->name = xstrndup (d->name->loc, d->name->len);
 			d->rty = t;
+			continue;
+		}
+		if (opt_cplusplus && t->kind == T_FUNC) {
+			cxx_function (d, t);
 			continue;
 		}
 		if (opt_cplusplus && d->has_args && !class_of (t)) {
@@ -2056,7 +2570,7 @@ static Node *ctor_inits (Class *c, MemInit *inits, Token *at)
 			if (same_tok (f->name, mi->name))
 				break;
 		if (fc && fc->needs_ctor)
-			cur = cur->next = special_call (fc->ctor, member_addr (f, at), mi ? mi->args : 0, mi ? mi->name : at);
+			cur = cur->next = ctor_call (fc, member_addr (f, at), mi ? mi->args : 0, mi ? mi->name : at, 0);
 		else if (mi) {
 			Node *lhs = mk (ND_MEMBER, mi->name), *a = mi->args, *asg;
 			if (a && a->next)
@@ -2100,6 +2614,8 @@ static void function_body (Node *n, Class *c, Method *m)
 	Ty *saved_ret = cur_ret;
 	CScope *saved_cs = cs;
 	int saved_in = in_function;
+	Scope *saved_fn = fn_scope;
+	Node *saved_temps = fn_temps;
 	declaration (d, 1);
 	cur_class = c;
 	cur_method = m;
@@ -2108,6 +2624,8 @@ static void function_body (Node *n, Class *c, Method *m)
 		sc = c->scope;
 	in_function = 1;
 	push_scope ();
+	fn_scope = sc;
+	fn_temps = 0;
 	if (d->type && d->type->kind == TY_FUNC) {
 		Type *ftype = d->type;
 		for (p = ftype->params; p; p = p->next) {
@@ -2152,6 +2670,13 @@ static void function_body (Node *n, Class *c, Method *m)
 	}
 	stmts (n->body->body);
 	n->body->cleanup = pop_cs (n->body->tok);
+	if (fn_temps) {
+		// the temporaries' storage, first
+		append (&fn_temps, n->body->body);
+		n->body->body = fn_temps;
+	}
+	fn_scope = saved_fn;
+	fn_temps = saved_temps;
 	pop_scope ();
 	sc = saved_sc;
 	cur_class = saved_class;
@@ -2168,9 +2693,11 @@ static void funcdef (Node *n)
 		// a member function defined outside its class
 		Class *c = class_named (d->qual);
 		Method *m;
+		Ty *dt = decl_type (d->spec, d->type);
 		for (m = c->methods; m; m = m->next)
-			if (d->is_ctor ? m->is_ctor : d->is_dtor ? m->is_dtor :
-			    !m->is_ctor && !m->is_dtor && same_tok (m->name, d->name))
+			if ((d->is_ctor ? m->is_ctor : d->is_dtor ? m->is_dtor :
+			     !m->is_ctor && !m->is_dtor && same_tok (m->name, d->name)) &&
+			    same_params (m->fty, dt, !m->is_static, 0))
 				break;
 		if (!m)
 			error_at (d->name, "'%.*s' is not a member function of '%.*s'", d->name->len, d->name->loc,

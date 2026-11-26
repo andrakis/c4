@@ -159,14 +159,15 @@ Ty *decay (Ty *t)
 	return t;
 }
 
-// the integer promotions; gcc's enum promotes as the type it is
+// the integer promotions; gcc's enum promotes as the type it is in C, and in
+// C++ to int, which holds its values
 Ty *promote (Ty *t)
 {
 	switch (t->kind) {
 	case T_BOOL: case T_CHAR: case T_SCHAR: case T_UCHAR: case T_SHORT: case T_USHORT:
 		return ty_int;
 	case T_ENUM:
-		return is_unsigned (t) ? ty_uint : ty_int;
+		return is_unsigned (t) && !opt_cplusplus ? ty_uint : ty_int;
 	}
 	return unqualified (t);
 }

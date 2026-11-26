@@ -773,6 +773,23 @@ void pp_add_include_path (const char *dir)
 	inc_paths = n;
 }
 
+static char **c_paths;
+static int n_c_paths;
+
+// C++: an include directory whose headers are C (c4's libc), so that their
+// functions keep their names in C, as an old C++ compiler took a system's
+// headers
+void pp_add_c_include_path (const char *dir)
+{
+	char **n = xalloc (sizeof (char *) * (n_c_paths + 1));
+	int len = (int)strlen (dir);
+	pp_add_include_path (dir);
+	if (n_c_paths)
+		memcpy (n, c_paths, sizeof (char *) * n_c_paths);
+	n[n_c_paths++] = (len && dir[len - 1] == '/') ? xstrndup (dir, len) : xformat ("%s/", dir);
+	c_paths = n;
+}
+
 static int file_exists (const char *p)
 {
 	FILE *f = fopen (p, "rb");
@@ -810,6 +827,12 @@ static Token *include_file (Token *rest, char *path, Token *at)
 	if (!text)
 		error_at (at, "cannot read include: %s", path);
 	f = new_file (path, text);
+	{
+		int i;
+		for (i = 0; i < n_c_paths; i++)
+			if (!strncmp (path, c_paths[i], strlen (c_paths[i])))
+				f->c_header = 1;
+	}
 	t = tokenize (f);
 	return append (t, rest);
 }

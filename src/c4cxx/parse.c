@@ -344,7 +344,7 @@ static Spec *parse_spec (int allow_storage)
 {
 	Spec *sp = xalloc (sizeof *sp);
 	sp->tok = T;
-	sp->extern_c = extern_c;
+	sp->extern_c = extern_c || (T->file && T->file->c_header);
 	for (;;) {
 		if (is_storage_word (T)) {
 			if (!allow_storage)

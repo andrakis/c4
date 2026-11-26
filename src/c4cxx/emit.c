@@ -499,6 +499,12 @@ static void check_expr (Node *n)
 	check_children (n);
 	if (!n->ty || n->bitfield || n->unsure)
 		return;
+	// C++: an enumerator has its enum's type, which C gives it not
+	if (opt_cplusplus && n->kind == ND_IDENT && n->ty->kind == T_ENUM && n->is_const)
+		return;
+	// and a string literal is const, which in C it is not
+	if (opt_cplusplus && n->kind == ND_STR)
+		return;
 	t = ty_str (n->ty, "");
 	if (!t)
 		return;

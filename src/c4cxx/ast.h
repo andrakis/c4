@@ -94,6 +94,7 @@ struct Decl {
 	Node *args;
 	MemInit *inits;		// X::X(...) : a(1), b(2)
 	Node *ctor;		// sema: the constructor call to print after it
+	int cname_done;		// sema: its name is already its name in C (a lowered member)
 	int no_body;		// sema: a method's inline body moved out of the class
 };
 

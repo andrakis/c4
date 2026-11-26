@@ -15,9 +15,9 @@ fi
 VER=${BLOOD_VER:-BS111A}
 mkdir -p $W
 opts=${*:--parse}
-# host.sh's order, then c4's libc where host.sh has the system's
+# host.sh's order, then c4's libc where host.sh has the system's, as headers of C
 INC="-I $S/c4inc -I $C/inc -I $B/blood -I $B/blood/qtools/include -I $B/build -I $B/mact -I $B/audiolib
- -I $R/src/c4ix/libc/include -I $R/src/c4ix/include -I $R/libjs/guest"
+ -isystem $R/src/c4ix/libc/include -isystem $R/src/c4ix/include -isystem $R/libjs/guest"
 GAME="globals blood screen view db gameutil fire sectorfx map2d satimer usrhooks endgame levels
  menu gamemenu config controls sound sfx asound seq qav tile mirrors actor ai aibat aibeast aiboneel
  aiburn aicaleb aicerber aicult aigarg aighost aigilbst aihand aihound aiinnoc aipod airat aispid

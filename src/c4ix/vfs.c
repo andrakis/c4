@@ -1719,6 +1719,7 @@ enum { E2_SPILL = 1048576 };
 int vfs_nocommit;
 
 int vfs_on_disk(struct file *f) { return f->vn->type == VN_RAMFILE && f->vn->e2 != 0; }
+int vfs_from_device(struct file *f) { return f->vn->type == VN_RAMFILE && f->vn->lazy; }
 void vfs_commit_file(struct file *f) {
     sched_lock();
     if (f->vn->e2) ext2_commit(f->vn->e2);

@@ -409,6 +409,8 @@ int          vfs_write(struct file *f, char *buf, int len);
 // those writes' metadata not committed while this is set (sys.c's steps
 // of one write but the last), then committed
 int          vfs_on_disk(struct file *f);
+// A file whose reads go to a device: a lazy one, still on a disk or a drive
+int          vfs_from_device(struct file *f);
 extern int   vfs_nocommit;
 void         vfs_commit_file(struct file *f);
 int          vfs_readable(struct vnode *vn, int pos);  // 1 = read won't block
@@ -764,11 +766,11 @@ struct task {
     int  tflags;               // TF_*: what is true of it, kept as it changes
     int  fdtop;                // one past the highest fd it has had: what a walk of fds needs see
     int  evgen;                // SYS_EVWAIT: sched_pipegen when its pipes were last looked at
-    // A write to a disk's file served a step a trap (sys.c, sys_write_steps):
-    // the bytes written by its steps so far, and where the next step's
-    // buffer starts (a write that is not that one's next step starts afresh)
-    int  wdone;
-    int  wnext;
+    // A read or write of a disk's file served a step a trap (sys.c,
+    // sys_steps): the bytes its steps have moved so far, and where the next
+    // step's buffer starts (a call that is not that one's next step starts afresh)
+    int  stepdone;
+    int  stepnext;
 };
 
 // What the hot paths ask of a task, answered from one word, kept where the

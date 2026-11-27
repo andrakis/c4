@@ -3581,10 +3581,12 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	# because they are only
 	# meaningful with -P, c4lc_pp.c being the L9 preprocessor test (this
 	# sweep deliberately runs without it); the vararg tests go through
-	# the preprocessor, exactly as c4cc receives them.
+	# the preprocessor, exactly as c4cc receives them. c4lc_swinit.c is
+	# c4pc's, for Shadow Warrior: the c4lc that takes it is c4pc's
+	# (bec4d35), and this one does not yet.
 	for f in src/tests/*.c; do \
 		case $$f in \
-		*/genfloat.c|*/test_illins.c) continue;; \
+		*/genfloat.c|*/test_illins.c|*/c4lc_swinit.c) continue;; \
 		*/c4lc_pp.c|*/srcmap_probe.c|*/srcmap_link.c|*/c4lc_bfl.c) continue;; \
 		*/oldtest_vararg*.c|*/oldvararg3.c|*/test_vprintf.c|*/vararg*.c) \
 			$(PREPROC) $$f > .c4lc_pp.c 2>/dev/null; \

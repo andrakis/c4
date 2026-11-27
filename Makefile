@@ -2870,14 +2870,30 @@ test-lazy-root: c4bb-images
 PHONY += test-lazy-root
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
-# scantest.c) on the bare machine, against gcc's build of the same.
-test-libc-bare: libc-bare-objs c4rlink32 $(C4LC_LISP) | $(LC32_BIN)
+# scantest.c) and printf's long longs (llprint.c) on the bare machine,
+# and opendir, readdir and stat (dirtest.c) there and under C4DOS,
+# against gcc's build of the same.
+test-libc-bare: libc-bare-objs c4rlink32 c4dos32.c4r $(C4LC_LISP) | $(LC32_BIN)
 	@rm -rf .libc_t && mkdir -p .libc_t && cp src/c4ix/libc/tests/scantest.c .libc_t/
 	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include .libc_t/scantest.c .libc_t/scantest.c4o > /dev/null
 	@./c4rlink32 .libc_t/scantest.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/scantest.c4r > /dev/null
 	@gcc -m32 -w -o .libc_t/scantest-host .libc_t/scantest.c
 	@cd .libc_t && ./scantest-host scantest.c > host.txt && node ../libjs/cli.js -m 64 -d . scantest.c4r scantest.c > c4.txt
 	@cmp -s .libc_t/host.txt .libc_t/c4.txt || { echo "test-libc-bare: differs from gcc's:"; diff .libc_t/c4.txt .libc_t/host.txt; exit 1; }
+	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/llprint.c .libc_t/llprint.c4o > /dev/null
+	@./c4rlink32 .libc_t/llprint.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/llprint.c4r > /dev/null
+	@gcc -m32 -w -o .libc_t/llprint-host src/c4ix/libc/tests/llprint.c
+	@cd .libc_t && ./llprint-host > llhost.txt && node ../libjs/cli.js -m 64 -d . llprint.c4r > llc4.txt
+	@cmp -s .libc_t/llhost.txt .libc_t/llc4.txt || { echo "test-libc-bare: llprint differs from gcc's:"; diff .libc_t/llc4.txt .libc_t/llhost.txt; exit 1; }
+	@# directories: each one's listing is its c4dos.dir, on the machine's
+	@# drive as under C4DOS (bare.c)
+	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/dirtest.c .libc_t/dirtest.c4o > /dev/null
+	@mkdir -p .libc_t/d/sub && ./c4rlink32 .libc_t/dirtest.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/d/dirtest.c4r > /dev/null
+	@gcc -m32 -w -o .libc_t/dirtest-host src/c4ix/libc/tests/dirtest.c
+	@cd .libc_t/d && echo hello > ab.txt && echo x > Cd.TXT && echo y > sub/x.dat && ls -p > c4dos.dir && (cd sub && ls -p > c4dos.dir)
+	@cd .libc_t/d && ../dirtest-host > ../dirhost.txt && node ../../libjs/cli.js -m 64 -d . dirtest.c4r > ../dirc4.txt
+	@cd .libc_t/d && printf 'dirtest\nver\n' | node ../../libjs/cli.js -m 64 -d . ../../c4dos32.c4r 2>/dev/null | grep -v 'C4DOS\|^A:' > ../dirdos.txt
+	@for w in c4 dos; do cmp -s .libc_t/dirhost.txt .libc_t/dir$$w.txt || { echo "test-libc-bare: dirtest ($$w) differs from gcc's:"; diff .libc_t/dir$$w.txt .libc_t/dirhost.txt; exit 1; }; done
 	@rm -rf .libc_t
 	@echo "test-libc-bare: OK"
 PHONY += test-libc-bare

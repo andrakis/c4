@@ -568,13 +568,24 @@ static char *conv_digits = "0123456789abcdef";
 static char *conv_DIGITS = "0123456789ABCDEF";
 
 // one integer conversion
-static void fmt_int(struct sink *k, unsigned int v, int neg, int base, int upper, int left, int zero,
+// hi is the high word of a 32-bit target's long long (%lld), else 0:
+// while it is not 0 the number is divided in 16-bit pieces, as a word
+// holds at most 32 bits there
+static void fmt_int(struct sink *k, unsigned int hi, unsigned int v, int neg, int base, int upper, int left, int zero,
                     int plus, int space, int alt, int width, int prec) {
     char tmp[40];
     char *dig;
     int n, len, pad, signch, prefix;
+    unsigned int r, q1, t;
     dig = upper ? conv_DIGITS : conv_digits;
     n = 0;
+    while (hi) {
+        r = hi % base; hi = hi / base;
+        t = (r << 16) | (v >> 16); q1 = t / base; r = t % base;
+        t = (r << 16) | (v & 0xFFFF);
+        v = (q1 << 16) | (t / base);
+        tmp[n++] = dig[t % base];
+    }
     while (v) { tmp[n++] = dig[v % base]; v = v / base; }
     if (prec < 0) prec = 1;
     len = n > prec ? n : prec;
@@ -611,7 +622,7 @@ static void fmt_fp(struct sink *k, unsigned int hi, unsigned int lo, int conv, i
 }
 
 static int fmt_core(struct sink *k, char *fmt, int *ap) {
-    int left, zero, plus, space, alt, width, prec, c, v, n;
+    int left, zero, plus, space, alt, width, prec, c, v, n, ll;
     unsigned int hi, lo;
     char *s;
     while ((c = *fmt++)) {
@@ -635,20 +646,33 @@ static int fmt_core(struct sink *k, char *fmt, int *ap) {
             if (*fmt == '*') { prec = va_arg(ap, int); ++fmt; if (prec < 0) prec = -1; }
             else while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); ++fmt; }
         }
-        // every length is one word on this machine
-        while (*fmt == 'h' || *fmt == 'l' || *fmt == 'z' || *fmt == 'j' || *fmt == 't' || *fmt == 'L' || *fmt == 'q') ++fmt;
+        // every length is one word on this machine, but a long long (ll,
+        // q) on a 32-bit one: two words, the high one first, as c4lc
+        // pushes it (c4lc-design 14.7)
+        ll = 0;
+        while (*fmt == 'h' || *fmt == 'l' || *fmt == 'z' || *fmt == 'j' || *fmt == 't' || *fmt == 'L' || *fmt == 'q') {
+            if (*fmt == 'q' || (*fmt == 'l' && fmt[1] == 'l')) ll = sizeof(int) == 4;
+            ++fmt;
+        }
         c = *fmt++;
+        hi = 0;
+        if (ll && (c == 'd' || c == 'i' || c == 'u' || c == 'x' || c == 'X' || c == 'o')) hi = va_arg(ap, unsigned int);
         if (c == 'd' || c == 'i') {
             v = va_arg(ap, int);
-            if (v < 0) fmt_int(k, -(unsigned int)v, 1, 10, 0, left, zero, plus, space, 0, width, prec);
-            else fmt_int(k, v, 0, 10, 0, left, zero, plus, space, 0, width, prec);
-        } else if (c == 'u') fmt_int(k, va_arg(ap, unsigned int), 0, 10, 0, left, zero, 0, 0, 0, width, prec);
-        else if (c == 'x' || c == 'X') fmt_int(k, va_arg(ap, unsigned int), 0, 16, c == 'X', left, zero, 0, 0, alt, width, prec);
-        else if (c == 'o') fmt_int(k, va_arg(ap, unsigned int), 0, 8, 0, left, zero, 0, 0, alt, width, prec);
+            if (ll) {
+                lo = v;
+                if ((int)hi < 0) { hi = ~hi; lo = -lo; if (lo == 0) ++hi; fmt_int(k, hi, lo, 1, 10, 0, left, zero, plus, space, 0, width, prec); }
+                else fmt_int(k, hi, lo, 0, 10, 0, left, zero, plus, space, 0, width, prec);
+            }
+            else if (v < 0) fmt_int(k, 0, -(unsigned int)v, 1, 10, 0, left, zero, plus, space, 0, width, prec);
+            else fmt_int(k, 0, v, 0, 10, 0, left, zero, plus, space, 0, width, prec);
+        } else if (c == 'u') fmt_int(k, hi, va_arg(ap, unsigned int), 0, 10, 0, left, zero, 0, 0, 0, width, prec);
+        else if (c == 'x' || c == 'X') fmt_int(k, hi, va_arg(ap, unsigned int), 0, 16, c == 'X', left, zero, 0, 0, alt, width, prec);
+        else if (c == 'o') fmt_int(k, hi, va_arg(ap, unsigned int), 0, 8, 0, left, zero, 0, 0, alt, width, prec);
         else if (c == 'p') {
             // glibc's: %#x of the pointer, or (nil) -- what c4m's PRTF prints
             v = va_arg(ap, int);
-            if (v) fmt_int(k, v, 0, 16, 0, left, zero, 0, 0, 1, width, prec);
+            if (v) fmt_int(k, 0, v, 0, 16, 0, left, zero, 0, 0, 1, width, prec);
             else {
                 s = "(nil)";
                 if (!left) sink_pad(k, ' ', width - 5);

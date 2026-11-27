@@ -69,9 +69,14 @@ memory when it opens, so `lseek` works on it, which the machine itself
 cannot do (Doom reads its WAD a lump at a time). Under C4DOS -- the loader fills in
 `__c4dos_api` -- `bare.c` asks DOS first: `open` of a DOS file, `create`
 and `write` on its RAM disk, and `exit` through `dos_exit`, back to the
-prompt. Directories, pipes and `execve` are not there, and fail; on a
-file being written, `lseek` only says where it has got to (enough for
-`ftell`).
+prompt. A directory is one with a listing, `c4dos.dir`, as C4DOS keeps
+one in each (a name a line, `NAME/` for a directory; `ls -p > c4dos.dir`
+makes one for the bare machine): `opendir` and `readdir` read it, in its
+order, and `stat` says a directory is one when its parent's listing
+names it. Without one there is no directory but the one, and no listing
+of it. Making directories, pipes and `execve` are not there, and fail;
+on a file being written, `lseek` only says where it has got to (enough
+for `ftell`).
 
 ## Limits
 

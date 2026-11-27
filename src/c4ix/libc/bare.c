@@ -143,6 +143,11 @@ static char *slurp(int fromdos, int h, int *n) {
 int uopen(char *path, int flags) {
     int h, fd, n, fromdos;
     char *b, *p1;
+    // O_RDWR with neither O_CREAT nor O_TRUNC is a file that exists,
+    // opened to read: as DOS games open their data (Blood its .ART files).
+    // It is read as any other, and writing to it is refused (-1), as the
+    // machine cannot write in place. Before, it was a new file to write.
+    if ((flags & 3) == 2 && (flags & (256 | 512)) == 0) return uopen(path, 0);
     if ((flags & 3) != 0) {
         // writing: where DOS puts it, or with no DOS onto drive 1
         if (dos()) {

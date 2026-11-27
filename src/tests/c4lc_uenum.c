@@ -77,5 +77,10 @@ int main (void)
 	st.n--;
 	st.e++;
 	printf ("%d %d\n", st.n, st.e);
+	/* multi-character constants, gcc's: each byte shifted in from the
+	   right, the last four kept (Blood's demos are signed '\x1aMED') */
+	i = 0x1a4d4544;
+	printf ("%x %x %x %x\n", 'ab', '\x1aMED', 'abcde', '\xff\x01');
+	printf ("%d %d\n", i == '\x1aMED', i != '\x1aMED');
 	return 0;
 }

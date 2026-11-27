@@ -375,6 +375,18 @@
 			(begin (set! lex:val c) (+ i 1)))))))))))
 		(begin (set! lex:val (lex:escape c)) (+ i 1))))))
 
+;; a character constant's value from its N decoded bytes in buf: its last
+;; byte, 0 to 255, as c4cc's; or -conforming, for 'ab' and longer, gcc's:
+;; each byte shifted in from the right, the last four kept ('\x1aMED' is
+;; 0x1a4d4544, Blood's demo signature)
+(define lex:charval (lambda (buf n)
+	(if (= n 0) 0
+	(if (if (= n 1) true (not lex:conforming)) (string:byte buf (- n 1))
+	(lex:charfold buf (if (> n 4) (- n 4) 0) n 0)))))
+(define lex:charfold (lambda (buf i n v)
+	(if (>= i n) v
+	(next lex:charfold buf (+ i 1) n (+ (* v 256) (string:byte buf i))))))
+
 ;; decode [i,end) into buf; returns the decoded length
 (define lex:strdecode (lambda (i end buf n)
 	(if (>= i end) n
@@ -740,9 +752,7 @@
 				(define buf (string:alloc (- e j)))
 				(define n (lex:strdecode j e buf 0))
 				(next lex:go (+ e 1) line (lex:cons
-					(list 'Num
-						(if (> n 0) (string:byte buf (- n 1)) 0)
-						line) acc)))
+					(list 'Num (lex:charval buf n) line) acc)))
 		(begin
 			(define k (lex:op i c))
 			(if k

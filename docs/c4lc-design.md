@@ -1606,12 +1606,22 @@ And three things of C that Blood's C units have, c4lc only:
   (`p:staticfns`, `p:deflinkage`).
 - **`extern` on a definition** changes nothing: `a_asm.c` writes `extern
   void setupqrhlineasm4 (...) { ... }`, whose symbol was an import.
+- **Multi-character constants** under `-conforming` are gcc's, in c4lc
+  and c4fc both (`lex:charval`, lex.f's `T-CHAR`): each byte is shifted
+  in from the right and the last four are kept, so `'ab'` is `0x6162` and
+  `'\x1aMED'` is `0x1a4d4544`. They were their last byte, as c4cc's are,
+  which stays the rule without `-conforming` (c4lc-tokens.txt). Blood
+  signs its demos `'\x1aMED'` and checks the signature before it plays
+  one, so c4lc's Blood played none. M7's first test did not see it: it
+  passed `-nodemo`, under which Blood plays no demo at all, the one named
+  by `-playback` included (blood.cpp), and so compared the title screen
+  and the menu. A one-byte constant is still its byte, 0 to 255.
 
-Tests: `c4lc_uenum.c` (both flags) and `c4lc_anon.c`, against gcc's
-goldens at both sizes, plain, `-O` and `-minline`; `c4lc_linka.c` and
-`c4lc_linkb.c`, two units linked by c4rlink at both sizes ("a 2 b 3").
-test-c4fc holds c4fc's images and `-c` objects of `c4lc_uenum.c` to
-c4lc's, without its typedef (`-D NOTYPEDEF`).
+Tests: `c4lc_uenum.c` (both flags, and multi-character constants) and
+`c4lc_anon.c`, against gcc's goldens at both sizes, plain, `-O` and
+`-minline`; `c4lc_linka.c` and `c4lc_linkb.c`, two units linked by c4rlink
+at both sizes ("a 2 b 3"). test-c4fc holds c4fc's images and `-c` objects
+of `c4lc_uenum.c` to c4lc's, without its typedef (`-D NOTYPEDEF`).
 
 ## 15. Source maps: `-g` (track S, S0-S2, 2026-10-24)
 

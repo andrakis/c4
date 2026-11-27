@@ -2624,6 +2624,15 @@ test-c4cxx-blood: c4cxx
 	src/c4cxx/blood-oracle.sh
 PHONY += test-c4cxx-blood
 
+# test-c4cxx-blood-c4lc: M7's test (src/c4cxx/blood-c4lc.sh). Blood built by
+# c4 alone -- c4cxx, then c4lc for every C++ unit, c4lc for every C one,
+# c4rlink32 with the bare machine's libc -- plays the shareware's first demo
+# in node with the host build's checksums, frame for frame. Needs c4-Blood
+# and BLOOD_RUN, as test-c4cxx-blood; minutes.
+test-c4cxx-blood-c4lc: c4cxx $(LC32_BIN) c4rlink32 libc-bare-objs
+	src/c4cxx/blood-c4lc.sh
+PHONY += test-c4cxx-blood-c4lc
+
 # 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.

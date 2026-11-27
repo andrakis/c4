@@ -1010,6 +1010,67 @@ Blood through c4lc does not yet have Watcom's layouts. c4lc compiles
 every unit (`blood-units.sh -compile`), but nothing links or runs that
 yet.
 
+### 4.11 M7, done (2026-11-27)
+
+**Blood built by c4 alone plays a demo as the host build does.** Every
+C++ unit through c4cxx and then c4lc (`lc32`), every C unit through c4lc,
+linked by c4rlink32 with the bare machine's libc, runs in node (libjs, the
+bare machine, the game's directory as its drive) with c4-Blood's null
+platform (`c4/blood-host.c`). It plays the shareware 1.11A's first demo
+with the checksums of c4-Blood's host build (B0, g++), frame for frame:
+4000 frames, about 15 minutes of game time, total `46c8dd68`. The image
+is 4,030,508 bytes, a quarter of the loader's 16 MB. Built and played in
+about five minutes. `src/c4cxx/blood-c4lc.sh` is the whole of it, and
+`make test-c4cxx-blood-c4lc` runs it (c4-Blood and `BLOOD_RUN`, as
+`test-c4cxx-blood`). The steps:
+
+1. **B0:** c4-Blood's `c4/host.sh`.
+2. **The 33 C units** host.sh builds (chocolate-blood's engine, MACT and
+   audiolib, fframe and crc32 in C) and c4/'s three (`c4blood.c`,
+   `blood-host.c`, `smacker.c`) through c4lc against C4IX's libc headers,
+   with host.sh's flags: `-funsigned-char` everywhere, and Watcom's layouts
+   (`-fshort-enums -mms-bitfields`) for Blood's own.
+3. **The 81 C++ units** (Blood's 80 and `c4/netnone.cpp`) through c4cxx
+   against the same headers, with Watcom's layouts, then c4lc.
+4. **The link:** loadsave first (section 4.10), the rest, `rt/libc4cxx.c`
+   for `c4/cxxrt.cpp`, and `.libc-bare`.
+5. **The demo:** both play `-nodemo -playback BLOOD000.DEM -sum 1`, and
+   the two lists of checksums must be the same.
+
+What it took, besides c4cxx as M6 left it:
+
+- **c4lc and c4fc:** `-funsigned-char` and `-fshort-enums`, Watcom's char
+  and enums (c4lc-design 14.17). c4fc's character constants are their
+  byte, 0 to 255, as c4lc's are (c4th's `C@` sign-extends: `'\xff'` was
+  -1).
+- **c4lc:** anonymous struct and union members (`a_asm.c`'s texture
+  coordinates); a function declared static stays static when its
+  definition does not say so (two units' `MoveToCeil`); `extern` on a
+  definition (`a_asm.c`) defines it (c4lc-design 14.17).
+- **C4IX's libc:** `malloc.h`, which the engine and MACT include; and on
+  the bare machine, `O_RDWR` without `O_CREAT` or `O_TRUNC` opens a file
+  that exists, to read. Blood opens its art and demos so. Before, it was
+  a new file to write, on drive 1.
+
+Two things of the bare machine, not of the compiler, the test works
+around:
+
+- **Its drive has no listing,** so `opendir` finds nothing there. c4/'s
+  `c4blood_open` looks for a name without regard to case through it (the
+  engine opens `tables.dat`; the file is `TABLES.DAT`), and Blood finds its
+  demo loop with `_dos_findfirst`, which c4/ makes of it. So the drive is
+  the game's files under their names and in lower case, and the demo is
+  named on the command line, for both programs. A demo loop on c4 wants a
+  listing (a register of the drive's), or C4IX's file system.
+- **A file is read whole into memory when it opens** (`bare.c`), and
+  `SHARE000.ART` is 16 MB: the run takes 256 MB (`-m 256`).
+
+And `printf`'s `%llu` prints 0 in the bare libc, which the `t=` field of
+blood-host's lines shows; the test compares the lines without it.
+
+After M7 the compiler is done (section 4). The rest is the game port
+(section 5).
+
 ## 5. What is left for Blood after the compiler
 
 The Duke port (`~/git/c4/games/duke3d`, `c4/` is 3,250 lines) shows what a

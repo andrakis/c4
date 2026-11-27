@@ -1108,10 +1108,11 @@ resource, so the file count sets the dictionary's size, and with it where
 each tile lands and what its slack holds. A gdb watchpoint on the pixel
 found the draw.
 
-**Where it stands: M7 passes.** blood-c4lc.sh (the bare machine, 4000
-frames; C4DOS and C4IX, 1000 frames each, the default `OS_FRAMES`):
-"4000 frames, every checksum B0's (total ef9f8bb2)" and "1000 frames,
-every checksum B0's (total 0e7bc8b6)" for C4DOS and for C4IX.
+**Where it stands: M7 passes.** blood-c4lc.sh with `OS_FRAMES=4000` prints
+"4000 frames, every checksum B0's (total ef9f8bb2)" for the bare machine,
+for C4DOS and for C4IX: the whole demo loop on each, about 17, 16 and 18
+minutes on helios. The default `OS_FRAMES` (1000) gives total 0e7bc8b6
+for C4DOS and C4IX.
 blood-oracle.sh: 4000 frames, every checksum B0's (total ef9f8bb2), 203
 types of g++'s size. ASan reports nothing in B0's 4000 frames. B0 gives
 the same 4000 checksums with 24, 26 and 27 files in its directory.

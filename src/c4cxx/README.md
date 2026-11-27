@@ -425,9 +425,10 @@ warp.cpp`, because `gUpperLink[-1]` is `velCeil`'s last entry, 0. c4-Blood
 fc1ff9b fixes the out-of-range reads that AddressSanitizer found in the
 demo loop, plus one inside Blood's own heap (a tile's slack) that a gdb
 watchpoint found (docs/c4cxx-plan.md 4.11). Now c4's Blood plays every
-one of B0's 4000 frames on the bare machine (total ef9f8bb2), and B0's
-frames under C4DOS and in C4IX (1000 frames each). The oracle still
-passes (4000 frames).
+one of B0's 4000 frames, the whole demo loop, on the bare machine, under
+C4DOS and in C4IX (total ef9f8bb2 on each, with `OS_FRAMES=4000`; the
+default runs 1000 frames on the two systems). The oracle still passes
+(4000 frames).
 
 ## M6, done (2026-11-27)
 

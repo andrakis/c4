@@ -398,8 +398,8 @@ be checked against g++'s.
 
 ## State: M7 (2026-11-27)
 
-**c4's Blood now plays what the host build plays; the game's own memory
-layout decides the rest.** M7's first test was wrong: under `-nodemo`
+**c4's Blood plays what the host build plays, and stops where it
+stops.** M7's first test was wrong: under `-nodemo`
 Blood plays no demo, so it compared the title screen and the menu, and
 c4lc's Blood could not have played one (a multi-character constant was
 its last byte). The test now (`blood-c4lc.sh`, `make
@@ -412,13 +412,19 @@ constants, gcc's; c4cxx `-fargs-rtl` (emit.c), a call's arguments in g++
 `c4dos.dir` listings on the bare machine and under C4DOS, a stable
 `qsort`, as glibc's.
 
-C4DOS and C4IX play the bare machine's frames. Against B0 they part at
-frame 63: Blood reads `xsector[-1]` (a sector without an xsector has
-`extra` -1), which is whatever the linker put before the array. B0 built
-with `-fno-toplevel-reorder` (the source's order, as c4rlink) gives c4's
-frames, all 228, and stops at the same assertion (warp.cpp 235). Which
-layout the demo needs, and Blood's `rand` (glibc's in B0), are the game
-port's.
+Blood reads outside its arrays: `xsector[-1]` for a sector without an
+xsector, and `gUpperLink[-1]` in warp.cpp's `CheckLink`. What it finds
+there depends on how the linker laid out the globals. So B0 is now built
+the way DOS Blood was: `blood-b0.sh` runs host.sh unchanged with
+`-fno-toplevel-reorder` (globals in the source's order, as Watcom and
+c4rlink lay them out), and links Watcom's `rand` (`b0/rand.c`, which is
+C4IX libc's generator) in place of glibc's.
+
+In that order the demo loop stops after frame 228 at `ERROR (235)
+warp.cpp`: `gUpperLink[-1]` is `velCeil`'s last entry, 0. c4's Blood plays
+all 228 of B0's frames and stops at the same assertion, on the bare
+machine, under C4DOS and in C4IX (total e5ced149). To get further, the
+out-of-range reads need fixing in c4-Blood, which is the game port's job.
 
 ## M6, done (2026-11-27)
 
@@ -500,6 +506,7 @@ yet.
 | `test-same.sh`, `run-corpora.sh` | the c4lc oracle and its corpora (`make test-c4cxx`) |
 | `c4odiff.py` | which functions and data differ between two objects |
 | `test-cxx.sh` | C++ programs against g++ (gcc and c4lc), and what c4cxx refuses |
+| `blood-b0.sh`, `b0/rand.c` | B0 for both Blood tests: c4-Blood's host build with globals in the source's order and Watcom's `rand` |
 | `blood-c4lc.sh` | M7's test: Blood built by c4 alone plays its demo loop on the bare machine, under C4DOS and in C4IX, against the host build (`make test-c4cxx-blood-c4lc`) |
 | `blood-oracle.sh` | M6's oracle: Blood from c4cxx's C by gcc against c4-Blood's host build, frame for frame, and the sizes (`make test-c4cxx-blood`) |
 | `blood-units.sh` | Blood's C++ units through c4cxx (`-parse` by default; `-compile` with Watcom's layouts, then gcc and c4lc) |

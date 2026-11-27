@@ -3,7 +3,8 @@
 # by c4 alone plays the shareware's demos as c4-Blood's host build (B0,
 # g++) does, frame for frame:
 #
-#   1. B0: c4-Blood's c4/host.sh, into $W/ref (kept: built once).
+#   1. B0: c4-Blood's c4/host.sh, into $W/ref (kept: built once), by
+#      blood-b0.sh: globals in the source's order, Watcom's rand.
 #   2. The C units host.sh builds -- chocolate-blood's engine, MACT and
 #      audiolib, fframe and crc32 in C, and c4/'s platform with no display
 #      and no sound (blood-host.c) -- through c4lc (lc32), against c4's libc
@@ -67,8 +68,8 @@ QTU="qheap resource iob trig getopt error debug4g textio pqueue key inifile qmou
 CXX_UNITS="$(for g in $GAME; do echo blood/$g; done) $(for q in $QTU; do echo blood/qtools/src/$q; done) c4/netnone"
 
 # 1. B0
-if [ ! -x $W/ref/blood-host ]; then
-	$C/host.sh $W/ref > $W/ref.log 2>&1 || { echo "blood-c4lc: host.sh failed"; tail -5 $W/ref.log; exit 1; }
+if [ ! -x $W/ref/blood-host ] || [ ! -f $W/ref/rand.o ]; then
+	BLOOD_DIR=$G src/c4cxx/blood-b0.sh $W/ref || exit 1
 fi
 bad=0 objs=
 # one unit through c4lc: NAME, the source to wrap after c4blood.h, flags
@@ -164,17 +165,37 @@ sums () { tr -d '\r' < $1 | grep "blood-host: frame" | sed 's/ t=.*//; s/^.*bloo
 (cd $W/run && timeout 3000 $W/ref/blood-host -sum 1 -frames $FRAMES) > $W/blood-host.out 2>&1
 sums $W/blood-host.out > $W/ref.sums
 n=$(wc -l < $W/ref.sums)
-if [ "$n" -lt "$FRAMES" ]; then echo "blood-c4lc: B0 ran $n frames of $FRAMES"; tail -3 $W/blood-host.out; exit 1; fi
-# what a run printed against B0's first FRAMES (fewer for the systems)
+# Blood's dassert: "ERROR (N) FILE", the file as its build named it
+stopped () { tr -d '\r' < $1 | grep -m1 -o 'ERROR ([0-9]*) [^%]*' | sed 's|) .*/|) |'; }
+STOP=
+if [ "$n" -lt "$FRAMES" ]; then
+	# B0 stopped short: on one of Blood's assertions, the builds must stop
+	# with it, after the same frames. Built in the source's order Blood
+	# stops so in its demo loop: it reads gUpperLink[-1] (warp.cpp's
+	# CheckLink), velCeil's last, 0, which is no link (docs/c4cxx-plan.md 4.11)
+	STOP=$(stopped $W/blood-host.out)
+	[ -n "$STOP" ] || { echo "blood-c4lc: B0 ran $n frames of $FRAMES"; tail -3 $W/blood-host.out; exit 1; }
+	echo "blood-c4lc: B0 stops after frame $n of $FRAMES: $STOP"
+fi
+# what a run printed against B0's first FRAMES (fewer for the systems);
+# if B0 stopped within them, the run must stop as B0
 check () {
 	local what=$1 out=$2 frames=$3
+	[ $frames -le $n ] || frames=$n
 	sums $out > $out.sums
 	head -$frames $W/ref.sums > $W/ref-$frames.sums
 	if ! cmp -s $W/ref-$frames.sums $out.sums; then
 		echo "blood-c4lc: $what: $(wc -l < $out.sums) frames; they differ from $(diff $W/ref-$frames.sums $out.sums | grep -m1 '^<' | sed 's/^< blood-host: //')"
 		tail -3 $out; return 1
 	fi
-	echo "blood-c4lc: $what: $frames frames, every checksum B0's ($(tail -1 $out.sums | sed 's/.*total/total/'))"
+	local how=
+	if [ -n "$STOP" ] && [ $frames = $n ]; then
+		if [ "$(stopped $out)" != "$STOP" ]; then
+			echo "blood-c4lc: $what: $frames frames, B0's, but not B0's stop ($STOP)"; tail -3 $out; return 1
+		fi
+		how=", and B0's stop"
+	fi
+	echo "blood-c4lc: $what: $frames frames, every checksum B0's$how ($(tail -1 $out.sums | sed 's/.*total/total/'))"
 }
 OSF=${OS_FRAMES:-1000}
 [ $OSF -le $FRAMES ] || OSF=$FRAMES

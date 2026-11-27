@@ -1010,7 +1010,7 @@ Blood through c4lc does not yet have Watcom's layouts. c4lc compiles
 every unit (`blood-units.sh -compile`), but nothing links or runs that
 yet.
 
-### 4.11 M7 (2026-11-27): the compiler reproduces the host build; the game's layout does not
+### 4.11 M7 (2026-11-27): c4's Blood plays B0's demo loop, and stops where B0 stops
 
 **What the first M7 test showed was wrong.** It passed Blood `-nodemo
 -playback BLOOD000.DEM`, and under `-nodemo` Blood plays no demo at all,
@@ -1021,7 +1021,8 @@ then: c4lc made `'\x1aMED'`, the demos' signature, its last byte.
 **The test now** (`src/c4cxx/blood-c4lc.sh`, `make test-c4cxx-blood-c4lc`)
 plays Blood's own demo loop, from one directory of the game's files:
 
-1. **B0:** c4-Blood's `c4/host.sh`.
+1. **B0:** c4-Blood's `c4/host.sh`, by `src/c4cxx/blood-b0.sh`, with
+   DOS Blood's layout and `rand` (below).
 2. **The 33 C units** host.sh builds (chocolate-blood's engine, MACT and
    audiolib, fframe and crc32 in C) and c4/'s three (`c4blood.c`,
    `blood-host.c`, `smacker.c`) through c4lc against C4IX's libc headers,
@@ -1036,7 +1037,9 @@ plays Blood's own demo loop, from one directory of the game's files:
 5. **The runs:** B0 natively; `blood.c4r` on the bare machine in node;
    the same image under C4DOS; `c4ix-blood.c4r` inside C4IX, from
    `/usr/games/blood` on a copy of the C4IX disk. Each list of checksums
-   must be B0's. Blood finds its demos with `_dos_findfirst` and takes
+   must be B0's; where B0 stops on one of Blood's assertions, each run
+   must stop after the same frame with the same one. Blood finds its
+   demos with `_dos_findfirst` and takes
    them in the order the directory gives, so every system lists the
    directory in B0's order: a `c4dos.dir` on the bare machine and under
    C4DOS (bare.c), and `/usr/games/blood`'s entries in C4IX (which lists a
@@ -1058,18 +1061,38 @@ What it took, after M7's first commits:
   glibc's (Blood sorts its event receivers by channel: two barrels on one
   channel blew in another order).
 
-**Where it stands.** C4DOS and C4IX play what the bare machine plays,
-frame for frame (200 frames each). Against B0 the frames part at 63. Blood
-reads outside its arrays: `viewProcessSprites` tests `pSector->extra ?
-&xsector[pSector->extra] : NULL`, and a sector without an xsector has
-`extra` -1, so it reads `xsector[-1]`, whatever the linker put before the
-array. g++ puts `nextXSprite` there; c4rlink keeps the source's order,
-`xwall` before `xsector`. Built with `-fno-toplevel-reorder` (globals in
-the source's order) B0 plays every one of c4's frames, 228 of them, and
-stops with c4's build at the same assertion (warp.cpp 235): the demo
-desyncs. So the compiler and libc now give what the host build gives;
-which layout the demo needs is the game port's question (section 5), as
-is Blood's `rand`, glibc's in B0 and Watcom's in C4IX's libc and in DOS.
+**B0's layout and `rand`.** Blood reads outside its arrays, and what it
+finds there depends on how the linker lays out the globals:
+
+- `viewProcessSprites` tests `pSector->extra ? &xsector[pSector->extra] :
+  NULL`. A sector without an xsector has `extra` -1, so it reads
+  `xsector[-1]`.
+- `CheckLink` (warp.cpp) reads `gUpperLink[*nSector]` for a sprite in no
+  sector, which is `gUpperLink[-1]`.
+
+g++ sorts the globals its own way; c4rlink, like Watcom, keeps the
+source's order. Under g++'s order the demos ran on what happened to sit
+there (`nextXSprite`, `gLowerLink`'s last entry, -1, meaning no link), and
+c4's builds parted from B0 at frame 63.
+
+So B0 is now built the way DOS Blood was (the user's choice, 2026-11-27).
+`blood-b0.sh` runs host.sh unchanged, through gcc and g++ wrappers that add
+`-fno-toplevel-reorder` (globals in the source's order). It then links
+B0 again with Watcom's `rand` (`src/c4cxx/b0/rand.c`), which is the C4IX
+libc's generator, in place of glibc's. blood-oracle.sh compiles c4cxx's C
+with the same flag and links the same `rand`. c4-Blood itself is unchanged.
+
+**Where it stands.** In the source's order Blood's demo loop reads
+`gUpperLink[-1]`, which is `velCeil`'s last entry, 0. That makes sprite 0
+a link, sprite 0 has no owner, and Blood stops after frame 228 at
+`dassert (nLower >= 0 ...)`, `ERROR (235) warp.cpp`. In those 228 frames
+the choice of `rand` changes nothing (glibc's or Watcom's, total
+e5ced149). c4's Blood plays every one of B0's 228 frames and stops at the
+same assertion, on the bare machine, under C4DOS and in C4IX (blood-c4lc.sh:
+"228 frames, every checksum B0's, and B0's stop (total e5ced149)" for each
+of the three). The compiler and the libc reproduce the host build. To get
+further, the game needs these out-of-range reads fixed in c4-Blood
+(`extra > 0`, and a check for a sprite in no sector): section 5.
 
 ## 5. What is left for Blood after the compiler
 

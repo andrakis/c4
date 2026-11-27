@@ -3,14 +3,16 @@
 # built from c4cxx's C by gcc -m32 must play the shareware's demos as
 # c4-Blood's host build (B0, g++) does, frame for frame.
 #
-#   1. B0: c4-Blood's c4/host.sh, into $W/ref (blood-host).
+#   1. B0: c4-Blood's c4/host.sh, into $W/ref (blood-host), by
+#      blood-b0.sh: globals in the source's order, Watcom's rand.
 #   2. Every C++ unit of Blood, and c4/netnone.cpp, through c4cxx against
 #      the host's headers (glibc's and gcc's, after c4-Blood's own), with
 #      what g++ gets from host.sh: Watcom's layouts (-fshort-enums
 #      -mms-bitfields -funsigned-char) and gcc's predefined __GNUC__ and
 #      __i386__, so that the headers take the paths they take for g++. Then
-#      gcc -m32 with host.sh's flags, -fno-common as C++ has it.
-#   3. Linked as host.sh links: loadsave first, host.sh's C objects, and
+#      gcc -m32 with host.sh's flags and B0's -fno-toplevel-reorder,
+#      -fno-common as C++ has it.
+#   3. Linked as B0 is: loadsave first, host.sh's C objects, B0's rand, and
 #      rt/libc4cxx.c for c4/cxxrt.cpp: $W/blood-cxx.
 #   4. Both run FRAMES frames (default 4000, the three demos) in $BLOOD_RUN,
 #      a directory of the game's files with BLOOD.CFG (c4-Blood's README:
@@ -41,7 +43,7 @@ SYS="-I /usr/include/$(gcc -print-multiarch) -I /usr/include -I $GCC_INC"
 INC="-I $C/inc -I $B/blood -I $B/blood/qtools/include -I $B/build -I $B/mact -I $B/audiolib"
 WF="-fshort-enums -mms-bitfields -funsigned-char"
 GNU="-D __GNUC__=$(gcc -dumpversion | cut -d. -f1) -D __GNUC_MINOR__=0 -D __GNUC_PATCHLEVEL__=0 -D __i386__=1 -D __linux__=1"
-GCC="gcc -m32 -O2 -g -std=gnu99 -fno-strict-aliasing -fwrapv -msse2 -mfpmath=sse -ffp-contract=off -fno-common -fpermissive -w $WF"
+GCC="gcc -m32 -O2 -g -std=gnu99 -fno-strict-aliasing -fwrapv -msse2 -mfpmath=sse -ffp-contract=off -fno-toplevel-reorder -fno-common -fpermissive -w $WF"
 GAME="globals blood screen view db gameutil fire sectorfx map2d satimer usrhooks endgame levels
 sound sfx controls actor player replace tile triggers eventq qav weapon gui seq mirrors dude warp
 weather credits menu messages ai aibat aibeast aiboneel aiburn aicaleb aicerber aicult aigarg
@@ -51,7 +53,7 @@ QTU="qheap resource iob trig getopt error debug4g textio pqueue key inifile qmou
 UNITS="$(for g in $GAME; do echo blood/$g; done) $(for q in $QTU; do echo blood/qtools/src/$q; done) c4/netnone"
 
 # 1. B0
-$C/host.sh $W/ref > $W/ref.log 2>&1 || { echo "blood-oracle: host.sh failed"; tail -5 $W/ref.log; exit 1; }
+BLOOD_DIR=$G src/c4cxx/blood-b0.sh $W/ref || exit 1
 # 2. c4cxx, then gcc
 bad=0 cxx=
 for u in $UNITS; do
@@ -77,7 +79,7 @@ for o in $W/ref/obj/*.o; do
 done
 objs="$H/blood_loadsave.o"
 for o in $cxx; do [ $o = blood_loadsave.o ] || objs="$objs $H/$o"; done
-gcc -m32 -g -o $W/blood-cxx $objs $c $H/libc4cxx.o -lm > $W/link.log 2>&1 || {
+gcc -m32 -g -o $W/blood-cxx $objs $c $W/ref/rand.o $H/libc4cxx.o -lm > $W/link.log 2>&1 || {
 	echo "blood-oracle: the link failed"; grep -E "undefined reference|multiple definition" $W/link.log | sed 's/.*: //' | sort | uniq -c | head; exit 1; }
 echo "blood-oracle: $(echo $UNITS | wc -w) C++ units through c4cxx and gcc, linked with $(echo $c | wc -w) of host.sh's C objects"
 # 4. the demos
@@ -87,12 +89,25 @@ done
 grep "blood-host: frame" $W/blood-host.out | sed 's/ t=.*//' > $W/ref.sums
 grep "blood-host: frame" $W/blood-cxx.out | sed 's/ t=.*//' > $W/cxx.sums
 n=$(wc -l < $W/ref.sums)
-if [ "$n" -lt "$FRAMES" ]; then echo "blood-oracle: B0 ran $n frames of $FRAMES"; tail -3 $W/blood-host.out; exit 1; fi
+# B0 may stop short on one of Blood's assertions ("ERROR (N) FILE": built
+# in the source's order, warp.cpp's 235 in the demo loop, blood-c4lc.sh);
+# blood-cxx must stop with it
+stopped () { grep -m1 -o 'ERROR ([0-9]*) [^%]*' $1 | sed 's|) .*/|) |'; }
+STOP= how=
+if [ "$n" -lt "$FRAMES" ]; then
+	STOP=$(stopped $W/blood-host.out)
+	[ -n "$STOP" ] || { echo "blood-oracle: B0 ran $n frames of $FRAMES"; tail -3 $W/blood-host.out; exit 1; }
+	echo "blood-oracle: B0 stops after frame $n of $FRAMES: $STOP"
+fi
 if ! cmp -s $W/ref.sums $W/cxx.sums; then
 	echo "blood-oracle: the frames differ from $(diff $W/ref.sums $W/cxx.sums | grep -m1 '^<' | sed 's/^< blood-host: //')"
 	tail -3 $W/blood-cxx.out; exit 1
 fi
-echo "blood-oracle: $n frames, every checksum B0's ($(tail -1 $W/ref.sums | sed 's/.*total/total/'))"
+if [ -n "$STOP" ]; then
+	[ "$(stopped $W/blood-cxx.out)" = "$STOP" ] || { echo "blood-oracle: $n frames, B0's, but not B0's stop ($STOP)"; tail -3 $W/blood-cxx.out; exit 1; }
+	how=", and B0's stop"
+fi
+echo "blood-oracle: $n frames, every checksum B0's$how ($(tail -1 $W/ref.sums | sed 's/.*total/total/'))"
 # 5. the sizes
 if command -v gdb > /dev/null; then
 	# unit by unit, g++'s object against c4cxx's, so that a type has one

@@ -2,8 +2,10 @@
 
 c4fc compiles C to `.c4r` images, with most of c4lc's coverage (structs,
 unions, a preprocessor, objects, `-O`), and its output is byte-identical to
-c4lc's, plain and `-O`, bit-fields included (c4lc-design §14.15). It has no `typedef`, `float` or `double` (c4lc has
-all three) and no `long long` on a 32-bit target, and its `-minline` is a
+c4lc's, plain and `-O`, bit-fields included (c4lc-design §14.15), and
+Watcom's char and enums (`-funsigned-char`, `-fshort-enums`, §14.17). It
+has no `typedef`, `float` or `double` (c4lc has all three), nor C11's
+anonymous struct and union members and no `long long` on a 32-bit target, and its `-minline` is a
 different inliner whose images differ from c4lc's. It also stops at a name
 used before anything declares it (`c4fc: undeclared NAME`), such as a global
 declared further down; c4lc accepts that. A call to a function the unit
@@ -57,6 +59,8 @@ file and writes the image to stdout. Options are words executed before it:
 | `1 CONFORMING !` | real C escape sequences, as c4lc's `-conforming` |
 | `-fno-builtin` | `open`, `read`, `printf`, `malloc` and the rest of the library names are ordinary identifiers, so a C library can define them (c4lc's `-fno-builtin`) |
 | `-mms-bitfields` | bit-fields laid out by MSVC's rule, as c4lc's `-mms-bitfields` |
+| `-funsigned-char` | plain `char` is `unsigned char`, and a string literal an `unsigned char *` (c4lc's) |
+| `-fshort-enums` | an enum is the smallest type that holds its constants (c4lc's) |
 
 Examples, as the Makefile runs them:
 

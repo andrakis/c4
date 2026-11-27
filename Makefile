@@ -2178,6 +2178,19 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	     || { echo "test-c4fc: c4lc_rowptr.c ($$m) differs from c4lc"; exit 1; }; \
 	 done
 	@echo "  pointers to arrays: c4lc's objects"
+	# -funsigned-char and -fshort-enums: c4lc's images and objects, plain
+	# and -O (NOTYPEDEF: c4fc has no typedef)
+	@for m in "" "1 OPTIMIZE !"; do for c in "" -c; do \
+	   lf="-P -conforming -funsigned-char -fshort-enums -D NOTYPEDEF $$c"; \
+	   ff="C4FC-INIT -P 1 CONFORMING ! -funsigned-char -fshort-enums S\" NOTYPEDEF=1\" -D $$c"; \
+	   if [ -n "$$m" ]; then lf="$$lf -O"; ff="$$ff $$m"; fi; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$lf $(TESTS)/c4lc_uenum.c .c4fc_lc.c4r > /dev/null 2>&1 \
+	     || { echo "test-c4fc: c4lc could not compile c4lc_uenum.c"; exit 1; }; \
+	   ./c4th $(C4FC_ALL) -e ": GO $$ff S\" $(TESTS)/c4lc_uenum.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
+	     || { echo "test-c4fc: c4lc_uenum.c ($$m $$c) differs from c4lc"; exit 1; }; \
+	 done; done
+	@echo "  unsigned char and short enums: c4lc's images and objects"
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
@@ -2623,6 +2636,15 @@ test-c4cxx-blood: c4cxx
 	src/c4cxx/blood-oracle.sh
 PHONY += test-c4cxx-blood
 
+# test-c4cxx-blood-c4lc: M7's test (src/c4cxx/blood-c4lc.sh). Blood built by
+# c4 alone -- c4cxx, then c4lc for every C++ unit, c4lc for every C one,
+# c4rlink32 with the bare machine's libc -- plays the shareware's first demo
+# in node with the host build's checksums, frame for frame. Needs c4-Blood
+# and BLOOD_RUN, as test-c4cxx-blood; minutes.
+test-c4cxx-blood-c4lc: c4cxx $(LC32_BIN) c4rlink32 libc-bare-objs
+	src/c4cxx/blood-c4lc.sh
+PHONY += test-c4cxx-blood-c4lc
+
 # 32-bit .c4r builds of the toolchain, for the c4bb disk: these are the
 # tools a system on that machine has to reach for, so they have to be
 # images the machine can load, not host binaries.
@@ -2860,14 +2882,36 @@ test-lazy-root: c4bb-images
 PHONY += test-lazy-root
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
-# scantest.c) on the bare machine, against gcc's build of the same.
-test-libc-bare: libc-bare-objs c4rlink32 $(C4LC_LISP) | $(LC32_BIN)
+# scantest.c), printf's long longs (llprint.c) and qsort's order of equal
+# elements, glibc's (sorttest.c) on the bare machine,
+# and opendir, readdir and stat (dirtest.c) there and under C4DOS,
+# against gcc's build of the same.
+test-libc-bare: libc-bare-objs c4rlink32 c4dos32.c4r $(C4LC_LISP) | $(LC32_BIN)
 	@rm -rf .libc_t && mkdir -p .libc_t && cp src/c4ix/libc/tests/scantest.c .libc_t/
 	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include .libc_t/scantest.c .libc_t/scantest.c4o > /dev/null
 	@./c4rlink32 .libc_t/scantest.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/scantest.c4r > /dev/null
 	@gcc -m32 -w -o .libc_t/scantest-host .libc_t/scantest.c
 	@cd .libc_t && ./scantest-host scantest.c > host.txt && node ../libjs/cli.js -m 64 -d . scantest.c4r scantest.c > c4.txt
 	@cmp -s .libc_t/host.txt .libc_t/c4.txt || { echo "test-libc-bare: differs from gcc's:"; diff .libc_t/c4.txt .libc_t/host.txt; exit 1; }
+	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/llprint.c .libc_t/llprint.c4o > /dev/null
+	@./c4rlink32 .libc_t/llprint.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/llprint.c4r > /dev/null
+	@gcc -m32 -w -o .libc_t/llprint-host src/c4ix/libc/tests/llprint.c
+	@cd .libc_t && ./llprint-host > llhost.txt && node ../libjs/cli.js -m 64 -d . llprint.c4r > llc4.txt
+	@cmp -s .libc_t/llhost.txt .libc_t/llc4.txt || { echo "test-libc-bare: llprint differs from gcc's:"; diff .libc_t/llc4.txt .libc_t/llhost.txt; exit 1; }
+	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/sorttest.c .libc_t/sorttest.c4o > /dev/null
+	@./c4rlink32 .libc_t/sorttest.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/sorttest.c4r > /dev/null
+	@gcc -m32 -w -o .libc_t/sorttest-host src/c4ix/libc/tests/sorttest.c
+	@cd .libc_t && ./sorttest-host > sorthost.txt && node ../libjs/cli.js -m 64 sorttest.c4r > sortc4.txt
+	@cmp -s .libc_t/sorthost.txt .libc_t/sortc4.txt || { echo "test-libc-bare: sorttest differs from gcc's:"; diff .libc_t/sortc4.txt .libc_t/sorthost.txt; exit 1; }
+	@# directories: each one's listing is its c4dos.dir, on the machine's
+	@# drive as under C4DOS (bare.c)
+	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/dirtest.c .libc_t/dirtest.c4o > /dev/null
+	@mkdir -p .libc_t/d/sub && ./c4rlink32 .libc_t/dirtest.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/d/dirtest.c4r > /dev/null
+	@gcc -m32 -w -o .libc_t/dirtest-host src/c4ix/libc/tests/dirtest.c
+	@cd .libc_t/d && echo hello > ab.txt && echo x > Cd.TXT && echo y > sub/x.dat && ls -p > c4dos.dir && (cd sub && ls -p > c4dos.dir)
+	@cd .libc_t/d && ../dirtest-host > ../dirhost.txt && node ../../libjs/cli.js -m 64 -d . dirtest.c4r > ../dirc4.txt
+	@cd .libc_t/d && printf 'dirtest\nver\n' | node ../../libjs/cli.js -m 64 -d . ../../c4dos32.c4r 2>/dev/null | grep -v 'C4DOS\|^A:' > ../dirdos.txt
+	@for w in c4 dos; do cmp -s .libc_t/dirhost.txt .libc_t/dir$$w.txt || { echo "test-libc-bare: dirtest ($$w) differs from gcc's:"; diff .libc_t/dir$$w.txt .libc_t/dirhost.txt; exit 1; }; done
 	@rm -rf .libc_t
 	@echo "test-libc-bare: OK"
 PHONY += test-libc-bare
@@ -4201,6 +4245,30 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-rowptr.txt || exit 1; \
 	   $(call lc32,) $$fl -c $(TESTS)/c4lc_rowptr.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   echo "  bit-fields and pointers to arrays ok, gcc's answers and layouts: c4lc $$fl"; \
+	 done
+	# -funsigned-char and -fshort-enums (docs/c4cxx-plan.md 3.9: Watcom's
+	# char and enums, as Blood is built): the golden is gcc -m32's with the
+	# same flags, at both sizes, plain, -O and -minline; anonymous struct
+	# and union members (C11, chocolate-blood's a_asm.c); and a function's
+	# linkage across two units, static from its first declaration and
+	# `extern` on a definition (c4lc_linka.c)
+	@for fl in "" "-O" "-minline"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -P -conforming -funsigned-char -fshort-enums $(TESTS)/c4lc_uenum.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-uenum.txt || exit 1; \
+	   $(call lc32,) $$fl -P -conforming -funsigned-char -fshort-enums $(TESTS)/c4lc_uenum.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-uenum.txt || exit 1; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_anon.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-anon.txt || exit 1; \
+	   $(call lc32,) $$fl $(TESTS)/c4lc_anon.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-anon.txt || exit 1; \
+	   for u in a b; do ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -c $(TESTS)/c4lc_link$$u.c .c4lc_l$$u.c4o > /dev/null || exit 1; done; \
+	   ./c4rlink .c4lc_la.c4o .c4lc_lb.c4o -o .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | grep -qx "a 2 b 3" || exit 1; \
+	   for u in a b; do $(call lc32,) $$fl -c $(TESTS)/c4lc_link$$u.c .c4lc_l$$u.c4o > /dev/null || exit 1; done; \
+	   ./c4rlink32 .c4lc_la.c4o .c4lc_lb.c4o -o .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | grep -qx "a 2 b 3" || exit 1; \
+	   rm -f .c4lc_la.c4o .c4lc_lb.c4o; \
+	   echo "  unsigned char, short enums, anonymous members and C's linkage ok: c4lc $$fl"; \
 	 done
 	# what the Puzzles needed (games/puzzles): _Bool, a function pointer that
 	# returns a float or a double, a variable named like a typedef, a tag

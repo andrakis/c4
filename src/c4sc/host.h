@@ -68,6 +68,8 @@ int *L_pp_58predefine (int *a0);
 int *L_pp_58predefines (int *a0);
 extern int *L_p_58lines;                // -g: the parser puts the lines in
 extern int *L_p_58msbf;                 // -mms-bitfields: MS bit-field layout
+extern int *L_p_58uchar;                // -funsigned-char: plain char unsigned
+extern int *L_p_58shortenums;           // -fshort-enums: an enum as small as its values
 int *L_parse_58program (int *a0);
 extern int *L_c4r_58v3;
 extern int *L_c4r_58bss_45extra;
@@ -86,6 +88,7 @@ extern int *L_gen_58fuse;
 extern int *L_gen_58fpu;
 extern int *L_gen_58nobuiltin;
 extern int *L_gen_58pic;
+extern int *L_gen_58uchar;              // -funsigned-char: a string literal is unsigned char *
 extern int *L_gen_58opt;
 extern int *L_gen_58bssextra;
 extern int *L_gen_58bsssize;

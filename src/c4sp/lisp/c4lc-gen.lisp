@@ -67,6 +67,11 @@
 (define g:BOOL 1025152)
 (define g:FN0 1025216)
 (define g:DOUBLE 1025088)
+;; -funsigned-char (gen:uchar): the parser gives plain char unsigned
+;; char's type, and a string literal is an unsigned char * here, so that
+;; "\xff"[0] is 255 as gcc -funsigned-char has it
+(define gen:uchar false)
+(define g:USTR (+ g:UCHAR g:PTR))
 (define g:ll? (lambda (t) (if (= t g:LL) true (if (= t g:ULL) true (if (= t g:DOUBLE) (= g:WORD 4) false)))))
 (define g:BITS (* 8 g:WORD))
 (define g:W64 (= g:WORD 8))
@@ -650,8 +655,21 @@
 (define g:member (lambda (ty n)
 	(begin
 		(if (g:svalue? ty) nil (g:die (+ "not a struct: ." n)))
-		(define m (g:lookup n (g:third (g:sinfo ty))))
+		(define m (g:mfind n (g:third (g:sinfo ty))))
 		(if m m (g:die (+ "no such member: " n))))))
+;; ... and a member of an anonymous struct or union member (C11; the
+;; parser names one "@", p:members): its record, at the offset in the
+;; outer struct
+(define g:mfind (lambda (n l)
+	(if (empty? l) false
+	(if (= (head (head l)) n) (head l)
+	(if (= (head (head l)) "@")
+		(begin
+			(define a (head l))
+			(define r (g:mfind n (g:third (g:sinfo (index a 2)))))
+			(if r (g:cons (head r) (g:cons (+ (g:second a) (g:second r)) (tail (tail r))))
+				(next g:mfind n (tail l))))
+	(next g:mfind n (tail l)))))))
 
 ;; struct/union layout from a (structdef NAME TYPE ISUNION MEMBERS SIZE
 ;; LAYOUT) node -- the parser bakes its assigned type id into the node,
@@ -1891,7 +1909,7 @@
 		(define h (head e))
 		(if (= h 'num) (if (= (index e 2) nil) g:INT (index e 2))
 		(if (= h 'llnum) (index e 3)
-		(if (= h 'str) g:PTR
+		(if (= h 'str) (if gen:uchar g:USTR g:PTR)
 		(if (= h 'var) (g:vartype (g:find (g:second e)))
 		(if (if (= h 'call) true (= h 'cmpd)) (if (= h 'call) (g:callty (g:find (g:second e))) (index e 2))
 		(if (= h 'calle) (g:fnret (g:typeof (g:calltgt (g:second e))))
@@ -2442,7 +2460,7 @@
 		(if (= h 'str)
 			(begin
 				(g:emit (list 'IMM (list 'data (g:dstr (g:second e)))))
-				(set! g:ty g:PTR))
+				(set! g:ty (if gen:uchar g:USTR g:PTR)))
 		(if (= h 'var) (g:varexpr (g:second e))
 		(if (if (= h 'call) true (= h 'cmpd)) (if (= h 'call) (g:call e) (g:cmpd e))
 		(if (if (= h 'assign) (g:svalue? (g:lvtype (g:second e))) false)

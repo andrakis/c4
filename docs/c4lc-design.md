@@ -1579,6 +1579,59 @@ Tests: `c4lc_rowptr.c`, against gcc's golden at both sizes, plain, `-O`
 and `-minline`, and compiled with `-c`. test-c4fc holds c4fc's `-c`
 objects of it to c4lc's.
 
+### 14.17 Watcom's char and enums, anonymous members, linkage (2026-11-27)
+
+What Blood on c4lc needed (docs/c4cxx-plan.md 4.11, M7). Its host build
+gives gcc `-funsigned-char`, and `-fshort-enums` for Blood's own units,
+because Watcom's char was unsigned and its enum as small as its values.
+c4lc now takes both flags, and c4fc does too, to the same bytes:
+
+- **`-funsigned-char`** (`p:uchar`, `gen:uchar`): plain `char` is
+  `unsigned char` (`p:specdone`; `void` stays `char` as it always was), and
+  a string literal is an `unsigned char *`, so `"\xff"[0]` is 255. A
+  character constant was already its byte, 0 to 255. Without the flag
+  nothing changes. c4fc: `UCHAR`, in `(BASE-TYPE)` and `CT n_str`.
+- **`-fshort-enums`** (`p:shortenums`): an enum's type is the smallest that
+  holds its constants -- unsigned char, unsigned short or unsigned int
+  when none is negative, else signed char, short or int, as gcc's flag
+  has it -- and its tag keeps that type for `enum TAG` without a body
+  (`p:enumtag`, `p:enumfit`; the latest tag of a name first). The
+  constants stay ints. c4fc: `SHORTENUMS`, `ENUM-SPEC`, `ENUM-FIT`,
+  `ET-FIND`.
+
+And three things of C that Blood's C units have, c4lc only:
+
+- **Anonymous struct and union members** (C11): chocolate-blood's
+  `a_asm.c` has `union { uint16_t lw; struct { uint32_t l, h; }; uint64_t
+  m; }`. A member with no tag and no name is laid out as any member, named
+  `@`, which no source can say, and a member lookup that misses looks
+  through it, adding its offset (`p:findrec`, `g:mfind`). An initializer
+  gives it its own braces, as gcc's does. c4fc has none (it stops at the
+  member: "unexpected token").
+- **A function declared static is static**, its definition saying so or
+  not: Blood's `aibat.cpp` and `aiboneel.cpp` each have `static void
+  MoveToCeil (SPRITE *, XSPRITE *);` and then `void MoveToCeil (...) {
+  ... }`, which c4lc exported from both, and c4rlink kept one
+  (`p:staticfns`, `p:deflinkage`).
+- **`extern` on a definition** changes nothing: `a_asm.c` writes `extern
+  void setupqrhlineasm4 (...) { ... }`, whose symbol was an import.
+- **Multi-character constants** under `-conforming` are gcc's, in c4lc
+  and c4fc both (`lex:charval`, lex.f's `T-CHAR`): each byte is shifted
+  in from the right and the last four are kept, so `'ab'` is `0x6162` and
+  `'\x1aMED'` is `0x1a4d4544`. They were their last byte, as c4cc's are,
+  which stays the rule without `-conforming` (c4lc-tokens.txt). Blood
+  signs its demos `'\x1aMED'` and checks the signature before it plays
+  one, so c4lc's Blood played none. M7's first test did not see it: it
+  passed `-nodemo`, under which Blood plays no demo at all, the one named
+  by `-playback` included (blood.cpp), and so compared the title screen
+  and the menu. A one-byte constant is still its byte, 0 to 255.
+
+Tests: `c4lc_uenum.c` (both flags, and multi-character constants) and
+`c4lc_anon.c`, against gcc's goldens at both sizes, plain, `-O` and
+`-minline`; `c4lc_linka.c` and `c4lc_linkb.c`, two units linked by c4rlink
+at both sizes ("a 2 b 3"). test-c4fc holds c4fc's images and `-c` objects
+of `c4lc_uenum.c` to c4lc's, without its typedef (`-D NOTYPEDEF`).
+
 ## 15. Source maps: `-g` (track S, S0-S2, 2026-10-24)
 
 docs/c4-explorer.md §2 is the design. This section records what c4lc does.

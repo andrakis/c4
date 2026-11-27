@@ -396,7 +396,41 @@ Still M6: the oracle. Blood built from c4cxx's C by gcc `-m32` must play
 B0's demos with B0's checksums, frame for frame, and the class sizes must
 be checked against g++'s.
 
-## State: M6, done (2026-11-27)
+## State: M7 (2026-11-27)
+
+**M7 passes: c4's Blood plays the shareware's demo loop as the host
+build does.** M7's first test was wrong: under `-nodemo`
+Blood plays no demo, so it compared the title screen and the menu, and
+c4lc's Blood could not have played one (a multi-character constant was
+its last byte). The test now (`blood-c4lc.sh`, `make
+test-c4cxx-blood-c4lc`) plays Blood's own demo loop on the bare machine,
+under C4DOS and inside C4IX, against B0 (docs/c4cxx-plan.md 4.11).
+
+What it took besides: c4lc's and c4fc's `-conforming` multi-character
+constants, gcc's; c4cxx `-fargs-rtl` (emit.c), a call's arguments in g++
+-m32's order; C4IX's libc: `%lld` at 32 bits, directories as
+`c4dos.dir` listings on the bare machine and under C4DOS, a stable
+`qsort`, as glibc's.
+
+Blood reads outside its arrays: `xsector[-1]` for a sector without an
+xsector, and `gUpperLink[-1]` in warp.cpp's `CheckLink`. What it finds
+there depends on how the linker laid out the globals. So B0 is now built
+the way DOS Blood was: `blood-b0.sh` runs host.sh unchanged with
+`-fno-toplevel-reorder` (globals in the source's order, as Watcom and
+c4rlink lay them out), and links Watcom's `rand` (`b0/rand.c`, which is
+C4IX libc's generator) in place of glibc's.
+
+In that order the demo loop stopped after frame 228 at `ERROR (235)
+warp.cpp`, because `gUpperLink[-1]` is `velCeil`'s last entry, 0. c4-Blood
+fc1ff9b fixes the out-of-range reads that AddressSanitizer found in the
+demo loop, plus one inside Blood's own heap (a tile's slack) that a gdb
+watchpoint found (docs/c4cxx-plan.md 4.11). Now c4's Blood plays every
+one of B0's 4000 frames, the whole demo loop, on the bare machine, under
+C4DOS and in C4IX (total ef9f8bb2 on each, with `OS_FRAMES=4000`; the
+default runs 1000 frames on the two systems). The oracle still passes
+(4000 frames).
+
+## M6, done (2026-11-27)
 
 **The oracle passes.** Blood built from c4cxx's C by gcc `-m32` plays the
 shareware 1.11A's demos (BS111A) with the checksums of c4-Blood's host
@@ -476,6 +510,8 @@ yet.
 | `test-same.sh`, `run-corpora.sh` | the c4lc oracle and its corpora (`make test-c4cxx`) |
 | `c4odiff.py` | which functions and data differ between two objects |
 | `test-cxx.sh` | C++ programs against g++ (gcc and c4lc), and what c4cxx refuses |
+| `blood-b0.sh`, `b0/rand.c` | B0 for both Blood tests: c4-Blood's host build with globals in the source's order and Watcom's `rand` |
+| `blood-c4lc.sh` | M7's test: Blood built by c4 alone plays its demo loop on the bare machine, under C4DOS and in C4IX, against the host build (`make test-c4cxx-blood-c4lc`) |
 | `blood-oracle.sh` | M6's oracle: Blood from c4cxx's C by gcc against c4-Blood's host build, frame for frame, and the sizes (`make test-c4cxx-blood`) |
 | `blood-units.sh` | Blood's C++ units through c4cxx (`-parse` by default; `-compile` with Watcom's layouts, then gcc and c4lc) |
 | `tests/` | the preprocessor's cases, with their output (checked against gcc -E); `t_*.cpp` programs, `m_*/` programs of several units, `e_*.cpp` refusals and `rt-gxx.cpp` (g++'s runtime) for `test-cxx.sh` |

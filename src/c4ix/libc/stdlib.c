@@ -129,27 +129,52 @@ static void swap_bytes(char *a, char *b, int n) {
     while (n > 0) { t = *a; *a = *b; *b = t; ++a; ++b; --n; }
 }
 
-// Shell sort: no recursion, a few lines, and fine at this machine's sizes.
-// CMP is a function (c4lc calls any variable): cmp(a, b) < 0 when a sorts first.
+// Stable, as glibc's (a merge sort): elements that compare equal keep their
+// order, so a program sorts as it does on glibc (Blood's event channels:
+// two barrels on one channel blow in the order the map has them). Bottom
+// up, no recursion; without memory for the merge, an insertion sort, which
+// is stable too. CMP is a function (c4lc calls any variable): cmp(a, b) < 0
+// when a sorts first.
 void qsort(char *base, int n, int size, int cmp) {
-    int gap, i, j;
-    char *a, *b;
-    gap = n / 2;
-    while (gap > 0) {
-        i = gap;
+    int width, lo, mid, hi, i, j, k;
+    char *tmp, *src, *dst, *t;
+    if (n < 2 || size <= 0) return;
+    if (!(tmp = malloc(n * size))) {
+        i = 1;
         while (i < n) {
-            j = i - gap;
-            while (j >= 0) {
-                a = base + j * size;
-                b = base + (j + gap) * size;
-                if (cmp(a, b) <= 0) break;
-                swap_bytes(a, b, size);
-                j = j - gap;
+            j = i;
+            while (j > 0 && cmp(base + (j - 1) * size, base + j * size) > 0) {
+                swap_bytes(base + (j - 1) * size, base + j * size, size);
+                --j;
             }
             ++i;
         }
-        gap = gap / 2;
+        return;
     }
+    src = base;
+    dst = tmp;
+    width = 1;
+    while (width < n) {
+        lo = 0;
+        while (lo < n) {
+            mid = lo + width < n ? lo + width : n;
+            hi = lo + 2 * width < n ? lo + 2 * width : n;
+            i = lo; j = mid; k = lo;
+            // the left run's element first unless the right one sorts before it
+            while (i < mid && j < hi) {
+                if (cmp(src + j * size, src + i * size) < 0) { memcpy(dst + k * size, src + j * size, size); ++j; }
+                else { memcpy(dst + k * size, src + i * size, size); ++i; }
+                ++k;
+            }
+            if (i < mid) memcpy(dst + k * size, src + i * size, (mid - i) * size);
+            if (j < hi) memcpy(dst + k * size, src + j * size, (hi - j) * size);
+            lo = hi;
+        }
+        t = src; src = dst; dst = t;
+        width = width * 2;
+    }
+    if (src != base) memcpy(base, src, n * size);
+    free(tmp);
 }
 
 char *bsearch(char *key, char *base, int n, int size, int cmp) {

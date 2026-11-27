@@ -341,7 +341,14 @@ VARIABLE T-SU   0 T-SU !
    end POS @ - 1+ ALLOT: TO dst
    end dst DECODE TO n
    end 1+ POS !  s SPELLED
-   Num  n 0> IF dst n 1- + C@ ELSE 0 THEN  0 TOK, ;
+   \ the last byte, 0 to 255 as c4lc's string:byte gives it ('\xff' is
+   \ 255): c4th's C@ sign-extends. -conforming, for 'ab' and longer,
+   \ gcc's: each byte shifted in from the right, the last four kept, as
+   \ c4lc's lex:charval ('\x1aMED' is 0x1a4d4544)
+   CONFORMING @ 0= n 2 < OR IF
+      Num  n 0> IF dst n 1- + C@ 255 AND ELSE 0 THEN  0 TOK, EXIT
+   THEN
+   Num  0  n  n 4 - 0 MAX  ?DO  256 *  dst I + C@ 255 AND +  LOOP  0 TOK, ;
 
 : T-SLASH {: | d -- :}
    POS @ 1+ PEEK TO d

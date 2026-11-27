@@ -149,6 +149,8 @@ struct Node {
 	int implicit;		// ND_CALL: of a function declared by the call
 	int cvar;		// is_const through a const variable (C++'s rule, not C's)
 	int unsure;		// typed by a fallback (a c4lc-ism gcc would refuse)
+	int *regflag;		// ND_IDENT: a function's variable gcc keeps in a
+				// register while *regflag (emit's -fargs-rtl)
 	// C++
 	Token *qual;		// ND_IDENT: X in X::name
 	int functional;		// ND_CAST: T(args)

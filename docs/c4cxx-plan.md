@@ -1010,6 +1010,113 @@ Blood through c4lc does not yet have Watcom's layouts. c4lc compiles
 every unit (`blood-units.sh -compile`), but nothing links or runs that
 yet.
 
+### 4.11 M7 (2026-11-27): c4's Blood plays B0's demo loop
+
+**What the first M7 test showed was wrong.** It passed Blood `-nodemo
+-playback BLOOD000.DEM`, and under `-nodemo` Blood plays no demo at all,
+the named one included (blood.cpp). Both builds showed the title screen
+and the menu for 4000 frames. c4's build could not have played a demo
+then: c4lc made `'\x1aMED'`, the demos' signature, its last byte.
+
+**The test now** (`src/c4cxx/blood-c4lc.sh`, `make test-c4cxx-blood-c4lc`)
+plays Blood's own demo loop, from one directory of the game's files:
+
+1. **B0:** c4-Blood's `c4/host.sh`, by `src/c4cxx/blood-b0.sh`, with
+   DOS Blood's layout and `rand` (below).
+2. **The 33 C units** host.sh builds (chocolate-blood's engine, MACT and
+   audiolib, fframe and crc32 in C) and c4/'s three (`c4blood.c`,
+   `blood-host.c`, `smacker.c`) through c4lc against C4IX's libc headers,
+   with host.sh's flags: `-funsigned-char` everywhere, and Watcom's layouts
+   (`-fshort-enums -mms-bitfields`) for Blood's own.
+3. **The 81 C++ units** (Blood's 80 and `c4/netnone.cpp`) through c4cxx
+   `-fargs-rtl` against the same headers, with Watcom's layouts, then c4lc.
+4. **The links:** loadsave first (section 4.10), the rest, `rt/libc4cxx.c`
+   for `c4/cxxrt.cpp`, and the bare machine's libc (`blood.c4r`); and with
+   C4IX's libc, linked in, for C4IX (`c4ix-blood.c4r`), when there are
+   C4IX images (`C4_IMAGES`).
+5. **The runs:** B0 natively; `blood.c4r` on the bare machine in node;
+   the same image under C4DOS; `c4ix-blood.c4r` inside C4IX, from
+   `/usr/games/blood` on a copy of the C4IX disk. Each list of checksums
+   must be B0's; where B0 stops on one of Blood's assertions, each run
+   must stop after the same frame with the same one. Blood finds its
+   demos with `_dos_findfirst` and takes
+   them in the order the directory gives, so every system lists the
+   directory in B0's order: a `c4dos.dir` on the bare machine and under
+   C4DOS (bare.c), and `/usr/games/blood`'s entries in C4IX (which lists a
+   directory newest entry first).
+
+What it took, after M7's first commits:
+
+- **c4lc and c4fc:** `-conforming` multi-character constants are gcc's
+  (c4lc-design 14.17).
+- **c4cxx `-fargs-rtl`:** a call's arguments in g++ -m32's order, right
+  to left, with a function's register variables read at the call (emit.c,
+  `rtl_call`). C leaves the order open; c4lc's is left to right. Blood's
+  weapons draw their spread so (`actFireVector (..., dx+Random3(600),
+  dy+Random3(600), ...)`). `tests/r_argorder.cpp` holds it to g++, and
+  blood-oracle.sh with `C4CXX_FLAGS=-fargs-rtl` still gives B0's 4000
+  frames.
+- **C4IX's libc:** `printf`'s `%lld` and `%llu` at 32 bits; directories
+  on the bare machine and under C4DOS (`c4dos.dir`); `qsort` stable, as
+  glibc's (Blood sorts its event receivers by channel: two barrels on one
+  channel blew in another order).
+
+**B0's layout and `rand`.** Blood reads outside its arrays, and what it
+finds there depends on how the linker lays out the globals:
+
+- `viewProcessSprites` tests `pSector->extra ? &xsector[pSector->extra] :
+  NULL`. A sector without an xsector has `extra` -1, so it reads
+  `xsector[-1]`.
+- `CheckLink` (warp.cpp) reads `gUpperLink[*nSector]` for a sprite in no
+  sector, which is `gUpperLink[-1]`.
+
+g++ sorts the globals its own way; c4rlink, like Watcom, keeps the
+source's order. Under g++'s order the demos ran on what happened to sit
+there (`nextXSprite`, `gLowerLink`'s last entry, -1, meaning no link), and
+c4's builds parted from B0 at frame 63.
+
+So B0 is now built the way DOS Blood was (the user's choice, 2026-11-27).
+`blood-b0.sh` runs host.sh unchanged, through gcc and g++ wrappers that add
+`-fno-toplevel-reorder` (globals in the source's order). It then links
+B0 again with Watcom's `rand` (`src/c4cxx/b0/rand.c`), which is the C4IX
+libc's generator, in place of glibc's. blood-oracle.sh compiles c4cxx's C
+with the same flag and links the same `rand`. blood-b0.sh doesn't change
+host.sh.
+
+In the source's order Blood's demo loop reads `gUpperLink[-1]`, which is
+`velCeil`'s last entry, 0. That makes sprite 0 a link, and sprite 0 has no
+owner, so Blood stopped after frame 228 at `ERROR (235) warp.cpp`. c4's
+Blood played the same 228 frames and stopped at the same assertion (9718ec9:
+both tests take a stop of B0's on one of Blood's assertions).
+
+**Blood's out-of-range reads, fixed in c4-Blood** (fc1ff9b, the user's
+choice). AddressSanitizer on B0, through the demo loop, found them:
+
+| Where | What it read | Now |
+| --- | --- | --- |
+| view.cpp `viewProcessSprites`, ai.cpp `CanMove` (twice) | `xsector[-1]` for a sector without one | `extra > 0` first, as aibeast.cpp has it |
+| warp.cpp `CheckLink` (both) | `gUpperLink[-1]`, `gLowerLink[-1]` for a sprite or view in no sector | no link |
+| actor.cpp `MoveDude` | the hit sprite's xsprite, tested on the mover's `extra` | the hit sprite's `extra` |
+| actor.cpp `actFireVector`, aiboneel.cpp `BiteSeqCallback` | `dudeInfo` for a dude just turned into 426 (a gib) | no mass; the eel bites level |
+| config.cpp | `SCRIPT_GetNumber` wrote 4 bytes into the 1-byte `ControllerType` | through an `int32` |
+| tile.cpp `tileLoadTile` | the engine reads past a tile: `maskwallscan`'s last column of a flipped tile whose height isn't a power of two starts a row past the column, in the heap block's slack | the slack, up to QHeap's 16 bytes, is 255 (transparent) |
+
+ASan can't see the last one: it is inside Blood's own heap (QHeap). It
+showed as one pixel of frame 1693 that changed with the number of files
+in the run directory. Resource.cpp adds every file there as an external
+resource, so the file count sets the dictionary's size, and with it where
+each tile lands and what its slack holds. A gdb watchpoint on the pixel
+found the draw.
+
+**Where it stands: M7 passes.** blood-c4lc.sh with `OS_FRAMES=4000` prints
+"4000 frames, every checksum B0's (total ef9f8bb2)" for the bare machine,
+for C4DOS and for C4IX: the whole demo loop on each, about 17, 16 and 18
+minutes on helios. The default `OS_FRAMES` (1000) gives total 0e7bc8b6
+for C4DOS and C4IX.
+blood-oracle.sh: 4000 frames, every checksum B0's (total ef9f8bb2), 203
+types of g++'s size. ASan reports nothing in B0's 4000 frames. B0 gives
+the same 4000 checksums with 24, 26 and 27 files in its directory.
+
 ## 5. What is left for Blood after the compiler
 
 The Duke port (`~/git/c4/games/duke3d`, `c4/` is 3,250 lines) shows what a

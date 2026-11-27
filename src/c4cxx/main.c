@@ -43,6 +43,8 @@ int main (int argc, char **argv)
 			opt_ms_bitfields = 1;
 		else if (!strcmp (a, "-funsigned-char"))
 			opt_unsigned_char = 1;
+		else if (!strcmp (a, "-fargs-rtl"))
+			opt_args_rtl = 1;
 		else if (!strcmp (a, "-o") && i + 1 < argc)
 			out = argv[++i];
 		else if (!strcmp (a, "-x") && i + 1 < argc) {

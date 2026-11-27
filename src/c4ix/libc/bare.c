@@ -28,7 +28,8 @@
 // Compiled WITHOUT -fno-builtin, as opcodes.c is, so open, read, close,
 // putchar, malloc and exit here are the opcodes. Everything here is the
 // subset the whole machine family has, and the write head where the
-// machine announces one: no directories but the one, no processes.
+// machine announces one: directories only where they have listings
+// (c4dos.dir, C4DOS's), no processes.
 
 int *__c4dos_api;        // the loader's, under C4DOS; 0 on the bare machine
 int __c4ke_exit;         // C4KE's loader's, under C4KE: the opcode that ends a task
@@ -143,6 +144,11 @@ static char *slurp(int fromdos, int h, int *n) {
 int uopen(char *path, int flags) {
     int h, fd, n, fromdos;
     char *b, *p1;
+    // O_RDWR with neither O_CREAT nor O_TRUNC is a file that exists,
+    // opened to read: as DOS games open their data (Blood its .ART files).
+    // It is read as any other, and writing to it is refused (-1), as the
+    // machine cannot write in place. Before, it was a new file to write.
+    if ((flags & 3) == 2 && (flags & (256 | 512)) == 0) return uopen(path, 0);
     if ((flags & 3) != 0) {
         // writing: where DOS puts it, or with no DOS onto drive 1
         if (dos()) {
@@ -257,18 +263,128 @@ int uexit(int code) {
 }
 
 // stat: a file is there if it opens, and its size is what it reads
-int ustat2(char *path, int *out, int n) {
-    int fd, size, i;
-    if ((fd = uopen(path, 0)) < 0) return 0 - 1;
-    size = fd_len[fd];
+// A directory is one with a listing: its c4dos.dir, as C4DOS keeps one in
+// each (src/c4dos/c4dos.c, "directories"), a name a line and "NAME/" for
+// a directory. DOS's open finds it as it finds any file, and on the bare
+// machine it is on the drive when the drive was given one (ls -p >
+// c4dos.dir makes it). Where there is none there is no directory but the
+// one, and no listing of it, as before. The listing's own name is not in
+// it. A directory below the root is one its parent's listing names
+// ("NAME/"), as C4DOS has it: the machine's drive gives a name it does not
+// have from the root instead ("x/c4dos.dir" is the root's c4dos.dir when
+// there is no x/, devices.js diskFind), so that a listing opens is not
+// enough.
+static char dir_name[NAME_MAX + 16];
+static char *dir_list(char *path) {
+    char *s;
+    int n;
+    n = 0;
+    while (path[n] && n < NAME_MAX) { dir_name[n] = path[n]; ++n; }
+    if (n == 2 && dir_name[0] == '.' && dir_name[1] == '/') n = 0;
+    if (n == 1 && (dir_name[0] == '.' || dir_name[0] == '/')) n = 0;
+    if (n > 0 && dir_name[n - 1] != '/') { dir_name[n] = '/'; ++n; }
+    s = "c4dos.dir";
+    while (*s) { dir_name[n] = *s; ++n; ++s; }
+    dir_name[n] = 0;
+    return dir_name;
+}
+static int is_listing(char *s, int n) {
+    char *l;
+    l = "c4dos.dir";
+    if (n != 9) return 0;
+    while (n > 0) { if (*s != *l) return 0; ++s; ++l; --n; }
+    return 1;
+}
+static int xstrlen(char *s) { int n; n = 0; while (s[n]) ++n; return n; }
+// 1 when dir's listing has the n bytes at name as a directory ("NAME/")
+static int dir_has(char *dir, char *name, int n) {
+    int fd, len, at, k, j;
+    char *b;
+    if ((fd = uopen(dir_list(dir), 0)) < 0) return 0;
+    b = fd_buf[fd];
+    len = fd_len[fd];
+    at = 0;
+    while (at < len) {
+        k = at;
+        while (k < len && b[k] != 10 && b[k] != 13) ++k;
+        if (k - at == n + 1 && b[k - 1] == '/') {
+            j = 0;
+            while (j < n && b[at + j] == name[j]) ++j;
+            if (j == n) { uclose(fd); return 1; }
+        }
+        at = k + 1;
+    }
     uclose(fd);
+    return 0;
+}
+// 1 when path is a directory: the root when it has a listing, any other
+// when its parent is one and names it
+static int dir_exists(char *path) {
+    char p[NAME_MAX + 4];
+    int n, k, fd;
+    n = 0;
+    while (path[n] && n < NAME_MAX) { p[n] = path[n]; ++n; }
+    p[n] = 0;
+    k = 0;
+    while (p[k] == '/' || (p[k] == '.' && p[k + 1] == '/')) k = k + (p[k] == '/' ? 1 : 2);
+    while (n > k && p[n - 1] == '/') --n;
+    p[n] = 0;
+    if (n == k || (n == k + 1 && p[k] == '.')) {
+        if ((fd = uopen(dir_list(""), 0)) < 0) return 0;
+        uclose(fd);
+        return 1;
+    }
+    n = n - 1;
+    while (n > k && p[n] != '/') --n;
+    if (p[n] != '/') return dir_has("", p + k, xstrlen(p + k));
+    p[n] = 0;
+    return dir_exists(p + k) && dir_has(p + k, p + n + 1, xstrlen(p + n + 1));
+}
+
+int ustat2(char *path, int *out, int n) {
+    int fd, size, i, type;
+    type = 2;                            // a file (ST_TYPE)
+    size = 0;
+    if ((fd = uopen(path, 0)) >= 0) { size = fd_len[fd]; uclose(fd); }
+    else if (*path && dir_exists(path)) type = 1;   // a directory
+    else return 0 - 1;
     i = 0;
     while (i < n) { out[i] = 0; ++i; }
-    if (n > 0) out[0] = 2;               // a file (ST_TYPE)
+    if (n > 0) out[0] = type;
     if (n > 1) out[1] = size;            // ST_SIZE
-    if (n > 6) out[6] = 420;             // ST_MODE: 0644
-    if (n > 5) out[5] = 1;               // ST_NLINK
+    if (n > 6) out[6] = type == 2 ? 33188 : 16877;   // ST_MODE: S_IFREG|0644, S_IFDIR|0755, as C4IX's (vfs.c)
+    if (n > 5) out[5] = type == 2 ? 1 : 2;       // ST_NLINK
     return 0;
+}
+
+// the index'th name of path's listing into name (dirent's 64 bytes): 1 for
+// a directory, 0 for a file, -1 past the end or with no listing
+int ureaddir(char *path, int index, char *name) {
+    int fd, n, at, k, len, dir, i;
+    char *b;
+    if ((fd = uopen(dir_list(path), 0)) < 0) return 0 - 1;
+    b = fd_buf[fd];
+    n = fd_len[fd];
+    at = 0;
+    i = 0;
+    while (at < n) {
+        k = at;
+        while (k < n && b[k] != 10 && b[k] != 13) ++k;
+        dir = k > at && b[k - 1] == '/';
+        len = k - at - dir;
+        if (len > 0 && len < 64 && !is_listing(b + at, len)) {
+            if (i == index) {
+                memcpy(name, b + at, len);
+                name[len] = 0;
+                uclose(fd);
+                return dir;
+            }
+            ++i;
+        }
+        at = k + 1;
+    }
+    uclose(fd);
+    return 0 - 1;
 }
 int ustat(char *path, int *out) { return ustat2(path, out, 3); }
 int ufstat(int fd, int *out, int n) {
@@ -323,7 +439,6 @@ int urename(char *path, char *newname) {
 }
 
 // what the machine has no way to do
-int ureaddir(char *path, int index, char *name) { return 0 - 1; }
 int umkdir(char *path) { return 0 - 1; }
 int udup(int fd) { return 0 - 1; }
 int udup2(int oldfd, int newfd) { return 0 - 1; }

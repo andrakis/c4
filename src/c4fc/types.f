@@ -32,6 +32,12 @@
  512 CONSTANT T-BAND0
  512 CONSTANT t_uchar   576 CONSTANT t_schar   640 CONSTANT t_short
  704 CONSTANT t_ushort  768 CONSTANT t_uint    832 CONSTANT t_ulong
+\ -funsigned-char (c4lc's p:uchar and gen:uchar): plain char is t_uchar,
+\ and a string literal an unsigned char *. -fshort-enums (p:shortenums):
+\ an enum is the smallest type that holds its constants, and its tag
+\ keeps that type (parse.f's ENUM-SPEC). Watcom's char and enums.
+VARIABLE UCHAR        0 UCHAR !
+VARIABLE SHORTENUMS   0 SHORTENUMS !
 
 256 CONSTANT SMAX-STRUCT
 CREATE ST-NAME  SMAX-STRUCT CELLS ALLOT

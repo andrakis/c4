@@ -18,6 +18,9 @@ struct Sym {
 	Method *m;		// S_METHOD
 	Token *cname;		// S_SVAR: the global's name in C (X__name); S_FUNC: mangled
 	int c_link;		// S_FUNC: extern "C" (its name is its own)
+	// S_VAR: a function's own variable or parameter (not static) whose
+	// address is not taken, which gcc keeps in a register (-fargs-rtl)
+	int reg;
 };
 enum { S_VAR, S_FUNC, S_TYPEDEF, S_ENUMC,
 	// C++: a class's members, in its scope
@@ -472,6 +475,8 @@ static void take_address (Node *n)
 	m = xalloc (sizeof *m);
 	*m = *n;
 	m->next = 0;
+	if (m->regflag)
+		*m->regflag = 0;	// in memory now, as gcc keeps it
 	memset (n, 0, sizeof *n);
 	n->kind = ND_PREFIX;
 	n->tok = at;
@@ -1785,6 +1790,8 @@ static void expr (Node *n)
 			n->val = y->val;
 		} else if (y->kind == S_VAR) {
 			n->lvalue = 1;
+			if (y->reg)
+				n->regflag = &y->reg;
 			if (y->has_val) {
 				// a const integer with a constant initializer: a constant to
 				// c4lc, and in C++; not in C (gcc is not asked about it)
@@ -1835,6 +1842,8 @@ static void expr (Node *n)
 		t = n->lhs->ty;
 		if (equal (n->op, "&")) {
 			n->ty = pointer_to (t);
+			if (n->lhs->regflag)
+				*n->lhs->regflag = 0;	// in memory now, as gcc keeps it
 		} else if (equal (n->op, "*")) {
 			t = decay (t);
 			if (!is_ptr (t))
@@ -3114,6 +3123,8 @@ static void declaration (Decl *d, int top)
 		pre = 0;
 		if (d->init && t->kind != T_FUNC && !find_in (sc, d->name))
 			pre = add_sym (sc, d->name, S_VAR, t);
+		if (pre && in_function && !(d->spec->storage & (ST_STATIC | ST_EXTERN)))
+			pre->reg = 1;
 		if (d->init) {
 			initializer (d->init, t);
 			if (t->kind == T_ARRAY && t->len < 0)
@@ -3154,6 +3165,8 @@ static void declaration (Decl *d, int top)
 					t = old->ty;
 			} else {
 				Sym *y = add_sym (sc, d->name, t->kind == T_FUNC ? S_FUNC : S_VAR, t);
+				if (t->kind != T_FUNC && in_function && !(d->spec->storage & (ST_STATIC | ST_EXTERN)))
+					y->reg = 1;
 				if ((t->qual & Q_CONST) && is_integer (t) && d->init && !d->init->is_list &&
 				    d->init->expr->is_const) {
 					y->has_val = 1;
@@ -3386,7 +3399,7 @@ static void function_body (Node *n, Class *c, Method *m)
 					}
 			}
 			if (p->name)
-				add_sym (sc, p->name, S_VAR, pt);
+				add_sym (sc, p->name, S_VAR, pt)->reg = 1;
 		}
 	}
 	cs = 0;

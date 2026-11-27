@@ -462,19 +462,59 @@ VARIABLE BF-UB     0 BF-UB !
 \ unsigned, short, long, int, char, a struct or union -- in any order.
 \ enum [TAG] [{ A, B = 5, C }] as a type specifier (M7b): an int, whose
 \ constants the body defines -- c4lc-parse's p:enumspec.
-: ENUM-SPEC ( -- ) {: | a u v -- :}
+\ Under -fshort-enums (c4lc-parse's p:enumtag) its type is the smallest
+\ that holds the constants -- unsigned char, unsigned short or unsigned
+\ int when none is negative, else signed char, short or int -- and a tag
+\ keeps it for `enum TAG` without a body, the latest tag of the name
+\ first. ENUM-SPEC leaves the type in ENUM-TY.
+VARIABLE ENUM-TY
+512 CONSTANT EMAX-TAG
+CREATE ET-NAME EMAX-TAG CELLS ALLOT
+CREATE ET-NLEN EMAX-TAG CELLS ALLOT
+CREATE ET-TYPE EMAX-TAG CELLS ALLOT
+VARIABLE #ETAGS   0 #ETAGS !
+: ET-FIND ( a u -- t ) {: a u | i -- t :}
+   #ETAGS @ TO i
+   BEGIN i 0> WHILE
+      i 1- TO i
+      i CELLS ET-NLEN + @ u = IF
+         i CELLS ET-NAME + @ a u BYTES= IF i CELLS ET-TYPE + @ EXIT THEN
+      THEN
+   REPEAT t_int ;
+: ET-ADD ( a u t -- ) {: a u t | k -- :}
+   #ETAGS @ TO k
+   k EMAX-TAG < 0= IF ." c4fc: too many enum tags" CR ABORT THEN
+   a k CELLS ET-NAME + !  u k CELLS ET-NLEN + !  t k CELLS ET-TYPE + !
+   k 1+ #ETAGS ! ;
+: ENUM-FIT ( lo hi -- t ) {: lo hi -- t :}
+   lo 0< 0= IF
+      hi 255 > 0= IF t_uchar EXIT THEN
+      hi 65535 > 0= IF t_ushort EXIT THEN
+      t_uint EXIT THEN
+   lo -128 < 0= hi 127 > 0= AND IF t_schar EXIT THEN
+   lo -32768 < 0= hi 32767 > 0= AND IF t_short EXIT THEN
+   t_int ;
+: ENUM-SPEC ( -- ) {: | a u v ta tu lo hi n -- :}
    Enum WANT
-   TK Id = IF TNEXT THEN                \ an optional tag, which c4 ignores
+   0 TO ta  0 TO tu  0 TO n
+   TK Id = IF TV TO ta  TL TO tu  TNEXT THEN   \ an optional tag
    TK Lbrace = IF
       TNEXT  0 TO v
       BEGIN TK Rbrace <> WHILE
          TV TO a  TL TO u  Id WANT
          TK Assign = IF TNEXT CONST-EXPR TO v THEN
          a u c_const v t_int 0 0 ST,
+         n 0= IF v TO lo  v TO hi ELSE
+            v lo < IF v TO lo THEN  v hi > IF v TO hi THEN THEN
+         n 1+ TO n
          v 1+ TO v
          TK Comma = IF TNEXT THEN
       REPEAT
       Rbrace WANT
+      lo hi ENUM-FIT ENUM-TY !
+      SHORTENUMS @ ta 0<> AND IF ta tu ENUM-TY @ ET-ADD THEN
+   ELSE
+      ta IF ta tu ET-FIND ELSE t_int THEN ENUM-TY !
    THEN ;
 
 : (BASE-TYPE) ( -- t ) {: | k a u q sg un sh lg ch it st isu -- t :}
@@ -486,7 +526,9 @@ VARIABLE BF-UB     0 BF-UB !
       TK Unsigned = IF 1 TO un TNEXT 1 ELSE
       TK Short    = IF 1 TO sh TNEXT 1 ELSE
       TK Long     = IF lg 1+ TO lg TNEXT 1 ELSE
-      TK Char = TK Void = OR IF 1 TO ch TNEXT 1 ELSE
+      \ ch 2: plain char under -funsigned-char
+      TK Char     = IF UCHAR @ IF 2 ELSE 1 THEN TO ch TNEXT 1 ELSE
+      TK Void     = IF 1 TO ch TNEXT 1 ELSE
       TK Int      = IF 1 TO it TNEXT 1 ELSE
       TK Struct = TK Union = OR st 0< AND
          sg un + sh + lg + ch + it + 0= AND IF
@@ -500,13 +542,15 @@ VARIABLE BF-UB     0 BF-UB !
          k ST-TYPE TO st  1
       ELSE
       TK Enum = st 0< AND
-         sg un + sh + lg + ch + it + 0= AND IF ENUM-SPEC  1 TO it  1
+         sg un + sh + lg + ch + it + 0= AND IF
+         ENUM-SPEC  SHORTENUMS @ IF ENUM-TY @ TO st ELSE 1 TO it THEN  1
       ELSE 0
-      THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN
+      THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN
    WHILE REPEAT
    q BQ !
    st 0< 0= IF st EXIT THEN
-   ch IF un IF t_uchar ELSE sg IF t_schar ELSE t_char THEN THEN EXIT THEN
+   ch IF un IF t_uchar ELSE sg IF t_schar ELSE
+      ch 2 = IF t_uchar ELSE t_char THEN THEN THEN EXIT THEN
    sh IF un IF t_ushort ELSE t_short THEN EXIT THEN
    \ long long is the word on a 64-bit host, as in c4lc. On a 32-bit one
    \ c4lc makes it two words (M8, c4lc-design 14.7); c4fc does not, and

@@ -366,6 +366,140 @@ static void const_expr (Node *n, int minprec)
 	expr (n, minprec);
 }
 
+// ---- -fargs-rtl: a call's arguments in gcc -m32's order ----
+//
+// C leaves the order of a call's arguments to the compiler. gcc and g++
+// -m32 evaluate them right to left; c4lc, as c4cc, left to right. Code
+// whose arguments draw random numbers (Blood's actFireVector (pSprite, ...,
+// dx+Random3(600), dy+Random3(600), dz+Random3(300), ...)) does something
+// else under each. With -fargs-rtl a call of two or more arguments, one of
+// which has a side effect, says gcc's order in its C: each argument that is
+// not a constant into a temporary of the function, the last first, then the
+// call -- (__c4x_a1 = c, __c4x_a0 = b, f (a?, __c4x_a0, __c4x_a1)). Every
+// compiler then evaluates them so.
+int opt_args_rtl;
+static int in_body;		// emitting a function's body, where temporaries go
+static Buf arg_decls;		// their declarations, put at the body's top
+static int n_arg_temps;
+
+static int side_effects (Node *n)
+{
+	Node *a;
+	if (!n)
+		return 0;
+	switch (n->kind) {
+	case ND_CALL: case ND_ASSIGN: case ND_NEW: case ND_DELETE: case ND_VA_ARG:
+		return 1;
+	case ND_PREFIX: case ND_POSTFIX:
+		if (n->op && (equal (n->op, "++") || equal (n->op, "--")))
+			return 1;
+		break;
+	case ND_SIZEOF_TYPE: case ND_SIZEOF_EXPR: case ND_OFFSETOF:
+		return 0;
+	}
+	if (side_effects (n->lhs) || side_effects (n->rhs) || side_effects (n->cond) ||
+	    side_effects (n->then) || side_effects (n->els))
+		return 1;
+	for (a = n->args; a; a = a->next)
+		if (side_effects (a))
+			return 1;
+	return 0;
+}
+
+// the type of a temporary holding argument A, or 0 (a type without a name)
+static char *arg_temp_type (Node *a, const char *name)
+{
+	Ty *t;
+	if (!a->ty)
+		return 0;
+	t = unqualified (decay (a->ty));
+	return ty_str (t, name);
+}
+
+// argument I of CALL, A, is a variable gcc keeps in a register, passed as
+// it is (no conversion to its parameter's type, or none of the default
+// promotions after "..."): gcc reads it when it makes the call, after the
+// other arguments, so it is left in the call. Anything else gcc reads in
+// its turn: a global or other memory, a variable whose address is taken,
+// a conversion ((int) of an unsigned char), an expression.
+static int late_arg (Node *call, int i, Node *a)
+{
+	Ty *f, *t, *p;
+	if (a->kind != ND_IDENT || !a->regflag || !*a->regflag || !a->ty)
+		return 0;
+	t = unqualified (a->ty);
+	f = call->lhs->ty ? decay (call->lhs->ty) : 0;
+	if (f && is_ptr (f))
+		f = f->base;
+	if (!f || f->kind != T_FUNC || f->oldstyle)
+		return 0;
+	if (i < f->nparams) {
+		p = unqualified (f->params[i]);
+		if (is_ptr (t) && is_ptr (p))
+			return 1;
+		return t->kind == p->kind && t->kind != T_STRUCT && t->kind != T_UNION && t->kind != T_ARRAY &&
+		       (t->kind != T_ENUM || t->def == p->def);
+	}
+	if (!f->variadic)
+		return 0;
+	switch (t->kind) {
+	case T_INT: case T_UINT: case T_LONG: case T_ULONG: case T_LLONG: case T_ULLONG: case T_DOUBLE: case T_PTR:
+		return 1;
+	}
+	return 0;
+}
+
+// N, a call, in gcc's order; 0 if it is not one that needs it
+static int rtl_call (Node *n)
+{
+	enum { MAXARGS = 64 };
+	Node *a, *v[MAXARGS];
+	char *name[MAXARGS];
+	int late[MAXARGS];
+	int k = 0, i, any = 0;
+	if (!opt_args_rtl || !in_body || n->unsure)
+		return 0;
+	for (a = n->args; a; a = a->next) {
+		if (k == MAXARGS)
+			return 0;
+		v[k++] = a;
+		any |= side_effects (a);
+	}
+	if (k < 2 || !any)
+		return 0;
+	for (i = 0; i < k; i++) {
+		late[i] = v[i]->is_const || v[i]->kind == ND_STR || late_arg (n, i, v[i]);
+		if (!late[i] && !arg_temp_type (v[i], "")) {
+			warn_at (v[i]->tok, "-fargs-rtl: an argument of a type without a name: left to right");
+			return 0;
+		}
+	}
+	put ("(");
+	for (i = k - 1; i >= 0; i--) {
+		name[i] = 0;
+		if (late[i])
+			continue;
+		name[i] = xformat ("__c4x_a%d", n_arg_temps++);
+		buf_fmt (&arg_decls, " %s;", arg_temp_type (v[i], name[i]));
+		put (name[i]);
+		put (" = ");
+		expr (v[i], 2);
+		put (", ");
+	}
+	expr (n->lhs, 15);
+	put (" (");
+	for (i = 0; i < k; i++) {
+		if (i)
+			put (", ");
+		if (name[i])
+			put (name[i]);
+		else
+			expr (v[i], 2);
+	}
+	put ("))");
+	return 1;
+}
+
 static void expr (Node *n, int minprec)
 {
 	int p = prec (n), paren = p < minprec;
@@ -466,6 +600,8 @@ static void expr (Node *n, int minprec)
 		initz (n->initz);
 		break;
 	case ND_CALL:
+		if (rtl_call (n))
+			break;
 		expr (n->lhs, 15);
 		put (" (");
 		for (a = n->args; a; a = a->next) {
@@ -819,6 +955,34 @@ static void stmt (Node *n)
 	}
 }
 
+// a function's body; under -fargs-rtl written apart first, so that the
+// temporaries its calls used are declared at its top, after the brace
+static void body (Node *b)
+{
+	Buf saved;
+	char *s, *brace;
+	if (!opt_args_rtl) {
+		stmt (b);
+		return;
+	}
+	saved = begin ();
+	arg_decls.p = 0; arg_decls.n = 0; arg_decls.cap = 0;
+	buf_add (&arg_decls, "", 0);
+	n_arg_temps = 0;
+	in_body = 1;
+	stmt (b);
+	in_body = 0;
+	s = take (&saved);
+	brace = strchr (s, '{');
+	if (!brace || arg_decls.n == 0) {
+		put (s);
+		return;
+	}
+	putn (s, (int)(brace - s) + 1);
+	putn (arg_decls.p, arg_decls.n);
+	put (brace + 1);
+}
+
 static void funcdef (Node *n)
 {
 	Decl *d = n->decl, *k;
@@ -834,7 +998,7 @@ static void funcdef (Node *n)
 		while (k && !k->first_of_spec)
 			k = k->next;
 	}
-	stmt (n->body);
+	body (n->body);
 }
 
 // a top-level node, with what lowering put before and after it
@@ -851,7 +1015,7 @@ static void top (Node *n)
 		if (out.n && out.p[out.n - 1] != '\n')
 			nl ();
 		puttok (n->tok);
-		stmt (n->body);
+		body (n->body);
 	} else if (n->kind == ND_RAW) {
 		if (out.n && out.p[out.n - 1] != '\n')
 			nl ();

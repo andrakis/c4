@@ -21,7 +21,8 @@
 #
 # From the c4 tree's root, c4cxx built. BLOOD_DIR is c4-Blood (default
 # ~/git/games/c4-blood), BLOOD_VER the version (BS111A), W the work
-# directory (default /tmp/blood-oracle; kept).
+# directory (default /tmp/blood-oracle; kept), C4CXX_FLAGS more of
+# c4cxx's options (-fargs-rtl, as blood-c4lc.sh has it).
 cd "$(dirname "$0")/../.." || exit 1
 FRAMES=${1:-4000}
 G=${BLOOD_DIR:-$HOME/git/games/c4-blood}
@@ -60,7 +61,7 @@ for u in $UNITS; do
 	[ -f $src ] || src=$G/$u.cpp
 	printf '#include "c4blood.h"\n#include "%s"\n' $src > $H/w_$b.cpp
 	cxx="$cxx $b.o"
-	if ! ./c4cxx -x c++ $WF $GNU -D __C4__ -D C4BLOOD -D MAPEDIT=0 $def $INC $SYS -o $H/$b.c $H/w_$b.cpp > $H/$b.err 2>&1; then
+	if ! ./c4cxx -x c++ $WF $C4CXX_FLAGS $GNU -D __C4__ -D C4BLOOD -D MAPEDIT=0 $def $INC $SYS -o $H/$b.c $H/w_$b.cpp > $H/$b.err 2>&1; then
 		echo "blood-oracle: c4cxx $u: $(grep -m1 error $H/$b.err | cut -c1-200)"; bad=$((bad + 1)); continue
 	fi
 	if ! $GCC -c -o $H/$b.o $H/$b.c > $H/$b.gcc 2>&1; then

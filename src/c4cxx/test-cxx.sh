@@ -13,13 +13,14 @@
 # A src/c4cxx/tests/w_*.cpp has Watcom's layouts, as Blood's host build:
 # -fshort-enums -mms-bitfields -funsigned-char for g++, c4cxx and gcc, and
 # no c4lc run (c4lc has -mms-bitfields only, so far). A g_*.cpp uses gcc's
-# builtins, as glibc's headers do, and has no c4lc run either.
+# builtins, as glibc's headers do, and has no c4lc run either. An r_*.cpp
+# has c4cxx -fargs-rtl: its C says g++'s order of a call's arguments.
 # From the c4 tree's root, with c4cxx, c4sc-host32, c4m32 and c4rlink32 built.
 LC=${C4CXX_LC:-./c4sc-host32}
 R=src/c4cxx
 T=$(mktemp -d)
 trap 'rm -rf $T' EXIT
-progs=${*:-$(ls -d $R/tests/t_*.cpp $R/tests/w_*.cpp $R/tests/g_*.cpp $R/tests/m_*/)}
+progs=${*:-$(ls -d $R/tests/t_*.cpp $R/tests/w_*.cpp $R/tests/g_*.cpp $R/tests/r_*.cpp $R/tests/m_*/)}
 n=0 bad=0
 mkdir $T/rt
 if ! { g++ -m32 -std=gnu++98 -fno-exceptions -fno-rtti -nostdinc++ -w -c -o $T/rt/rt-gxx.o $R/tests/rt-gxx.cpp &&
@@ -34,17 +35,18 @@ for p in $progs; do
 	fail () { echo "FAIL $b: $1"; bad=$((bad + 1)); }
 	mkdir $T/$b
 	ok=1 gxx= cs= c4s=
-	case $b in w_*) xf="-fshort-enums -mms-bitfields -funsigned-char" lc= ;; g_*) xf= lc= ;; *) xf= lc=1 ;; esac
+	cf=
+	case $b in w_*) xf="-fshort-enums -mms-bitfields -funsigned-char" lc= ;; g_*) xf= lc= ;; r_*) xf= cf=-fargs-rtl lc=1 ;; *) xf= lc=1 ;; esac
 	for u in $units; do
 		v=$(basename $u .cpp)
 		# linked by gcc: there is no 32-bit libstdc++ here, and no need of one
 		if ! g++ -m32 -std=gnu++98 -fno-exceptions -fno-rtti -nostdinc++ -w $xf -c -o $T/$b/$v.o $u 2> $T/$b/$v.gxx; then
 			fail "g++ rejects $v: $(head -1 $T/$b/$v.gxx)"; ok=0; break
 		fi
-		if ! ./c4cxx $xf -o $T/$b/$v.c $u 2> $T/$b/$v.err; then
+		if ! ./c4cxx $xf $cf -o $T/$b/$v.c $u 2> $T/$b/$v.err; then
 			fail "c4cxx: $(head -1 $T/$b/$v.err)"; ok=0; break
 		fi
-		if ! { ./c4cxx $xf -check-types -o $T/$b/$v.t.c $u &&
+		if ! { ./c4cxx $xf $cf -check-types -o $T/$b/$v.t.c $u &&
 		       gcc -m32 -std=gnu11 -fsyntax-only -fpermissive -w -fno-builtin $xf $T/$b/$v.t.c; } > $T/$b/$v.terr 2>&1; then
 			fail "gcc does not confirm c4cxx's types in $v: $(grep -m1 error $T/$b/$v.terr)"; ok=0; break
 		fi

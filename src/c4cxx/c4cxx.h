@@ -79,6 +79,7 @@ extern int opt_cplusplus;
 extern int opt_short_enums;	// -fshort-enums: an enum the smallest type that holds it
 extern int opt_ms_bitfields;	// -mms-bitfields: MSVC's bit-field units
 extern int opt_unsigned_char;	// -funsigned-char
+extern int opt_args_rtl;	// -fargs-rtl: calls' arguments right to left, as gcc -m32 (emit.c)
 void pp_add_include_path (const char *dir);
 void pp_add_c_include_path (const char *dir);	// -isystem: headers of C
 void pp_define (const char *spec);		// NAME or NAME=VALUE

@@ -1010,7 +1010,7 @@ Blood through c4lc does not yet have Watcom's layouts. c4lc compiles
 every unit (`blood-units.sh -compile`), but nothing links or runs that
 yet.
 
-### 4.11 M7 (2026-11-27): c4's Blood plays B0's demo loop, and stops where B0 stops
+### 4.11 M7 (2026-11-27): c4's Blood plays B0's demo loop
 
 **What the first M7 test showed was wrong.** It passed Blood `-nodemo
 -playback BLOOD000.DEM`, and under `-nodemo` Blood plays no demo at all,
@@ -1080,19 +1080,41 @@ So B0 is now built the way DOS Blood was (the user's choice, 2026-11-27).
 `-fno-toplevel-reorder` (globals in the source's order). It then links
 B0 again with Watcom's `rand` (`src/c4cxx/b0/rand.c`), which is the C4IX
 libc's generator, in place of glibc's. blood-oracle.sh compiles c4cxx's C
-with the same flag and links the same `rand`. c4-Blood itself is unchanged.
+with the same flag and links the same `rand`. blood-b0.sh doesn't change
+host.sh.
 
-**Where it stands.** In the source's order Blood's demo loop reads
-`gUpperLink[-1]`, which is `velCeil`'s last entry, 0. That makes sprite 0
-a link, sprite 0 has no owner, and Blood stops after frame 228 at
-`dassert (nLower >= 0 ...)`, `ERROR (235) warp.cpp`. In those 228 frames
-the choice of `rand` changes nothing (glibc's or Watcom's, total
-e5ced149). c4's Blood plays every one of B0's 228 frames and stops at the
-same assertion, on the bare machine, under C4DOS and in C4IX (blood-c4lc.sh:
-"228 frames, every checksum B0's, and B0's stop (total e5ced149)" for each
-of the three). The compiler and the libc reproduce the host build. To get
-further, the game needs these out-of-range reads fixed in c4-Blood
-(`extra > 0`, and a check for a sprite in no sector): section 5.
+In the source's order Blood's demo loop reads `gUpperLink[-1]`, which is
+`velCeil`'s last entry, 0. That makes sprite 0 a link, and sprite 0 has no
+owner, so Blood stopped after frame 228 at `ERROR (235) warp.cpp`. c4's
+Blood played the same 228 frames and stopped at the same assertion (9718ec9:
+both tests take a stop of B0's on one of Blood's assertions).
+
+**Blood's out-of-range reads, fixed in c4-Blood** (fc1ff9b, the user's
+choice). AddressSanitizer on B0, through the demo loop, found them:
+
+| Where | What it read | Now |
+| --- | --- | --- |
+| view.cpp `viewProcessSprites`, ai.cpp `CanMove` (twice) | `xsector[-1]` for a sector without one | `extra > 0` first, as aibeast.cpp has it |
+| warp.cpp `CheckLink` (both) | `gUpperLink[-1]`, `gLowerLink[-1]` for a sprite or view in no sector | no link |
+| actor.cpp `MoveDude` | the hit sprite's xsprite, tested on the mover's `extra` | the hit sprite's `extra` |
+| actor.cpp `actFireVector`, aiboneel.cpp `BiteSeqCallback` | `dudeInfo` for a dude just turned into 426 (a gib) | no mass; the eel bites level |
+| config.cpp | `SCRIPT_GetNumber` wrote 4 bytes into the 1-byte `ControllerType` | through an `int32` |
+| tile.cpp `tileLoadTile` | the engine reads past a tile: `maskwallscan`'s last column of a flipped tile whose height isn't a power of two starts a row past the column, in the heap block's slack | the slack, up to QHeap's 16 bytes, is 255 (transparent) |
+
+ASan can't see the last one: it is inside Blood's own heap (QHeap). It
+showed as one pixel of frame 1693 that changed with the number of files
+in the run directory. Resource.cpp adds every file there as an external
+resource, so the file count sets the dictionary's size, and with it where
+each tile lands and what its slack holds. A gdb watchpoint on the pixel
+found the draw.
+
+**Where it stands: M7 passes.** blood-c4lc.sh (the bare machine, 4000
+frames; C4DOS and C4IX, 1000 frames each, the default `OS_FRAMES`):
+"4000 frames, every checksum B0's (total ef9f8bb2)" and "1000 frames,
+every checksum B0's (total 0e7bc8b6)" for C4DOS and for C4IX.
+blood-oracle.sh: 4000 frames, every checksum B0's (total ef9f8bb2), 203
+types of g++'s size. ASan reports nothing in B0's 4000 frames. B0 gives
+the same 4000 checksums with 24, 26 and 27 files in its directory.
 
 ## 5. What is left for Blood after the compiler
 

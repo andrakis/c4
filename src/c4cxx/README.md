@@ -398,8 +398,8 @@ be checked against g++'s.
 
 ## State: M7 (2026-11-27)
 
-**c4's Blood plays what the host build plays, and stops where it
-stops.** M7's first test was wrong: under `-nodemo`
+**M7 passes: c4's Blood plays the shareware's demo loop as the host
+build does.** M7's first test was wrong: under `-nodemo`
 Blood plays no demo, so it compared the title screen and the menu, and
 c4lc's Blood could not have played one (a multi-character constant was
 its last byte). The test now (`blood-c4lc.sh`, `make
@@ -420,11 +420,14 @@ the way DOS Blood was: `blood-b0.sh` runs host.sh unchanged with
 c4rlink lay them out), and links Watcom's `rand` (`b0/rand.c`, which is
 C4IX libc's generator) in place of glibc's.
 
-In that order the demo loop stops after frame 228 at `ERROR (235)
-warp.cpp`: `gUpperLink[-1]` is `velCeil`'s last entry, 0. c4's Blood plays
-all 228 of B0's frames and stops at the same assertion, on the bare
-machine, under C4DOS and in C4IX (total e5ced149). To get further, the
-out-of-range reads need fixing in c4-Blood, which is the game port's job.
+In that order the demo loop stopped after frame 228 at `ERROR (235)
+warp.cpp`, because `gUpperLink[-1]` is `velCeil`'s last entry, 0. c4-Blood
+fc1ff9b fixes the out-of-range reads that AddressSanitizer found in the
+demo loop, plus one inside Blood's own heap (a tile's slack) that a gdb
+watchpoint found (docs/c4cxx-plan.md 4.11). Now c4's Blood plays every
+one of B0's 4000 frames on the bare machine (total ef9f8bb2), and B0's
+frames under C4DOS and in C4IX (1000 frames each). The oracle still
+passes (4000 frames).
 
 ## M6, done (2026-11-27)
 

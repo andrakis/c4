@@ -317,6 +317,7 @@
 	(begin
 		(define isu (= (p:kind) 'Union))
 		(p:advance)
+		(define notag (if (= (p:kind) 'Id) false true))
 		(define n
 			(if (= (p:kind) 'Id)
 				(begin (define v (p:value)) (p:advance) v)
@@ -336,6 +337,8 @@
 					(list 'structdef n ty isu ms (head lay) recs)
 					p:pending)))
 			nil)
+		;; after the body, whose own members set it
+		(set! p:anontag notag)
 		ty)))
 
 ;; ---- layout (M9) ----
@@ -441,6 +444,7 @@
 	(if (= ty p:USHORT) true (if (= ty p:UINT) true (if (= ty p:ULONG) true
 	(= ty p:BOOL)))))))))))
 (define p:bfuns? (lambda (ty)
+	;; plain char is UCHAR itself under -funsigned-char (p:specdone)
 	(if (= ty p:UCHAR) true (if (= ty p:USHORT) true (if (= ty p:UINT) true
 	(if (= ty p:ULONG) true (= ty p:BOOL)))))))
 ;; the widest a field of type ty may be: its bits (an unsigned int's
@@ -546,14 +550,34 @@
 (define p:findrec (lambda (n l)
 	(if (empty? l) false
 	(if (= (head (head l)) n) (head l)
-	(next p:findrec n (tail l))))))
+	;; a member of an anonymous struct or union member (p:members), at
+	;; its offset in this one
+	(if (= (head (head l)) "@")
+		(begin
+			(define a (head l))
+			(define r (p:findrec n (index (p:slay (index a 2)) 2)))
+			(if r (p:cons (head r) (p:cons (+ (p:second a) (p:second r)) (tail (tail r))))
+				(next p:findrec n (tail l))))
+	(next p:findrec n (tail l)))))))
 (define p:members (lambda (acc)
 	(if (= (p:kind) 'Rbrace)
 		(begin (p:advance) (p:reverse acc))
 	(begin
+		(set! p:anontag false)
 		(define bt (p:basetype nil))
 		(if (= bt nil) (p:die "bad struct member type") nil)
-		(next p:members/2 bt p:bq acc)))))
+		;; `struct { ... };` or `union { ... };` with no tag and no name: an
+		;; anonymous member (C11), whose members are this struct's at its
+		;; offset. It is laid out as any member, named "@", which no
+		;; source can say, and p:findrec and c4lc-gen's g:mfind look
+		;; through it.
+		(if (if p:anontag (= (p:kind) 'Semi) false)
+			(begin
+				(p:advance)
+				(next p:members (p:cons (list bt "@" nil) acc)))
+		(next p:members/2 bt p:bq acc))))))
+;; did the last struct or union specifier have no tag (p:structtype)?
+(define p:anontag false)
 (define p:members/2 (lambda (bt bq acc)
 	(begin
 		(define ty0 (p:stars bt bq))
@@ -610,7 +634,9 @@
 		(if (= k 'Unsigned) (begin (p:advance) (next p:spec d q sg 1 sh lg ch it bt))
 		(if (= k 'Short) (begin (p:advance) (next p:spec d q sg un 1 lg ch it bt))
 		(if (= k 'Long) (begin (p:advance) (next p:spec d q sg un sh (+ lg 1) ch it bt))
-		(if (if (= k 'Char) true (= k 'Void)) (begin (p:advance) (next p:spec d q sg un sh lg 1 it bt))
+		;; ch 2: plain char under -funsigned-char (p:specdone)
+		(if (= k 'Char) (begin (p:advance) (next p:spec d q sg un sh lg (if p:uchar 2 1) it bt))
+		(if (= k 'Void) (begin (p:advance) (next p:spec d q sg un sh lg 1 it bt))
 		(if (= k 'Int) (begin (p:advance) (next p:spec d q sg un sh lg ch 1 bt))
 		;; long double is double
 		(if (= k 'Float) (begin (p:advance) (next p:spec d q sg un sh 0 ch it p:FLOAT))
@@ -620,11 +646,14 @@
 				(define st (p:structtype))
 				(next p:spec d q sg un sh lg ch it st))
 		;; enum [TAG] [{ ... }] is a type wherever one may be written
-		;; (M7b): an int, whose constants the body defines on the way
+		;; (M7b): an int, whose constants the body defines on the way;
+		;; under -fshort-enums the type its values need (p:enumty)
 		(if (if bare (= k 'Enum) false)
 			(begin
 				(p:enumspec)
-				(next p:spec d q sg un sh lg ch 1 bt))
+				(if p:shortenums
+					(next p:spec d q sg un sh lg ch it p:enumty)
+				(next p:spec d q sg un sh lg ch 1 bt)))
 		(if (if bare (= k 'Id) false)
 			(begin
 				(define a (p:assoc (p:value) p:typedefs))
@@ -633,12 +662,12 @@
 						(p:advance)
 						(next p:spec d (bit:or q (index a 2)) sg un sh lg ch it (p:second a)))
 				(p:specdone d q sg un sh lg ch it bt)))
-		(p:specdone d q sg un sh lg ch it bt)))))))))))))))))
+		(p:specdone d q sg un sh lg ch it bt))))))))))))))))))
 (define p:specdone (lambda (d q sg un sh lg ch it bt)
 	(begin
 		(set! p:bq q)
 		(if (= bt nil)
-			(if (= ch 1) (if (= un 1) p:UCHAR (if (= sg 1) p:SCHAR p:CHAR))
+			(if (> ch 0) (if (= un 1) p:UCHAR (if (= sg 1) p:SCHAR (if (= ch 2) p:UCHAR p:CHAR)))
 			(if (= sh 1) (if (= un 1) p:USHORT p:SHORT)
 			(if (> lg 1)
 				(if (= p:WORD 4) (if (= un 1) p:ULL p:LL) (if (= un 1) p:ULONG p:INT))
@@ -1783,19 +1812,55 @@
 (define p:enumdecl (lambda ()
 	(begin
 		(p:advance)
-		(if (= (p:kind) 'Lbrace) nil (p:advance))  ;; skip optional tag
+		(define tag nil)
+		(if (= (p:kind) 'Lbrace) nil (begin (set! tag (p:value)) (p:advance)))  ;; the optional tag
 		(if (= (p:kind) 'Lbrace)
 			(begin
 				(p:advance)
-				(p:cons 'enum (p:enumbody 0 (list))))
-		(list 'enum)))))
+				(define cs (p:enumbody 0 (list)))
+				(p:enumtag tag cs)
+				(p:cons 'enum cs))
+		(begin (p:enumtag tag nil) (list 'enum))))))
 ;; enum as a type specifier: the keyword, an optional tag, an optional
 ;; body, whose constants p:enumbody defines
 (define p:enumspec (lambda ()
 	(begin
 		(p:advance)
-		(if (= (p:kind) 'Id) (p:advance) nil)
-		(if (= (p:kind) 'Lbrace) (begin (p:advance) (p:enumbody 0 (list))) nil))))
+		(define tag nil)
+		(if (= (p:kind) 'Id) (begin (set! tag (p:value)) (p:advance)) nil)
+		(define cs (if (= (p:kind) 'Lbrace) (begin (p:advance) (p:enumbody 0 (list))) nil))
+		(p:enumtag tag cs)
+		cs)))
+
+;; -fshort-enums (gcc's flag, and Watcom's enums): an enum's type is the
+;; smallest that holds its constants -- unsigned char, unsigned short or
+;; unsigned int when none is negative, else signed char, short or int --
+;; and its tag keeps that type for `enum TAG` without a body. Without the
+;; flag every enum is an int, as before. The type is left in p:enumty.
+(define p:uchar false)       ;; -funsigned-char: plain char is unsigned char
+(define p:shortenums false)  ;; -fshort-enums
+(define p:enumty 1)
+(define p:enumtags nil)      ;; (("TAG" TYPE) ...), under -fshort-enums
+(define p:enumtag (lambda (tag cs)
+	(if p:shortenums
+		(begin
+			(if (= cs nil)
+				(begin
+					(define a (if (= tag nil) false (p:assoc tag p:enumtags)))
+					(set! p:enumty (if a (p:second a) p:INT)))
+			(begin
+				(set! p:enumty (p:enumfit cs 0 0 true))
+				(if (= tag nil) nil (set! p:enumtags (p:cons (list tag p:enumty) p:enumtags))))))
+	nil)))
+(define p:enumfit (lambda (cs lo hi first)
+	(if (empty? cs)
+		(if (>= lo 0)
+			(if (<= hi 255) p:UCHAR (if (<= hi 65535) p:USHORT p:UINT))
+		(if (if (>= lo -128) (<= hi 127) false) p:SCHAR
+		(if (if (>= lo -32768) (<= hi 32767) false) p:SHORT p:INT)))
+	(begin
+		(define v (p:second (head cs)))
+		(next p:enumfit (tail cs) (if first v (if (< v lo) v lo)) (if first v (if (> v hi) v hi)) false)))))
 (define p:enumbody (lambda (i acc)
 	(if (= (p:kind) 'Rbrace)
 		(begin (p:advance) (p:reverse acc))
@@ -2126,6 +2191,7 @@
 			;; "int f(), g;" keeps working. The masks, when there are
 			;; any, follow.
 			(begin
+				(if (= 8 (bit:and attr 8)) (set! p:staticfns (p:cons n p:staticfns)) nil)
 				(define pq (p:pquals ps (list)))
 				(define pn (list 'proto ty n (p:ptypes ps (list)) va (+ a2 16)))
 				(if (if (= rq 0) (p:allzero? pq) false) pn
@@ -2152,9 +2218,20 @@
 				;; compound literals' hidden locals go with the others, and
 				;; keep the function from the inliner (attribute 128)
 				(define ls2 (if (empty? p:hiddens) ls (+ ls (p:reverse p:hiddens))))
-				(define a3 (if (empty? p:hiddens) a2 (bit:or a2 128)))
+				(define a2d (p:deflinkage n a2))
+				(define a3 (if (empty? p:hiddens) a2d (bit:or a2d 128)))
 				(set! p:hiddens (list))
 			(p:qnode (list 'func ty n ps va a3 ls2 body) rq))))))
+;; a function definition's linkage, as C has it: `extern` on a definition
+;; changes nothing (chocolate-blood's a_asm.c writes `extern void f (...)
+;; { ... }`), and a function declared static before is static, its
+;; definition saying so or not (Blood's `static void MoveToCeil (...);`,
+;; then `void MoveToCeil (...) { ... }`, in two units)
+(define p:staticfns nil)
+(define p:deflinkage (lambda (n a)
+	(begin
+		(define a1 (if (= 16 (bit:and a 16)) (- a 16) a))
+		(if (p:member? n p:staticfns) (bit:or a1 8) a1))))
 (define p:ptypes (lambda (ps acc)
 	(if (empty? ps) (p:reverse acc)
 	(next p:ptypes (tail ps) (p:cons (head (head ps)) acc)))))
@@ -2390,8 +2467,9 @@
 		(if (= (p:kind) 'Enum)
 			(begin
 				(define ed (p:enumdecl))
-				;; any declarators after the enum share INT base type
-				(next p:top (p:declarators p:INT 0 attr (p:cons ed acc))))
+				;; any declarators after the enum share INT base type, or
+				;; under -fshort-enums the enum's own
+				(next p:top (p:declarators (if p:shortenums p:enumty p:INT) 0 attr (p:cons ed acc))))
 		(if (= (p:kind) 'Typedef)
 			(begin
 				(define td (p:typedefdecl))
@@ -3730,6 +3808,8 @@ static int __c4fp_hw() {
 	(begin
 		(set! p:toks (p:untag (p:withll (p:withfp tokens)) (list)))
 		(set! p:enums (list))
+		(set! p:enumtags (list))
+		(set! p:staticfns (list))
 		(set! p:sconsts (list))
 		(set! p:locals (list))
 		(set! p:structs (list))

@@ -2167,6 +2167,19 @@ test-c4fc: c4th c4th.c4r $(C4M) c4sp c4mp c4 c4l.c $(C4RDUMP)
 	     || { echo "test-c4fc: c4lc_rowptr.c ($$m) differs from c4lc"; exit 1; }; \
 	 done
 	@echo "  pointers to arrays: c4lc's objects"
+	# -funsigned-char and -fshort-enums: c4lc's images and objects, plain
+	# and -O (NOTYPEDEF: c4fc has no typedef)
+	@for m in "" "1 OPTIMIZE !"; do for c in "" -c; do \
+	   lf="-P -conforming -funsigned-char -fshort-enums -D NOTYPEDEF $$c"; \
+	   ff="C4FC-INIT -P 1 CONFORMING ! -funsigned-char -fshort-enums S\" NOTYPEDEF=1\" -D $$c"; \
+	   if [ -n "$$m" ]; then lf="$$lf -O"; ff="$$ff $$m"; fi; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$lf $(TESTS)/c4lc_uenum.c .c4fc_lc.c4r > /dev/null 2>&1 \
+	     || { echo "test-c4fc: c4lc could not compile c4lc_uenum.c"; exit 1; }; \
+	   ./c4th $(C4FC_ALL) -e ": GO $$ff S\" $(TESTS)/c4lc_uenum.c\" C4FC ; GO" > .c4fc_fc.c4r 2>&1; \
+	   cmp -s .c4fc_lc.c4r .c4fc_fc.c4r \
+	     || { echo "test-c4fc: c4lc_uenum.c ($$m $$c) differs from c4lc"; exit 1; }; \
+	 done; done
+	@echo "  unsigned char and short enums: c4lc's images and objects"
 	@rm -f .c4fc_lex.txt .c4fc_a.txt .c4fc_b.txt .c4fc_lc.c4r .c4fc_fc.c4r
 	@rm -f .c4fc_o0.c4r .c4fc_o1.c4r .c4fc_o2.c4r .c4fc_r0 .c4fc_r1 .c4fc_pp.c
 	@echo "test-c4fc: OK"
@@ -3910,6 +3923,30 @@ test-c4lc: c4sp c4sp.c4r c4m $(C4CC) $(C4RLINK) $(C4KE_C4R) $(TESTS)/test_ramcc.
 	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-rowptr.txt || exit 1; \
 	   $(call lc32,) $$fl -c $(TESTS)/c4lc_rowptr.c .c4lc_b.c4r > /dev/null || exit 1; \
 	   echo "  bit-fields and pointers to arrays ok, gcc's answers and layouts: c4lc $$fl"; \
+	 done
+	# -funsigned-char and -fshort-enums (docs/c4cxx-plan.md 3.9: Watcom's
+	# char and enums, as Blood is built): the golden is gcc -m32's with the
+	# same flags, at both sizes, plain, -O and -minline; anonymous struct
+	# and union members (C11, chocolate-blood's a_asm.c); and a function's
+	# linkage across two units, static from its first declaration and
+	# `extern` on a definition (c4lc_linka.c)
+	@for fl in "" "-O" "-minline"; do \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -P -conforming -funsigned-char -fshort-enums $(TESTS)/c4lc_uenum.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-uenum.txt || exit 1; \
+	   $(call lc32,) $$fl -P -conforming -funsigned-char -fshort-enums $(TESTS)/c4lc_uenum.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-uenum.txt || exit 1; \
+	   ./c4sp src/c4sp/lisp/c4lc.lisp $$fl $(TESTS)/c4lc_anon.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-anon.txt || exit 1; \
+	   $(call lc32,) $$fl $(TESTS)/c4lc_anon.c .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | cmp - src/c4sp/tests/expected/c4lc-anon.txt || exit 1; \
+	   for u in a b; do ./c4sp src/c4sp/lisp/c4lc.lisp $$fl -c $(TESTS)/c4lc_link$$u.c .c4lc_l$$u.c4o > /dev/null || exit 1; done; \
+	   ./c4rlink .c4lc_la.c4o .c4lc_lb.c4o -o .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m load-c4r.c -- .c4lc_b.c4r | grep -qx "a 2 b 3" || exit 1; \
+	   for u in a b; do $(call lc32,) $$fl -c $(TESTS)/c4lc_link$$u.c .c4lc_l$$u.c4o > /dev/null || exit 1; done; \
+	   ./c4rlink32 .c4lc_la.c4o .c4lc_lb.c4o -o .c4lc_b.c4r > /dev/null || exit 1; \
+	   ./c4m32 load-c4r.c -- .c4lc_b.c4r | grep -qx "a 2 b 3" || exit 1; \
+	   rm -f .c4lc_la.c4o .c4lc_lb.c4o; \
+	   echo "  unsigned char, short enums, anonymous members and C's linkage ok: c4lc $$fl"; \
 	 done
 	# what the Puzzles needed (games/puzzles): _Bool, a function pointer that
 	# returns a float or a double, a variable named like a typedef, a tag

@@ -176,7 +176,7 @@ VARIABLE VUNUSED   0 VUNUSED !
 :M CQ       n_fnref DROP 0 ;M
 
 :M CT n_num  >nty @ ;M
-:M CT n_str  DROP 2 ;M                  \ char *
+:M CT n_str  DROP UCHAR @ IF t_uchar 2 + ELSE 2 THEN ;M   \ char *, or unsigned char *
 :M CT n_var  >sym @ y.ct @ ;M
 :M CT n_gvar >sym @ y.ct @ ;M
 \ c4lc's g:typeof, rule for rule: c4 gives + and - the left operand's

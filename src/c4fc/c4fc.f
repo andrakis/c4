@@ -68,6 +68,10 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 : -minline ( -- )  1 INLINING !  1 OPTIMIZE ! ;
 \ -mms-bitfields: bit-fields laid out as MSVC lays them out (c4lc's flag)
 : -mms-bitfields ( -- )  1 MSBF ! ;
+\ -funsigned-char and -fshort-enums: Watcom's char and enums, as gcc's
+\ flags give them (c4lc's)
+: -funsigned-char ( -- )  1 UCHAR ! ;
+: -fshort-enums ( -- )  1 SHORTENUMS ! ;
 
 \ Everything a compile of one unit starts from. -O runs it twice: the
 \ first pass exists only to learn which functions are reachable, and
@@ -75,7 +79,7 @@ VARIABLE C4FC-READY   0 C4FC-READY !
 : UNIT-RESET ( -- )
    EMIT-RESET
    NSYM SYMR * ALLOCATE STAB !  0 STN !  0 NGLO !
-   0 #STRUCTS !  0 #MEMS !  0 VA-MAKE !
+   0 #STRUCTS !  0 #MEMS !  0 VA-MAKE !  0 #ETAGS !
    0 TP !
    HELP-RESET
    BUILTINS ;

@@ -29,6 +29,8 @@
 	(define Pic false)         ;; -fpic: data through a per-task base (shared libraries)
 	(define Lines false)       ;; -g: a source map (docs/c4-explorer.md, track S); -g0 none
 	(define MsBf false)        ;; -mms-bitfields: MSVC's bit-field layout, as gcc's flag
+	(define UChar false)       ;; -funsigned-char: plain char unsigned, as gcc's flag
+	(define ShortEnums false)  ;; -fshort-enums: an enum as small as its values, as gcc's flag
 	(define Paths nil)
 	(define PreDefs nil)
 	(define Args argv)
@@ -117,6 +119,15 @@
 		;; struct aligned to 8 (c4lc-parse's p:msbf). Blood is built so.
 		(if (= (+ "" (head Args)) "-mms-bitfields")
 			(begin (set! MsBf true) (set! Args (tail Args)) (next flags))
+		;; -funsigned-char: plain char is unsigned char, as Watcom's was
+		;; and gcc's flag makes it (c4lc-parse's p:uchar). Blood is built so.
+		(if (= (+ "" (head Args)) "-funsigned-char")
+			(begin (set! UChar true) (set! Args (tail Args)) (next flags))
+		;; -fshort-enums: an enum is the smallest integer type that holds
+		;; its values, unsigned when none is negative, as Watcom's and gcc's
+		;; flag make it (p:shortenums). Blood is built so.
+		(if (= (+ "" (head Args)) "-fshort-enums")
+			(begin (set! ShortEnums true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-P")
 			(begin (set! Pp true) (set! Args (tail Args)) (next flags))
 		(if (= (+ "" (head Args)) "-I")
@@ -131,7 +142,7 @@
 				(set! PreDefs (+ PreDefs (list (+ "" (index Args 1)))))
 				(set! Args (tail (tail Args)))
 				(next flags))
-		nil)))))))))))))))))))
+		nil)))))))))))))))))))))
 	(flags)
 	(if (< (length Args) 2) (error "usage: c4lc.lisp [-O] [-c] in.c out"))
 	(define In (head Args))
@@ -147,6 +158,9 @@
 	(set! lex:locs Lines)
 	(set! p:lines Lines)
 	(set! p:msbf MsBf)
+	(set! p:uchar UChar)
+	(set! gen:uchar UChar)
+	(set! p:shortenums ShortEnums)
 	(define Ast (parse:program
 		(if Pp
 			(begin

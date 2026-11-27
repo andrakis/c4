@@ -325,7 +325,9 @@ VARIABLE T-ADJ  0 T-ADJ !                 \ consumed by the next TOK,
    end POS @ - 1+ ALLOT: TO dst
    end dst DECODE TO n
    end 1+ POS !
-   Num  n 0> IF dst n 1- + C@ ELSE 0 THEN  0 TOK, ;
+   \ the last byte, 0 to 255 as c4lc's string:byte gives it ('\xff' is
+   \ 255): c4th's C@ sign-extends
+   Num  n 0> IF dst n 1- + C@ 255 AND ELSE 0 THEN  0 TOK, ;
 
 : T-SLASH {: | d -- :}
    POS @ 1+ PEEK TO d

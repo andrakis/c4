@@ -2870,7 +2870,8 @@ test-lazy-root: c4bb-images
 PHONY += test-lazy-root
 
 # test-libc-bare: libc's scanf, fseek and fread (src/c4ix/libc/tests/
-# scantest.c) and printf's long longs (llprint.c) on the bare machine,
+# scantest.c), printf's long longs (llprint.c) and qsort's order of equal
+# elements, glibc's (sorttest.c) on the bare machine,
 # and opendir, readdir and stat (dirtest.c) there and under C4DOS,
 # against gcc's build of the same.
 test-libc-bare: libc-bare-objs c4rlink32 c4dos32.c4r $(C4LC_LISP) | $(LC32_BIN)
@@ -2885,6 +2886,11 @@ test-libc-bare: libc-bare-objs c4rlink32 c4dos32.c4r $(C4LC_LISP) | $(LC32_BIN)
 	@gcc -m32 -w -o .libc_t/llprint-host src/c4ix/libc/tests/llprint.c
 	@cd .libc_t && ./llprint-host > llhost.txt && node ../libjs/cli.js -m 64 -d . llprint.c4r > llc4.txt
 	@cmp -s .libc_t/llhost.txt .libc_t/llc4.txt || { echo "test-libc-bare: llprint differs from gcc's:"; diff .libc_t/llc4.txt .libc_t/llhost.txt; exit 1; }
+	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/sorttest.c .libc_t/sorttest.c4o > /dev/null
+	@./c4rlink32 .libc_t/sorttest.c4o --start-lib .libc-bare/libc-*.c4o -o .libc_t/sorttest.c4r > /dev/null
+	@gcc -m32 -w -o .libc_t/sorttest-host src/c4ix/libc/tests/sorttest.c
+	@cd .libc_t && ./sorttest-host > sorthost.txt && node ../libjs/cli.js -m 64 sorttest.c4r > sortc4.txt
+	@cmp -s .libc_t/sorthost.txt .libc_t/sortc4.txt || { echo "test-libc-bare: sorttest differs from gcc's:"; diff .libc_t/sortc4.txt .libc_t/sorthost.txt; exit 1; }
 	@# directories: each one's listing is its c4dos.dir, on the machine's
 	@# drive as under C4DOS (bare.c)
 	@$(call lc32,-c 400000) -O -fno-builtin -c -I src/c4ix/libc/include src/c4ix/libc/tests/dirtest.c .libc_t/dirtest.c4o > /dev/null

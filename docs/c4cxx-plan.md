@@ -1010,19 +1010,16 @@ Blood through c4lc does not yet have Watcom's layouts. c4lc compiles
 every unit (`blood-units.sh -compile`), but nothing links or runs that
 yet.
 
-### 4.11 M7, done (2026-11-27)
+### 4.11 M7 (2026-11-27): the compiler reproduces the host build; the game's layout does not
 
-**Blood built by c4 alone plays a demo as the host build does.** Every
-C++ unit through c4cxx and then c4lc (`lc32`), every C unit through c4lc,
-linked by c4rlink32 with the bare machine's libc, runs in node (libjs, the
-bare machine, the game's directory as its drive) with c4-Blood's null
-platform (`c4/blood-host.c`). It plays the shareware 1.11A's first demo
-with the checksums of c4-Blood's host build (B0, g++), frame for frame:
-4000 frames, about 15 minutes of game time, total `46c8dd68`. The image
-is 4,030,508 bytes, a quarter of the loader's 16 MB. Built and played in
-about five minutes. `src/c4cxx/blood-c4lc.sh` is the whole of it, and
-`make test-c4cxx-blood-c4lc` runs it (c4-Blood and `BLOOD_RUN`, as
-`test-c4cxx-blood`). The steps:
+**What the first M7 test showed was wrong.** It passed Blood `-nodemo
+-playback BLOOD000.DEM`, and under `-nodemo` Blood plays no demo at all,
+the named one included (blood.cpp). Both builds showed the title screen
+and the menu for 4000 frames. c4's build could not have played a demo
+then: c4lc made `'\x1aMED'`, the demos' signature, its last byte.
+
+**The test now** (`src/c4cxx/blood-c4lc.sh`, `make test-c4cxx-blood-c4lc`)
+plays Blood's own demo loop, from one directory of the game's files:
 
 1. **B0:** c4-Blood's `c4/host.sh`.
 2. **The 33 C units** host.sh builds (chocolate-blood's engine, MACT and
@@ -1031,45 +1028,48 @@ about five minutes. `src/c4cxx/blood-c4lc.sh` is the whole of it, and
    with host.sh's flags: `-funsigned-char` everywhere, and Watcom's layouts
    (`-fshort-enums -mms-bitfields`) for Blood's own.
 3. **The 81 C++ units** (Blood's 80 and `c4/netnone.cpp`) through c4cxx
-   against the same headers, with Watcom's layouts, then c4lc.
-4. **The link:** loadsave first (section 4.10), the rest, `rt/libc4cxx.c`
-   for `c4/cxxrt.cpp`, and `.libc-bare`.
-5. **The demo:** both play `-nodemo -playback BLOOD000.DEM -sum 1`, and
-   the two lists of checksums must be the same.
+   `-fargs-rtl` against the same headers, with Watcom's layouts, then c4lc.
+4. **The links:** loadsave first (section 4.10), the rest, `rt/libc4cxx.c`
+   for `c4/cxxrt.cpp`, and the bare machine's libc (`blood.c4r`); and with
+   C4IX's libc, linked in, for C4IX (`c4ix-blood.c4r`), when there are
+   C4IX images (`C4_IMAGES`).
+5. **The runs:** B0 natively; `blood.c4r` on the bare machine in node;
+   the same image under C4DOS; `c4ix-blood.c4r` inside C4IX, from
+   `/usr/games/blood` on a copy of the C4IX disk. Each list of checksums
+   must be B0's. Blood finds its demos with `_dos_findfirst` and takes
+   them in the order the directory gives, so every system lists the
+   directory in B0's order: a `c4dos.dir` on the bare machine and under
+   C4DOS (bare.c), and `/usr/games/blood`'s entries in C4IX (which lists a
+   directory newest entry first).
 
-What it took, besides c4cxx as M6 left it:
+What it took, after M7's first commits:
 
-- **c4lc and c4fc:** `-funsigned-char` and `-fshort-enums`, Watcom's char
-  and enums (c4lc-design 14.17). c4fc's character constants are their
-  byte, 0 to 255, as c4lc's are (c4th's `C@` sign-extends: `'\xff'` was
-  -1).
-- **c4lc:** anonymous struct and union members (`a_asm.c`'s texture
-  coordinates); a function declared static stays static when its
-  definition does not say so (two units' `MoveToCeil`); `extern` on a
-  definition (`a_asm.c`) defines it (c4lc-design 14.17).
-- **C4IX's libc:** `malloc.h`, which the engine and MACT include; and on
-  the bare machine, `O_RDWR` without `O_CREAT` or `O_TRUNC` opens a file
-  that exists, to read. Blood opens its art and demos so. Before, it was
-  a new file to write, on drive 1.
+- **c4lc and c4fc:** `-conforming` multi-character constants are gcc's
+  (c4lc-design 14.17).
+- **c4cxx `-fargs-rtl`:** a call's arguments in g++ -m32's order, right
+  to left, with a function's register variables read at the call (emit.c,
+  `rtl_call`). C leaves the order open; c4lc's is left to right. Blood's
+  weapons draw their spread so (`actFireVector (..., dx+Random3(600),
+  dy+Random3(600), ...)`). `tests/r_argorder.cpp` holds it to g++, and
+  blood-oracle.sh with `C4CXX_FLAGS=-fargs-rtl` still gives B0's 4000
+  frames.
+- **C4IX's libc:** `printf`'s `%lld` and `%llu` at 32 bits; directories
+  on the bare machine and under C4DOS (`c4dos.dir`); `qsort` stable, as
+  glibc's (Blood sorts its event receivers by channel: two barrels on one
+  channel blew in another order).
 
-Two things of the bare machine, not of the compiler, the test works
-around:
-
-- **Its drive has no listing,** so `opendir` finds nothing there. c4/'s
-  `c4blood_open` looks for a name without regard to case through it (the
-  engine opens `tables.dat`; the file is `TABLES.DAT`), and Blood finds its
-  demo loop with `_dos_findfirst`, which c4/ makes of it. So the drive is
-  the game's files under their names and in lower case, and the demo is
-  named on the command line, for both programs. A demo loop on c4 wants a
-  listing (a register of the drive's), or C4IX's file system.
-- **A file is read whole into memory when it opens** (`bare.c`), and
-  `SHARE000.ART` is 16 MB: the run takes 256 MB (`-m 256`).
-
-And `printf`'s `%llu` prints 0 in the bare libc, which the `t=` field of
-blood-host's lines shows; the test compares the lines without it.
-
-After M7 the compiler is done (section 4). The rest is the game port
-(section 5).
+**Where it stands.** C4DOS and C4IX play what the bare machine plays,
+frame for frame (200 frames each). Against B0 the frames part at 63. Blood
+reads outside its arrays: `viewProcessSprites` tests `pSector->extra ?
+&xsector[pSector->extra] : NULL`, and a sector without an xsector has
+`extra` -1, so it reads `xsector[-1]`, whatever the linker put before the
+array. g++ puts `nextXSprite` there; c4rlink keeps the source's order,
+`xwall` before `xsector`. Built with `-fno-toplevel-reorder` (globals in
+the source's order) B0 plays every one of c4's frames, 228 of them, and
+stops with c4's build at the same assertion (warp.cpp 235): the demo
+desyncs. So the compiler and libc now give what the host build gives;
+which layout the demo needs is the game port's question (section 5), as
+is Blood's `rand`, glibc's in B0 and Watcom's in C4IX's libc and in DOS.
 
 ## 5. What is left for Blood after the compiler
 

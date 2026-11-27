@@ -13,20 +13,25 @@
 #      headers, with Watcom's layouts, then c4lc.
 #   4. c4rlink32: loadsave first (its constructor builds the list the
 #      savers' join), the rest, rt/libc4cxx.c for c4/cxxrt.cpp, and the
-#      bare machine's libc: $W/blood.c4r.
-#   5. Both play FRAMES frames (default 4000) of the first demo in
-#      $BLOOD_RUN, every frame's checksum printed (-sum 1): B0 natively,
-#      blood.c4r on the bare machine in node (libjs/cli.js, the directory
-#      as its drive). The two lists must be the same. The demo is named
-#      (-nodemo -playback BLOOD000.DEM), because Blood finds its demo loop
-#      with _dos_findfirst, which c4/c4blood.c makes of opendir, and the
-#      bare machine's drive has no listing: there the loop is empty.
+#      bare machine's libc: $W/blood.c4r. And with C4IX's libc instead,
+#      when there are C4IX images to run it in: $W/c4ix-blood.c4r.
+#   5. Blood's own demo loop, every frame's checksum printed (-sum 1), from
+#      one directory of the game's files: B0 natively, FRAMES frames
+#      (default 4000); then on the bare machine in node (libjs/cli.js, the
+#      directory as its drive), the same; under C4DOS on that machine,
+#      blood.c4r again, and inside C4IX, c4ix-blood.c4r, OS_FRAMES frames
+#      each (default 1000). Each list must be B0's. Blood finds its demos
+#      with _dos_findfirst, which c4/c4blood.c makes of opendir, so each
+#      system lists the directory in B0's order: c4dos.dir on the bare
+#      machine and under C4DOS (bare.c), /usr/games/blood in C4IX.
 #
-# From the c4 tree's root, with c4cxx, c4sc-host32, c4rlink32 and the bare
-# libc (make libc-bare-objs) built, and node on the path. BLOOD_DIR is
-# c4-Blood (default ~/git/games/c4-blood), BLOOD_VER the version (BS111A),
-# W the work directory (default /tmp/blood-c4lc; kept), BLOOD_RUN a
-# directory of the game's files with BLOOD.CFG (blood-oracle.sh's).
+# From the c4 tree's root, with c4cxx, c4sc-host32, c4rlink32, the bare
+# libc (make libc-bare-objs) and c4dos32.c4r built, and node on the path.
+# BLOOD_DIR is c4-Blood (default ~/git/games/c4-blood), BLOOD_VER the
+# version (BS111A), W the work directory (default /tmp/blood-c4lc; kept),
+# BLOOD_RUN a directory of the game's files with BLOOD.CFG
+# (blood-oracle.sh's), C4_IMAGES the images C4IX boots from (default
+# src/c4bb/images: make c4bb-images; without them C4IX is skipped).
 cd "$(dirname "$0")/../.." || exit 1
 R=$(pwd)
 FRAMES=${1:-4000}
@@ -90,7 +95,9 @@ done
 for s in c4blood blood-host smacker; do
 	lc c4_$s $C/$s.c $DEF -I $B/build -I $C/c4inc -I $C/inc $GINC $LIBC
 done
-# 3. the C++ units: c4cxx, then c4lc
+# 3. the C++ units: c4cxx, then c4lc. -fargs-rtl: a call's arguments in
+# g++'s order, which B0 has (Blood's weapons draw their spread so:
+# actFireVector (..., dx+Random3(600), dy+Random3(600), ...))
 cxx=
 for u in $CXX_UNITS; do
 	case $u in blood/qtools/*) def="-D APPVER_EXEDEF=$QT" ;; blood/*) def="-D APPVER_EXEDEF=$VER" ;; *) def= ;; esac
@@ -98,7 +105,7 @@ for u in $CXX_UNITS; do
 	src=$B/$u.cpp
 	[ -f $src ] || src=$G/$u.cpp
 	printf '#include "c4blood.h"\n#include "%s"\n' $src > $O/w_$b.cpp
-	if ! ./c4cxx -x c++ $WF -funsigned-char $DEF $def -I $C/c4inc -I $C/inc $GINC \
+	if ! ./c4cxx -x c++ $WF -funsigned-char -fargs-rtl $DEF $def -I $C/c4inc -I $C/inc $GINC \
 			-isystem src/c4ix/libc/include -isystem src/c4ix/include -o $O/$b.c $O/w_$b.cpp > $O/$b.err 2>&1; then
 		echo "blood-c4lc: c4cxx $u: $(grep -m1 error $O/$b.err | cut -c1-200)"; bad=$((bad + 1)); continue
 	fi
@@ -118,28 +125,89 @@ echo "blood-c4lc: $(echo $C_UNITS | wc -w) C units, 3 of c4's and $(echo $CXX_UN
 ./c4rlink32 $O/blood_loadsave.c4o $cxx $objs $O/libc4cxx.c4o .libc-bare/libc-*.c4o -o $W/blood.c4r > $W/link.log 2>&1 \
 	|| { echo "blood-c4lc: the link failed"; grep -v '^;;' $W/link.log | head; exit 1; }
 echo "blood-c4lc: $W/blood.c4r, $(stat -c %s $W/blood.c4r) bytes"
-# 5. the demos
-DEMO="-nodemo -playback BLOOD000.DEM"
-(cd $RUN && timeout 3000 $W/ref/blood-host $DEMO -sum 1 -frames $FRAMES) > $W/blood-host.out 2>&1
-# The bare machine's drive has no listing, so c4/c4blood.c's search for a
-# name without regard to case (Blood opens tables.dat; the file is
-# TABLES.DAT) finds nothing there: the drive is $RUN's files under their
-# own names and in lower case, as links. And each file it opens is read
-# whole into memory (bare.c): 256 MB.
+# ... and for C4IX, when there are images to run it in (C4_IMAGES, which
+# may be another tree's): with C4IX's libc, this tree's, linked in as
+# vfsload has it (build-images.sh compiles the same units -fpic into
+# /lib/libc.c4s), so that the disk's libraries need not be this tree's
+IMG=${C4_IMAGES:-$R/src/c4bb/images}
+if [ -f $IMG/c4ix32.c4r ] && [ -f $IMG/disk/c4ix.vfs.txt ]; then
+	X=$W/ixlibc
+	mkdir -p $X
+	for m in string stdlib stdio unix fp math; do
+		./c4sc-host32 -c 400000 compile -O -fno-builtin -c -I src/c4ix/libc/include -I src/c4ix/libc src/c4ix/libc/$m.c $X/$m.c4o \
+			> $X/$m.lc 2>&1 || { echo "blood-c4lc: C4IX's libc: $m.c"; exit 1; }
+	done
+	./c4sc-host32 -c 400000 compile -O -c src/c4ix/libc/opcodes.c $X/opcodes.c4o > /dev/null \
+		&& ./c4sc-host32 -c 400000 compile -O -c -I src/c4ix/include src/c4ix/lib/libc4ix.c $X/libc4ix.c4o > /dev/null \
+		|| { echo "blood-c4lc: C4IX's libc: opcodes.c or libc4ix.c"; exit 1; }
+	./c4rlink32 $O/blood_loadsave.c4o $cxx $objs $O/libc4cxx.c4o $X/*.c4o -o $W/c4ix-blood.c4r > $W/link-c4ix.log 2>&1 \
+		|| { echo "blood-c4lc: the link for C4IX failed"; grep -v '^;;' $W/link-c4ix.log | head; exit 1; }
+	echo "blood-c4lc: $W/c4ix-blood.c4r, $(stat -c %s $W/c4ix-blood.c4r) bytes"
+fi
+
+# 5. the demos: one directory of $RUN's files, as links, and blood.c4r.
+# Blood finds its demo loop with _dos_findfirst, which c4/c4blood.c makes
+# of opendir, and takes the demos in the order the directory gives them;
+# it opens tables.dat, which is TABLES.DAT, by finding the name in the
+# directory without regard to case. So each system's listing must be the
+# host's: on the bare machine and under C4DOS it is c4dos.dir (bare.c),
+# written here in the order B0 reads the directory in (ls -f); in C4IX
+# the order of the game's directory in c4ix.vfs.txt, the same.
 rm -rf $W/run && mkdir -p $W/run
-for f in $RUN/*; do
-	b=$(basename $f) l=$(basename $f | tr A-Z a-z)
-	ln -s $(readlink -f $f) $W/run/$b
-	[ $l = $b ] || ln -s $(readlink -f $f) $W/run/$l
-done
-(cd $W/run && timeout ${C4_TIMEOUT:-20000} node $R/libjs/cli.js -m ${C4_MEM:-256} -d . $W/blood.c4r $DEMO -sum 1 -frames $FRAMES) \
-	> $W/blood-c4lc.out 2>&1
-grep "blood-host: frame" $W/blood-host.out | sed 's/ t=.*//' > $W/ref.sums
-grep "blood-host: frame" $W/blood-c4lc.out | sed 's/ t=.*//' > $W/c4lc.sums
+for f in $RUN/*; do ln -s $(readlink -f $f) $W/run/; done
+cp $W/blood.c4r $W/run/
+(cd $W/run && ls -f | grep -v '^\.\.\?$' | grep -vx c4dos.dir > c4dos.dir)
+NAMES=$(grep -vx 'blood.c4r' $W/run/c4dos.dir)
+# Every frame's checksum (-sum 1), the time dropped: B0's is the host's,
+# and the run's in C4IX is the machine's
+sums () { tr -d '\r' < $1 | grep "blood-host: frame" | sed 's/ t=.*//; s/^.*blood-host: /blood-host: /'; }
+(cd $W/run && timeout 3000 $W/ref/blood-host -sum 1 -frames $FRAMES) > $W/blood-host.out 2>&1
+sums $W/blood-host.out > $W/ref.sums
 n=$(wc -l < $W/ref.sums)
 if [ "$n" -lt "$FRAMES" ]; then echo "blood-c4lc: B0 ran $n frames of $FRAMES"; tail -3 $W/blood-host.out; exit 1; fi
-if ! cmp -s $W/ref.sums $W/c4lc.sums; then
-	echo "blood-c4lc: $(wc -l < $W/c4lc.sums) frames; they differ from $(diff $W/ref.sums $W/c4lc.sums | grep -m1 '^<' | sed 's/^< blood-host: //')"
-	tail -3 $W/blood-c4lc.out; exit 1
-fi
-echo "blood-c4lc: $n frames, every checksum B0's ($(tail -1 $W/ref.sums | sed 's/.*total/total/'))"
+# what a run printed against B0's first FRAMES (fewer for the systems)
+check () {
+	local what=$1 out=$2 frames=$3
+	sums $out > $out.sums
+	head -$frames $W/ref.sums > $W/ref-$frames.sums
+	if ! cmp -s $W/ref-$frames.sums $out.sums; then
+		echo "blood-c4lc: $what: $(wc -l < $out.sums) frames; they differ from $(diff $W/ref-$frames.sums $out.sums | grep -m1 '^<' | sed 's/^< blood-host: //')"
+		tail -3 $out; return 1
+	fi
+	echo "blood-c4lc: $what: $frames frames, every checksum B0's ($(tail -1 $out.sums | sed 's/.*total/total/'))"
+}
+OSF=${OS_FRAMES:-1000}
+[ $OSF -le $FRAMES ] || OSF=$FRAMES
+# Each file Blood opens is read whole into memory on the bare machine and
+# under C4DOS (bare.c): 256 MB
+(cd $W/run && timeout ${C4_TIMEOUT:-20000} node $R/libjs/cli.js -m ${C4_MEM:-256} -d . blood.c4r -sum 1 -frames $FRAMES) \
+	> $W/bare.out 2>&1
+check "the bare machine" $W/bare.out $FRAMES || exit 1
+# Under C4DOS: the same image, a transient of C4DOS's
+(cd $W/run && printf 'blood -sum 1 -frames %s\nver\n' $OSF | timeout ${C4_TIMEOUT:-20000} node $R/libjs/cli.js -m ${C4_MEM:-256} \
+	-d . $R/c4dos32.c4r) > $W/dos.out 2>&1
+check "C4DOS" $W/dos.out $OSF || exit 1
+[ -f $W/c4ix-blood.c4r ] || { echo "blood-c4lc: no C4IX images in $IMG (make c4bb-images, or C4_IMAGES): C4IX skipped"; exit 0; }
+# In C4IX: its disk, as links, with Blood in /usr/games/blood, its files
+# on the disk as blood-NAME (the disk is flat and shared), listed in the
+# directory B0 reads and in c4ix.sizes (vfsload: lazy files)
+rm -rf $W/disk && mkdir -p $W/disk
+for f in $(ls -A $IMG/disk); do ln -s $IMG/disk/$f $W/disk/$f; done
+rm $W/disk/c4ix.vfs.txt $W/disk/c4ix.sizes
+cp $W/c4ix-blood.c4r $W/disk/
+for f in $NAMES; do ln -s $(readlink -f $W/run/$f) $W/disk/blood-$f; done
+{
+	printf '\t\t\t# Blood (c4cxx, src/c4cxx/blood-c4lc.sh): the test'"'"'s\n\t\t\tblood/:\n\t\t\t\tblood.c4r: c4ix-blood.c4r\n'
+	# C4IX lists a directory newest entry first: the last in c4ix.vfs.txt
+	for f in $(echo $NAMES | tr ' ' '\n' | tac); do printf '\t\t\t\t%s: blood-%s\n' $f $f; done
+} > $W/vfs-blood.txt
+awk -v add=$W/vfs-blood.txt '/^\t\t\tduke3d\/:$/ && !done { while ((getline l < add) > 0) print l; done = 1 } { print } END { if (!done) exit 1 }' \
+	$IMG/disk/c4ix.vfs.txt > $W/disk/c4ix.vfs.txt || { echo "blood-c4lc: no /usr/games/duke3d in $IMG/disk/c4ix.vfs.txt to put Blood beside"; exit 1; }
+{
+	echo "$(stat -c %s $W/disk/c4ix-blood.c4r) c4ix-blood.c4r"
+	for f in $NAMES; do echo "$(stat -L -c %s $W/disk/blood-$f) blood-$f"; done
+	cat $IMG/disk/c4ix.sizes
+} > $W/disk/c4ix.sizes
+printf 'cd /usr/games/blood\n./blood.c4r -sum 1 -frames %s\nexit\n' $OSF | timeout ${C4_TIMEOUT:-20000} \
+	node $R/libjs/cli.js -m ${C4_MEM:-256} -d $W/disk $IMG/c4ix32.c4r > $W/c4ix.out 2>&1
+check "C4IX" $W/c4ix.out $OSF || exit 1

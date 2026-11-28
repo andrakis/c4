@@ -14,7 +14,8 @@
 // TCP: at stdin's end nc says so (the FIN) and goes on printing until the
 // other side closes too: `echo hello | nc one 7000` is a message, and
 // `nc -l 7000 > file` on one machine and `cat file | nc one 7000` on
-// another a copy. A datagram is a read of stdin (a line, as a terminal
+// another a copy. The other side's FIN ends nc only when stdin has ended
+// or is the console (tcp_pump). A datagram is a read of stdin (a line, as a terminal
 // gives them), 1472 bytes at most; UDP's nc ends SECS (1) after stdin's
 // end, having printed what came meanwhile; with -l it runs until Ctrl-C.
 
@@ -28,23 +29,43 @@ static void usage() {
     uexit(2);
 }
 
+// stdin the console (S_IFCHR): someone typing, who is done when the other
+// side is
+static int stdin_typed() {
+    int st[ST_WORDS];
+    if (ufstat(STDIN, st, ST_WORDS) < 0) return 1;
+    return (st[ST_MODE] & 0xF000) == 0x2000;
+}
+
 // a connection's bytes both ways until it ends: stdin to FD (then a FIN at
-// stdin's end), FD to stdout; or until IDLE ms (0: no limit) with nothing either way
+// stdin's end), FD to stdout; or until IDLE ms (0: no limit) with nothing
+// either way. The other side's FIN ends only its half: stdin a pipe or a
+// file still goes out, to its end. `nc -l 7104 &` (its stdin ended, so its
+// FIN at once) and `echo hi | nc localhost 7104`: the FIN can come before
+// echo's line, which is sent all the same. Typed at the console, nc ends
+// with the other side's FIN, as nothing more is wanted (`nc b 80`, a HEAD
+// typed, the answer).
 static int tcp_pump(int fd, int idle) {
     int p[6];
-    int n, a, moved, eof, last;
+    int n, a, moved, eof, done, typed, np, last;
     eof = 0;
+    done = 0;                                      // the other side has said all it will
+    typed = stdin_typed();
     last = __time();
     while (1) {
         if (idle > 0 && __time() - last >= idle) return 0;
         moved = 0;
-        n = uavail(fd);
-        if (n < 0) return 0;                       // the other side has closed
-        if (n > 0) {
-            n = uread(fd, buf, n > (int)sizeof buf ? (int)sizeof buf : n);
-            if (n <= 0) return 0;
-            write(STDOUT, buf, n);
-            moved = 1;
+        if (!done) {
+            n = uavail(fd);
+            if (n < 0) {                           // the other side's FIN, or the connection's end
+                if (eof || typed) return 0;
+                done = 1;
+            } else if (n > 0) {
+                n = uread(fd, buf, n > (int)sizeof buf ? (int)sizeof buf : n);
+                if (n <= 0) return 0;
+                write(STDOUT, buf, n);
+                moved = 1;
+            }
         }
         if (!eof) {
             a = uavail(STDIN);
@@ -55,14 +76,17 @@ static int tcp_pump(int fd, int idle) {
                 else if (write(fd, buf, a) != a) { ufprintf(STDERR, "nc: the connection is gone\n"); return 1; }
                 moved = 1;
             }
+            if (eof && done) return 0;
         }
         // nothing either way: until the connection or stdin has something (or -w's time is up)
         if (moved) last = __time();
         else {
-            p[0] = fd; p[1] = POLL_IN; p[3] = STDIN; p[4] = POLL_IN;
+            np = 0;
+            if (!done) { p[0] = fd; p[1] = POLL_IN; np = 1; }
+            if (!eof) { p[np * 3] = STDIN; p[np * 3 + 1] = POLL_IN; ++np; }
             a = 0 - 1;
             if (idle > 0 && (a = idle - (__time() - last)) < 0) a = 0;
-            upoll(p, eof ? 1 : 2, a);
+            upoll(p, np, a);
         }
     }
     return 0;

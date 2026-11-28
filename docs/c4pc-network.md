@@ -129,10 +129,12 @@ the end; SYS_EVWAIT with pipes set wakes for a socket too.
   out as datagrams, what comes printed. Two machines each running one is
   the talk program; `echo hi | nc -u one 7000` a one-shot message.
 - (N3) `nc HOST PORT` and `nc -l PORT` -- the same over TCP, until both
-  sides have closed (stdin's end sends the FIN); `-w SECS` ends an idle
-  connection; `nc -l -e PROG PORT` runs PROG with the connection as its
-  stdin, stdout and stderr (`nc -l -e sh 2323`: a machine's shell for
-  another; `nc -l -e cat 7` an echo server).
+  sides have closed (stdin's end sends the FIN; the other side's FIN ends
+  nc at once only when it is typed at the console, else stdin still goes
+  out to its end); `-w SECS` ends an idle connection; `nc -l -e PROG
+  PORT` runs PROG with the connection as its stdin, stdout and stderr
+  (`nc -l -e sh 2323`: a machine's shell for another; `nc -l -e cat 7`
+  an echo server).
 - (N3) `netstat` -- each socket (protocol, bytes queued each way, local and
   peer's address, TCP state) and TCP's counts (segments, timeouts, resets).
 - `httpd [-p PORT] [-q] [-d] [-n COUNT] [DIR]` -- a directory's files over
